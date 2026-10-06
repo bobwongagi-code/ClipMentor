@@ -12,6 +12,14 @@ interface CreativeSkillMetadata {
 
 export const CREATIVE_SKILL_METADATA: CreativeSkillMetadata[] = [
   {
+    id: '11111111-1240-4000-8000-000000000016',
+    slug: 'clipmentor',
+    name: 'ClipMentor',
+    nameZh: 'ClipMentor 爆款拆解',
+    summary: '从产品卖点和完整原片生成拆解蓝图、马来语讲解及达人照拍的原片分镜，支持已有工程的局部修改。',
+    scenarios: ['clipmentor', '爆款拆解', '心译', 'creator-breakdown'],
+  },
+  {
     id: '11111111-1240-4000-8000-000000000015',
     slug: 'livestream-to-clips',
     name: 'Livestream to Clips',

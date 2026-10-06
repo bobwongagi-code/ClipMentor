@@ -94,10 +94,18 @@ function sequence(events: readonly CodexTurnStreamEvent[]): ServerCodexTurnDeps 
     { type: 'text-delta', delta: 'I found ' },
     { type: 'thinking-delta', delta: 'checking clip boundaries' },
     { type: 'text-delta', delta: 'the clips.' },
+    { type: 'context-usage', inputTokens: 1000, outputTokens: 10, cacheReadTokens: 200 },
+    { type: 'context-usage', inputTokens: 1200, outputTokens: 20, cacheReadTokens: 300 },
     { type: 'done' },
   ]);
   const outcome = await executeServerCodexTurn(input, deps);
   assert.equal(outcome.text, 'I found the clips.', 'text is collected across deltas');
+  assert.equal(run.metrics?.inputTokens, 2200, 'request inputs are summed once');
+  assert.equal(run.runtimeContext.inputTokens, 1200, 'latest usage is per request');
+  assert.equal(run.runtimeContext.activeToolCount, TOOL_SCHEMAS.length,
+    'diagnostics count the tools actually registered with Codex');
+  assert.equal(run.runtimeContext.toolSchemaChars, JSON.stringify(TOOL_SCHEMAS).length,
+    'diagnostics measure the complete registered catalog');
   assert.equal(outcome.continued, false, 'no tool calls means no continuation');
   assert.deepEqual(
     outcome.messages.map((message) => message.role),

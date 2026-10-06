@@ -292,6 +292,7 @@ button, input, select { font: inherit; }
 }
 .cc-chat-send-btn { flex:0 0 28px; }
 .cc-chat-messages.empty { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.cc-chat-messages.empty:has(.cc-proposal) { display:block; overflow-y:auto; }
 .cc-chat-header { min-height:48px; display:flex; align-items:center; gap:8px; padding:6px 12px; box-sizing:border-box; border-bottom:0.5px solid var(--cc-border); }
 .cc-chat-capability-banner { display:flex; align-items:center; gap:6px; padding:6px 12px; background:color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel)); border-bottom:0.5px solid var(--cc-border); font-size:11px; color:var(--cc-text-dim); line-height:1.45; }
 .cc-chat-capability-banner span { flex:1; min-width:0; }

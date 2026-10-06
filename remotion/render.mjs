@@ -17,6 +17,7 @@ import {
   withEncoderProfileFallback,
 } from './performance.mjs';
 import { renderDirectHardware } from './direct-hardware.mjs';
+import { renderH264WithPcmAudio } from './h264-audio.mjs';
 import { assertMaterializedRenderSnapshot, normalizeH264Profile } from './render-contract.mjs';
 import { resolveRenderTimeout } from './render-timeout.mjs';
 
@@ -108,10 +109,13 @@ export async function withAbortableCompositionSelection({
 }
 
 function directHardwareRenderer(directBinaries, abortSignal) {
-  if (!directBinaries) return renderMedia;
-  return (attempt) => attempt.binariesDirectory
-    ? renderDirectHardware({ render: renderMedia, options: attempt, binariesDirectory: directBinaries, signal: abortSignal })
-    : renderMedia(attempt);
+  return (attempt) => {
+    if (directBinaries && attempt.binariesDirectory) {
+      return renderDirectHardware({ render: renderMedia, options: attempt, binariesDirectory: directBinaries, signal: abortSignal });
+    }
+    if (attempt.codec === 'h264') return renderH264WithPcmAudio({ render: renderMedia, options: attempt });
+    return renderMedia(attempt);
+  };
 }
 
 /** Render with the selected probed engine, then make a truthful software retry. */

@@ -148,9 +148,8 @@ export async function executeServerCodexTurn(
   followupText: string | null;
   hitMaxTokens: boolean;
 }> {
-  const prepared = await prepareCodexContext(input);
-  const activeSchemas = input.activation.current.schemas();
   const schemas = input.activation.current.allSchemas();
+  const prepared = await prepareCodexContext({ ...input, schemas });
   const requestId = `run-${input.run.id}-${input.requestIndex}`;
   pushRunEvent(input.run, 'text-start', {});
   let text = '';
@@ -227,8 +226,8 @@ export async function executeServerCodexTurn(
         recordServerContextUsage(
           input.run,
           usageFromCodexEvent(event, prepared, input.requestIndex),
-          activeSchemas.length,
-          JSON.stringify(activeSchemas).length,
+          schemas.length,
+          JSON.stringify(schemas).length,
         );
         break;
       case 'error':

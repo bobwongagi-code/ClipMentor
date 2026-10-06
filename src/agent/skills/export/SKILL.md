@@ -29,7 +29,9 @@ Use `submit_export` for the execution path:
 
 Video codec options are `h264` (MP4, default) and `vp8` (WebM). Video frame-rate options match the editor UI: `24`, `25`, `30`, `50`, or `60`; omit `fps` to match the timeline. Audio export is MP3: pass `"format":"audio"` and omit `codec` / `fps` unless you explicitly pass `"codec":"mp3"`.
 
-`submit_export` returns a durable `renderId`. Some export types, such as subtitle files, may complete immediately and return `downloadUrl`; video/audio usually require `track_export` to wait for completion.
+Follow the actual return shape. `submit_export` is the synchronous export tool: it can finish immediately and trigger a browser download, returning file name, dimensions, duration and size without a `renderId` or `downloadUrl`. A successful synchronous result is not an asynchronous queue job. Do not call `track_export` merely because a path is absent, and do not export again to obtain a queue entry. Report the returned file name and explicitly state when its local download path is unavailable to the tool.
+
+`submit_render_job` is the asynchronous alternative and returns a durable `renderId`; use `track_export` only for that returned job, or a genuinely recorded asynchronous export. `read_export_history` may legitimately be empty after a synchronous browser download; an empty queue does not prove that export failed.
 
 After getting each `downloadUrl`:
 

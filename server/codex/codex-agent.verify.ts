@@ -145,18 +145,34 @@ lines.on('line', (line) => {
   }
   if (message.id === 'dynamic-1') {
     if (message.result?.success !== true) process.exit(74);
+    // A total-only event must not be passed downstream as a request sample.
+    send({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: activeThread,
+        turnId: activeTurn,
+        tokenUsage: { total: { inputTokens: 1000, outputTokens: 100 } },
+      },
+    });
     send({
       method: 'thread/tokenUsage/updated',
       params: {
         threadId: activeThread,
         turnId: activeTurn,
         tokenUsage: {
-          total: {
+          last: {
             inputTokens: 321,
             cachedInputTokens: 200,
             outputTokens: 89,
             reasoningOutputTokens: 34,
             totalTokens: 410,
+          },
+          total: {
+            inputTokens: 1321,
+            cachedInputTokens: 900,
+            outputTokens: 189,
+            reasoningOutputTokens: 64,
+            totalTokens: 1510,
           },
           modelContextWindow: 272000,
         },

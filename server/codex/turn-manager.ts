@@ -59,11 +59,12 @@ function contextUsageEvent(
   params: Record<string, unknown>,
 ): Extract<CodexTurnStreamEvent, { type: 'context-usage' }> | null {
   const usage = object(params.tokenUsage);
-  const total = object(usage?.total);
-  const inputTokens = tokenCount(total?.inputTokens);
-  const outputTokens = tokenCount(total?.outputTokens);
-  const reasoningTokens = tokenCount(total?.reasoningOutputTokens);
-  const cacheReadTokens = tokenCount(total?.cachedInputTokens);
+  // Downstream metrics sum per-request usage. `total` is thread cumulative.
+  const last = object(usage?.last);
+  const inputTokens = tokenCount(last?.inputTokens);
+  const outputTokens = tokenCount(last?.outputTokens);
+  const reasoningTokens = tokenCount(last?.reasoningOutputTokens);
+  const cacheReadTokens = tokenCount(last?.cachedInputTokens);
   const contextWindowTokens = tokenCount(usage?.modelContextWindow);
   if (inputTokens === null) return null;
   const validCache = cacheReadTokens !== null && cacheReadTokens <= inputTokens
