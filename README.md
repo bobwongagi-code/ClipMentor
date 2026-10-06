@@ -1,3 +1,5 @@
+> **ClipMentor modified version — 2026-10-06.** This repository contains local modifications to [OpenChatCut](https://github.com/0xsline/OpenChatCut), created by 0xsline and its contributors. It is not an official upstream release. Original attribution and the GNU AGPL-3.0 license are retained. See [ClipMentor changes and license notes](CLIPMENTOR.md).
+
 <p align="center">
   <img src="public/openchatcut-icon.png" width="96" alt="OpenChatCut" />
 </p>
