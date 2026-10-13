@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import type { CustomSkill } from '../../persist/skillStore';
@@ -68,6 +69,22 @@ try {
     const prompt = prompts.creativeModePrompt(skill);
     assert.match(prompt, new RegExp(`name="${skill.slug}"`));
     assert(!prompt.includes(skill.body));
+  }
+
+  // ClipMentor's workflow must remain usable outside the local production workspace.
+  for (const file of [
+    'references/planning.md',
+    'references/approved-reproduction.md',
+    'references/delivery-checklist.md',
+    'references/reproduction-lessons.md',
+  ]) {
+    const loaded = loader.execPluginSkillTool('load_skill', { name: 'clipmentor', file, offset: 0 });
+    assert(loaded && typeof loaded === 'object' && 'contents' in loaded, `cannot load ${file}`);
+    const result = loaded as { contents: Record<string, string>; nextOffset: number | null };
+    const expected = await readFile(new URL(`./clipmentor/${file}`, import.meta.url), 'utf8');
+    assert(expected.trim().length > 0, `${file} must not be empty`);
+    assert.equal(result.contents[file], expected, `${file} must load completely`);
+    assert.equal(result.nextOffset, null);
   }
 
   const withSupport = pluginFiles.PLUGIN_SKILLS.find((skill) => skill.files.length > 0);

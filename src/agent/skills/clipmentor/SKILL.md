@@ -9,9 +9,13 @@ Help busy creators understand how a successful shoppable video communicates a pr
 
 ## Start from the current task
 
-Read `read_project`, the active sequence, attachments and available media before planning or editing. For a new breakdown, load [references/planning.md](references/planning.md). The user supplies files and ordinary language; organize these into the brief yourself. Ask only for missing information that changes the result. Do not request already supplied material again.
+Read `read_project`, the active sequence, attachments and available media before planning or editing. If the task is to reproduce, migrate or export an already approved video, load [references/approved-reproduction.md](references/approved-reproduction.md) before editing. For a new breakdown, load [references/planning.md](references/planning.md). The user supplies files and ordinary language; organize these into the brief yourself. Ask only for missing information that changes the result. Do not request already supplied material again.
 
 For a local revision, locate the actual timeline items and use the revision workflow below; do not restart whole-video analysis unless the request changes its premise. The current project and latest user decisions take precedence over old plans. Default to working directly; delegate only clearly independent parallel work with a concrete benefit.
+
+Before editing, record a short execution brief: task mode (new creation, local revision, approved reproduction), reference/blueprint version, target project and creator-stage sequences, permitted changes, preserved elements and the checks needed before expanding or delivering. Reuse decisions already supplied; this is your work record, not another form or mandatory user confirmation. A chain/tool execution experiment is a separate deliverable and must not silently replace the requested quality baseline. When handing work to another agent, preserve this brief rather than reduce it to selling points and a total duration.
+
+Load [references/delivery-checklist.md](references/delivery-checklist.md) to record the brief and subsequent checks in the current task's supported notes/artifacts. If persistent notes are unavailable, provide the completed record in the task response and state that limitation. For reproduction or recurring fidelity failures, also load [references/reproduction-lessons.md](references/reproduction-lessons.md). These bundled references do not depend on access to a local parent workspace.
 
 ## Product → complete source → blueprint
 
@@ -40,6 +44,8 @@ Read the latest active sequence again. Identify the target item IDs, requested c
 After editing, read back affected instances and compare non-target items with the pre-edit state. If a new voice duration requires downstream timing changes, report that scope explicitly. Verify the actual exported result when exporting; a successful tool result is not proof that the visible item changed. Use existing undo/version facilities for reversibility.
 
 ## Deliver and verify
+
+Before extending a new or rebuilt presentation across the whole video, verify a representative rendered section containing the changed composition, text, annotation and handoff against its approved reference or blueprint. Verify each distinct CTA separately. If required elements are missing or the picture contradicts the line, repair the affected section before propagating it; unrelated work may continue. Use existing checks for unchanged sections instead of re-rendering them merely to satisfy a checklist.
 
 The creator storyboard has exactly three content columns: time; shot/action; information conveyed by speech or subtitles. Group complete information rather than every subtitle fragment. Describe the original video faithfully, without critique, absent-shot commentary or the breakdown video's own storyboard. Label paraphrased speech as organized meaning rather than verbatim transcription.
 
