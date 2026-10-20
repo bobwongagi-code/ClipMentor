@@ -29,6 +29,9 @@ const ENV_PATH = ACTIVE_PROFILE.keystorePath;
 // Whitelist of settable env vars — mirrors what config/vite.config.ts reads. POST /api/keys
 // rejects anything outside this set so the endpoint can never write arbitrary env.
 export const KEY_NAMES = [
+  "ROOTIFY_GATEWAY_API_KEY",
+  "CLIPMENTOR_FUNASR_API_KEY",
+  "CLIPMENTOR_FUNASR_ENDPOINT",
   "AGENT_IMPORT_ROOTS",
   "PROXY_URL",
   "LLM_API_KEY",
@@ -194,6 +197,7 @@ const SETTABLE = new Set<string>(KEY_NAMES);
 // not credentials). Deliberately a separate explicit list rather than derived from
 // KEY_NAMES: adding a key to the whitelist must never accidentally make it non-secret.
 export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
+  "CLIPMENTOR_FUNASR_ENDPOINT",
   "AGENT_IMPORT_ROOTS",
   "PROXY_URL",
   "LLM_PROVIDER",

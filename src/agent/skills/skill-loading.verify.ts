@@ -77,6 +77,8 @@ try {
     'references/approved-reproduction.md',
     'references/delivery-checklist.md',
     'references/reproduction-lessons.md',
+    'references/pre-edit-analysis.md',
+    'references/analysis-method.md',
   ]) {
     const loaded = loader.execPluginSkillTool('load_skill', { name: 'clipmentor', file, offset: 0 });
     assert(loaded && typeof loaded === 'object' && 'contents' in loaded, `cannot load ${file}`);

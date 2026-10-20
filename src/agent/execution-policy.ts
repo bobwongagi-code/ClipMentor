@@ -37,7 +37,7 @@ const IRREVERSIBLE_EXTERNAL_TOOLS = new Set([
   'run_code', 'web_crawl', 'web_browser', 'web_search', 'web_map', 'web_batch_scrape',
   'submit_render_job', 'submit_export', 'export_timeline', 'export_motion_graphic_prores',
   'convert_motion_graphic_to_video',
-  'transcribe_track',
+  'transcribe_track', 'transcribe_clipmentor_source', 'request_clipmentor_copy_review', 'observe_clipmentor_source_video',
   'submit_image', 'submit_video', 'submit_music', 'submit_sound', 'submit_voice',
   'submit_motion_graphic', 'create_motion_graphic', 'create_motion_graphic_from_code',
   'submit_shader', 'rerun_generation',

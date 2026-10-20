@@ -130,11 +130,13 @@ function dynamicToolResult(body: CodexToolResultRequest): Record<string, unknown
       : `${shaped.__images.length} frames rendered`;
     return {
       contentItems: [
+        // The current CLI's tool-image preparation can consume trailing text
+        // as part of a data URL. Put metadata first; preserve image bytes.
+        { type: 'inputText', text: note },
         ...shaped.__images.map((image) => ({
           type: 'inputImage',
           imageUrl: `data:image/jpeg;base64,${image.base64}`,
         })),
-        { type: 'inputText', text: note },
       ],
       success: body.success,
     };
@@ -145,12 +147,34 @@ function dynamicToolResult(body: CodexToolResultRequest): Record<string, unknown
   };
 }
 
+/** Keep object arguments visible to code-mode's schema-to-signature conversion.
+ * Cross-field required/not branches remain enforced by the canonical host schema.
+ * Do not flatten actual value unions or nested schemas.
+ */
+export function codexModelInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const alternatives = schema.oneOf;
+  if (schema.type !== 'object' || !object(schema.properties) || !Array.isArray(alternatives) || !alternatives.length) return schema;
+  const requirements = (value: unknown): boolean => {
+    const constraint = object(value);
+    return !!constraint && Object.keys(constraint).length === 1
+      && Array.isArray(constraint.required) && constraint.required.length > 0
+      && constraint.required.every((key) => typeof key === 'string');
+  };
+  if (!alternatives.every((value) => {
+    const branch = object(value);
+    return !!branch && Object.keys(branch).every((key) => key === 'required' || key === 'not')
+      && requirements({ required: branch.required }) && (branch.not === undefined || requirements(branch.not));
+  })) return schema;
+  const { oneOf: _hostConstraint, ...visible } = schema;
+  return visible;
+}
+
 function dynamicTools(tools: readonly CodexAgentToolSpec[]): unknown[] {
   return tools.map((tool) => ({
     type: 'function',
     name: tool.name,
     description: tool.description ?? tool.name,
-    inputSchema: tool.inputSchema,
+    inputSchema: codexModelInputSchema(tool.inputSchema),
   }));
 }
 

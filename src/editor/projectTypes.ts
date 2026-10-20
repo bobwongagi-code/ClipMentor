@@ -1,6 +1,7 @@
 import type { CURRENT_PROJECT_VERSION } from '../../shared/project-version.js';
 import type { DesignStyle } from './designTypes.js';
 import type { MediaAsset, MediaFolder } from './mediaTypes.js';
+import type { ClipMentorAnalysis } from '../clipmentor/analysis.js';
 import type { Timeline } from './timelineTypes.js';
 
 /** a project = shared media + ordered timelines + which one is active
@@ -14,6 +15,8 @@ export interface ProjectDoc {
   activeTimelineId: string;
   /** applied brand identity (manage_design_style); absent = no style set */
   designStyle?: DesignStyle;
+  /** Source-bound pre-edit analysis; absent on ordinary editing projects. */
+  clipMentorAnalysis?: ClipMentorAnalysis;
 }
 
 /** the active timeline of a project (falls back to the first if the id is stale). */

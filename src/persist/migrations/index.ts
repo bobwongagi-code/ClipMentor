@@ -1,3 +1,4 @@
+import { isClipMentorAnalysis } from '../../clipmentor/analysis.js';
 import { CURRENT_PROJECT_VERSION } from '../../../shared/project-version.js';
 import type { ProjectDoc } from '../../editor/types.js';
 import { fitTimelineItems } from '../../editor/clipFit.js';
@@ -42,6 +43,7 @@ function collapseDevelopmentVersion(value: unknown, version: number): unknown {
 
 function finalize(value: unknown): ProjectDoc | null {
   if (!isProjectShape(value) || value.version !== CURRENT_PROJECT_VERSION) return null;
+  if (value.clipMentorAnalysis !== undefined && !isClipMentorAnalysis(value.clipMentorAnalysis)) return null;
   const mediaFolders = normalizeFolders(value.mediaFolders);
   const folderIds = new Set(mediaFolders.map((folder) => folder.id));
   const assets = dedupeAssets(Array.isArray(value.assets) ? value.assets : []).map((asset) => (

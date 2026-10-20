@@ -390,6 +390,9 @@ export class ServerRunToolExecutor {
           activation: this.activation,
           ctx: {
             ...draftContext(this.callbacks.ctx(), this.draft),
+            getProjectId: () => this.projectId,
+            getAgentRunId: () => session.runId,
+            getAgentRunSignal: () => session.abort.signal,
             onToolProgress: (note: string) => {
               if (this.current(session)) {
                 this.callbacks.setLiveTool({ name: request.name, partial: note });

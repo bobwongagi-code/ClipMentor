@@ -4,7 +4,7 @@ import {
   projectToolResultForPersistence,
 } from './runtime-artifact';
 
-const MAX_SERVER_RUN_TOOL_RESULT_BYTES = 768 * 1024;
+import { TOOL_RESULT_TEXT_BYTES, isBoundedVisualToolResult } from '../../shared/agent-tool-result-limits';
 const encoder = new TextEncoder();
 function omitProjectedImages(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -27,13 +27,15 @@ function omitProjectedImages(value: unknown): unknown {
 export function projectServerRunToolResult(value: unknown): unknown {
   try {
     const original = JSON.stringify(value);
-    if (encoder.encode(original).byteLength <= MAX_SERVER_RUN_TOOL_RESULT_BYTES) return value;
+    const bytes = encoder.encode(original).byteLength;
+    if (bytes <= TOOL_RESULT_TEXT_BYTES) return value;
+    if (isBoundedVisualToolResult(value)) return value;
   } catch {
     // Fall through to the fail-closed persistence projection.
   }
   const projected = omitProjectedImages(projectToolResultForPersistence(value));
   const encoded = JSON.stringify(projected);
-  if (encoder.encode(encoded).byteLength <= MAX_SERVER_RUN_TOOL_RESULT_BYTES) return projected;
+  if (encoder.encode(encoded).byteLength <= TOOL_RESULT_TEXT_BYTES) return projected;
   const artifact = agentArtifactRefOf(value);
   if (artifact) return artifactPlaceholder(artifact);
   return {

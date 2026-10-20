@@ -54,6 +54,9 @@ export interface AgentContext {
   audio: AudioAsset[];
   /** Open project id (hash route /#/editor/:id). Used by project tools. */
   getProjectId?: () => string;
+  /** Host-owned identity for isolated review requests; never supplied by the model. */
+  getAgentRunId?: () => string;
+  getAgentRunSignal?: () => AbortSignal;
   /** Navigate editor to another project (flush + hash change). */
   openProject?: (projectId: string) => Promise<{ ok: boolean; error?: string } | void>;
   /** Dashboard/title rename when edit_project updates the open project. */

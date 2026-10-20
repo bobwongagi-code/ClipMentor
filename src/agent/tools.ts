@@ -1,6 +1,8 @@
+import { CLIPMENTOR_ANALYSIS_TOOL_NAMES, CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS } from './tools/schemas/clipmentor-analysis-tools';
 import type { AgentToolSchema } from './tool-schema';
 import type { AgentContext } from './context';
 import type { HarnessToolExecutionContext } from './harness-context';
+import { clipMentorProductionBlock } from '../clipmentor/production-gate';
 import { CORE_TOOL_SCHEMAS } from './tools/schemas/core-tools';
 import { AUDIO_ASSET_TOOL_NAMES } from './tools/schemas/audio-asset-tools';
 import { SCENE_QUALITY_TOOL_NAMES, SCENE_QUALITY_TOOL_SCHEMAS } from './tools/schemas/scene-quality-tools';
@@ -147,6 +149,7 @@ export const TOOL_SCHEMAS: AgentToolSchema[] = [
   ...FOLLOWUP_TOOL_SCHEMAS,
   // Project session: create/list/delete/duplicate/edit/restore/target_project + get_editor_url
   ...PROJECT_TOOL_SCHEMAS,
+  ...CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS,
   // Verified import session/finalize receipt chain plus media download.
   ...UPLOAD_TOOL_SCHEMAS,
   // Silent friction reporting through a localStorage ring buffer; no backend.
@@ -254,6 +257,7 @@ const EXECUTOR_GROUPS: ReadonlyArray<readonly [ReadonlySet<string>, ToolExecutor
   [FONT_TOOL_NAMES, async () => (await import('./tools/font-tools')).execFontTool],
   [SEARCH_TOOL_NAMES, async () => (await import('./tools/search-tools')).execSearchTool],
   [FOLLOWUP_TOOL_NAMES, async () => (await import('./tools/followup-tools')).execFollowupTool],
+  [CLIPMENTOR_ANALYSIS_TOOL_NAMES, async () => (await import('./tools/clipmentor-analysis-tools')).execClipMentorAnalysisTool],
   [PROJECT_TOOL_NAMES, async () => (await import('./tools/project-tools')).execProjectTool],
   [UPLOAD_TOOL_NAMES, async () => (await import('./tools/upload-tools')).execUploadTool],
   [FRICTION_TOOL_NAMES, async () => (await import('./tools/friction-tools')).execFrictionTool],
@@ -304,6 +308,8 @@ export async function executeTool(
   searchCatalog: readonly AgentToolSchema[] = TOOL_SCHEMAS,
   harness?: HarnessToolExecutionContext,
 ): Promise<unknown> {
+  const blocked = await clipMentorProductionBlock(name, args, ctx);
+  if (blocked) return blocked;
   if (name === 'track_progress') {
     const { execProgressTool } = await import('./tools/progress-tools');
     return execProgressTool(name, args, ctx);

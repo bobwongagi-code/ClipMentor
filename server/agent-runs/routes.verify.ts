@@ -320,6 +320,19 @@ try {
   );
   assert.equal(deliveredResult.image.length, acceptedPayload.length);
 
+  const visualBinding = { ...toolBinding, toolCallId: 'call-clear-images', claimId: 'browser-clear-images' };
+  const visualDelivered = waitForToolResult(toolRun, visualBinding.toolCallId, 'observe_clipmentor_source', largeArgsDigest);
+  const postVisual = async (path: string, body: unknown) => fetch(`${origin}/api/agent-runs/${toolRun.id}/${path}`, {
+    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json', 'X-OpenChatCut-Run-Capability': toolCapability }, body: JSON.stringify(body),
+  });
+  assert.equal((await postVisual('tool-claim', visualBinding)).status, 200);
+  const visual = { __images: [{ frame: 1, base64: 'a'.repeat(1_200_000) }], note: 'clear source image' };
+  assert.equal((await postVisual('tool-result', { ...visualBinding, result: { ...visual, metadata: 'x'.repeat(800_000) } })).status, 413,
+    'visual allowance must not admit oversized text metadata');
+  assert.equal((await postVisual('tool-result', { ...visualBinding, result: { __images: [{ frame: 1, base64: 'a'.repeat(4 * 1024 * 1024) }] } })).status, 413);
+  assert.equal((await postVisual('tool-result', { ...visualBinding, result: visual })).status, 200);
+  assert.deepEqual(await visualDelivered, visual, 'clear image payload above 1 MiB reaches the tool consumer unchanged');
+
   const { run: capRun, capability: capCapability } = createRunWithCapability({ id: '22222222-2222-4222-8222-222222222222', projectId: 'project-cap', sessionGeneration: 'legacy', provider: 'deepseek', model: 'test' });
   for (let index = 0; index < MAX_SERVER_RUN_EVENTS * 4 + 2; index += 1) {
     pushRunEvent(capRun, 'tool-request', {

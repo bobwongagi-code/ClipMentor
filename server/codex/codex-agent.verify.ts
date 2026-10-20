@@ -6,9 +6,27 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { CodexTurnStreamEvent } from '../../shared/codex-agent.ts';
 import { CODEX_DISABLED_FEATURES, CodexAppServerClient } from './app-server.ts';
 import { codexCommand } from './command.ts';
-import { CodexTurnManager } from './turn-manager.ts';
+import { CodexTurnManager, codexModelInputSchema } from './turn-manager.ts';
 import { mapCodexModels, parseCodexTurnRequest } from '../plugins/codex-agent.ts';
 import { KEY_NAMES, seedKeystore } from '../keystore.ts';
+import { CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS } from '../../src/agent/tools/schemas/clipmentor-analysis-tools.ts';
+import { validateAgentToolInvocation } from '../../src/agent/execution-policy.ts';
+const observeSchema = CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS.find((tool) => tool.name === 'observe_clipmentor_source')!;
+const visibleObserveSchema = codexModelInputSchema(observeSchema.input_schema);
+assert.equal(visibleObserveSchema.oneOf, undefined);
+assert.deepEqual(visibleObserveSchema.properties, observeSchema.input_schema.properties);
+assert.deepEqual(visibleObserveSchema.required, observeSchema.input_schema.required);
+assert(observeSchema.input_schema.oneOf, 'the authoritative host schema is not mutated');
+const valueUnion = { type: 'object', properties: { value: {} }, oneOf: [{ properties: { value: { type: 'string' } } }, { properties: { value: { type: 'number' } } }] };
+assert.equal(codexModelInputSchema(valueUnion), valueUnion, 'actual unions are preserved');
+const nestedUnion = { type: 'object', properties: { value: { oneOf: [{ type: 'string' }, { type: 'number' }] } } };
+assert.equal(codexModelInputSchema(nestedUnion), nestedUnion, 'nested unions are preserved');
+const validObserve = { expectedRevision: 1, actor: { operator: 'test', executor: 'test', instruction: 'test-only', identity: 'local_declared_not_authenticated' }, reason: 'test-only', seconds: [1] };
+assert(validateAgentToolInvocation(observeSchema, validObserve, [observeSchema]).ok);
+for (const args of [{ seconds: [1] }, { ...validObserve, unrecognized: true }, { ...validObserve, sequence: { startSeconds: 1, endSeconds: 2, count: 3 } }, { ...validObserve, seconds: undefined }]) {
+  assert(!validateAgentToolInvocation(observeSchema, args, [observeSchema]).ok, 'host retains required identity and exclusive sampling checks');
+}
+
 
 seedKeystore({
   ...Object.fromEntries(KEY_NAMES.map((name) => [name, ''])),
@@ -112,6 +130,11 @@ lines.on('line', (line) => {
   if (message.method === 'thread/start') {
     if (message.params.model !== 'gpt-5.4') process.exit(77);
     if (!message.params.dynamicTools?.some((tool) => tool.name === 'read_project')) process.exit(79);
+    const observe = message.params.dynamicTools.find((tool) => tool.name === 'observe_clipmentor_source')?.inputSchema;
+    if (!observe || observe.oneOf || !observe.properties?.seconds || !observe.properties?.sequence
+      || !observe.required?.includes('expectedRevision') || !observe.required?.includes('actor') || !observe.required?.includes('reason')
+      || observe.additionalProperties !== false) process.exit(82);
+
     if (!message.params.baseInstructions?.includes('without changing the project')) process.exit(80);
     if (message.params.config?.features?.code_mode !== false
       || message.params.config?.features?.code_mode_host !== true
@@ -145,6 +168,12 @@ lines.on('line', (line) => {
   }
   if (message.id === 'dynamic-1') {
     if (message.result?.success !== true) process.exit(74);
+    // Text after a data URL is consumed as image bytes by the current CLI.
+    // Keep metadata before all image items; never change the image payload.
+    const items = message.result.contentItems;
+    if (items?.[0]?.type !== 'inputText' || items[0].text !== 'image boundary check'
+      || items[1]?.type !== 'inputImage' || items[1].imageUrl !== 'data:image/jpeg;base64,aGVsbG8='
+      || items[2]?.type !== 'inputImage' || items[2].imageUrl !== 'data:image/jpeg;base64,d29ybGQ=') process.exit(82);
     // A total-only event must not be passed downstream as a request sample.
     send({
       method: 'thread/tokenUsage/updated',
@@ -263,7 +292,7 @@ try {
       name: 'read_project',
       description: 'Read project state',
       inputSchema: { type: 'object', properties: { section: { type: 'string' } } },
-    }],
+    }, { name: observeSchema.name, description: observeSchema.description, inputSchema: observeSchema.input_schema }],
   }, (event) => {
     events.push(event);
     if (event.type === 'tool-start') {
@@ -271,7 +300,8 @@ try {
         requestId: 'request-1',
         callId: event.callId,
         success: true,
-        result: { projectId: 'project-1' },
+        result: { projectId: 'project-1', note: 'image boundary check',
+          __images: [{ frame: 1, base64: 'aGVsbG8=' }, { frame: 2, base64: 'd29ybGQ=' }] },
       }), 'ok');
     }
   }, new AbortController().signal);

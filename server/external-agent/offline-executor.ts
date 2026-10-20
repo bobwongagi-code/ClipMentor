@@ -1,4 +1,5 @@
 import type { AgentContext } from '../../src/agent/context.js';
+import { clipMentorProductionBlock } from '../../src/clipmentor/production-gate.js';
 import { execAgentRuntimeTool } from '../../src/agent/tools/agent-runtime-tools.js';
 import { execCaptionsTool } from '../../src/agent/tools/captions-tools.js';
 import { CORE_DATA_TOOL_NAMES, execCoreDataTool } from '../../src/agent/tools/core-data-tools.js';
@@ -24,6 +25,8 @@ export async function executeOfflineTool(
   args: Args,
   ctx: AgentContext,
 ): Promise<unknown> {
+  const blocked = await clipMentorProductionBlock(name, args, ctx);
+  if (blocked) return blocked;
   if (name === 'read_agent_artifact') return execAgentRuntimeTool(name, args, ctx);
   if (CORE_DATA_TOOL_NAMES.has(name)) return execCoreDataTool(name, args, ctx);
   if (name === 'manage_timelines') return execTimelineTool(name, args, ctx);

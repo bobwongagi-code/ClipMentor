@@ -52,6 +52,8 @@ export function draftContext(ctx: AgentContext, draft: DraftEngine): AgentContex
     templates: ctx.templates,
     audio: ctx.audio,
     getProjectId: ctx.getProjectId,
+    getAgentRunId: ctx.getAgentRunId,
+    getAgentRunSignal: ctx.getAgentRunSignal,
     openProject: ctx.openProject,
     onProjectRenamed: ctx.onProjectRenamed,
     getUndoTarget: ctx.getUndoTarget,

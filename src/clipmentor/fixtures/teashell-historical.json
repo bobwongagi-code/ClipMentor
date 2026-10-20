@@ -1,0 +1,3641 @@
+{
+  "inventory": {
+    "version": "2026-10-16-v1",
+    "status": "evidence_inventory_pending_user_review",
+    "purpose": "source_selling_point_expression_and_consumer_cta_analysis_only",
+    "source": {
+      "source_sha256": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+      "fps": "30/1",
+      "time_base": "1/15360",
+      "duration_seconds": 99.86666666666666,
+      "frame_count": 2996,
+      "extraction": "ffmpeg select by zero-based source frame; original resolution; no color changes",
+      "observation_limit": "Sampled frames only; no actual listening or continuous playback in this pass"
+    },
+    "transcript_sources": [
+      {
+        "source_id": "TS-ASR-FULL",
+        "file": "transcript.words.json",
+        "sha256": "37c56f029af83f2091b7058e3ff3ae5b2b58be266d4654aec41997776a978c27",
+        "kind": "machine_transcript",
+        "source_offset_seconds": 0,
+        "listening_verified": false
+      },
+      {
+        "source_id": "TS-ASR-END",
+        "file": "transcript.words.json",
+        "sha256": "f5b563e16ba02f68f17e3cccb67a8809076827d3750065e2d3b047d6bfdf085e",
+        "kind": "machine_transcript",
+        "source_offset_seconds": 67,
+        "listening_verified": false
+      }
+    ],
+    "claim_and_operator_evidence": [
+      {
+        "evidence_id": "TS-A01",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-FULL",
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          67,
+          73
+        ],
+        "text": "ASR候选：dah putih dari sebelahnya；原达人表达与另一侧相比更白。",
+        "status": "machine_transcript_candidate_not_listening_verified"
+      },
+      {
+        "evidence_id": "TS-A02",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-FULL",
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          80,
+          87
+        ],
+        "text": "ASR中比较/亮白关键词beza、putih；不是完整逐字还原。",
+        "status": "machine_transcript_candidate_not_listening_verified"
+      },
+      {
+        "evidence_id": "TS-A03",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-FULL",
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          87,
+          94
+        ],
+        "text": "ASR近似商品名skin brightening sop；不从乱码补成分功效。",
+        "status": "machine_transcript_candidate_not_listening_verified"
+      },
+      {
+        "evidence_id": "TS-A04",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          94,
+          99.86666666666666
+        ],
+        "text": "ASR含kuning、beli片段，整句乱码且与全片转写不一致；不能引用为已听清的黄车CTA。",
+        "status": "uncertain"
+      },
+      {
+        "evidence_id": "TS-U01",
+        "kind": "operator_supplied",
+        "source": "user_feedback_in_current_conversation",
+        "text": "用户指出收尾以集中商品的组合/份量和价值感承接黄色购物入口下单，普通促单简短说明。",
+        "status": "user_supplied_not_independently_listening_verified"
+      }
+    ],
+    "frame_manifest": "原片帧清单.json",
+    "points": [
+      {
+        "point_id": "TS-CMP-01",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          67,
+          73
+        ],
+        "buying_reason_or_function": "提亮差别",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-A01"
+        ],
+        "visible_action": {
+          "text": "双手手背靠近镜头并排，有明显泡沫。",
+          "evidence_ids": [
+            "TS-F2010",
+            "TS-F2130",
+            "TS-F2160"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "提亮是外观差别；靠近且同框，让观众直接看两侧，不必靠远景记忆比较。",
+          "supporting_evidence_ids": [
+            "TS-F2010",
+            "TS-F2130",
+            "TS-F2160",
+            "TS-A01"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "core",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-CMP-02",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          73,
+          80
+        ],
+        "buying_reason_or_function": "使用到结果的衔接",
+        "original_claim_or_operator_evidence_ids": [],
+        "visible_action": {
+          "text": "在水槽前处理前臂/肘部，可见水滴，明显泡沫减少。",
+          "evidence_ids": [
+            "TS-F2250",
+            "TS-F2310",
+            "TS-F2340"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "维持使用过程与再展示的承接，不凭空跳出结果；本点不是独立新增卖点。",
+          "supporting_evidence_ids": [
+            "TS-F2250",
+            "TS-F2310",
+            "TS-F2340"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "supporting_bridge",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-CMP-03",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          80,
+          85
+        ],
+        "buying_reason_or_function": "提亮差别",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-A02"
+        ],
+        "visible_action": {
+          "text": "双手再次近镜头同框，无此前同样明显的泡沫。",
+          "evidence_ids": [
+            "TS-F2400",
+            "TS-F2490",
+            "TS-F2520"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "不同泡沫状态下都展示比较，强调同一购买关注，不是简单重复素材。",
+          "supporting_evidence_ids": [
+            "TS-F2400",
+            "TS-F2490",
+            "TS-F2520",
+            "TS-A02"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "core",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-CMP-04",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          84,
+          87
+        ],
+        "buying_reason_or_function": "对提亮差别的注意与感受",
+        "original_claim_or_operator_evidence_ids": [],
+        "visible_action": {
+          "text": "双手展示后，脸部露出，眉眼睁大、头部倾斜。",
+          "evidence_ids": [
+            "TS-F2520",
+            "TS-F2550",
+            "TS-F2580"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "表情接住比较后的感受，帮助观众留意差别；不是额外功效证据。",
+          "supporting_evidence_ids": [
+            "TS-F2520",
+            "TS-F2550",
+            "TS-F2580"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "supporting_emphasis",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-END-01",
+        "unit_id": "source_consumer_cta",
+        "source_range_seconds": [
+          90,
+          99.86666666666666
+        ],
+        "buying_reason_or_function": "购买对象与价值感",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-U01"
+        ],
+        "visible_action": {
+          "text": "收拢皂块/网袋；98秒举盒，99.5秒两个包装盒并排面对镜头。",
+          "evidence_ids": [
+            "TS-F2850",
+            "TS-F2940",
+            "TS-F2985"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "集中商品强化份量和价值感，重新明确购买对象；不能据此确认套餐或低价。",
+          "supporting_evidence_ids": [
+            "TS-F2850",
+            "TS-F2940",
+            "TS-F2985",
+            "TS-U01"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "brief",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-END-02",
+        "unit_id": "source_consumer_cta",
+        "source_range_seconds": [
+          94,
+          99.86666666666666
+        ],
+        "buying_reason_or_function": "购买行动",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-A04",
+          "TS-U01"
+        ],
+        "visible_action": {
+          "text": "尾部手持商品面对镜头说话；采样图无可读购物入口文字。",
+          "evidence_ids": [
+            "TS-F2985"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "集中商品后接下单邀请；黄车意图来自用户反馈，精确台词仍待听审；不能把帧本身作为黄车台词证据。",
+          "supporting_evidence_ids": [
+            "TS-F2985",
+            "TS-A04",
+            "TS-U01"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "brief",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      }
+    ],
+    "must_preserve": [
+      "卖点与具体画面关系",
+      "靠近且两侧同框",
+      "不同泡沫状态的比较",
+      "反应接住比较",
+      "商品集中展示及用户指出的下单引导",
+      "普通收尾短带"
+    ],
+    "forbidden_additions": [
+      "未确认左右使用身份的Before–After",
+      "一洗即白或永久改善承诺",
+      "三盒套餐或具体促销价",
+      "从活动产品海报移植折扣/赠品",
+      "画面已证明完整黄车口播",
+      "确定销量或转化率因果"
+    ],
+    "unresolved": [
+      "原片收尾完整话句和句界未听审",
+      "具体套餐数量和价格未确认",
+      "两侧使用身份未独立确认",
+      "完全冲净过程未连续观看核实"
+    ],
+    "inspection": {
+      "sampled_frames": 49,
+      "full_resolution_frames_reviewed_seconds": [
+        75,
+        77,
+        78,
+        81,
+        85,
+        99.5
+      ],
+      "continuous_viewing": false,
+      "actual_listening": false,
+      "fresh_asr_calls": 0,
+      "gemini_calls": 0,
+      "new_voice_synthesis": 0,
+      "timeline_edited": false,
+      "independent_new_video_test": false
+    }
+  },
+  "frame_manifest": {
+    "source_sha256": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+    "fps": "30/1",
+    "time_base": "1/15360",
+    "duration_seconds": 99.86666666666666,
+    "frame_count": 2996,
+    "extraction": "ffmpeg select by zero-based source frame; original resolution; no color changes",
+    "observation_limit": "Sampled frames only; no actual listening or continuous playback in this pass",
+    "frames": [
+      {
+        "evidence_id": "TS-F0000",
+        "source_frame": 0,
+        "time_seconds": 0.0,
+        "file": "原片帧/frame-001.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "94cc4f942293e7fa0b592632f6736758aa9d2cd2b465e39001bd5720629bb774"
+      },
+      {
+        "evidence_id": "TS-F0150",
+        "source_frame": 150,
+        "time_seconds": 5.0,
+        "file": "原片帧/frame-002.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "4aab1cc98da6c2484e3db3f0b0c4d0b6a1c02d9d89fd009cd4f0464aa372029e"
+      },
+      {
+        "evidence_id": "TS-F0300",
+        "source_frame": 300,
+        "time_seconds": 10.0,
+        "file": "原片帧/frame-003.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "a7ae5f4cec28fe40e9a6340f2e299f1c0f32825618ea068511ec927235ca94ee"
+      },
+      {
+        "evidence_id": "TS-F0450",
+        "source_frame": 450,
+        "time_seconds": 15.0,
+        "file": "原片帧/frame-004.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "2d8731985d0b73922ba4b2dfd805168461fa1bac8acfd2d0ee53fc405abbaae4"
+      },
+      {
+        "evidence_id": "TS-F0600",
+        "source_frame": 600,
+        "time_seconds": 20.0,
+        "file": "原片帧/frame-005.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "0c16e37881f706ee0aafc17dae3e8b2111a12794338b43812f4166ac47cf99ce"
+      },
+      {
+        "evidence_id": "TS-F0750",
+        "source_frame": 750,
+        "time_seconds": 25.0,
+        "file": "原片帧/frame-006.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "477d627eb7cd1c4ae4864920f361e2003aba79eeece43d8e36b80becbe646120"
+      },
+      {
+        "evidence_id": "TS-F0900",
+        "source_frame": 900,
+        "time_seconds": 30.0,
+        "file": "原片帧/frame-007.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "2cfce8fc04f0c0c21304b181212fc6980e443453b3bd210e4e5c5a42e08297d2"
+      },
+      {
+        "evidence_id": "TS-F1050",
+        "source_frame": 1050,
+        "time_seconds": 35.0,
+        "file": "原片帧/frame-008.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "2c29a823521dbbffe03daac998bb2a232098e31ff30e9042c2bf75b67c7628de"
+      },
+      {
+        "evidence_id": "TS-F1200",
+        "source_frame": 1200,
+        "time_seconds": 40.0,
+        "file": "原片帧/frame-009.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "19360bec96fc5c858199efeb9ad926cb5c27139f8a598e7aa3f6341200be1e16"
+      },
+      {
+        "evidence_id": "TS-F1350",
+        "source_frame": 1350,
+        "time_seconds": 45.0,
+        "file": "原片帧/frame-010.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "327405db1382ae2c4560f903d41721b063a81a5b7221730030216f67ec5e60ba"
+      },
+      {
+        "evidence_id": "TS-F1500",
+        "source_frame": 1500,
+        "time_seconds": 50.0,
+        "file": "原片帧/frame-011.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "ecadc13fdd15855d94db44453b85df7b1ba7323f4dccdfcd7c862f9fa8710338"
+      },
+      {
+        "evidence_id": "TS-F1650",
+        "source_frame": 1650,
+        "time_seconds": 55.0,
+        "file": "原片帧/frame-012.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "6e7ef4e26fdf2c640e57186c687a1e964b613c36fd9870a24f96b50e543b1e3e"
+      },
+      {
+        "evidence_id": "TS-F1800",
+        "source_frame": 1800,
+        "time_seconds": 60.0,
+        "file": "原片帧/frame-013.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "02599b7a59274a004b0dd0d37c843bd5955e7b459948a81c342b2cbd896fdd87"
+      },
+      {
+        "evidence_id": "TS-F1950",
+        "source_frame": 1950,
+        "time_seconds": 65.0,
+        "file": "原片帧/frame-014.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "7e92cdb84fe08629a7fdc8e9d028a52396e0073a0a303099d003177fb48e0c64"
+      },
+      {
+        "evidence_id": "TS-F1980",
+        "source_frame": 1980,
+        "time_seconds": 66.0,
+        "file": "原片帧/frame-015.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "57b88b7fcb9241e5293ab4213f994003e9062dd84b8dd0f1bd090a4c42b67462"
+      },
+      {
+        "evidence_id": "TS-F2010",
+        "source_frame": 2010,
+        "time_seconds": 67.0,
+        "file": "原片帧/frame-016.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "d8bd79a4b4ddfaca099bea68f78ba352b144af260379e409aecea7b8a0d6be76"
+      },
+      {
+        "evidence_id": "TS-F2040",
+        "source_frame": 2040,
+        "time_seconds": 68.0,
+        "file": "原片帧/frame-017.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "41be4a5f3fc7c3a9a053e6310ba2e348b1d5fe116937f750a176acc9b485eaea"
+      },
+      {
+        "evidence_id": "TS-F2070",
+        "source_frame": 2070,
+        "time_seconds": 69.0,
+        "file": "原片帧/frame-018.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "5c09bc9a64d027f1b79ce10a2e6d28a313a88e68cdb5c167e8b86537e666f49b"
+      },
+      {
+        "evidence_id": "TS-F2100",
+        "source_frame": 2100,
+        "time_seconds": 70.0,
+        "file": "原片帧/frame-019.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "95c2d45012aecbd9b9a7273867faa26ac49b259f53802974cb17f15ba6d6ad51"
+      },
+      {
+        "evidence_id": "TS-F2130",
+        "source_frame": 2130,
+        "time_seconds": 71.0,
+        "file": "原片帧/frame-020.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "556fac72e80a96db46337c8f76de6b2c5da2003dba0e473ec402c32f7db51de9"
+      },
+      {
+        "evidence_id": "TS-F2160",
+        "source_frame": 2160,
+        "time_seconds": 72.0,
+        "file": "原片帧/frame-021.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "f3a2042aa43e4bf63ab422d6c9ed8b8987f20c34382dfcb3f2781d7b9d3ba10a"
+      },
+      {
+        "evidence_id": "TS-F2190",
+        "source_frame": 2190,
+        "time_seconds": 73.0,
+        "file": "原片帧/frame-022.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "bfc376aa0191afcc605bbd5c522c02ce8bfd4e431ce3ebb24cbf4e5cc5f3b40e"
+      },
+      {
+        "evidence_id": "TS-F2220",
+        "source_frame": 2220,
+        "time_seconds": 74.0,
+        "file": "原片帧/frame-023.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "a37edfc98bbab638c09c80b2fb68a85f93fc321767744360e2bb90db2f34713d"
+      },
+      {
+        "evidence_id": "TS-F2250",
+        "source_frame": 2250,
+        "time_seconds": 75.0,
+        "file": "原片帧/frame-024.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "a66a69825ecc1e6f70054e8c1c0c8bbb5d89dc143930ff05ae924586c739485b"
+      },
+      {
+        "evidence_id": "TS-F2280",
+        "source_frame": 2280,
+        "time_seconds": 76.0,
+        "file": "原片帧/frame-025.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "2e84ab24f697c8b42e3ed174f6bc5e7951589919abc76e6857ed3e9ce34cae26"
+      },
+      {
+        "evidence_id": "TS-F2310",
+        "source_frame": 2310,
+        "time_seconds": 77.0,
+        "file": "原片帧/frame-026.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "b57ed938a2f54a8abaa9dc15a600476ff76f24278f8cb5d0f54cf76d11e51291"
+      },
+      {
+        "evidence_id": "TS-F2340",
+        "source_frame": 2340,
+        "time_seconds": 78.0,
+        "file": "原片帧/frame-027.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "55edb0c8ac20032253cf74a75f5d8d008f468da56737eeb10a340e26f56b9de2"
+      },
+      {
+        "evidence_id": "TS-F2370",
+        "source_frame": 2370,
+        "time_seconds": 79.0,
+        "file": "原片帧/frame-028.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "86c5242b3bfa32d5c847e3fe3b3220b7b5baa4d1087bff0b3b43a7a55f3c369d"
+      },
+      {
+        "evidence_id": "TS-F2400",
+        "source_frame": 2400,
+        "time_seconds": 80.0,
+        "file": "原片帧/frame-029.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "8e84b80cef4baac971df9d6e2e837a04c464dc8c14027079f2da9c8d0243a36f"
+      },
+      {
+        "evidence_id": "TS-F2430",
+        "source_frame": 2430,
+        "time_seconds": 81.0,
+        "file": "原片帧/frame-030.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "bf76228b52fba1b7513ce5bd34f65661ac78dcca4ac5a8a86fc2b148e84ae6f6"
+      },
+      {
+        "evidence_id": "TS-F2460",
+        "source_frame": 2460,
+        "time_seconds": 82.0,
+        "file": "原片帧/frame-031.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "98c3c44940e5b329affcc22f479b9c24983fe229b1d1401bcf270b4e40f77067"
+      },
+      {
+        "evidence_id": "TS-F2490",
+        "source_frame": 2490,
+        "time_seconds": 83.0,
+        "file": "原片帧/frame-032.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "79dcd709dd82118feac4edc453c466b9f655f6cc81d8bcf553db39493278198c"
+      },
+      {
+        "evidence_id": "TS-F2520",
+        "source_frame": 2520,
+        "time_seconds": 84.0,
+        "file": "原片帧/frame-033.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "b5a325d5bb8f9a0893ececa02fe8c5dfc39b546159490292b1e11b4b1d78ae62"
+      },
+      {
+        "evidence_id": "TS-F2550",
+        "source_frame": 2550,
+        "time_seconds": 85.0,
+        "file": "原片帧/frame-034.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "bde50ae7091a74bc43c5e05001774b4047e7b5b484000c78413efbf132f32cce"
+      },
+      {
+        "evidence_id": "TS-F2580",
+        "source_frame": 2580,
+        "time_seconds": 86.0,
+        "file": "原片帧/frame-035.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "9e10baa297f32bccb58434b8c2e14fc08ef572b71d5fb98863c83ef4a0a0456e"
+      },
+      {
+        "evidence_id": "TS-F2610",
+        "source_frame": 2610,
+        "time_seconds": 87.0,
+        "file": "原片帧/frame-036.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "aec6a80d262ee4c29633b811a7f9ff1386122d8ffa5cab5552da60a4ab3e3f7e"
+      },
+      {
+        "evidence_id": "TS-F2640",
+        "source_frame": 2640,
+        "time_seconds": 88.0,
+        "file": "原片帧/frame-037.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "542e81ea05b0373ca7243ea8964ade4acb1924186274c761e432d168be27ca6d"
+      },
+      {
+        "evidence_id": "TS-F2670",
+        "source_frame": 2670,
+        "time_seconds": 89.0,
+        "file": "原片帧/frame-038.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "85168cb94c2d7e9053eb025caaa5b546d3e6259d126ba6159e09412b1463ec92"
+      },
+      {
+        "evidence_id": "TS-F2700",
+        "source_frame": 2700,
+        "time_seconds": 90.0,
+        "file": "原片帧/frame-039.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "d7bf6b28c60fcbfa996ad05bee5e6519ba3775925cc17b5bb22b7a08116ee827"
+      },
+      {
+        "evidence_id": "TS-F2730",
+        "source_frame": 2730,
+        "time_seconds": 91.0,
+        "file": "原片帧/frame-040.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "25da0036105c9c8519ca868080f0b69f0d74b9d1038f3d9c2766a7e3ae02b51c"
+      },
+      {
+        "evidence_id": "TS-F2760",
+        "source_frame": 2760,
+        "time_seconds": 92.0,
+        "file": "原片帧/frame-041.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "9f4c2af59be904c1b8d6deb81432105e6a48e1ee0c90b064a3f9c569f01b116f"
+      },
+      {
+        "evidence_id": "TS-F2790",
+        "source_frame": 2790,
+        "time_seconds": 93.0,
+        "file": "原片帧/frame-042.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "6bea51ce0355b756f449d5702077377c2b6baaef4f9732f108c83505365dbde5"
+      },
+      {
+        "evidence_id": "TS-F2820",
+        "source_frame": 2820,
+        "time_seconds": 94.0,
+        "file": "原片帧/frame-043.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "4b03fa19cb48705ae0a866099fd961c220b07af5844086218b4edf39d8c5a7e0"
+      },
+      {
+        "evidence_id": "TS-F2850",
+        "source_frame": 2850,
+        "time_seconds": 95.0,
+        "file": "原片帧/frame-044.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "42b81291734a6e8a9882cd73fae8505aa1cb46226f8de3f36caf2925949e6200"
+      },
+      {
+        "evidence_id": "TS-F2880",
+        "source_frame": 2880,
+        "time_seconds": 96.0,
+        "file": "原片帧/frame-045.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "49da41ff32c6b3b69718095c36e10fb0974179241b1f5d43ca623d1a98b7113b"
+      },
+      {
+        "evidence_id": "TS-F2910",
+        "source_frame": 2910,
+        "time_seconds": 97.0,
+        "file": "原片帧/frame-046.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "6f3902ff0b1b7d36ac10a4138a50b23658693da0de75d8f091e9ce33b1d25f01"
+      },
+      {
+        "evidence_id": "TS-F2940",
+        "source_frame": 2940,
+        "time_seconds": 98.0,
+        "file": "原片帧/frame-047.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "cfdeabb897aafc2afeabfaa9e0a5dacb632aee0ddbdaf679491fdc8be375ed2c"
+      },
+      {
+        "evidence_id": "TS-F2970",
+        "source_frame": 2970,
+        "time_seconds": 99.0,
+        "file": "原片帧/frame-048.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "145c36cb9c26b05c5afee3c57080758f9ef9c9afbfc5451b722828f6dbe08186"
+      },
+      {
+        "evidence_id": "TS-F2985",
+        "source_frame": 2985,
+        "time_seconds": 99.5,
+        "file": "原片帧/frame-049.png",
+        "width": 576,
+        "height": 1024,
+        "sha256": "0128102e172e8a8b80edb37cf76b9741e71d57de5890783f85451b56ee620e88"
+      }
+    ]
+  },
+  "copy_input": {
+    "version": "2026-10-16-copy-input-v1",
+    "language": "ms-MY",
+    "audience": "马来西亚忙碌的带货创作者",
+    "task": "approved_evidence_to_narration_not_new_video_analysis",
+    "approval_basis": "用户看过卖点与证据清单后回复同意继续；该批准不等于原声逐字听审。",
+    "evidence_inventory_sha256": "c80618c9c624ed17a2f262e1dd1fc5fb442be95a99506525c9a69b8c86db6769",
+    "product": {
+      "name": "Teashell",
+      "category": "提亮皂",
+      "positioning_source": "原片提亮主张与商品包装；不代表独立功效验证"
+    },
+    "units": [
+      {
+        "unit_id": "comparison",
+        "point_ids": [
+          "TS-CMP-01",
+          "TS-CMP-02",
+          "TS-CMP-03",
+          "TS-CMP-04"
+        ],
+        "intent_zh": "围绕提亮卖点，解释达人把双手靠近镜头并排，让差别可以直接比较；有明显泡沫时与之后继续展示两个阶段；最后用表情引导观众留意差别。手臂处理只作过程衔接，不单独报动作。",
+        "narration_budget_seconds": [
+          12,
+          16
+        ],
+        "budget_basis": "本次解释的计划目标，未合成；不沿用旧句时间槽，实际音频仍须实测；不要为凑满预算加话。",
+        "line_guidance": "最多三个简短解释句，可以合并point；不要四点各讲一次。"
+      },
+      {
+        "unit_id": "source_consumer_cta",
+        "point_ids": [
+          "TS-END-01",
+          "TS-END-02"
+        ],
+        "intent_zh": "普通收尾简短点明：商品集中展示形成份量和价值感，顺势邀请消费者点黄色购物袋下单。解释原达人的促单做法，不直接命令观看拆解的达人买皂，不改成Rootify招商。",
+        "narration_budget_seconds": [
+          4,
+          5
+        ],
+        "budget_basis": "本次普通收尾的目标，未实测；不强行锁在旧3.93秒。",
+        "line_guidance": "一句简短解释即可，不报套餐数量，不加具体价格。"
+      }
+    ],
+    "points": [
+      {
+        "point_id": "TS-CMP-01",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          67,
+          73
+        ],
+        "buying_reason_or_function": "提亮差别",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-A01"
+        ],
+        "visible_action": {
+          "text": "双手手背靠近镜头并排，有明显泡沫。",
+          "evidence_ids": [
+            "TS-F2010",
+            "TS-F2130",
+            "TS-F2160"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "提亮是外观差别；靠近且同框，让观众直接看两侧，不必靠远景记忆比较。",
+          "supporting_evidence_ids": [
+            "TS-F2010",
+            "TS-F2130",
+            "TS-F2160",
+            "TS-A01"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "core",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-CMP-02",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          73,
+          80
+        ],
+        "buying_reason_or_function": "使用到结果的衔接",
+        "original_claim_or_operator_evidence_ids": [],
+        "visible_action": {
+          "text": "在水槽前处理前臂/肘部，可见水滴，明显泡沫减少。",
+          "evidence_ids": [
+            "TS-F2250",
+            "TS-F2310",
+            "TS-F2340"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "维持使用过程与再展示的承接，不凭空跳出结果；本点不是独立新增卖点。",
+          "supporting_evidence_ids": [
+            "TS-F2250",
+            "TS-F2310",
+            "TS-F2340"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "supporting_bridge",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-CMP-03",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          80,
+          85
+        ],
+        "buying_reason_or_function": "提亮差别",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-A02"
+        ],
+        "visible_action": {
+          "text": "双手再次近镜头同框，无此前同样明显的泡沫。",
+          "evidence_ids": [
+            "TS-F2400",
+            "TS-F2490",
+            "TS-F2520"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "不同泡沫状态下都展示比较，强调同一购买关注，不是简单重复素材。",
+          "supporting_evidence_ids": [
+            "TS-F2400",
+            "TS-F2490",
+            "TS-F2520",
+            "TS-A02"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "core",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-CMP-04",
+        "unit_id": "comparison",
+        "source_range_seconds": [
+          84,
+          87
+        ],
+        "buying_reason_or_function": "对提亮差别的注意与感受",
+        "original_claim_or_operator_evidence_ids": [],
+        "visible_action": {
+          "text": "双手展示后，脸部露出，眉眼睁大、头部倾斜。",
+          "evidence_ids": [
+            "TS-F2520",
+            "TS-F2550",
+            "TS-F2580"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "表情接住比较后的感受，帮助观众留意差别；不是额外功效证据。",
+          "supporting_evidence_ids": [
+            "TS-F2520",
+            "TS-F2550",
+            "TS-F2580"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "supporting_emphasis",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-END-01",
+        "unit_id": "source_consumer_cta",
+        "source_range_seconds": [
+          90,
+          99.86666666666666
+        ],
+        "buying_reason_or_function": "购买对象与价值感",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-U01"
+        ],
+        "visible_action": {
+          "text": "收拢皂块/网袋；98秒举盒，99.5秒两个包装盒并排面对镜头。",
+          "evidence_ids": [
+            "TS-F2850",
+            "TS-F2940",
+            "TS-F2985"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "集中商品强化份量和价值感，重新明确购买对象；不能据此确认套餐或低价。",
+          "supporting_evidence_ids": [
+            "TS-F2850",
+            "TS-F2940",
+            "TS-F2985",
+            "TS-U01"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "brief",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      },
+      {
+        "point_id": "TS-END-02",
+        "unit_id": "source_consumer_cta",
+        "source_range_seconds": [
+          94,
+          99.86666666666666
+        ],
+        "buying_reason_or_function": "购买行动",
+        "original_claim_or_operator_evidence_ids": [
+          "TS-A04",
+          "TS-U01"
+        ],
+        "visible_action": {
+          "text": "尾部手持商品面对镜头说话；采样图无可读购物入口文字。",
+          "evidence_ids": [
+            "TS-F2985"
+          ],
+          "observation_method": "sampled_source_frames"
+        },
+        "analyst_interpretation": {
+          "text": "集中商品后接下单邀请；黄车意图来自用户反馈，精确台词仍待听审；不能把帧本身作为黄车台词证据。",
+          "supporting_evidence_ids": [
+            "TS-F2985",
+            "TS-A04",
+            "TS-U01"
+          ],
+          "classification": "expression_analysis_not_verified_causal_effect"
+        },
+        "explanation_priority": "brief",
+        "review_status": "pending_user_review",
+        "provenance": "prior_user_guidance_and_current_source_frame_review"
+      }
+    ],
+    "claim_and_operator_evidence": [
+      {
+        "evidence_id": "TS-A01",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-FULL",
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          67,
+          73
+        ],
+        "text": "ASR候选：dah putih dari sebelahnya；原达人表达与另一侧相比更白。",
+        "status": "machine_transcript_candidate_not_listening_verified"
+      },
+      {
+        "evidence_id": "TS-A02",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-FULL",
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          80,
+          87
+        ],
+        "text": "ASR中比较/亮白关键词beza、putih；不是完整逐字还原。",
+        "status": "machine_transcript_candidate_not_listening_verified"
+      },
+      {
+        "evidence_id": "TS-A03",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-FULL",
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          87,
+          94
+        ],
+        "text": "ASR近似商品名skin brightening sop；不从乱码补成分功效。",
+        "status": "machine_transcript_candidate_not_listening_verified"
+      },
+      {
+        "evidence_id": "TS-A04",
+        "kind": "original_claim",
+        "source_ids": [
+          "TS-ASR-END"
+        ],
+        "source_range_seconds": [
+          94,
+          99.86666666666666
+        ],
+        "text": "ASR含kuning、beli片段，整句乱码且与全片转写不一致；不能引用为已听清的黄车CTA。",
+        "status": "uncertain"
+      },
+      {
+        "evidence_id": "TS-U01",
+        "kind": "operator_supplied",
+        "source": "user_feedback_in_current_conversation",
+        "text": "用户指出收尾以集中商品的组合/份量和价值感承接黄色购物入口下单，普通促单简短说明。",
+        "status": "user_supplied_not_independently_listening_verified"
+      }
+    ],
+    "must_preserve": [
+      "卖点与具体画面关系",
+      "靠近且两侧同框",
+      "不同泡沫状态的比较",
+      "反应接住比较",
+      "商品集中展示及用户指出的下单引导",
+      "普通收尾短带"
+    ],
+    "forbidden_additions": [
+      "未确认左右使用身份的Before–After",
+      "一洗即白或永久改善承诺",
+      "三盒套餐或具体促销价",
+      "从活动产品海报移植折扣/赠品",
+      "画面已证明完整黄车口播",
+      "确定销量或转化率因果"
+    ],
+    "unresolved": [
+      "原片收尾完整话句和句界未听审",
+      "具体套餐数量和价格未确认",
+      "两侧使用身份未独立确认",
+      "完全冲净过程未连续观看核实"
+    ],
+    "registered_entities_and_numbers": [
+      {
+        "entity": "Teashell",
+        "kind": "product_name"
+      },
+      {
+        "value": 2,
+        "entity": "hands",
+        "kind": "visible_count",
+        "allowed_ms": [
+          "dua tangan",
+          "kedua-dua tangan"
+        ]
+      },
+      {
+        "value": 2,
+        "entity": "visible_boxes",
+        "kind": "visible_count_not_bundle",
+        "voice_requirement": "do_not_mention_bundle_count"
+      }
+    ],
+    "style": {
+      "stance": "简短的同行分享，说明具体做法的作用，不是喊口号、上课或强势叫卖。",
+      "avoid": [
+        "动作流水账",
+        "泛技巧标签替代解释",
+        "字典式直译",
+        "故意堆俚语或英文",
+        "锁单、逼单或收益口号",
+        "内部证据限制变成面对达人的免责声明"
+      ],
+      "auxiliary_label_max_words": 4,
+      "caption_rule": "字幕文字必须与实际口播定稿相同；caption_lines仅允许分行，不另写精简字幕。"
+    },
+    "output_contract": {
+      "root": {
+        "version": "string",
+        "units": "array"
+      },
+      "unit": {
+        "unit_id": "must match input",
+        "lines": "array, ordinary closing one line, comparison up to three"
+      },
+      "line": {
+        "line_id": "unique stable ID",
+        "point_ids": "only approved IDs from same unit",
+        "evidence_ids": "existing supporting IDs only",
+        "narration_ms": "spoken Malay",
+        "caption_lines": "array of exact narration words, only line breaks differ",
+        "meaning_zh": "faithful Chinese meaning",
+        "labels": "array of objects {text_ms,meaning_zh,evidence_ids}, short and specific",
+        "estimated_duration_seconds": "estimate only, not measured",
+        "facts_used": "array of {content,evidence_ids}",
+        "uncertainties": "array; do not put internal notes in spoken copy"
+      }
+    }
+  },
+  "transcripts": [
+    {
+      "source_id": "TS-ASR-FULL",
+      "data": {
+        "schema_version": "flayr.transcript_words.v1",
+        "source": "transcript.json",
+        "provider": "fun-asr",
+        "words": [
+          {
+            "start_seconds": 0.64,
+            "end_seconds": 1.079,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 1.079,
+            "end_seconds": 1.199,
+            "text": "di"
+          },
+          {
+            "start_seconds": 1.199,
+            "end_seconds": 1.359,
+            "text": "med"
+          },
+          {
+            "start_seconds": 1.359,
+            "end_seconds": 1.599,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 1.599,
+            "end_seconds": 1.718,
+            "text": "ber"
+          },
+          {
+            "start_seconds": 1.718,
+            "end_seconds": 1.758,
+            "text": "das"
+          },
+          {
+            "start_seconds": 1.758,
+            "end_seconds": 2.398,
+            "text": "arkan"
+          },
+          {
+            "start_seconds": 2.398,
+            "end_seconds": 2.558,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 2.558,
+            "end_seconds": 2.677,
+            "text": "di"
+          },
+          {
+            "start_seconds": 2.677,
+            "end_seconds": 2.797,
+            "text": "ul"
+          },
+          {
+            "start_seconds": 2.797,
+            "end_seconds": 2.917,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 2.917,
+            "end_seconds": 3.077,
+            "text": "med"
+          },
+          {
+            "start_seconds": 3.077,
+            "end_seconds": 3.237,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 3.397,
+            "end_seconds": 3.636,
+            "text": "sikit"
+          },
+          {
+            "start_seconds": 3.636,
+            "end_seconds": 3.796,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 3.796,
+            "end_seconds": 3.956,
+            "text": "dah"
+          },
+          {
+            "start_seconds": 3.956,
+            "end_seconds": 4.156,
+            "text": "put"
+          },
+          {
+            "start_seconds": 4.156,
+            "end_seconds": 4.356,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 4.356,
+            "end_seconds": 4.556,
+            "text": "dari"
+          },
+          {
+            "start_seconds": 4.556,
+            "end_seconds": 4.654,
+            "text": "se"
+          },
+          {
+            "start_seconds": 4.654,
+            "end_seconds": 4.755,
+            "text": "bel"
+          },
+          {
+            "start_seconds": 4.755,
+            "end_seconds": 4.995,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 4.995,
+            "end_seconds": 5.275,
+            "text": "nya"
+          },
+          {
+            "start_seconds": 5.275,
+            "end_seconds": 5.554,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 5.554,
+            "end_seconds": 7.353,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 7.393,
+            "end_seconds": 7.552,
+            "text": "main"
+          },
+          {
+            "start_seconds": 7.552,
+            "end_seconds": 7.752,
+            "text": "dia"
+          },
+          {
+            "start_seconds": 7.752,
+            "end_seconds": 7.912,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 7.912,
+            "end_seconds": 7.992,
+            "text": "med"
+          },
+          {
+            "start_seconds": 7.992,
+            "end_seconds": 8.711,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 8.711,
+            "end_seconds": 8.991,
+            "text": "orang"
+          },
+          {
+            "start_seconds": 8.991,
+            "end_seconds": 9.271,
+            "text": "review"
+          },
+          {
+            "start_seconds": 9.271,
+            "end_seconds": 9.431,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 9.574,
+            "end_seconds": 9.79,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 9.79,
+            "end_seconds": 9.95,
+            "text": "ket"
+          },
+          {
+            "start_seconds": 9.95,
+            "end_seconds": 10.11,
+            "text": "i"
+          },
+          {
+            "start_seconds": 10.11,
+            "end_seconds": 10.39,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 10.39,
+            "end_seconds": 10.589,
+            "text": "oleh"
+          },
+          {
+            "start_seconds": 10.589,
+            "end_seconds": 10.789,
+            "text": "put"
+          },
+          {
+            "start_seconds": 10.789,
+            "end_seconds": 11.708,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 11.708,
+            "end_seconds": 11.868,
+            "text": "cel"
+          },
+          {
+            "start_seconds": 11.868,
+            "end_seconds": 12.028,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 12.028,
+            "end_seconds": 12.268,
+            "text": "kang"
+          },
+          {
+            "start_seconds": 12.268,
+            "end_seconds": 12.348,
+            "text": "k"
+          },
+          {
+            "start_seconds": 12.348,
+            "end_seconds": 12.547,
+            "text": "ang"
+          },
+          {
+            "start_seconds": 12.547,
+            "end_seconds": 12.707,
+            "text": "oleh"
+          },
+          {
+            "start_seconds": 12.707,
+            "end_seconds": 12.947,
+            "text": "put"
+          },
+          {
+            "start_seconds": 12.947,
+            "end_seconds": 14.146,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 14.146,
+            "end_seconds": 14.385,
+            "text": "pat"
+          },
+          {
+            "start_seconds": 14.385,
+            "end_seconds": 14.585,
+            "text": "ung"
+          },
+          {
+            "start_seconds": 14.585,
+            "end_seconds": 14.825,
+            "text": "pun"
+          },
+          {
+            "start_seconds": 14.825,
+            "end_seconds": 14.945,
+            "text": "oleh"
+          },
+          {
+            "start_seconds": 14.945,
+            "end_seconds": 15.145,
+            "text": "put"
+          },
+          {
+            "start_seconds": 15.145,
+            "end_seconds": 15.305,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 15.305,
+            "end_seconds": 16.064,
+            "text": "pada"
+          },
+          {
+            "start_seconds": 16.064,
+            "end_seconds": 16.264,
+            "text": "bel"
+          },
+          {
+            "start_seconds": 16.264,
+            "end_seconds": 16.343,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 16.343,
+            "end_seconds": 16.503,
+            "text": "ang"
+          },
+          {
+            "start_seconds": 16.503,
+            "end_seconds": 16.623,
+            "text": "pat"
+          },
+          {
+            "start_seconds": 16.623,
+            "end_seconds": 16.823,
+            "text": "ung"
+          },
+          {
+            "start_seconds": 16.823,
+            "end_seconds": 16.943,
+            "text": "bo"
+          },
+          {
+            "start_seconds": 16.943,
+            "end_seconds": 17.063,
+            "text": "leh"
+          },
+          {
+            "start_seconds": 17.063,
+            "end_seconds": 17.263,
+            "text": "put"
+          },
+          {
+            "start_seconds": 17.263,
+            "end_seconds": 17.742,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 17.742,
+            "end_seconds": 18.222,
+            "text": "ark"
+          },
+          {
+            "start_seconds": 18.222,
+            "end_seconds": 18.381,
+            "text": "ung"
+          },
+          {
+            "start_seconds": 18.381,
+            "end_seconds": 18.621,
+            "text": "itu"
+          },
+          {
+            "start_seconds": 18.621,
+            "end_seconds": 18.821,
+            "text": "pun"
+          },
+          {
+            "start_seconds": 18.821,
+            "end_seconds": 18.941,
+            "text": "oleh"
+          },
+          {
+            "start_seconds": 18.941,
+            "end_seconds": 19.101,
+            "text": "put"
+          },
+          {
+            "start_seconds": 19.101,
+            "end_seconds": 19.3,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 19.4,
+            "end_seconds": 19.98,
+            "text": "koya"
+          },
+          {
+            "start_seconds": 20.1,
+            "end_seconds": 20.379,
+            "text": "tiga"
+          },
+          {
+            "start_seconds": 20.379,
+            "end_seconds": 20.539,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 20.539,
+            "end_seconds": 20.659,
+            "text": "mel"
+          },
+          {
+            "start_seconds": 20.659,
+            "end_seconds": 21.099,
+            "text": "ihat"
+          },
+          {
+            "start_seconds": 21.218,
+            "end_seconds": 21.458,
+            "text": "tiga"
+          },
+          {
+            "start_seconds": 21.458,
+            "end_seconds": 21.578,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 21.578,
+            "end_seconds": 21.698,
+            "text": "mel"
+          },
+          {
+            "start_seconds": 21.698,
+            "end_seconds": 22.297,
+            "text": "ihat"
+          },
+          {
+            "start_seconds": 22.457,
+            "end_seconds": 22.617,
+            "text": "nanti"
+          },
+          {
+            "start_seconds": 22.617,
+            "end_seconds": 22.737,
+            "text": "di"
+          },
+          {
+            "start_seconds": 22.737,
+            "end_seconds": 23.057,
+            "text": "mel"
+          },
+          {
+            "start_seconds": 23.057,
+            "end_seconds": 23.296,
+            "text": "ito"
+          },
+          {
+            "start_seconds": 23.296,
+            "end_seconds": 23.456,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 23.456,
+            "end_seconds": 23.576,
+            "text": "bis"
+          },
+          {
+            "start_seconds": 23.576,
+            "end_seconds": 23.816,
+            "text": "ik"
+          },
+          {
+            "start_seconds": 23.816,
+            "end_seconds": 24.056,
+            "text": "net"
+          },
+          {
+            "start_seconds": 24.056,
+            "end_seconds": 24.235,
+            "text": "sek"
+          },
+          {
+            "start_seconds": 24.235,
+            "end_seconds": 24.375,
+            "text": "ali"
+          },
+          {
+            "start_seconds": 24.455,
+            "end_seconds": 24.615,
+            "text": "diber"
+          },
+          {
+            "start_seconds": 24.615,
+            "end_seconds": 24.775,
+            "text": "i"
+          },
+          {
+            "start_seconds": 24.775,
+            "end_seconds": 25.134,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 25.134,
+            "end_seconds": 25.334,
+            "text": "net"
+          },
+          {
+            "start_seconds": 25.334,
+            "end_seconds": 25.502,
+            "text": "u"
+          },
+          {
+            "start_seconds": 25.67,
+            "end_seconds": 25.934,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 26.014,
+            "end_seconds": 26.173,
+            "text": "kena"
+          },
+          {
+            "start_seconds": 26.173,
+            "end_seconds": 26.359,
+            "text": "meny"
+          },
+          {
+            "start_seconds": 26.359,
+            "end_seconds": 26.693,
+            "text": "impan"
+          },
+          {
+            "start_seconds": 26.693,
+            "end_seconds": 26.933,
+            "text": "sab"
+          },
+          {
+            "start_seconds": 26.933,
+            "end_seconds": 27.053,
+            "text": "un"
+          },
+          {
+            "start_seconds": 27.053,
+            "end_seconds": 27.292,
+            "text": "di"
+          },
+          {
+            "start_seconds": 27.292,
+            "end_seconds": 27.412,
+            "text": "to"
+          },
+          {
+            "start_seconds": 27.412,
+            "end_seconds": 28.012,
+            "text": "a"
+          },
+          {
+            "start_seconds": 28.012,
+            "end_seconds": 28.171,
+            "text": "dah"
+          },
+          {
+            "start_seconds": 28.171,
+            "end_seconds": 28.291,
+            "text": "di"
+          },
+          {
+            "start_seconds": 28.291,
+            "end_seconds": 28.371,
+            "text": "meng"
+          },
+          {
+            "start_seconds": 28.371,
+            "end_seconds": 28.571,
+            "text": "ena"
+          },
+          {
+            "start_seconds": 28.571,
+            "end_seconds": 28.691,
+            "text": "dis"
+          },
+          {
+            "start_seconds": 28.691,
+            "end_seconds": 28.931,
+            "text": "impan"
+          },
+          {
+            "start_seconds": 28.931,
+            "end_seconds": 29.05,
+            "text": "di"
+          },
+          {
+            "start_seconds": 29.05,
+            "end_seconds": 29.13,
+            "text": "to"
+          },
+          {
+            "start_seconds": 29.13,
+            "end_seconds": 29.25,
+            "text": "a"
+          },
+          {
+            "start_seconds": 29.25,
+            "end_seconds": 29.37,
+            "text": "yang"
+          },
+          {
+            "start_seconds": 29.49,
+            "end_seconds": 29.69,
+            "text": "muka"
+          },
+          {
+            "start_seconds": 29.69,
+            "end_seconds": 29.81,
+            "text": "oleh"
+          },
+          {
+            "start_seconds": 29.89,
+            "end_seconds": 30.01,
+            "text": "kena"
+          },
+          {
+            "start_seconds": 30.13,
+            "end_seconds": 30.169,
+            "text": "k"
+          },
+          {
+            "start_seconds": 30.169,
+            "end_seconds": 30.329,
+            "text": "ita"
+          },
+          {
+            "start_seconds": 30.329,
+            "end_seconds": 30.449,
+            "text": "ber"
+          },
+          {
+            "start_seconds": 30.449,
+            "end_seconds": 30.569,
+            "text": "uns"
+          },
+          {
+            "start_seconds": 30.569,
+            "end_seconds": 30.768,
+            "text": "ur"
+          },
+          {
+            "start_seconds": 30.768,
+            "end_seconds": 31.04,
+            "text": "sek"
+          },
+          {
+            "start_seconds": 31.04,
+            "end_seconds": 31.248,
+            "text": "ali"
+          },
+          {
+            "start_seconds": 31.447,
+            "end_seconds": 32.725,
+            "text": "sisco"
+          },
+          {
+            "start_seconds": 32.805,
+            "end_seconds": 33.005,
+            "text": "paling"
+          },
+          {
+            "start_seconds": 33.005,
+            "end_seconds": 33.324,
+            "text": "best"
+          },
+          {
+            "start_seconds": 33.324,
+            "end_seconds": 33.444,
+            "text": "sid"
+          },
+          {
+            "start_seconds": 33.444,
+            "end_seconds": 33.564,
+            "text": "am"
+          },
+          {
+            "start_seconds": 33.564,
+            "end_seconds": 33.684,
+            "text": "ad"
+          },
+          {
+            "start_seconds": 33.684,
+            "end_seconds": 33.843,
+            "text": "as"
+          },
+          {
+            "start_seconds": 33.843,
+            "end_seconds": 33.963,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 33.963,
+            "end_seconds": 34.071,
+            "text": "h"
+          },
+          {
+            "start_seconds": 34.179,
+            "end_seconds": 34.442,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 34.442,
+            "end_seconds": 35.121,
+            "text": "ay"
+          },
+          {
+            "start_seconds": 35.121,
+            "end_seconds": 35.321,
+            "text": "u"
+          },
+          {
+            "start_seconds": 35.321,
+            "end_seconds": 35.521,
+            "text": "den"
+          },
+          {
+            "start_seconds": 35.521,
+            "end_seconds": 35.68,
+            "text": "pun"
+          },
+          {
+            "start_seconds": 35.68,
+            "end_seconds": 35.76,
+            "text": "nem"
+          },
+          {
+            "start_seconds": 35.76,
+            "end_seconds": 35.96,
+            "text": "u"
+          },
+          {
+            "start_seconds": 35.96,
+            "end_seconds": 36.159,
+            "text": "put"
+          },
+          {
+            "start_seconds": 36.159,
+            "end_seconds": 36.279,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 36.279,
+            "end_seconds": 36.439,
+            "text": "hal"
+          },
+          {
+            "start_seconds": 36.439,
+            "end_seconds": 36.599,
+            "text": "aman"
+          },
+          {
+            "start_seconds": 36.798,
+            "end_seconds": 37.357,
+            "text": "tesis"
+          },
+          {
+            "start_seconds": 37.357,
+            "end_seconds": 37.477,
+            "text": "nu"
+          },
+          {
+            "start_seconds": 37.557,
+            "end_seconds": 37.837,
+            "text": "jern"
+          },
+          {
+            "start_seconds": 37.837,
+            "end_seconds": 38.316,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 38.316,
+            "end_seconds": 38.555,
+            "text": "su"
+          },
+          {
+            "start_seconds": 38.555,
+            "end_seconds": 38.675,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 38.771,
+            "end_seconds": 38.915,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 38.979,
+            "end_seconds": 39.075,
+            "text": "kung"
+          },
+          {
+            "start_seconds": 39.075,
+            "end_seconds": 39.115,
+            "text": "em"
+          },
+          {
+            "start_seconds": 39.115,
+            "end_seconds": 39.194,
+            "text": "ang"
+          },
+          {
+            "start_seconds": 39.194,
+            "end_seconds": 39.398,
+            "text": "mem"
+          },
+          {
+            "start_seconds": 39.398,
+            "end_seconds": 39.554,
+            "text": "ang"
+          },
+          {
+            "start_seconds": 39.554,
+            "end_seconds": 39.634,
+            "text": "tem"
+          },
+          {
+            "start_seconds": 39.634,
+            "end_seconds": 39.793,
+            "text": "pe"
+          },
+          {
+            "start_seconds": 39.793,
+            "end_seconds": 39.913,
+            "text": "nya"
+          },
+          {
+            "start_seconds": 40.073,
+            "end_seconds": 40.193,
+            "text": "mesti"
+          },
+          {
+            "start_seconds": 40.193,
+            "end_seconds": 40.352,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 40.352,
+            "end_seconds": 40.512,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 40.618,
+            "end_seconds": 40.912,
+            "text": "coba"
+          },
+          {
+            "start_seconds": 40.912,
+            "end_seconds": 41.63,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 41.63,
+            "end_seconds": 41.71,
+            "text": "med"
+          },
+          {
+            "start_seconds": 41.71,
+            "end_seconds": 41.87,
+            "text": "a"
+          },
+          {
+            "start_seconds": 41.87,
+            "end_seconds": 42.042,
+            "text": "ket"
+          },
+          {
+            "start_seconds": 42.042,
+            "end_seconds": 42.389,
+            "text": "eb"
+          },
+          {
+            "start_seconds": 42.389,
+            "end_seconds": 43.028,
+            "text": "al"
+          },
+          {
+            "start_seconds": 43.028,
+            "end_seconds": 43.347,
+            "text": "so"
+          },
+          {
+            "start_seconds": 43.347,
+            "end_seconds": 43.667,
+            "text": "kita"
+          },
+          {
+            "start_seconds": 43.747,
+            "end_seconds": 43.986,
+            "text": "coba"
+          },
+          {
+            "start_seconds": 43.986,
+            "end_seconds": 44.146,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 44.146,
+            "end_seconds": 44.306,
+            "text": "bak"
+          },
+          {
+            "start_seconds": 44.386,
+            "end_seconds": 44.665,
+            "text": "lengan"
+          },
+          {
+            "start_seconds": 44.777,
+            "end_seconds": 44.945,
+            "text": "dulu"
+          },
+          {
+            "start_seconds": 44.945,
+            "end_seconds": 45.144,
+            "text": "lah"
+          },
+          {
+            "start_seconds": 45.144,
+            "end_seconds": 46.223,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 46.223,
+            "end_seconds": 46.462,
+            "text": "tem"
+          },
+          {
+            "start_seconds": 46.462,
+            "end_seconds": 46.502,
+            "text": "ul"
+          },
+          {
+            "start_seconds": 46.502,
+            "end_seconds": 46.662,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 46.662,
+            "end_seconds": 46.742,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 46.742,
+            "end_seconds": 46.862,
+            "text": "bal"
+          },
+          {
+            "start_seconds": 46.862,
+            "end_seconds": 47.221,
+            "text": "engan"
+          },
+          {
+            "start_seconds": 47.588,
+            "end_seconds": 48.14,
+            "text": "dulu"
+          },
+          {
+            "start_seconds": 48.22,
+            "end_seconds": 48.899,
+            "text": "oke"
+          },
+          {
+            "start_seconds": 48.899,
+            "end_seconds": 49.218,
+            "text": "kita"
+          },
+          {
+            "start_seconds": 49.538,
+            "end_seconds": 49.738,
+            "text": "gos"
+          },
+          {
+            "start_seconds": 49.738,
+            "end_seconds": 49.898,
+            "text": "ok"
+          },
+          {
+            "start_seconds": 49.898,
+            "end_seconds": 50.097,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 50.097,
+            "end_seconds": 50.377,
+            "text": "sama"
+          },
+          {
+            "start_seconds": 50.377,
+            "end_seconds": 50.497,
+            "text": "en"
+          },
+          {
+            "start_seconds": 50.497,
+            "end_seconds": 50.657,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 50.657,
+            "end_seconds": 50.777,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 50.888,
+            "end_seconds": 51.056,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 51.056,
+            "end_seconds": 51.216,
+            "text": "lu"
+          },
+          {
+            "start_seconds": 51.216,
+            "end_seconds": 51.336,
+            "text": "put"
+          },
+          {
+            "start_seconds": 51.336,
+            "end_seconds": 51.536,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 51.536,
+            "end_seconds": 51.815,
+            "text": "serta"
+          },
+          {
+            "start_seconds": 51.815,
+            "end_seconds": 51.855,
+            "text": "mer"
+          },
+          {
+            "start_seconds": 51.855,
+            "end_seconds": 51.935,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 51.935,
+            "end_seconds": 52.095,
+            "text": "mer"
+          },
+          {
+            "start_seconds": 52.095,
+            "end_seconds": 52.734,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 52.734,
+            "end_seconds": 53.533,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 53.533,
+            "end_seconds": 53.773,
+            "text": "kita"
+          },
+          {
+            "start_seconds": 53.853,
+            "end_seconds": 53.973,
+            "text": "mesti"
+          },
+          {
+            "start_seconds": 53.973,
+            "end_seconds": 54.093,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 54.093,
+            "end_seconds": 54.213,
+            "text": "per"
+          },
+          {
+            "start_seconds": 54.213,
+            "end_seconds": 54.732,
+            "text": "ut"
+          },
+          {
+            "start_seconds": 54.732,
+            "end_seconds": 54.932,
+            "text": "anak"
+          },
+          {
+            "start_seconds": 54.932,
+            "end_seconds": 55.091,
+            "text": "cum"
+          },
+          {
+            "start_seconds": 55.091,
+            "end_seconds": 55.131,
+            "text": "a"
+          },
+          {
+            "start_seconds": 55.131,
+            "end_seconds": 55.211,
+            "text": "bel"
+          },
+          {
+            "start_seconds": 55.211,
+            "end_seconds": 55.491,
+            "text": "i"
+          },
+          {
+            "start_seconds": 55.491,
+            "end_seconds": 55.571,
+            "text": "yang"
+          },
+          {
+            "start_seconds": 55.651,
+            "end_seconds": 55.851,
+            "text": "mesti"
+          },
+          {
+            "start_seconds": 55.851,
+            "end_seconds": 55.97,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 55.97,
+            "end_seconds": 56.29,
+            "text": "per"
+          },
+          {
+            "start_seconds": 56.29,
+            "end_seconds": 57.409,
+            "text": "ut"
+          },
+          {
+            "start_seconds": 57.409,
+            "end_seconds": 57.728,
+            "text": "baru"
+          },
+          {
+            "start_seconds": 57.928,
+            "end_seconds": 58.088,
+            "text": "siko"
+          },
+          {
+            "start_seconds": 58.088,
+            "end_seconds": 58.208,
+            "text": "to"
+          },
+          {
+            "start_seconds": 58.208,
+            "end_seconds": 58.448,
+            "text": "pon"
+          },
+          {
+            "start_seconds": 58.448,
+            "end_seconds": 58.607,
+            "text": "ole"
+          },
+          {
+            "start_seconds": 58.607,
+            "end_seconds": 58.847,
+            "text": "put"
+          },
+          {
+            "start_seconds": 58.847,
+            "end_seconds": 59.007,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 59.007,
+            "end_seconds": 59.167,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 59.167,
+            "end_seconds": 60.725,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 60.845,
+            "end_seconds": 61.084,
+            "text": "bau"
+          },
+          {
+            "start_seconds": 61.084,
+            "end_seconds": 61.564,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 61.564,
+            "end_seconds": 61.804,
+            "text": "jus"
+          },
+          {
+            "start_seconds": 61.864,
+            "end_seconds": 62.043,
+            "text": "nasi"
+          },
+          {
+            "start_seconds": 62.343,
+            "end_seconds": 62.643,
+            "text": "aja"
+          },
+          {
+            "start_seconds": 62.775,
+            "end_seconds": 62.842,
+            "text": "macam"
+          },
+          {
+            "start_seconds": 62.922,
+            "end_seconds": 63.042,
+            "text": "bau"
+          },
+          {
+            "start_seconds": 63.042,
+            "end_seconds": 63.242,
+            "text": "sab"
+          },
+          {
+            "start_seconds": 63.242,
+            "end_seconds": 63.322,
+            "text": "un"
+          },
+          {
+            "start_seconds": 63.322,
+            "end_seconds": 63.653,
+            "text": "bias"
+          },
+          {
+            "start_seconds": 63.653,
+            "end_seconds": 63.787,
+            "text": "a"
+          },
+          {
+            "start_seconds": 63.921,
+            "end_seconds": 64.001,
+            "text": "nanti"
+          },
+          {
+            "start_seconds": 64.001,
+            "end_seconds": 64.161,
+            "text": "itu"
+          },
+          {
+            "start_seconds": 64.321,
+            "end_seconds": 65.36,
+            "text": "wangi"
+          },
+          {
+            "start_seconds": 67.2,
+            "end_seconds": 67.64,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 67.64,
+            "end_seconds": 67.72,
+            "text": "de"
+          },
+          {
+            "start_seconds": 67.72,
+            "end_seconds": 67.8,
+            "text": "k"
+          },
+          {
+            "start_seconds": 67.8,
+            "end_seconds": 67.92,
+            "text": "bed"
+          },
+          {
+            "start_seconds": 67.92,
+            "end_seconds": 68.2,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 68.2,
+            "end_seconds": 68.28,
+            "text": "bed"
+          },
+          {
+            "start_seconds": 68.28,
+            "end_seconds": 68.44,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 68.44,
+            "end_seconds": 68.6,
+            "text": "sudah"
+          },
+          {
+            "start_seconds": 68.6,
+            "end_seconds": 68.76,
+            "text": "bas"
+          },
+          {
+            "start_seconds": 68.76,
+            "end_seconds": 68.96,
+            "text": "uh"
+          },
+          {
+            "start_seconds": 68.96,
+            "end_seconds": 69.16,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 69.16,
+            "end_seconds": 69.24,
+            "text": "di"
+          },
+          {
+            "start_seconds": 69.24,
+            "end_seconds": 69.32,
+            "text": "ul"
+          },
+          {
+            "start_seconds": 69.32,
+            "end_seconds": 69.48,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 69.48,
+            "end_seconds": 69.64,
+            "text": "bed"
+          },
+          {
+            "start_seconds": 69.64,
+            "end_seconds": 69.8,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 70.0,
+            "end_seconds": 70.2,
+            "text": "sikit"
+          },
+          {
+            "start_seconds": 70.2,
+            "end_seconds": 70.36,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 70.36,
+            "end_seconds": 70.456,
+            "text": "ud"
+          },
+          {
+            "start_seconds": 70.456,
+            "end_seconds": 70.52,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 70.52,
+            "end_seconds": 70.72,
+            "text": "put"
+          },
+          {
+            "start_seconds": 70.72,
+            "end_seconds": 70.92,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 70.92,
+            "end_seconds": 71.12,
+            "text": "dari"
+          },
+          {
+            "start_seconds": 71.12,
+            "end_seconds": 71.219,
+            "text": "se"
+          },
+          {
+            "start_seconds": 71.219,
+            "end_seconds": 71.32,
+            "text": "bel"
+          },
+          {
+            "start_seconds": 71.32,
+            "end_seconds": 71.56,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 71.56,
+            "end_seconds": 71.84,
+            "text": "nya"
+          },
+          {
+            "start_seconds": 71.84,
+            "end_seconds": 72.36,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 72.36,
+            "end_seconds": 72.64,
+            "text": "ad"
+          },
+          {
+            "start_seconds": 72.64,
+            "end_seconds": 73.6,
+            "text": "uh"
+          },
+          {
+            "start_seconds": 74.1,
+            "end_seconds": 74.6,
+            "text": "hah"
+          },
+          {
+            "start_seconds": 74.6,
+            "end_seconds": 74.8,
+            "text": "yang"
+          },
+          {
+            "start_seconds": 74.88,
+            "end_seconds": 74.96,
+            "text": "kau"
+          },
+          {
+            "start_seconds": 74.96,
+            "end_seconds": 75.04,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 75.04,
+            "end_seconds": 75.32,
+            "text": "bet"
+          },
+          {
+            "start_seconds": 75.32,
+            "end_seconds": 76.32,
+            "text": "ul"
+          },
+          {
+            "start_seconds": 76.32,
+            "end_seconds": 76.5,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 76.5,
+            "end_seconds": 76.56,
+            "text": "h"
+          },
+          {
+            "start_seconds": 76.56,
+            "end_seconds": 77.136,
+            "text": "ud"
+          },
+          {
+            "start_seconds": 77.136,
+            "end_seconds": 77.52,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 77.52,
+            "end_seconds": 78.04,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 78.04,
+            "end_seconds": 78.2,
+            "text": "le"
+          },
+          {
+            "start_seconds": 78.2,
+            "end_seconds": 78.52,
+            "text": "pot"
+          },
+          {
+            "start_seconds": 78.52,
+            "end_seconds": 78.6,
+            "text": "me"
+          },
+          {
+            "start_seconds": 78.6,
+            "end_seconds": 78.866,
+            "text": "lep"
+          },
+          {
+            "start_seconds": 78.866,
+            "end_seconds": 79.0,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 79.0,
+            "end_seconds": 79.2,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 79.2,
+            "end_seconds": 79.48,
+            "text": "sis"
+          },
+          {
+            "start_seconds": 79.48,
+            "end_seconds": 79.56,
+            "text": "lim"
+          },
+          {
+            "start_seconds": 79.56,
+            "end_seconds": 79.76,
+            "text": "a"
+          },
+          {
+            "start_seconds": 79.76,
+            "end_seconds": 80.04,
+            "text": "dak"
+          },
+          {
+            "start_seconds": 80.04,
+            "end_seconds": 80.31,
+            "text": "si"
+          },
+          {
+            "start_seconds": 80.31,
+            "end_seconds": 80.4,
+            "text": "h"
+          },
+          {
+            "start_seconds": 80.4,
+            "end_seconds": 80.64,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 80.64,
+            "end_seconds": 80.72,
+            "text": "h"
+          },
+          {
+            "start_seconds": 80.72,
+            "end_seconds": 81.0,
+            "text": "be"
+          },
+          {
+            "start_seconds": 81.0,
+            "end_seconds": 81.48,
+            "text": "za"
+          },
+          {
+            "start_seconds": 81.48,
+            "end_seconds": 81.88,
+            "text": "satu"
+          },
+          {
+            "start_seconds": 81.88,
+            "end_seconds": 82.09,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 82.09,
+            "end_seconds": 82.16,
+            "text": "h"
+          },
+          {
+            "start_seconds": 82.16,
+            "end_seconds": 82.24,
+            "text": "cuk"
+          },
+          {
+            "start_seconds": 82.24,
+            "end_seconds": 82.4,
+            "text": "up"
+          },
+          {
+            "start_seconds": 82.4,
+            "end_seconds": 82.68,
+            "text": "put"
+          },
+          {
+            "start_seconds": 82.68,
+            "end_seconds": 83.0,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 83.0,
+            "end_seconds": 83.36,
+            "text": "sis"
+          },
+          {
+            "start_seconds": 83.36,
+            "end_seconds": 84.32,
+            "text": "ku"
+          },
+          {
+            "start_seconds": 84.32,
+            "end_seconds": 84.56,
+            "text": "dah"
+          },
+          {
+            "start_seconds": 84.56,
+            "end_seconds": 84.752,
+            "text": "git"
+          },
+          {
+            "start_seconds": 84.752,
+            "end_seconds": 84.816,
+            "text": "u"
+          },
+          {
+            "start_seconds": 84.88,
+            "end_seconds": 85.04,
+            "text": "kena"
+          },
+          {
+            "start_seconds": 85.168,
+            "end_seconds": 85.36,
+            "text": "berm"
+          },
+          {
+            "start_seconds": 85.36,
+            "end_seconds": 86.88,
+            "text": "uka"
+          },
+          {
+            "start_seconds": 87.04,
+            "end_seconds": 87.719,
+            "text": "confirm"
+          },
+          {
+            "start_seconds": 87.719,
+            "end_seconds": 88.239,
+            "text": "confirm"
+          },
+          {
+            "start_seconds": 88.239,
+            "end_seconds": 88.438,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 88.438,
+            "end_seconds": 88.558,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 88.558,
+            "end_seconds": 88.642,
+            "text": "h"
+          },
+          {
+            "start_seconds": 88.726,
+            "end_seconds": 88.918,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 88.918,
+            "end_seconds": 89.038,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 89.038,
+            "end_seconds": 89.318,
+            "text": "bis"
+          },
+          {
+            "start_seconds": 89.318,
+            "end_seconds": 89.518,
+            "text": "ine"
+          },
+          {
+            "start_seconds": 89.518,
+            "end_seconds": 89.677,
+            "text": "as"
+          },
+          {
+            "start_seconds": 89.677,
+            "end_seconds": 89.797,
+            "text": "in"
+          },
+          {
+            "start_seconds": 89.797,
+            "end_seconds": 89.997,
+            "text": "am"
+          },
+          {
+            "start_seconds": 89.997,
+            "end_seconds": 90.357,
+            "text": "ite"
+          },
+          {
+            "start_seconds": 90.357,
+            "end_seconds": 90.717,
+            "text": "skin"
+          },
+          {
+            "start_seconds": 90.717,
+            "end_seconds": 91.036,
+            "text": "bright"
+          },
+          {
+            "start_seconds": 91.036,
+            "end_seconds": 91.316,
+            "text": "ening"
+          },
+          {
+            "start_seconds": 91.316,
+            "end_seconds": 91.756,
+            "text": "sop"
+          },
+          {
+            "start_seconds": 91.756,
+            "end_seconds": 92.116,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 92.195,
+            "end_seconds": 92.315,
+            "text": "coba"
+          },
+          {
+            "start_seconds": 92.315,
+            "end_seconds": 92.435,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 92.435,
+            "end_seconds": 92.515,
+            "text": "ng"
+          },
+          {
+            "start_seconds": 92.515,
+            "end_seconds": 92.555,
+            "text": "aj"
+          },
+          {
+            "start_seconds": 92.555,
+            "end_seconds": 92.635,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 92.675,
+            "end_seconds": 92.875,
+            "text": "kum"
+          },
+          {
+            "start_seconds": 92.875,
+            "end_seconds": 93.514,
+            "text": "ayo"
+          },
+          {
+            "start_seconds": 93.574,
+            "end_seconds": 93.634,
+            "text": "oke"
+          },
+          {
+            "start_seconds": 93.634,
+            "end_seconds": 93.754,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 93.754,
+            "end_seconds": 93.994,
+            "text": "mana"
+          },
+          {
+            "start_seconds": 93.994,
+            "end_seconds": 94.194,
+            "text": "kita"
+          },
+          {
+            "start_seconds": 94.194,
+            "end_seconds": 94.274,
+            "text": "pat"
+          },
+          {
+            "start_seconds": 94.274,
+            "end_seconds": 94.434,
+            "text": "ut"
+          },
+          {
+            "start_seconds": 94.434,
+            "end_seconds": 94.594,
+            "text": "ser"
+          },
+          {
+            "start_seconds": 94.594,
+            "end_seconds": 94.793,
+            "text": "ing"
+          },
+          {
+            "start_seconds": 94.793,
+            "end_seconds": 94.953,
+            "text": "orang"
+          },
+          {
+            "start_seconds": 95.013,
+            "end_seconds": 95.313,
+            "text": "baku"
+          },
+          {
+            "start_seconds": 95.313,
+            "end_seconds": 95.393,
+            "text": "pun"
+          },
+          {
+            "start_seconds": 95.393,
+            "end_seconds": 95.433,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 95.433,
+            "end_seconds": 95.673,
+            "text": "bisa"
+          },
+          {
+            "start_seconds": 95.673,
+            "end_seconds": 95.873,
+            "text": "baru"
+          },
+          {
+            "start_seconds": 95.873,
+            "end_seconds": 96.232,
+            "text": "hanya"
+          },
+          {
+            "start_seconds": 96.232,
+            "end_seconds": 96.392,
+            "text": "lain"
+          },
+          {
+            "start_seconds": 96.392,
+            "end_seconds": 96.632,
+            "text": "mau"
+          },
+          {
+            "start_seconds": 96.692,
+            "end_seconds": 96.872,
+            "text": "jago"
+          },
+          {
+            "start_seconds": 96.872,
+            "end_seconds": 97.072,
+            "text": "lagi"
+          },
+          {
+            "start_seconds": 97.072,
+            "end_seconds": 97.152,
+            "text": "ik"
+          },
+          {
+            "start_seconds": 97.152,
+            "end_seconds": 98.271,
+            "text": "ut"
+          },
+          {
+            "start_seconds": 98.431,
+            "end_seconds": 98.75,
+            "text": "tgg"
+          },
+          {
+            "start_seconds": 98.75,
+            "end_seconds": 99.87,
+            "text": "aku"
+          }
+        ]
+      }
+    },
+    {
+      "source_id": "TS-ASR-END",
+      "data": {
+        "schema_version": "flayr.transcript_words.v1",
+        "source": "transcript.json",
+        "provider": "fun-asr",
+        "words": [
+          {
+            "start_seconds": 0.24,
+            "end_seconds": 0.639,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 0.639,
+            "end_seconds": 0.799,
+            "text": "dia"
+          },
+          {
+            "start_seconds": 0.799,
+            "end_seconds": 0.959,
+            "text": "med"
+          },
+          {
+            "start_seconds": 0.959,
+            "end_seconds": 1.199,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 1.199,
+            "end_seconds": 1.279,
+            "text": "bed"
+          },
+          {
+            "start_seconds": 1.279,
+            "end_seconds": 1.439,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 1.439,
+            "end_seconds": 1.599,
+            "text": "sudah"
+          },
+          {
+            "start_seconds": 1.599,
+            "end_seconds": 1.759,
+            "text": "bas"
+          },
+          {
+            "start_seconds": 1.759,
+            "end_seconds": 1.959,
+            "text": "uh"
+          },
+          {
+            "start_seconds": 1.959,
+            "end_seconds": 2.159,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 2.159,
+            "end_seconds": 2.319,
+            "text": "dia"
+          },
+          {
+            "start_seconds": 2.319,
+            "end_seconds": 2.479,
+            "text": "oleh"
+          },
+          {
+            "start_seconds": 2.479,
+            "end_seconds": 2.639,
+            "text": "med"
+          },
+          {
+            "start_seconds": 2.639,
+            "end_seconds": 2.799,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 2.999,
+            "end_seconds": 3.199,
+            "text": "sikit"
+          },
+          {
+            "start_seconds": 3.199,
+            "end_seconds": 3.359,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 3.359,
+            "end_seconds": 3.518,
+            "text": "dah"
+          },
+          {
+            "start_seconds": 3.518,
+            "end_seconds": 3.718,
+            "text": "put"
+          },
+          {
+            "start_seconds": 3.718,
+            "end_seconds": 3.918,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 3.918,
+            "end_seconds": 4.118,
+            "text": "dari"
+          },
+          {
+            "start_seconds": 4.118,
+            "end_seconds": 4.217,
+            "text": "se"
+          },
+          {
+            "start_seconds": 4.217,
+            "end_seconds": 4.318,
+            "text": "bel"
+          },
+          {
+            "start_seconds": 4.318,
+            "end_seconds": 4.558,
+            "text": "ah"
+          },
+          {
+            "start_seconds": 4.558,
+            "end_seconds": 4.838,
+            "text": "nya"
+          },
+          {
+            "start_seconds": 4.838,
+            "end_seconds": 5.358,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 5.358,
+            "end_seconds": 5.638,
+            "text": "ad"
+          },
+          {
+            "start_seconds": 5.638,
+            "end_seconds": 6.598,
+            "text": "uh"
+          },
+          {
+            "start_seconds": 6.598,
+            "end_seconds": 7.597,
+            "text": "ha"
+          },
+          {
+            "start_seconds": 7.597,
+            "end_seconds": 7.797,
+            "text": "yang"
+          },
+          {
+            "start_seconds": 7.877,
+            "end_seconds": 7.957,
+            "text": "kau"
+          },
+          {
+            "start_seconds": 7.957,
+            "end_seconds": 8.037,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 8.037,
+            "end_seconds": 8.317,
+            "text": "bet"
+          },
+          {
+            "start_seconds": 8.317,
+            "end_seconds": 8.597,
+            "text": "ul"
+          },
+          {
+            "start_seconds": 8.597,
+            "end_seconds": 8.637,
+            "text": "bet"
+          },
+          {
+            "start_seconds": 8.637,
+            "end_seconds": 9.317,
+            "text": "ul"
+          },
+          {
+            "start_seconds": 9.317,
+            "end_seconds": 9.557,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 9.557,
+            "end_seconds": 10.516,
+            "text": "dah"
+          },
+          {
+            "start_seconds": 10.516,
+            "end_seconds": 11.036,
+            "text": "ha"
+          },
+          {
+            "start_seconds": 11.036,
+            "end_seconds": 11.196,
+            "text": "le"
+          },
+          {
+            "start_seconds": 11.196,
+            "end_seconds": 11.516,
+            "text": "pot"
+          },
+          {
+            "start_seconds": 11.516,
+            "end_seconds": 11.596,
+            "text": "me"
+          },
+          {
+            "start_seconds": 11.596,
+            "end_seconds": 11.796,
+            "text": "le"
+          },
+          {
+            "start_seconds": 11.796,
+            "end_seconds": 11.996,
+            "text": "pat"
+          },
+          {
+            "start_seconds": 11.996,
+            "end_seconds": 12.236,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 12.236,
+            "end_seconds": 12.476,
+            "text": "sis"
+          },
+          {
+            "start_seconds": 12.476,
+            "end_seconds": 12.636,
+            "text": "ni"
+          },
+          {
+            "start_seconds": 12.636,
+            "end_seconds": 12.756,
+            "text": "med"
+          },
+          {
+            "start_seconds": 12.756,
+            "end_seconds": 13.036,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 13.036,
+            "end_seconds": 13.305,
+            "text": "si"
+          },
+          {
+            "start_seconds": 13.305,
+            "end_seconds": 13.395,
+            "text": "h"
+          },
+          {
+            "start_seconds": 13.395,
+            "end_seconds": 13.515,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 13.515,
+            "end_seconds": 13.555,
+            "text": "le"
+          },
+          {
+            "start_seconds": 13.555,
+            "end_seconds": 13.715,
+            "text": "h"
+          },
+          {
+            "start_seconds": 13.715,
+            "end_seconds": 13.995,
+            "text": "be"
+          },
+          {
+            "start_seconds": 13.995,
+            "end_seconds": 14.475,
+            "text": "za"
+          },
+          {
+            "start_seconds": 14.475,
+            "end_seconds": 14.875,
+            "text": "satu"
+          },
+          {
+            "start_seconds": 14.875,
+            "end_seconds": 15.155,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 15.155,
+            "end_seconds": 15.235,
+            "text": "cuk"
+          },
+          {
+            "start_seconds": 15.235,
+            "end_seconds": 15.395,
+            "text": "up"
+          },
+          {
+            "start_seconds": 15.395,
+            "end_seconds": 15.715,
+            "text": "put"
+          },
+          {
+            "start_seconds": 15.715,
+            "end_seconds": 15.995,
+            "text": "ih"
+          },
+          {
+            "start_seconds": 15.995,
+            "end_seconds": 16.355,
+            "text": "sis"
+          },
+          {
+            "start_seconds": 16.355,
+            "end_seconds": 17.314,
+            "text": "ku"
+          },
+          {
+            "start_seconds": 17.314,
+            "end_seconds": 17.554,
+            "text": "dah"
+          },
+          {
+            "start_seconds": 17.554,
+            "end_seconds": 17.746,
+            "text": "git"
+          },
+          {
+            "start_seconds": 17.746,
+            "end_seconds": 17.81,
+            "text": "u"
+          },
+          {
+            "start_seconds": 17.874,
+            "end_seconds": 18.034,
+            "text": "kena"
+          },
+          {
+            "start_seconds": 18.162,
+            "end_seconds": 18.354,
+            "text": "berm"
+          },
+          {
+            "start_seconds": 18.354,
+            "end_seconds": 20.153,
+            "text": "uka"
+          },
+          {
+            "start_seconds": 20.193,
+            "end_seconds": 20.673,
+            "text": "confirm"
+          },
+          {
+            "start_seconds": 20.673,
+            "end_seconds": 21.233,
+            "text": "confirm"
+          },
+          {
+            "start_seconds": 21.233,
+            "end_seconds": 21.433,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 21.433,
+            "end_seconds": 21.593,
+            "text": "tu"
+          },
+          {
+            "start_seconds": 21.769,
+            "end_seconds": 22.033,
+            "text": "tadi"
+          },
+          {
+            "start_seconds": 22.033,
+            "end_seconds": 22.073,
+            "text": "hab"
+          },
+          {
+            "start_seconds": 22.073,
+            "end_seconds": 22.353,
+            "text": "is"
+          },
+          {
+            "start_seconds": 22.353,
+            "end_seconds": 22.513,
+            "text": "ini"
+          },
+          {
+            "start_seconds": 22.513,
+            "end_seconds": 22.673,
+            "text": "as"
+          },
+          {
+            "start_seconds": 22.673,
+            "end_seconds": 22.793,
+            "text": "in"
+          },
+          {
+            "start_seconds": 22.793,
+            "end_seconds": 22.993,
+            "text": "am"
+          },
+          {
+            "start_seconds": 22.993,
+            "end_seconds": 23.352,
+            "text": "ite"
+          },
+          {
+            "start_seconds": 23.352,
+            "end_seconds": 23.712,
+            "text": "skin"
+          },
+          {
+            "start_seconds": 23.712,
+            "end_seconds": 24.032,
+            "text": "bright"
+          },
+          {
+            "start_seconds": 24.032,
+            "end_seconds": 24.312,
+            "text": "ening"
+          },
+          {
+            "start_seconds": 24.312,
+            "end_seconds": 24.752,
+            "text": "sop"
+          },
+          {
+            "start_seconds": 24.752,
+            "end_seconds": 25.112,
+            "text": "ya"
+          },
+          {
+            "start_seconds": 25.112,
+            "end_seconds": 25.312,
+            "text": "so"
+          },
+          {
+            "start_seconds": 25.312,
+            "end_seconds": 25.392,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 25.392,
+            "end_seconds": 25.512,
+            "text": "ng"
+          },
+          {
+            "start_seconds": 25.512,
+            "end_seconds": 25.552,
+            "text": "aj"
+          },
+          {
+            "start_seconds": 25.552,
+            "end_seconds": 25.632,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 25.672,
+            "end_seconds": 25.752,
+            "text": "kum"
+          },
+          {
+            "start_seconds": 25.752,
+            "end_seconds": 25.872,
+            "text": "ai"
+          },
+          {
+            "start_seconds": 25.872,
+            "end_seconds": 25.992,
+            "text": "y"
+          },
+          {
+            "start_seconds": 25.992,
+            "end_seconds": 26.272,
+            "text": "oh"
+          },
+          {
+            "start_seconds": 26.272,
+            "end_seconds": 26.431,
+            "text": "ha"
+          },
+          {
+            "start_seconds": 26.431,
+            "end_seconds": 26.551,
+            "text": "ot"
+          },
+          {
+            "start_seconds": 26.551,
+            "end_seconds": 26.671,
+            "text": "ak"
+          },
+          {
+            "start_seconds": 26.671,
+            "end_seconds": 26.751,
+            "text": "ke"
+          },
+          {
+            "start_seconds": 26.751,
+            "end_seconds": 26.991,
+            "text": "mana"
+          },
+          {
+            "start_seconds": 26.991,
+            "end_seconds": 27.191,
+            "text": "kita"
+          },
+          {
+            "start_seconds": 27.191,
+            "end_seconds": 27.271,
+            "text": "pat"
+          },
+          {
+            "start_seconds": 27.271,
+            "end_seconds": 27.391,
+            "text": "ut"
+          },
+          {
+            "start_seconds": 27.391,
+            "end_seconds": 27.591,
+            "text": "set"
+          },
+          {
+            "start_seconds": 27.591,
+            "end_seconds": 27.791,
+            "text": "ing"
+          },
+          {
+            "start_seconds": 27.791,
+            "end_seconds": 27.951,
+            "text": "orang"
+          },
+          {
+            "start_seconds": 28.011,
+            "end_seconds": 28.191,
+            "text": "baku"
+          },
+          {
+            "start_seconds": 28.191,
+            "end_seconds": 28.311,
+            "text": "kun"
+          },
+          {
+            "start_seconds": 28.311,
+            "end_seconds": 28.391,
+            "text": "ing"
+          },
+          {
+            "start_seconds": 28.391,
+            "end_seconds": 28.431,
+            "text": "hab"
+          },
+          {
+            "start_seconds": 28.431,
+            "end_seconds": 28.591,
+            "text": "is"
+          },
+          {
+            "start_seconds": 28.591,
+            "end_seconds": 28.671,
+            "text": "ada"
+          },
+          {
+            "start_seconds": 28.671,
+            "end_seconds": 28.871,
+            "text": "baru"
+          },
+          {
+            "start_seconds": 28.871,
+            "end_seconds": 29.231,
+            "text": "hanya"
+          },
+          {
+            "start_seconds": 29.231,
+            "end_seconds": 29.391,
+            "text": "lain"
+          },
+          {
+            "start_seconds": 29.391,
+            "end_seconds": 29.511,
+            "text": "mau"
+          },
+          {
+            "start_seconds": 29.511,
+            "end_seconds": 29.591,
+            "text": "bel"
+          },
+          {
+            "start_seconds": 29.591,
+            "end_seconds": 29.75,
+            "text": "i"
+          },
+          {
+            "start_seconds": 29.75,
+            "end_seconds": 29.87,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 29.87,
+            "end_seconds": 30.15,
+            "text": "lagi"
+          },
+          {
+            "start_seconds": 30.15,
+            "end_seconds": 31.23,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 31.43,
+            "end_seconds": 31.59,
+            "text": "tiga"
+          },
+          {
+            "start_seconds": 31.75,
+            "end_seconds": 31.79,
+            "text": "g"
+          },
+          {
+            "start_seconds": 31.79,
+            "end_seconds": 31.95,
+            "text": "aku"
+          },
+          {
+            "start_seconds": 31.95,
+            "end_seconds": 32.07,
+            "text": "ump"
+          },
+          {
+            "start_seconds": 32.07,
+            "end_seconds": 32.43,
+            "text": "u"
+          },
+          {
+            "start_seconds": 32.43,
+            "end_seconds": 32.87,
+            "text": "hmm"
+          }
+        ]
+      }
+    }
+  ]
+}

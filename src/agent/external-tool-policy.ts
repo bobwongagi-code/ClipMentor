@@ -8,7 +8,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'read_script', 'view_timeline_frames', 'view_asset_frames', 'browse_library',
   'read_captions', 'read_project', 'read_transcript', 'find_transcript',
   'search_media', 'search_stock_media', 'search_fonts', 'analyze_music', 'inspect_music', 'music_edit_plan', 'music_image_plan',
-  'read_agent_artifact',
+  'read_agent_artifact', 'read_clipmentor_analysis', 'read_clipmentor_source_video',
 ]);
 
 const DRAFT_EDIT_TOOL_NAMES = new Set([
@@ -17,7 +17,7 @@ const DRAFT_EDIT_TOOL_NAMES = new Set([
   'set_aspect_ratio', 'manage_timelines', 'edit_track', 'apply_script',
   'edit_item', 'manage_effects', 'edit_captions', 'update_watermark',
   'manage_markers', 'apply_caption_avoidance', 'place_graphics_in_safe_zone', 'auto_reframe',
-  'manage_design_style',
+  'manage_design_style', 'revise_clipmentor_analysis', 'review_clipmentor_analysis', 'transcribe_clipmentor_source', 'observe_clipmentor_source', 'request_clipmentor_copy_review', 'observe_clipmentor_source_video',
   'import_timeline',
   'export_jianying_draft',
 ]);

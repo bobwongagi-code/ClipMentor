@@ -21,6 +21,9 @@ import { asrModelsPlugin } from "./asr-models.ts";
 import { modelPacksPlugin } from "./model-packs.ts";
 import { assemblyAiUploadPlugin } from "./assemblyai-upload.ts";
 import { transcriptionPlugin } from "./transcription.ts";
+import { clipMentorFunAsrPlugin } from './clipmentor-funasr.ts';
+import { clipMentorSourceVideoPlugin } from './clipmentor-source-video.ts';
+import { clipMentorCopyReviewPlugin } from './clipmentor-copy-review.ts';
 import { extractFramesPlugin } from "./extract-frames.ts";
 import { sceneDetectionPlugin } from "./scene-detection.ts";
 import { autoGradePlugin } from "./auto-grade.ts";
@@ -88,6 +91,9 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
     modelPacksPlugin(),
     assemblyAiUploadPlugin(),
     transcriptionPlugin(transcriptionOptions()),
+    clipMentorFunAsrPlugin(),
+    clipMentorCopyReviewPlugin(),
+    clipMentorSourceVideoPlugin(),
     extractFramesPlugin(),
     sceneDetectionPlugin(),
     autoGradePlugin(),

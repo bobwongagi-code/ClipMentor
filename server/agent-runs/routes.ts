@@ -44,7 +44,7 @@ import {
 } from './request';
 import { CursorProtocolError, resolveCursor, sseForRun } from './sse';
 import { projectStoreHttpAuthorized, projectStoreReadAuthorized } from '../project-store-http-auth';
-const MAX_TOOL_RESULT_BODY_BYTES = 1024 * 1024;
+import { TOOL_RESULT_BODY_BYTES, TOOL_RESULT_STANDARD_BODY_BYTES, isBoundedVisualToolResult } from '../../shared/agent-tool-result-limits';
 const SERVER_RUN_CAPABILITY_HEADER = 'x-openchatcut-run-capability';
 const SERVER_RUN_ADMISSION_TIMEOUT_MS = 60_000;
 interface DeferredRun {
@@ -305,10 +305,16 @@ async function handleToolClaim(req: IncomingMessage, res: ServerResponse, runId:
 }
 
 async function handleToolResult(req: IncomingMessage, res: ServerResponse, runId: string): Promise<void> {
-  const body = await readJson(req, MAX_TOOL_RESULT_BODY_BYTES);
+  const body = await readJson(req, TOOL_RESULT_BODY_BYTES);
   const projectId = requireProjectId(body.projectId);
   const run = await boundRun(req, res, projectId, runId);
   if (!run) return;
+  const { result, ...envelope } = body;
+  if (Buffer.byteLength(JSON.stringify(body)) > TOOL_RESULT_STANDARD_BODY_BYTES
+    && (!isBoundedVisualToolResult(result) || Buffer.byteLength(JSON.stringify(envelope)) > TOOL_RESULT_STANDARD_BODY_BYTES)) {
+    sendJson(res, 413, { error: 'tool result exceeds text or bounded visual allowance' });
+    return;
+  }
   const binding = toolBinding(body);
   const hasResult = Object.hasOwn(body, 'result');
   const error = typeof body.error === 'string' ? body.error : undefined;

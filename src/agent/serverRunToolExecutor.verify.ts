@@ -186,13 +186,22 @@ const boundedImage = {
 };
 assert.equal(projectServerRunToolResult(boundedImage), boundedImage,
   'bounded image bytes remain intact for provider vision input');
-const oversizedImageProjection = projectServerRunToolResult({
+const clearImageBatch = {
   __images: [{ frame: 1, base64: 'a'.repeat(800 * 1024) }],
   note: 'large frame',
+};
+assert.equal(projectServerRunToolResult(clearImageBatch), clearImageBatch,
+  'clear image bytes above the text allowance are retained unchanged inside the visual allowance');
+const oversizedImageProjection = projectServerRunToolResult({
+  __images: [{ frame: 1, base64: 'a'.repeat(4 * 1024 * 1024) }], note: 'over visual allowance',
 }) as Record<string, unknown>;
 assert.equal(Object.hasOwn(oversizedImageProjection, '__images'), false);
 assert.equal(oversizedImageProjection.imagesOmitted, true,
   'oversized images become text-only metadata instead of invalid base64 placeholders');
+const largeMetadata = projectServerRunToolResult({ ...clearImageBatch, payload: 'x'.repeat(800 * 1024) }) as Record<string, unknown>;
+assert.equal(Object.hasOwn(largeMetadata, '__images'), false, 'visual exception cannot carry oversized non-image metadata');
+assert(new TextEncoder().encode(JSON.stringify(largeMetadata)).byteLength <= 768 * 1024);
+assert.equal((projectServerRunToolResult({ __images: Array(9).fill(clearImageBatch.__images[0]) }) as Record<string, unknown>).imagesOmitted, true);
 const activation = new ToolActivation([], []);
 const startExecutor = (
   executor: ServerRunToolExecutor,

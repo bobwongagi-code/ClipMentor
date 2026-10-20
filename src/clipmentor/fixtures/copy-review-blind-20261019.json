@@ -1,0 +1,352 @@
+{
+  "protocol": "creator-copy-v1",
+  "scope": "text_and_planned_picture_only",
+  "blind_input": {
+    "audience": "马来西亚创作者，学习原作者如何具体展示商品购买理由；不是给消费者的叫卖，不是产品功效认证",
+    "product": {
+      "name": "Teashell亮肤香皂",
+      "buying_concerns": [
+        "人们在意的暗沉部位",
+        "实际使用方式与用皂体验",
+        "皮肤展示和比较"
+      ]
+    },
+    "source_evidence": [
+      {
+        "evidence_id": "E1",
+        "source_seconds": [
+          56,
+          59.4
+        ],
+        "observed": "手肘揉擦近景，操作手与接触部位同框",
+        "operator_context": "用户指出该产品的部位选择针对暗沉关注，不是只在普通小臂泛泛涂抹；这是用户提供的解释，不是效果证明"
+      },
+      {
+        "evidence_id": "E2",
+        "source_seconds": [
+          59.4,
+          62.2
+        ],
+        "observed": "揉擦期间腕/前臂靠近鼻部，再回揉擦；60.6秒有近鼻姿态。未核实实际吸气或香味评价"
+      },
+      {
+        "evidence_id": "E3",
+        "source_seconds": [
+          69.8,
+          73.3
+        ],
+        "observed": "泡沫双手之后展示湿润肘臂近景；对象不同，没有确认完整冲洗"
+      },
+      {
+        "evidence_id": "E4",
+        "source_seconds": [
+          76.8,
+          84.2
+        ],
+        "observed": "肘臂细节后手背靠近镜头，另一手加入；83.2和84.2秒两手背同框，处理侧身份未确认"
+      },
+      {
+        "evidence_id": "E5",
+        "source_seconds": [
+          84.4,
+          85.3
+        ],
+        "observed": "双手比较后回人物，眉眼/头部姿态配合讲述。原声具体含义未核，不认定满意或因效果惊喜",
+        "image": "E5.png"
+      }
+    ],
+    "cases": [
+      {
+        "case_id": "Ca4e8c81a",
+        "units": [
+          {
+            "unit_id": "U1",
+            "lines": [
+              {
+                "line_id": "L1",
+                "narration_ms": "Topik kulit cerah jadi lebih jelas bila siku dirakam dekat bersama tangan yang menggosok.",
+                "captions": [
+                  "Topik kulit cerah jadi lebih jelas",
+                  "bila siku dirakam dekat",
+                  "bersama tangan yang menggosok."
+                ],
+                "meaning_zh": "手肘与揉擦的手一起拍近，提亮话题就更具体。",
+                "source_seconds": [
+                  56,
+                  59.4
+                ]
+              },
+              {
+                "line_id": "L2",
+                "narration_ms": "Gerak dekat hidung itu menambah sisi pengalaman penggunaan.",
+                "captions": [
+                  "Gerak dekat hidung itu",
+                  "menambah sisi pengalaman penggunaan."
+                ],
+                "meaning_zh": "靠近鼻子的动作，补进了使用体验这一面。",
+                "source_seconds": [
+                  59.4,
+                  62.2
+                ]
+              }
+            ]
+          },
+          {
+            "unit_id": "U2",
+            "lines": [
+              {
+                "line_id": "L1",
+                "narration_ms": "Urutan buih ke kulit basah membezakan tahap penggunaan.",
+                "captions": [
+                  "Urutan buih ke kulit basah",
+                  "membezakan tahap penggunaan."
+                ],
+                "meaning_zh": "从泡沫到湿润皮肤的顺序，区分了使用阶段。",
+                "source_seconds": [
+                  69.8,
+                  73.3
+                ]
+              },
+              {
+                "line_id": "L2",
+                "narration_ms": "Rakaman dekat memperjelas butiran kulit; dua belakang tangan dalam satu bingkai memudahkan perbandingan rupa kulit.",
+                "captions": [
+                  "Rakaman dekat memperjelas butiran kulit;",
+                  "dua belakang tangan dalam satu bingkai",
+                  "memudahkan perbandingan rupa kulit."
+                ],
+                "meaning_zh": "近拍让皮肤细节更清楚；两个手背在同一画面里，方便比较皮肤观感。",
+                "source_seconds": [
+                  76.8,
+                  83.2
+                ]
+              },
+              {
+                "line_id": "L3",
+                "narration_ms": "Ekspresi wajah menyambung perhatian kepada ceritanya.",
+                "captions": [
+                  "Ekspresi wajah menyambung perhatian",
+                  "kepada ceritanya."
+                ],
+                "meaning_zh": "面部表情把注意力接回她的讲述。",
+                "source_seconds": [
+                  83.2,
+                  85.3
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "case_id": "C73f7e338",
+        "units": [
+          {
+            "unit_id": "U1",
+            "lines": [
+              {
+                "line_id": "L1",
+                "narration_ms": "Rakaman dekat siku dan tangan yang menggosok menunjukkan di mana sabun pencerah ini dicuba.",
+                "captions": [
+                  "Rakaman dekat siku dan tangan yang menggosok",
+                  "menunjukkan di mana sabun pencerah ini dicuba."
+                ],
+                "meaning_zh": "手肘与揉擦手的近拍，表明这款亮肤香皂试用在哪里。",
+                "source_seconds": [
+                  56,
+                  59.4
+                ]
+              },
+              {
+                "line_id": "L2",
+                "narration_ms": "Di celah gosokan, gerak lengan ke hidung mengajak penonton membayangkan bau sabun semasa digunakan.",
+                "captions": [
+                  "Di celah gosokan,",
+                  "gerak lengan ke hidung",
+                  "mengajak penonton membayangkan bau sabun",
+                  "semasa digunakan."
+                ],
+                "meaning_zh": "揉擦之间，手臂靠近鼻子的动作，引导观众联想使用香皂时的气味。",
+                "source_seconds": [
+                  59.4,
+                  62.2
+                ]
+              }
+            ]
+          },
+          {
+            "unit_id": "U2",
+            "lines": [
+              {
+                "line_id": "L1",
+                "narration_ms": "Mula-mula tangan berbuih, kemudian siku dan lengan basah dari dekat.",
+                "captions": [
+                  "Mula-mula tangan berbuih,",
+                  "kemudian siku dan lengan basah dari dekat."
+                ],
+                "meaning_zh": "先是带泡沫的双手，然后是湿润肘臂的近景。",
+                "source_seconds": [
+                  69.8,
+                  73.3
+                ]
+              },
+              {
+                "line_id": "L2",
+                "narration_ms": "Selepas memperlihatkan kulit siku dan lengan, dia mendekatkan kedua-dua belakang tangan ke kamera dalam satu bingkai. Butiran kulit lebih jelas dan rupanya mudah dibandingkan.",
+                "captions": [
+                  "Selepas memperlihatkan kulit siku dan lengan,",
+                  "dia mendekatkan kedua-dua belakang tangan",
+                  "ke kamera dalam satu bingkai.",
+                  "Butiran kulit lebih jelas",
+                  "dan rupanya mudah dibandingkan."
+                ],
+                "meaning_zh": "展示肘臂皮肤之后，她把两个手背靠近镜头，放进同一个画面。皮肤细节更清楚，外观也方便比较。",
+                "source_seconds": [
+                  76.8,
+                  83.4
+                ]
+              },
+              {
+                "line_id": "L3",
+                "narration_ms": "Selepas perbandingan tangan, wajah dan ekspresinya membantu kita mengikuti apa yang diceritakannya seterusnya.",
+                "captions": [
+                  "Selepas perbandingan tangan,",
+                  "wajah dan ekspresinya membantu kita mengikuti",
+                  "apa yang diceritakannya seterusnya."
+                ],
+                "meaning_zh": "双手比较之后，她的面孔和表情帮助我们跟上她接着讲的内容。",
+                "source_seconds": [
+                  84.4,
+                  85.3
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "raw_review": {
+    "cases": [
+      {
+        "case_id": "Ca4e8c81a",
+        "verdict": "needs_revision",
+        "units": [
+          {
+            "unit_id": "U1",
+            "verdict": "needs_revision",
+            "findings": [
+              {
+                "criterion": "product_relevance",
+                "severity": "blocking",
+                "line_ids": [
+                  "L1",
+                  "L2"
+                ],
+                "quote": "Topik kulit cerah jadi lebih jelas bila siku dirakam dekat bersama tangan yang menggosok.\nGerak dekat hidung itu menambah sisi pengalaman penggunaan.",
+                "reason_zh": "两句合看仍主要停在‘提亮话题更清楚’和‘增加使用体验’。稿件没有交代手肘这个部位怎样对应暗沉关注，也没有说靠鼻动作具体让观众联想到什么体验。动作、近景和抽象收益都有了，但创作者仍需自行补出本品的购买关注与拍法之间的联系；不能用输入中的目标和解释替稿件补全。"
+              }
+            ]
+          },
+          {
+            "unit_id": "U2",
+            "verdict": "pass",
+            "findings": [
+              {
+                "criterion": "spoken_clarity",
+                "severity": "suggestion",
+                "line_ids": [
+                  "L1"
+                ],
+                "quote": "Urutan buih ke kulit basah membezakan tahap penggunaan.",
+                "reason_zh": "‘从泡沫到湿润皮肤的顺序区分使用阶段’较抽象，具体看到的双手和肘臂也被省掉，单句不如后文直接。此处属于局部表达可改进；组内下一句已把近拍、皮肤细节和同框比较的用途讲清，不据此否定整组。"
+              },
+              {
+                "criterion": "evidence_scope",
+                "severity": "suggestion",
+                "line_ids": [
+                  "L2",
+                  "L3"
+                ],
+                "quote": "Rakaman dekat memperjelas butiran kulit; dua belakang tangan dalam satu bingkai memudahkan perbandingan rupa kulit.\nEkspresi wajah menyambung perhatian kepada ceritanya.",
+                "reason_zh": "保留依据：近拍用于看清皮肤细节、双手同框用于比较外观，拍法与皮肤展示的购买关注有明确联系；同框条件没有丢失。表情只承担回到讲述的衔接作用，与E5可见姿态相容，没有认定满意或效果惊喜，也没有把双手指定成已用与未用。无需为这些句子强加功效解释。"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "case_id": "C73f7e338",
+        "verdict": "pass",
+        "units": [
+          {
+            "unit_id": "U1",
+            "verdict": "pass",
+            "findings": [
+              {
+                "criterion": "product_relevance",
+                "severity": "suggestion",
+                "line_ids": [
+                  "L1",
+                  "L2"
+                ],
+                "quote": "Rakaman dekat siku dan tangan yang menggosok menunjukkan di mana sabun pencerah ini dicuba.\nDi celah gosokan, gerak lengan ke hidung mengajak penonton membayangkan bau sabun semasa digunakan.",
+                "reason_zh": "保留依据：第一句把部位与揉擦手的近拍解释为展示这款亮肤香皂的试用位置，第二句把揉擦中的靠鼻动作联系到用皂时的气味联想。两句分担试用方式和感官体验，整组已有具体商品与拍法的联系。手肘与暗沉部位的关系尚可更具体，但当前并非只列动作，不必因此判整组不合格。"
+              },
+              {
+                "criterion": "evidence_scope",
+                "severity": "suggestion",
+                "line_ids": [
+                  "L2"
+                ],
+                "quote": "Di celah gosokan, gerak lengan ke hidung mengajak penonton membayangkan bau sabun semasa digunakan.",
+                "reason_zh": "保留依据：‘让观众联想使用时的气味’是对靠鼻姿态的有限解释，保留了揉擦期间与手臂靠鼻的条件；没有声称实际吸气、闻出何种香味或作出香味好坏评价，未越过E2的关键证据边界。"
+              }
+            ]
+          },
+          {
+            "unit_id": "U2",
+            "verdict": "pass",
+            "findings": [
+              {
+                "criterion": "filming_conditions",
+                "severity": "suggestion",
+                "line_ids": [
+                  "L1",
+                  "L2"
+                ],
+                "quote": "Mula-mula tangan berbuih, kemudian siku dan lengan basah dari dekat.\nSelepas memperlihatkan kulit siku dan lengan, dia mendekatkan kedua-dua belakang tangan ke kamera dalam satu bingkai. Butiran kulit lebih jelas dan rupanya mudah dibandingkan.",
+                "reason_zh": "保留依据：先分清带泡沫的双手与湿润肘臂两个对象，再解释手背靠近镜头、两个手背同框怎样帮助看细节和比较外观。前一句虽以顺序描述为主，后一句已补足拍法用途，整组无需每句都重复购买理由。没有把对象更换写成完整冲洗过程，也没有确认处理侧或亮肤效果。"
+              },
+              {
+                "criterion": "evidence_scope",
+                "severity": "suggestion",
+                "line_ids": [
+                  "L3"
+                ],
+                "quote": "Selepas perbandingan tangan, wajah dan ekspresinya membantu kita mengikuti apa yang diceritakannya seterusnya.",
+                "reason_zh": "保留依据：双手比较后回到面孔与表情，E5支持这个衔接观察。句子只说明表情帮助跟随讲述，未补写原声内容、满意评价或因效果惊喜。用途虽较通用，但放在已有皮肤展示与比较解释的整组中可理解，不构成关键缺口。"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "regression_oracles": [
+    {
+      "case_id": "Ca4e8c81a",
+      "revision": 90,
+      "expected": "needs_revision",
+      "preparation_digest_unverified": "250627ad6b8040edee1c8736aef265b66d77eba61ad18feabf6490270163a0a9",
+      "source_file_byte_sha256_at_check": "16d34687e06d8dbecbc1c897219ac0878e6d421192422a1118755d3e5cbb12d5"
+    },
+    {
+      "case_id": "C73f7e338",
+      "revision": 95,
+      "expected": "needs_revision",
+      "preparation_digest_unverified": "e4357543686ab562c692c089485554b6a0528acd34419d8a217afdd382dae358",
+      "source_file_byte_sha256_at_check": "5f03ae0854599be792ce4171780dcedbccf5c58d09c2f20ca5c9589f6949b983"
+    }
+  ]
+}

@@ -188,12 +188,13 @@ export function frameSeekArgs(timeMs: number): string[] {
   return seconds > 0 ? ['-ss', String(seconds)] : [];
 }
 
-async function extractOneFrame(input: string, timeMs: number, outPath: string): Promise<void> {
+export async function extractOneFrame(input: string, timeMs: number, outPath: string, individual = false): Promise<void> {
   await run(ffmpegBin(), [
     '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
     ...(await resolveHwDecodeArgs(ffmpegBin(), undefined)),
     ...frameSeekArgs(timeMs),
     '-i', input,
+    ...(individual ? ['-vf', "scale=w='min(iw,1280)':h='min(ih,1280)':force_original_aspect_ratio=decrease:force_divisible_by=2"] : []),
     '-frames:v', '1',
     '-q:v', '4',
     outPath,
@@ -218,7 +219,18 @@ export function extractFramesPlugin(): Plugin {
             fromMs?: number;
             toMs?: number;
             cols?: number;
+            output?: 'frames';
           };
+          if (body.output !== undefined && body.output !== 'frames') {
+            sendJson(res, 400, { error: 'unsupported frame output' });
+            return;
+          }
+          const individual = body.output === 'frames';
+          if (individual && (!Array.isArray(body.sourceTimesMs) || !body.sourceTimesMs.length
+            || body.sourceTimesMs.length > 8 || !body.sourceTimesMs.every((t) => typeof t === 'number' && Number.isFinite(t) && t >= 0))) {
+            sendJson(res, 400, { error: 'individual frames require 1–8 explicit source times' });
+            return;
+          }
           const src = String(body.src ?? '').trim();
           const name = uploadNameFromSrc(src);
           if (!name) {
@@ -255,15 +267,16 @@ export function extractFramesPlugin(): Plugin {
             return;
           }
 
-          const cells: { jpeg: Buffer; label: string }[] = [];
+          const cells: { jpeg: Buffer; label: string; sourceTimeMs: number }[] = [];
           for (let i = 0; i < times.length; i += 1) {
             const t = times[i]!;
             const framePath = join(work, `f-${i}.jpg`);
             try {
-              await extractOneFrame(inputPath, t, framePath);
+              await extractOneFrame(inputPath, t, framePath, individual);
               cells.push({
                 jpeg: await readFile(framePath),
                 label: formatTimeLabel(t),
+                sourceTimeMs: t,
               });
             } catch (err) {
               server.config.logger.info(
@@ -273,6 +286,16 @@ export function extractFramesPlugin(): Plugin {
           }
           if (!cells.length) {
             sendJson(res, 422, { error: 'could not extract any frames (codec/corrupt?)' });
+            return;
+          }
+
+          if (individual) {
+            sendJson(res, 200, {
+              ok: true, output: 'frames', sampleCount: cells.length,
+              sourceTimesMs: cells.map((c) => c.sourceTimeMs),
+              frames: cells.map((c) => ({ base64: c.jpeg.toString('base64'), sourceTimeMs: c.sourceTimeMs, mediaType: 'image/jpeg' })),
+              maxLongEdge: 1280, renderedBy: 'ffmpeg',
+            });
             return;
           }
 
@@ -289,7 +312,7 @@ export function extractFramesPlugin(): Plugin {
             base64: sheet.toString('base64'),
             mediaType: 'image/jpeg',
             sampleCount: cells.length,
-            sourceTimesMs: times.slice(0, cells.length),
+            sourceTimesMs: cells.map((c) => c.sourceTimeMs),
             labels: cells.map((c) => c.label),
             renderedBy: 'ffmpeg',
             note: `contact sheet · ${cells.length} samples from ${name}`,

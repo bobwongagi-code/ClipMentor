@@ -1,0 +1,125 @@
+{
+  "provenance": {
+    "scope": "development_structural_regression_only",
+    "timeline_source": "两段重写与严格复核-20261019/原工程-修前.json",
+    "source_file_sha256": "cfa4cb8998a9d06e7dcdde2e7e408c0cb22601955a6d7554523f5f6f26c6e412",
+    "timeline_id": "tl_3f005316-ceab-4898-bef1-afc79d34c3dd",
+    "note": "Only existing video item coordinates are copied verbatim. Selected teaching-task ledger is reconstructed from the recorded failure; not a new model observation or semantic verdict."
+  },
+  "fps": 30,
+  "items": [
+    {
+      "id": "item_18eb13bc-b095-4d47-ba6a-df536933a92c",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 0,
+      "durationInFrames": 672,
+      "srcInFrame": 1291,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_39c09eb1-3b06-4bb8-91d5-c17dac0df512",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 672,
+      "durationInFrames": 12,
+      "srcInFrame": 1964,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_27d79c56-fbae-4987-a304-f40fc535b08a",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 684,
+      "durationInFrames": 102,
+      "srcInFrame": 1680,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_cf7c9994-4a28-4e53-847c-cac5b3d9aa35",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 786,
+      "durationInFrames": 120,
+      "srcInFrame": 1500,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_62728fa0-4cb7-4c3f-a5e2-6388e1390f93",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 906,
+      "durationInFrames": 334,
+      "srcInFrame": 2273,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_4d1af32c-40c4-4a86-adec-c2878e47f0c0",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 1240,
+      "durationInFrames": 12,
+      "srcInFrame": 2607,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_4b6ebfce-0a38-4756-8600-90ca1a8bd801",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 1252,
+      "durationInFrames": 60,
+      "srcInFrame": 2094,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_ed55b364-b05c-423d-9e68-added9e46bb7",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 1312,
+      "durationInFrames": 30,
+      "srcInFrame": 2169,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_4c20ba5d-3322-41f2-bc70-b1c0d7bd9df0",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 1342,
+      "durationInFrames": 45,
+      "srcInFrame": 2304,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    },
+    {
+      "id": "item_562b315c-c577-4054-a6bf-2ba6b918bcda",
+      "kind": "video",
+      "track": "track_e4507d0f-9de6-4c07-8faa-bbfcb5e88411",
+      "startFrame": 1387,
+      "durationInFrames": 153,
+      "srcInFrame": 2349,
+      "sourceAssetId": "12546aa7-70fd-42c1-852a-8bf50f2abf58"
+    }
+  ],
+  "windows": {
+    "U02_original": [
+      0,
+      672
+    ],
+    "U02_explanation": [
+      684,
+      906
+    ],
+    "U03_original": [
+      906,
+      1240
+    ],
+    "U03_explanation": [
+      1252,
+      1540
+    ]
+  },
+  "expected_failures": [
+    "required_point_not_explained",
+    "timeline_source_range_mismatch",
+    "revisit_not_registered"
+  ]
+}

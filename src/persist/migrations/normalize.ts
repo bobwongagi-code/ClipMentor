@@ -25,6 +25,7 @@ export type LooseProjectShape = {
   timelines: Timeline[];
   activeTimelineId: string;
   designStyle?: unknown;
+  clipMentorAnalysis?: unknown;
 };
 
 const ITEM_KINDS: Record<TimelineItem['kind'], true> = {
