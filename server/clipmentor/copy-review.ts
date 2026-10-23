@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CopyReviewRequest, CopyReviewResult } from '../../shared/clipmentor-copy-review';
+import { COPY_REVIEW_INPUT_POLICY } from '../../shared/clipmentor-copy-review';
 import { assessTeachingReview, buildCopyTeachingReviewRequest, COPY_REVIEW_PROTOCOL, isCopyProductionReview,
-  type CopyProductionReview, type TeachingEnvelope } from '../../src/clipmentor/production-gate';
+  type CopyProductionReview, type TeachingEnvelope, assessNarrationChecks, assessGroupReview, checkCopyFindingQuotes } from '../../src/clipmentor/production-gate';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import { isSafeUploadName, resolveUploadFile } from '../media-dir';
 import { sha256File } from '../../shared/node-content-hash';
@@ -52,8 +53,10 @@ function samples(request: CopyReviewRequest) {
   const frames: Array<Omit<ReviewFrame, 'base64'>> = [];
   for (const unit of request.packet.units) {
     for (const [phase, ranges] of [
-      ['original', unit.picture_plan!.original_source_ranges],
-      ['explanation', unit.picture_plan!.explanation_source_ranges],
+      ['original', [...unit.picture_plan!.original_source_ranges,
+        ...unit.points.flatMap((p) => p.visual_evidence?.filter((v) => v.phase === 'original').map((v) => v.source_range_seconds) ?? [])]],
+      ['explanation', [...unit.picture_plan!.explanation_source_ranges,
+        ...unit.points.flatMap((p) => p.visual_evidence?.filter((v) => v.phase === 'explanation').map((v) => v.source_range_seconds) ?? [])]],
     ] as const) {
       const seen = new Set<number>();
       for (const [start, end] of ranges) {
@@ -79,6 +82,14 @@ function reviewPrompt(request: CopyReviewRequest): string {
     '不写替换稿。输出仍有cases，并在顶层另加copy_units，逐单元给unit_id、verdict(pass/needs_revision/insufficient_evidence)、' +
     'findings:[{severity:blocking/suggestion/unknown,quote:稿中原句,reason:简短中文原因}]。' +
     '只把影响本次文案/计划结论的未知列为unknown；未来实际配音与成片验收没有完成，不等于当前文本必然有错。' +
+    '每个copy_units单元还必须返回narration_checks，恰好覆盖该单元每句一次：' +
+    '[{line_id:真实句子ID,necessity:necessary/redundant/uncertain,omission_loss:拿掉本句在整组中具体损失什么或为什么没有损失,' +
+    'naturalness:natural/awkward/uncertain,reason:依据原句说明必要性与自然度}]。' +
+    '按该单元的omission_views核对删句后的整组：omission_loss写仍保留的理解、具体损失及其余句/短标/画面能否承担；reason引用实际内容说明独立发声的必要性，不以重点必讲或作用成立代替。' +
+    '所有分类都要逐句回答，不按秒数判定；无法判断用uncertain。缺答不放行，但这些文字判断不声称母语或实际听审通过。' +
+    'visual_only重点不计作一条不存在的口播：仍逐point审核并返回visual_check，引用该点的visual_evidence及实际可见关系，独立判断画面承担是否充分。' +
+    '作者取舍理由仅保留在宿主绑定包，不作为通过依据；不能因选择了visual_only就通过，也不能因没有旁白引文就自动退稿。' +
+    '画面问题用visual_check.sufficiency/evidence_refs/observed_relation/omission_loss及point.reason记录，copy_units.findings仍只引用真实口播/字幕/短标，不伪造表情句。' +
     '只返回JSON。';
 }
 
@@ -92,13 +103,21 @@ function receiptFromRaw(raw: unknown, request: CopyReviewRequest): CopyProductio
   if (teaching.issues.some((i) => i.code === 'teaching_review_invalid')) throw new Error('Invalid typed review');
   const units = request.subject.units.map((unit) => {
     const result = (raw.copy_units as unknown[]).find((u) => object(u) && u.unit_id === unit.unit_id);
-    if (!object(result) || !Array.isArray(result.findings) || !['pass', 'needs_revision', 'insufficient_evidence'].includes(String(result.verdict))) throw new Error('Missing independent copy result');
+    if (!object(result) || !Array.isArray(result.findings) || !(typeof result.verdict === 'string' && ['pass', 'needs_revision', 'insufficient_evidence'].includes(result.verdict))) throw new Error('Missing independent copy result');
     const assessed = teaching.units.find((u) => u.unit_id === unit.unit_id)!;
+    const lines = request.packet.units.find((u) => u.unit_id === unit.unit_id)!.lines;
+    const lineReview = assessNarrationChecks(lines, result.narration_checks);
+    const groupReview = assessGroupReview(result.group_checks);
+    const findingQuotes = checkCopyFindingQuotes(lines, result.findings);
+
     const blocking = result.findings.some((f) => object(f) && f.severity === 'blocking');
     const unknown = result.findings.some((f) => object(f) && f.severity === 'unknown');
-    const verdict = assessed.verdict === 'needs_revision' || result.verdict === 'needs_revision' || blocking ? 'needs_revision'
-      : assessed.verdict === 'insufficient_evidence' || result.verdict === 'insufficient_evidence' || unknown ? 'insufficient_evidence' : 'pass';
-    return { ...unit, verdict, findings: result.findings };
+    const verdict = !findingQuotes.valid ? 'insufficient_evidence'
+      : assessed.verdict === 'needs_revision' || groupReview.verdict === 'needs_revision' || lineReview.verdict === 'needs_revision' || result.verdict === 'needs_revision' || blocking ? 'needs_revision'
+      : assessed.verdict === 'insufficient_evidence' || groupReview.verdict === 'insufficient_evidence' || lineReview.verdict === 'insufficient_evidence' || result.verdict === 'insufficient_evidence' || unknown ? 'insufficient_evidence' : 'pass';
+    return { ...unit, verdict, findings: result.findings,
+      ...(result.group_checks !== undefined ? { group_checks: result.group_checks } : {}),
+      ...(Array.isArray(result.narration_checks) ? { narration_checks: result.narration_checks } : {}) };
   });
   const verdict = units.some((u) => u.verdict === 'needs_revision') ? 'needs_revision'
     : units.some((u) => u.verdict !== 'pass' || u.findings.some((f) => object(f) && f.severity !== 'suggestion')) ? 'insufficient_evidence' : 'pass';
@@ -145,9 +164,10 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     signal.throwIfAborted();
     if (await deps.hash(file) !== request.source.hash) throw new Error('Source changed during review');
     const result: CopyReviewResult = { operationId: request.operationId, requestsAttempted: attempts,
-      receipt: receiptFromRaw(raw, request), inspection: { scope: 'copy_and_planned_picture_only', sampled_frames: frames.length, continuous_viewing: false, listening: false } };
+      receipt: receiptFromRaw(raw, request), inspection: { scope: 'copy_and_planned_picture_only', sampled_frames: frames.length,
+        continuous_viewing: false, listening: false, input_policy: COPY_REVIEW_INPUT_POLICY } };
     await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'completed', requests_attempted: attempts,
-      method: METHOD, model: null, model_note: 'Codex configured default; exact upstream model not exposed by this transport',
+      method: METHOD, input_policy: COPY_REVIEW_INPUT_POLICY, model: null, model_note: 'Codex configured default; exact upstream model not exposed by this transport',
       source_hash: request.source.hash, prompt_sha256: digest(prompt), raw_review: raw, result }));
     return result;
   } catch {

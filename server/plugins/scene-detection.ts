@@ -201,11 +201,12 @@ export async function detectScenesInFile(
   const durationMs = await probeDurationMs(file, options.signal);
   const sampleFps = sceneAnalysisFps(durationMs);
   options.onProgress?.({ phase: 'detecting', progress: 0.05, processedMs: 0, durationMs });
-  // Keep a second full-rate analysis branch alive so FFmpeg progress advances even
-  // when the selected scene-change branch emits no frames.
+  // Keep the sampled clock branch alive so FFmpeg progress advances even when no
+  // changes are selected. Consume hits without an output encoder: an empty hits
+  // stream makes bundled FFmpeg fail encoder initialization at EOF.
   const filter = [
     `[0:v:0]fps=${sampleFps.toFixed(4)},scale=320:-2:flags=fast_bilinear,split=2[scan][clock]`,
-    `[scan]select='gt(scene,${threshold})',metadata=print:file=-[hits]`,
+    `[scan]select='gt(scene,${threshold})',metadata=print:file=-,nullsink`,
     '[clock]null[analysis_clock]',
   ].join(';');
   let progressBuffer = '';
@@ -214,7 +215,6 @@ export async function detectScenesInFile(
     '-nostdin', '-hide_banner', '-loglevel', 'error',
     ...(await resolveHwDecodeArgs(ffmpegBin(), undefined)), '-i', file,
     '-filter_complex', filter,
-    '-map', '[hits]', '-an', '-f', 'null', '-',
     '-map', '[analysis_clock]', '-an',
     '-progress', 'pipe:2', '-stats_period', '0.2', '-nostats', '-f', 'null', '-',
   ], {

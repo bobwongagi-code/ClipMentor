@@ -1,4 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { executeTool, TOOL_SCHEMAS } from '../tools';
+import { activatedToolNamesForResult } from '../skills/skill-tool-activation';
+import { policyForTool } from '../execution-policy';
+import { EXPORT_QA_TOOL_SCHEMAS } from './schemas/export-qa-tools';
 import type { AgentContext } from '../context';
 import { execExportQaTool } from './export-qa-tools';
 
@@ -60,6 +65,34 @@ globalThis.fetch = async (input, init) => {
 };
 
 try {
+  const noNetworkFetch = globalThis.fetch;
+  let localRequests = 0;
+  globalThis.fetch = async () => { localRequests++; throw new Error('Local self-check must never use a service'); };
+  const manifest = { fps: 30, total_frames: 120, scenes: [
+    { start_frame: 0, end_frame: 90, kind: 'relation', content: [1, 2] },
+    { start_frame: 90, end_frame: 96, kind: 'still', content: 2, label: 'breath' },
+    { start_frame: 96, end_frame: 120, kind: 'original', content: 3 },
+  ], audios: [{ start: 0, end: 3.01, kind: 'voice' }, { start: 3.21, end: 4, kind: 'original' }] };
+  const before = JSON.stringify(ctx.getDoc());
+  assert.deepEqual(policyForTool('verify_export', { executionManifest: manifest }), { effect: 'read', recovery: 'pure' });
+  assert.notEqual(policyForTool('verify_export', { executionManifest: manifest, src: '/media/uploads/x.mp4' }).effect, 'read', 'only the data-only mode gains a pure-read classification');
+  const local = await executeTool('verify_export', { executionManifest: manifest }, { ...ctx, getCreativeMode: () => 'clipmentor' }) as any;
+  const invalid = await executeTool('verify_export', { executionManifest: { fps: 0 } }, { ...ctx, getCreativeMode: () => 'clipmentor' }) as any;
+  assert(invalid.error);
+  assert.equal(invalid.full_film_accepted, false);
+  const skill = readFileSync(new URL('../skills/clipmentor/SKILL.md', import.meta.url), 'utf8');
+  assert(activatedToolNamesForResult('load_skill', { contents: { 'SKILL.md': skill } }, TOOL_SCHEMAS).includes('verify_export'), 'loading ClipMentor activates the existing self-check entry');
+  const catalog = JSON.parse(readFileSync(new URL('../../../assets/agent/openchatcut-tool-schemas.json', import.meta.url), 'utf8'));
+  assert.deepEqual(catalog.edit.find((tool: { name: string }) => tool.name === 'verify_export').input_schema, EXPORT_QA_TOOL_SCHEMAS[0].input_schema);
+
+  assert.equal(local.ok, true);
+  assert.equal(local.transition_self_check.review_groups.length, 1);
+  assert.equal(local.human_review_requested, false);
+  assert.equal(local.full_film_accepted, false);
+  assert.equal(localRequests, 0);
+  assert.equal(JSON.stringify(ctx.getDoc()), before);
+  globalThis.fetch = noNetworkFetch;
+
   const result = await execExportQaTool('verify_export', {
     src: '/media/uploads/export.mp4', maxCuts: 4,
   }, ctx) as {
@@ -75,6 +108,24 @@ try {
   assert.equal(requestBody.durationSeconds, 4);
   assert.equal(requestBody.expectsAudio, true);
   assert.deepEqual(requestBody.cutTimesSeconds, [2]);
+
+  const mixed = await execExportQaTool('verify_export', { src: '/media/uploads/export.mp4', executionManifest: manifest }, ctx) as any;
+  assert.equal(mixed.preview_binding, 'timing_only_not_content_verified');
+  assert.equal(mixed.full_film_accepted, false);
+  const mismatched = await execExportQaTool('verify_export', { src: '/media/uploads/export.mp4', executionManifest: { ...manifest, fps: 25 } }, ctx) as any;
+  assert.equal(mismatched.preview_binding, 'timing_mismatch');
+  assert.equal(mismatched.ok, false, 'a stale/timebase-mismatched manifest cannot masquerade as checked output');
+
+  const technicalFetcher = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const response = await technicalFetcher(url, init); const data = await response.json();
+    if (data.report) delete data.report.fps;
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+  const missingTiming = await execExportQaTool('verify_export', { src: '/media/uploads/export.mp4', executionManifest: manifest }, ctx) as any;
+  assert.equal(missingTiming.preview_binding, 'timing_mismatch', 'unknown output metadata must not be called matching');
+  assert.equal(missingTiming.ok, false);
+  globalThis.fetch = technicalFetcher;
 
   renderJobResult = {
     path: '/media/uploads/ranged.mp4',

@@ -32,7 +32,7 @@ import {
   type ServerRunSettleStatus,
 } from './store-settle';
 import { digestValue } from './store-values';
-import { deleteAgentArtifacts, loadAgentRuntimeSidecar, storeAgentArtifact } from '../../src/persist/agentRuntimeStore';
+import { deleteAgentArtifacts, loadAgentRuntimeSidecar, MAX_ARTIFACT_BYTES, storeAgentArtifact } from '../../src/persist/agentRuntimeStore';
 import { sha256Text } from '../../src/persist/agentRuntimeStore';
 import {
   readJson,
@@ -47,6 +47,10 @@ import { projectStoreHttpAuthorized, projectStoreReadAuthorized } from '../proje
 import { TOOL_RESULT_BODY_BYTES, TOOL_RESULT_STANDARD_BODY_BYTES, isBoundedVisualToolResult } from '../../shared/agent-tool-result-limits';
 const SERVER_RUN_CAPABILITY_HEADER = 'x-openchatcut-run-capability';
 const SERVER_RUN_ADMISSION_TIMEOUT_MS = 60_000;
+// Drafts carry an already serialized JSON body: the outer JSON can double its
+// bytes through escaping. Keep the 8 MiB artifact cap; allow its wire envelope
+// plus bounded metadata here, without relaxing other agent-run endpoints.
+const DRAFT_BODY_BYTES = 2 * MAX_ARTIFACT_BYTES + 64 * 1024;
 interface DeferredRun {
   readonly input: ServerRunInput;
   readonly timeout: NodeJS.Timeout;
@@ -399,7 +403,7 @@ async function handleSettle(req: IncomingMessage, res: ServerResponse, runId: st
 }
 
 async function handleDraftStore(req: IncomingMessage, res: ServerResponse, runId: string): Promise<void> {
-  const body = await readJson(req);
+  const body = await readJson(req, DRAFT_BODY_BYTES);
   const projectId = requireProjectId(body.projectId);
   const run = await boundRun(req, res, projectId, runId);
   if (!run) return;

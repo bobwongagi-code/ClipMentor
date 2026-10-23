@@ -91,6 +91,57 @@ try {
   assert.match(String(actions[0]?.error), /audioName/,
     'durable recovery stores the business failure on its error channel');
   assert.equal(actions[0]?.result, undefined);
+
+  // A local tool may succeed before the proposal/checkpoint callback refuses
+  // its actions. A later read must retain prior accepted edits, not that refusal.
+  const rejectedRunId = 'run-callback-rejection';
+  assert(saveStoredServerRun(projectId, { projectId, runId: rejectedRunId, attempts: [] }));
+  let rejectedCallbacks = 0;
+  const rejectingExecutor = new ServerRunToolExecutor(projectId, {
+    ctx: () => ({
+      commands: draft.commands,
+      getState: draft.getState,
+      getDoc: draft.getDoc,
+      getCreativeMode: () => null,
+      templates: [],
+      audio: [],
+    }),
+    settings: () => ({} as never),
+    onToolAction: (action) => {
+      if (action.args.name !== 'Rejected candidate edit') return;
+      assert(action.actions.some((item) => item.type === 'tl.rename'
+        && item.name === 'Rejected candidate edit'), 'the tool mutated its local draft before callback rejection');
+      rejectedCallbacks += 1;
+      throw new Error('Save the copy candidate in a preparation-only step, without pending project edits.');
+    },
+    updateMessages: () => undefined,
+    setLiveTool: () => undefined,
+    retryStream: () => undefined,
+    abandonRecovery: () => undefined,
+  }, new FakeLockManager());
+  rejectingExecutor.start({
+    capability: 'test-rejection-capability',
+    baseDoc: doc,
+    activation: new ToolActivation(TOOL_SCHEMAS, []),
+    runId: rejectedRunId,
+    abort: new AbortController(),
+    recovered: new Map(),
+  });
+  assert.equal(await rejectingExecutor.handle(rejectedRunId, 'accepted-edit', 'manage_timelines', {
+    action: 'update', timelineId: doc.activeTimelineId, name: 'Accepted prior edit',
+  }, 'accepted-digest', () => true), true);
+  assert.equal(await rejectingExecutor.handle(rejectedRunId, 'rejected-edit', 'manage_timelines', {
+    action: 'update', timelineId: doc.activeTimelineId, name: 'Rejected candidate edit',
+  }, 'rejected-digest', () => true), true);
+  assert.equal(rejectedCallbacks, 2, 'both durable callback attempts reached the refusal');
+  assert.match(String((resultBody as unknown as Record<string, unknown>).error), /preparation-only/);
+  assert.equal(await rejectingExecutor.handle(rejectedRunId, 'read-after-refusal', 'manage_timelines', {
+    action: 'list',
+  }, 'read-digest', () => true), true);
+  const afterRefusal = (resultBody as unknown as { result: Array<{ name: string }> }).result;
+  assert.equal(afterRefusal[0]?.name, 'Accepted prior edit',
+    'reads after callback rejection must roll back only the refused local mutation');
+  assert.equal(draft.getDoc().timelines[0]?.name, 'Business failure', 'executor drafts never mutate the live project');
 } finally {
   globalThis.fetch = originalFetch;
   if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);

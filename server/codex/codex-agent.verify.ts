@@ -58,6 +58,8 @@ assert.match(windowsShim.args[3], /\^"model=name\^&danger\^""$/);
 
 const FAKE_APP_SERVER = String.raw`
 import { createInterface } from 'node:readline';
+import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 
 
 const requiredFeatureArgs = ${JSON.stringify(CODEX_DISABLED_FEATURES.map((feature) => `features.${feature}=false`))};
@@ -136,6 +138,20 @@ lines.on('line', (line) => {
       || observe.additionalProperties !== false) process.exit(82);
 
     if (!message.params.baseInstructions?.includes('without changing the project')) process.exit(80);
+    const instructions = message.params.baseInstructions;
+    assert(instructions.includes('structuredClone is not available in functions.exec'), 'code-mode runtime contract must reach thread/start');
+    const cloneExample = instructions.match(/JSON clone example: ([^\n]+)/)?.[1];
+    assert(cloneExample, 'the runtime must supply an executable JSON-only copy example');
+    const value = { id: 'existing-line', captions: ['气味', 'bau sabun'], range: [59.4, 64.6], state: null };
+    const scope = { value };
+    assert.equal(runInNewContext('typeof structuredClone', scope), 'undefined');
+    assert.throws(() => runInNewContext('structuredClone(value)', scope), /structuredClone is not defined/);
+    const copy = runInNewContext(cloneExample + '; copy', scope);
+    assert.equal(JSON.stringify(copy), JSON.stringify(value));
+    copy.captions[0] = 'changed';
+    copy.range[0] = 0;
+    assert.equal(value.captions[0], '气味');
+    assert.equal(value.range[0], 59.4, 'building arguments must not mutate the readback');
     if (message.params.config?.features?.code_mode !== false
       || message.params.config?.features?.code_mode_host !== true
       || message.params.config?.features?.computer_use !== false
@@ -168,12 +184,16 @@ lines.on('line', (line) => {
   }
   if (message.id === 'dynamic-1') {
     if (message.result?.success !== true) process.exit(74);
-    // Text after a data URL is consumed as image bytes by the current CLI.
-    // Keep metadata before all image items; never change the image payload.
+    // Code-mode nested calls return text; images must have an explicit JSON
+    // content contract that the caller can forward with image(contentBlock).
     const items = message.result.contentItems;
-    if (items?.[0]?.type !== 'inputText' || items[0].text !== 'image boundary check'
-      || items[1]?.type !== 'inputImage' || items[1].imageUrl !== 'data:image/jpeg;base64,aGVsbG8='
-      || items[2]?.type !== 'inputImage' || items[2].imageUrl !== 'data:image/jpeg;base64,d29ybGQ=') process.exit(82);
+    if (items?.length !== 1 || items[0]?.type !== 'inputText') process.exit(82);
+    const visual = JSON.parse(items[0].text);
+    if (visual.metadata.note !== 'image boundary check'
+      || visual.content[0]?.type !== 'image' || visual.content[0]?.data !== 'aGVsbG8='
+      || visual.content[1]?.type !== 'image' || visual.content[1]?.data !== 'd29ybGQ='
+      || visual.content[0]?.mimeType !== 'image/jpeg'
+      || '__images' in visual.metadata) process.exit(82);
     // A total-only event must not be passed downstream as a request sample.
     send({
       method: 'thread/tokenUsage/updated',

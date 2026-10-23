@@ -1,3 +1,4 @@
+import { isManifestSelfCheckCall } from '../clipmentor/transition-check';
 import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import type { AgentToolSchema } from './tool-schema';
@@ -37,7 +38,7 @@ const IRREVERSIBLE_EXTERNAL_TOOLS = new Set([
   'run_code', 'web_crawl', 'web_browser', 'web_search', 'web_map', 'web_batch_scrape',
   'submit_render_job', 'submit_export', 'export_timeline', 'export_motion_graphic_prores',
   'convert_motion_graphic_to_video',
-  'transcribe_track', 'transcribe_clipmentor_source', 'request_clipmentor_copy_review', 'observe_clipmentor_source_video',
+  'transcribe_track', 'transcribe_clipmentor_source', 'request_clipmentor_copy_review', 'observe_clipmentor_source_video', 'review_clipmentor_preview',
   'submit_image', 'submit_video', 'submit_music', 'submit_sound', 'submit_voice',
   'submit_motion_graphic', 'create_motion_graphic', 'create_motion_graphic_from_code',
   'submit_shader', 'rerun_generation',
@@ -91,6 +92,11 @@ export function policyForTool(
   name: string,
   args?: Readonly<Record<string, unknown>>,
 ): ToolExecutionPolicy {
+  if (name === 'edit_clipmentor_preview') return args?.action === 'read'
+    ? { effect:'read', recovery:'pure' } : args?.action === 'render'
+      ? { effect:'irreversible_external', recovery:'outcome_unknown' } : { effect:'reversible_edit', recovery:'idempotent' };
+  if (name === 'review_clipmentor_preview' && args?.action === 'read') return { effect: 'read', recovery: 'pure' };
+  if (name === 'verify_export' && isManifestSelfCheckCall(args)) return { effect: 'read', recovery: 'pure' };
   if (name === 'manage_design_style') return designStylePolicy(args);
   if (READ_TOOLS.has(name) || isExternalReadTool(name) || isExternalGlobalReadTool(name)) {
     return { effect: 'read', recovery: 'pure' };

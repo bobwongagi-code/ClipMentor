@@ -120,24 +120,24 @@ export function isClipMentorAnalysis(v: unknown): v is ClipMentorAnalysis {
     && str(o.source_hash) && /^[a-f0-9]{64}$/.test(o.source_hash)
     && Array.isArray(o.requested_times_seconds) && o.requested_times_seconds.length > 0
     && o.requested_times_seconds.every((t) => finite(t) && t >= 0)
-    && strings(o.frame_evidence_ids) && ['images_returned', 'failed'].includes(String(o.status))
+    && strings(o.frame_evidence_ids) && (typeof o.status === 'string' && ['images_returned', 'failed'].includes(o.status))
     && o.method === 'source_frames_for_main_agent' && finite(o.at) && o.at >= 0
     && (o.image_layout === undefined || o.image_layout === 'individual_frames')
-    && (o.sampling === undefined || ['explicit_times', 'sequence'].includes(String(o.sampling)))
+    && (o.sampling === undefined || (typeof o.sampling === 'string' && ['explicit_times', 'sequence'].includes(o.sampling)))
     && (o.failure === undefined || o.failure === 'extraction_failed_or_incomplete'))
     || !unique(v.observations as unknown[], 'observation_id'))) return false;
   if (!rows(v.evidence, (e) => nonempty(e.evidence_id) && nonempty(e.status) && str(e.text)
-    && ['source_frame', 'original_claim', 'visible_action', 'expression_analysis_not_verified_causal_effect', 'operator_supplied'].includes(String(e.kind))
+    && (typeof e.kind === 'string' && ['source_frame', 'original_claim', 'visible_action', 'expression_analysis_not_verified_causal_effect', 'operator_supplied'].includes(e.kind))
     && (e.provenance === undefined || nonempty(e.provenance))
     && strings(e.supporting_evidence_ids) && strings(e.source_ids)
     && (e.source_range_seconds === undefined || range(e.source_range_seconds, e.kind === 'visible_action'))
     && (e.time_seconds === undefined || (finite(e.time_seconds) && e.time_seconds >= 0))
     && (e.source_frame === undefined || (Number.isSafeInteger(e.source_frame) && Number(e.source_frame) >= 0))
     && (e.observation_method === undefined || nonempty(e.observation_method))
-    && (e.call_status === undefined || ['historical_unknown', 'unknown', 'failed', 'succeeded'].includes(String(e.call_status)))
+    && (e.call_status === undefined || (typeof e.call_status === 'string' && ['historical_unknown', 'unknown', 'failed', 'succeeded'].includes(e.call_status)))
     && (e.observation_id === undefined || nonempty(e.observation_id))
     && (e.kind !== 'source_frame' || (finite(e.time_seconds) && Number.isSafeInteger(e.source_frame)))
-    && (!['source_frame', 'visible_action'].includes(String(e.kind)) || (nonempty(e.observation_method) && nonempty(e.call_status))))) return false;
+    && (!(typeof e.kind === 'string' && ['source_frame', 'visible_action'].includes(e.kind)) || (nonempty(e.observation_method) && nonempty(e.call_status))))) return false;
   if (!rows(v.points, (p) => nonempty(p.point_id) && nonempty(p.unit_id) && range(p.source_range_seconds)
     && nonempty(p.buying_reason_or_function) && strings(p.filming_conditions) && strings(p.evidence_ids)
     && strings(p.uncertainties) && typeof p.required === 'boolean' && nonempty(p.explanation_priority) && nonempty(p.status)
@@ -147,7 +147,7 @@ export function isClipMentorAnalysis(v: unknown): v is ClipMentorAnalysis {
   if (!rows(v.transcripts, (t) => nonempty(t.source_id) && nonempty(t.provider) && nonempty(t.origin) && nonempty(t.status)
     && rows(t.words, (w) => finite(w.start_seconds) && finite(w.end_seconds) && w.start_seconds >= 0
       && w.end_seconds >= w.start_seconds && nonempty(w.text)))) return false;
-  if (!rows(v.reviews, (r) => nonempty(r.point_id) && ['confirmed', 'needs_revision', 'stale'].includes(String(r.state))
+  if (!rows(v.reviews, (r) => nonempty(r.point_id) && (typeof r.state === 'string' && ['confirmed', 'needs_revision', 'stale'].includes(r.state))
     && hash(r.source_hash) && str(r.content_digest) && /^[a-f0-9]{64}$/.test(r.content_digest)
     && isAnalysisActor(r.actor) && finite(r.at) && r.at >= 0 && nonempty(r.reason))) return false;
   if (!rows(v.audit, (a) => Number.isSafeInteger(a.revision) && Number(a.revision) > 0 && nonempty(a.action)

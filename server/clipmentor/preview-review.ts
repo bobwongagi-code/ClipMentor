@@ -72,7 +72,7 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
     ids.add(point.point_id);
   }
   for (const reference of value.reference_text) {
-    if (!object(reference) || !['narration', 'annotation'].includes(String(reference.channel))
+    if (!object(reference) || !(typeof reference.channel === 'string' && ['narration', 'annotation'].includes(reference.channel))
       || !range(reference, value.duration_seconds) || !text(reference.text)) throw new Error('Invalid reference text');
   }
   const units = new Set<string>();
@@ -123,11 +123,11 @@ export function buildPreviewReviewRequest(video: Uint8Array, input: PreviewRevie
 export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewReviewInput) {
   const issues: string[] = [];
   const receipt = (v: unknown): v is ReviewReceipt => object(v) && range(v, input.duration_seconds)
-    && ['original', 'narration', 'annotation', 'visual_organization'].includes(String(v.channel))
+    && (typeof v.channel === 'string' && ['original', 'narration', 'annotation', 'visual_organization'].includes(v.channel))
     && text(v.observed) && (v.quote === undefined || text(v.quote));
   const receipts = (v: unknown): v is ReviewReceipt[] => Array.isArray(v) && v.every(receipt);
   const finding = (v: unknown): v is Finding => object(v)
-    && ['supported', 'not_supported', 'insufficient_evidence'].includes(String(v.status))
+    && (typeof v.status === 'string' && ['supported', 'not_supported', 'insufficient_evidence'].includes(v.status))
     && text(v.reasoning) && receipts(v.evidence);
   if (!object(value) || !Array.isArray(value.coverage) || !Array.isArray(value.continuity)) {
     return { status: 'review_required' as const, issues: ['invalid_judgment_schema'], unit_results: [], full_film_accepted: false as const };
@@ -160,7 +160,7 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
     if (!object(row) || !text(row.unit_id) || units.has(row.unit_id) || !input.units.some((u) => u.unit_id === row.unit_id) || !Array.isArray(row.point_ids)
       || !row.point_ids.length || !row.point_ids.every((id) => input.points.some((p) => p.point_id === id))
       || !receipts(row.previous) || !receipts(row.current)
-      || !['continuation', 'recap', 'new_information'].includes(String(row.relation))
+      || !(typeof row.relation === 'string' && ['continuation', 'recap', 'new_information'].includes(row.relation))
       || !finding(row.narrative) || !finding(row.teaching)) { issues.push('invalid_continuity_row'); continue; }
     units.add(row.unit_id);
     const expected = input.units.find((u) => u.unit_id === row.unit_id)!;

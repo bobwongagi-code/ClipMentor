@@ -1,4 +1,5 @@
 export { EXPORT_QA_TOOL_SCHEMAS, EXPORT_QA_TOOL_NAMES } from './schemas/export-qa-tools';
+import { checkTransitionManifest, isManifestSelfCheckCall, transitionSelfCheckResult } from '../../clipmentor/transition-check';
 import { captionFaceQaIssues } from '../../geometry/caption-qa';
 import type { AgentContext } from '../context';
 import {
@@ -60,6 +61,8 @@ async function resolveExportSrc(args: Args): Promise<ResolvedExport | { error: s
 
 async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
   try {
+    if (isManifestSelfCheckCall(args)) return transitionSelfCheckResult(args.executionManifest);
+    const transitions = args.executionManifest === undefined ? undefined : checkTransitionManifest(args.executionManifest);
     const resolved = await resolveExportSrc(args);
     if ('error' in resolved) return resolved;
 
@@ -92,8 +95,13 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
     const faceIssues = await captionFaceQaIssues(ctx.getDoc(), state);
     const merged = faceIssues.length ? mergeExportQaIssues(report, faceIssues) : report;
     const evidence = result.evidence;
+    const manifestTimingMismatch = transitions && (!Number.isFinite(merged.durationSeconds) || !Number.isFinite(merged.fps)
+      || Math.abs(transitions.duration_seconds - merged.durationSeconds) > 1 / transitions.fps
+      || Math.abs(transitions.fps - merged.fps) > Number.EPSILON * Math.max(transitions.fps, merged.fps) * 4);
     return {
-      ok: merged.ok,
+      ok: merged.ok && !manifestTimingMismatch,
+      ...(transitions ? { transition_self_check: transitions, preview_binding: manifestTimingMismatch ? 'timing_mismatch' : 'timing_only_not_content_verified',
+        human_review_requested: false, full_film_accepted: false } : {}),
       src: resolved.src,
       report: merged,
       cutCount: cutTimesSeconds.length,
@@ -102,7 +110,10 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
       note: evidence?.base64
         ? 'Cut evidence is a two-column sheet: each row shows the frame immediately before and after one edit boundary.'
         : 'No adjacent edit boundaries were available for visual evidence; stream-level QA still completed.',
-      next: merged.ok && merged.summary.warnings === 0
+      next: transitions ? manifestTimingMismatch
+        ? 'Agent读取本次导出的实际执行清单再自检；时基不符不能当已检查，不询问用户逐条核对。'
+        : transitions.next
+        : merged.ok && merged.summary.warnings === 0
         ? 'Export passed automated QA.'
         : 'Inspect every issue and evidence row. Fix confirmed problems, export again, and rerun verify_export. Stop after three attempts and report any remaining issue to the user.',
     };

@@ -11,7 +11,7 @@ import { importTeashellAnalysis } from './import-teashell';
 import { isClipMentorAnalysis } from './analysis';
 import blindRegression from './fixtures/copy-review-blind-20261019.json';
 import teachingRegression from './fixtures/copy-teaching-blind-v2-20261019.json';
-import { bindCopyProductionReview, checkCopyProduction, copyReviewCalibration, copyReviewSubject, isCopyProductionReview, isReviewedNarrationText, COPY_REVIEW_PROTOCOL, assessTeachingReview, buildCopyTeachingReviewRequest, legacyCopyReviewCalibration, clipMentorProductionBlock, copyTeachingPacketFromDoc, type TeachingPacket, type TeachingEnvelope } from './production-gate';
+import { bindCopyProductionReview, checkCopyProduction, copyReviewCalibration, copyReviewSubject, isCopyProductionReview, isReviewedNarrationText, COPY_REVIEW_PROTOCOL, assessTeachingReview, buildCopyTeachingReviewRequest, legacyCopyReviewCalibration, clipMentorProductionBlock, copyTeachingPacketFromDoc, type TeachingPacket, type TeachingEnvelope, assessNarrationChecks, checkCopyFindingQuotes } from './production-gate';
 
 const calibration = copyReviewCalibration();
 assert.equal(calibration.protocol, COPY_REVIEW_PROTOCOL);
@@ -65,6 +65,10 @@ for (const executor of [executeOfflineTool, executeTool]) {
   assert.equal(draft.takeActions().length, 0);
 }
 
+assert.equal(await clipMentorProductionBlock('manage_timelines', { action: 'list' }, context(base).ctx), null, 'valid read-only action remains preparation');
+assert.equal((await clipMentorProductionBlock('manage_timelines', { action: ['list'] }, context(base).ctx))?.production_gate.code,
+  'copy_review_missing', 'coerced read action must not bypass production validation');
+
 const subject = await copyReviewSubject(base);
 assert(isReviewedNarrationText(subject, subject.units[0].narration[0]));
 assert(isReviewedNarrationText(subject, `  ${subject.units[0].narration[0].replaceAll(' ', '\n')}  `));
@@ -78,11 +82,143 @@ const teaching: TeachingEnvelope = {
   }] })) } as TeachingEnvelope['review'],
 };
 assert.equal(assessTeachingReview(teaching.packet, teaching.review).verdict, 'pass');
+const criteriaRequest = buildCopyTeachingReviewRequest([{ case_id: 'criteria-wiring-test', packet: teaching.packet }]);
+for (const question of ['', '  ', null, ['question']]) {
+  const invalid = structuredClone(teaching.packet);
+  Object.assign(invalid.units[0].points[0], { question });
+  assert.throws(() => buildCopyTeachingReviewRequest([{ case_id: 'missing-goal', packet: invalid }]));
+}
+const absentEvidence = structuredClone(teaching.packet);
+absentEvidence.units[0].points[0].evidence_ids = ['NOT_REGISTERED'];
+assert.throws(() => buildCopyTeachingReviewRequest([{ case_id: 'missing-evidence', packet: absentEvidence }]));
+assert(criteriaRequest.instructions.includes('planned_group_teaching_only'));
+assert(criteriaRequest.instructions.includes('逐句结合整组检验旁白必要性'));
+assert(criteriaRequest.instructions.includes('分类不是旁白必要性的豁免'));
+assert(criteriaRequest.instructions.includes('固定3/5秒或40%/60%占比'));
+assert.equal(criteriaRequest.input.cases[0].packet.units[0].points[0].question,
+  teaching.packet.units[0].points[0].question, 'registered teaching goal/question is carried unchanged, not supplied by the host');
+
+// Counterfactual inputs are derived from actual group IDs, never authored loss claims.
+const multiLinePacket = structuredClone(teaching.packet);
+const firstUnit = multiLinePacket.units[0];
+firstUnit.lines.push({ ...structuredClone(firstUnit.lines[0]), line_id: 'second-line',
+  labels: ['independent-visible-label'] });
+(firstUnit as unknown as Record<string, unknown>).omission_views = [{ target_line_id: 'FORGED', remaining_line_ids: [] }];
+const packetBeforeOmission = JSON.stringify(multiLinePacket);
+const omissionRequest = buildCopyTeachingReviewRequest([{ case_id: 'omission-test', packet: multiLinePacket }]);
+const omissionUnit = omissionRequest.input.cases[0].packet.units[0];
+assert.deepEqual(omissionUnit.omission_views, firstUnit.lines.map((line) => ({
+  target_line_id: line.line_id, remaining_line_ids: firstUnit.lines.filter((other) => other.line_id !== line.line_id).map((other) => other.line_id),
+})), 'remove exactly the target narration/captions, retain the other lines of THIS unit');
+assert.deepEqual(omissionUnit.points, criteriaRequest.input.cases[0].packet.units[0].points, 'counterfactual deletion does not delete or downgrade selected points');
+for (const unit of omissionRequest.input.cases[0].packet.units.slice(1)) {
+  assert.deepEqual(unit.omission_views, unit.lines.map((line) => ({ target_line_id: line.line_id,
+    remaining_line_ids: unit.lines.filter((other) => other.line_id !== line.line_id).map((other) => other.line_id) })), "a deletion in one unit never leaks another unit's lines, even when line IDs repeat across units");
+  assert(!unit.omission_views.some((view) => view.remaining_line_ids.includes('second-line')));
+}
+
+assert.deepEqual(omissionUnit.lines.map((line) => line.labels), firstUnit.lines.map((line) => line.labels), 'independent visible labels remain');
+assert.equal(JSON.stringify(multiLinePacket), packetBeforeOmission, 'request generation must not edit a draft or supplied material');
+assert.deepEqual(omissionUnit.picture_plan, criteriaRequest.input.cases[0].packet.units[0].picture_plan, 'original/explanation ranges and planned pictures do not disappear with a voiceover line');
+const sharedPointDoc = structuredClone(base);
+const sharedAnalysis = sharedPointDoc.clipMentorAnalysis!;
+const sharedUnit = sharedAnalysis.source_breakdown!.units[0];
+const sharedPoint = { ...structuredClone(sharedAnalysis.source_breakdown!.points[0]), point_id: 'shared-auxiliary', role: 'auxiliary' as const };
+sharedAnalysis.source_breakdown!.points.push(sharedPoint);
+sharedUnit.coverage.push({ point_id: sharedPoint.point_id, treatment: 'merged', merged_into_point_id: sharedUnit.coverage[0].point_id,
+  reason: 'Synthetic mapping test only: retain both points without requiring a second independent voiceover line' });
+const sharedBlueprint = sharedAnalysis.blueprint[0] as unknown as Record<string, any>;
+sharedBlueprint.point_ids.push(sharedPoint.point_id);
+sharedBlueprint.internal_review['test-candidate'].lines[0].point_ids.push(sharedPoint.point_id);
+const sharedPacket = await copyTeachingPacketFromDoc(sharedPointDoc);
+const sharedRequest = buildCopyTeachingReviewRequest([{ case_id: 'shared-point-mapping-test', packet: sharedPacket }]);
+assert.equal(sharedRequest.input.cases[0].packet.units[0].points.length, 2);
+assert.equal(sharedRequest.input.cases[0].packet.units[0].lines.length, 1, 'retained required points can share a spoken line; this is not semantic approval of the merge');
+assert(sharedAnalysis.source_breakdown!.points.every((point) => point.importance === 'must_explain'));
+
+// A selected visual-only point stays in the review without inventing a spoken reference.
+// Synthetic policy fixtures only: these checks do not establish real teaching quality.
+const visualDoc = structuredClone(base);
+const va = visualDoc.clipMentorAnalysis!;
+const visualPointId = 'visual-auxiliary';
+va.source_breakdown!.points.push({ ...structuredClone(va.source_breakdown!.points[0]),
+  point_id: visualPointId, role: 'auxiliary' });
+va.source_breakdown!.units[0].coverage.push({ point_id: visualPointId, treatment: 'visual_only',
+  reason: 'AUTHOR_VISUAL_REASON: selected gesture remains visible; its standalone narration is not established' });
+va.blueprint[0].point_ids.push(visualPointId);
+const visualPacket = await copyTeachingPacketFromDoc(visualDoc);
+assert.doesNotThrow(() => buildCopyTeachingReviewRequest([{ case_id: 'visual-only', packet: visualPacket }]),
+  'a registered picture-only point must reach review without a fabricated narration link');
+const visualPoint = visualPacket.units[0].points.find(p => p.point_id === visualPointId)!;
+assert.equal(visualPoint.treatment, 'visual_only');
+assert(visualPoint.treatment_reason!.includes('AUTHOR_VISUAL_REASON'), 'retain the actual author decision for provenance');
+assert(visualPoint.visual_evidence!.length > 0, 'source ranges and visible evidence must remain bound');
+const visualRequest = buildCopyTeachingReviewRequest([{ case_id: 'visual-only', packet: visualPacket }]);
+assert(!JSON.stringify(visualRequest).includes('AUTHOR_VISUAL_REASON'), 'author reasons must not become the independent reviewer verdict');
+assert.equal(visualRequest.input.cases[0].packet.units[0].points.length, 2, 'never drop the picture-only task from the review');
+const slot = visualPoint.visual_evidence![0];
+const visualReview = structuredClone(teaching.review);
+visualReview.units[0].points.push({ ...structuredClone(visualReview.units[0].points[0]),
+  point_id: visualPointId, connection: 'auxiliary_transition', basis: 'within_unit', quotes: [],
+  visual_check: { evidence_refs: [{ segment_id: slot.segment_id, phase: slot.phase,
+    evidence_id: slot.evidence_ids[0], source_range_seconds: [...slot.source_range_seconds] }],
+    observed_relation: 'Synthetic selected gesture in the mapped source window', sufficiency: 'sufficient',
+    omission_loss: 'Synthetic control: the group retains its instruction and this visual relation without a separate spoken line' } });
+assert.equal(assessTeachingReview(visualPacket, visualReview).verdict, 'pass', 'supported visual coverage is not blanket-rejected');
+for (const mutate of [
+  (p: any) => { delete p.visual_check; },
+  (p: any) => { p.visual_check.evidence_refs = []; },
+  (p: any) => { p.visual_check.evidence_refs[0].evidence_id = 'unrelated-or-missing'; },
+  (p: any) => { p.visual_check.evidence_refs[0].source_range_seconds = [0, 1]; },
+  (p: any) => { p.visual_check.evidence_refs[0].phase = 'not-a-phase'; },
+  (p: any) => { p.visual_check.omission_loss = ''; },
+  (p: any) => { p.visual_check.sufficiency = 'uncertain'; },
+  (p: any) => { p.source_support = 'uncertain'; },
+]) {
+  const bad = structuredClone(visualReview); mutate(bad.units[0].points.at(-1));
+  assert.equal(assessTeachingReview(visualPacket, bad).verdict, 'insufficient_evidence');
+}
+const needsWords = structuredClone(visualReview);
+needsWords.units[0].points.at(-1)!.visual_check!.sufficiency = 'needs_explanation';
+assert.equal(assessTeachingReview(visualPacket, needsWords).verdict, 'needs_revision');
+for (const invalid of [['sufficient'], [['sufficient']], null, {}, 0, true]) {
+  const bad = structuredClone(visualReview);
+  Object.assign(bad.units[0].points.at(-1)!.visual_check!, { sufficiency: invalid });
+  assert.equal(assessTeachingReview(visualPacket, bad).verdict, 'insufficient_evidence', 'no enum coercion');
+}
+for (const mutate of [
+  (p: any) => { p.visual_evidence = []; },
+  (p: any) => { p.treatment_reason = ''; },
+  (p: any) => { p.visual_evidence[0].evidence_ids = ['unrelated-or-missing']; },
+  (p: any) => { p.visual_evidence[0].source_range_seconds = [0, 1]; },
+  (p: any) => { p.treatment = ['visual_only']; },
+]) {
+  const bad = structuredClone(visualPacket); mutate(bad.units[0].points.at(-1));
+  assert.throws(() => buildCopyTeachingReviewRequest([{ case_id: 'bad-visual', packet: bad }]));
+}
+const forgedNarrationOnly = structuredClone(teaching.review);
+forgedNarrationOnly.units[0].points[0].quotes = [];
+Object.assign(forgedNarrationOnly.units[0].points[0], { visual_check: visualReview.units[0].points.at(-1)!.visual_check });
+assert.equal(assessTeachingReview(teaching.packet, forgedNarrationOnly).verdict, 'insufficient_evidence',
+  'visual support cannot waive a spoken point quote');
+
+for (const unit of criteriaRequest.input.cases[0].packet.units) {
+  assert.deepEqual(unit.omission_views, [{ target_line_id: unit.lines[0].line_id, remaining_line_ids: [] }], 'single-line groups still retain evidence, points and picture; zero remaining narration is not invalid');
+}
+assert(omissionRequest.instructions.includes('删去目标口播及其同文字幕'));
+assert(omissionRequest.instructions.includes('重点保留不等于每个重点独占一句旁白'));
+assert(omissionRequest.instructions.includes('有表达作用不等于值得独立占用旁白'));
+
 const receipt = await bindCopyProductionReview(base, {
   teaching_review: teaching,
   analysis_revision: subject.revision, content_digest: subject.digest,
   author_run_id: 'test-author', reviewer_run_id: 'test-independent-reviewer', reviewed_at: 1, verdict: 'pass',
-  units: subject.units.map((u) => ({ unit_id: u.unit_id, candidate_id: u.candidate_id, verdict: 'pass', findings: [] })),
+  units: subject.units.map((u) => ({ unit_id: u.unit_id, candidate_id: u.candidate_id, verdict: 'pass', findings: [],
+    group_checks: { scope: 'planned_group_teaching_only',
+      L1: { verdict: 'pass', learner_takeaway: 'Synthetic group teaching relation', reason: 'Synthetic complete selected-point coverage, not a quality oracle' },
+      L2: { verdict: 'pass', viewer_chain: 'Synthetic original then explanation', stage_cues: 'Synthetic visible revisit label', reason: 'Synthetic planned handoff, not rendered viewing' } },
+    narration_checks: u.lines.map((l) => ({ line_id: l.line_id, necessity: 'necessary', omission_loss: 'Synthetic test: use-experience relation',
+      naturalness: 'natural', reason: 'Synthetic policy positive, not a naturalness certification' })) })),
 });
 const approved = structuredClone(base);
 approved.clipMentorAnalysis!.production_copy_review = receipt;
@@ -90,6 +226,171 @@ assert(isClipMentorAnalysis(approved.clipMentorAnalysis));
 assert.deepEqual(migrateProjectDoc(JSON.parse(JSON.stringify(approved)))?.clipMentorAnalysis?.production_copy_review, receipt, 'save/reopen migration preserves a typed receipt');
 assert.equal((await checkCopyProduction(base, null)).code, 'copy_review_missing', 'changing creative mode does not bypass project-owned analysis');
 assert.equal((await checkCopyProduction(approved, null)).code, 'copy_and_plan_ready', 'a complete reviewed positive must not be blanket-blocked');
+const historicalGroupMissing = structuredClone(approved);
+delete historicalGroupMissing.clipMentorAnalysis!.production_copy_review!.units[0].group_checks;
+assert(isCopyProductionReview(historicalGroupMissing.clipMentorAnalysis!.production_copy_review), 'old receipts stay readable without fabricated group checks');
+assert.equal((await checkCopyProduction(historicalGroupMissing, null)).code, 'copy_group_review_not_passed',
+  'per-point and per-line passes cannot substitute for missing whole-group review');
+for (const layer of ['L1', 'L2'] as const) {
+  for (const verdict of ['needs_revision', 'insufficient_evidence'] as const) {
+    const failedGroup = structuredClone(approved);
+    const saved = failedGroup.clipMentorAnalysis!.production_copy_review!;
+    saved.units[0].group_checks![layer].verdict = verdict;
+    const checked = await checkCopyProduction(failedGroup, null);
+    assert.equal(checked.code, 'copy_group_review_not_passed');
+    assert('group_layer' in checked && 'group_verdict' in checked);
+    assert.equal(checked.group_layer, layer);
+    assert.equal(checked.group_verdict, verdict);
+    for (const executor of [executeTool, executeOfflineTool]) {
+      const { ctx, draft } = context(failedGroup);
+      const before = JSON.stringify(draft.getDoc());
+      for (const tool of ['submit_voice', 'set_aspect_ratio']) {
+        const blocked = await executor(tool, { text: goodLine.narration_ms, ratio: '1:1' }, ctx) as { production_gate?: { code: string } };
+        assert.equal(blocked.production_gate?.code, 'copy_group_review_not_passed');
+      }
+      assert.equal(JSON.stringify(draft.getDoc()), before);
+      assert.equal(draft.takeActions().length, 0);
+    }
+    const read = await executeTool('read_clipmentor_analysis', { view: 'copy_review' }, context(failedGroup).ctx) as any;
+    assert.deepEqual(read.analysis.copy_review.receipt.units[0].group_checks, saved.units[0].group_checks);
+    assert.equal(read.production_gate.allowed, false);
+  }
+}
+for (const change of [
+  (g: any) => { g.scope = 'rendered_preview'; },
+  (g: any) => { g.L1.verdict = ['pass']; },
+  (g: any) => { g.L2.verdict = null; },
+  (g: any) => { g.L1.learner_takeaway = ' '; },
+  (g: any) => { g.L1.reason = []; },
+  (g: any) => { g.L2.viewer_chain = ''; },
+  (g: any) => { g.L2.stage_cues = null; },
+  (g: any) => { delete g.L2.reason; },
+]) {
+  const invalid = structuredClone(approved);
+  change(invalid.clipMentorAnalysis!.production_copy_review!.units[0].group_checks);
+  assert(!isCopyProductionReview(invalid.clipMentorAnalysis!.production_copy_review));
+  assert.equal((await checkCopyProduction(invalid, null)).code, 'copy_review_invalid');
+}
+const visualSubject = await copyReviewSubject(visualDoc);
+const visualReceipt = await bindCopyProductionReview(visualDoc, { ...structuredClone(receipt),
+  analysis_revision: visualSubject.revision, content_digest: visualSubject.digest,
+  teaching_review: { packet: visualPacket, review: visualReview } });
+const visualApproved = structuredClone(visualDoc);
+visualApproved.clipMentorAnalysis!.production_copy_review = visualReceipt;
+assert.equal((await checkCopyProduction(visualApproved, null)).code, 'copy_and_plan_ready');
+for (const sufficiency of ['uncertain', 'needs_explanation'] as const) {
+  const blockedVisual = structuredClone(visualApproved);
+  blockedVisual.clipMentorAnalysis!.production_copy_review!.teaching_review!.review.units[0].points.at(-1)!.visual_check!.sufficiency = sufficiency;
+  assert.equal((await checkCopyProduction(blockedVisual, null)).code, 'copy_teaching_review_not_passed');
+  for (const executor of [executeTool, executeOfflineTool]) {
+    const { ctx, draft } = context(blockedVisual);
+    for (const tool of ['submit_voice', 'set_aspect_ratio']) {
+      const result = await executor(tool, { ratio: '1:1', text: goodLine.narration_ms }, ctx) as { production_gate?: { code: string } };
+      assert.equal(result.production_gate?.code, 'copy_teaching_review_not_passed');
+    }
+    assert.equal(draft.takeActions().length, 0);
+  }
+}
+const missingVisualPoint = structuredClone(visualApproved);
+missingVisualPoint.clipMentorAnalysis!.production_copy_review!.teaching_review!.packet.units[0].points.pop();
+assert.equal((await checkCopyProduction(missingVisualPoint, null)).code, 'copy_teaching_ledger_mismatch',
+  'removing a retained visual task from the receipt cannot authorize production');
+
+const quoteLines = [
+  { ...goodLine, narration_ms: 'Dia tunjuk contoh ini.', caption_lines: ['Lihat tangan', 'dalam bingkai.'], meaning_zh: '她展示这个例子。', labels: ['Dalam satu bingkai'] },
+  { ...goodLine, line_id: 'quote-line-2', narration_ms: 'Kemudian dia sambung.', caption_lines: ['Teruskan pemerhatian.'], labels: [] },
+];
+for (const quote of ['Dia tunjuk contoh ini.', 'tunjuk contoh', '\nDia  tunjuk\tcontoh ini. ',
+  'tangan dalam bingkai.', 'Dalam satu bingkai', 'contoh ini. Kemudian dia sambung.']) {
+  assert(checkCopyFindingQuotes(quoteLines, [{ severity: 'suggestion', quote, reason: 'Synthetic exact source text' }]).valid,
+    'exact fragments, whitespace, caption wrapping, labels and consecutive lines remain quotable');
+}
+for (const quote of ['她展示这个例子。', 'OTHER UNIT COPY', 'OLD DRAFT COPY', 'ini. Lihat tangan', '', '  ', ['Dia tunjuk contoh ini.'], null]) {
+  assert(!checkCopyFindingQuotes(quoteLines, [{ severity: 'suggestion', quote, reason: 'Synthetic invalid quote' }]).valid,
+    'Chinese meaning, other units, history, cross-channel splicing and non-text quotes cannot substantiate a finding');
+}
+assert(checkCopyFindingQuotes(quoteLines, []).valid, 'no findings remains a valid positive control');
+assert(!checkCopyFindingQuotes(quoteLines, null).valid);
+for (const severity of ['blocking', 'suggestion', 'unknown'] as const) {
+  const unanchored = structuredClone(approved);
+  unanchored.clipMentorAnalysis!.production_copy_review!.units[0].findings = [
+    { severity, quote: 'THIS QUOTE IS NOT IN THE CURRENT COPY', reason: 'Synthetic unmatched finding in a stored receipt' },
+  ];
+  const checked = await checkCopyProduction(unanchored, null);
+  assert.equal(checked.code, 'copy_finding_evidence_invalid', 'stored receipts must revalidate their finding quotes, not trust the old pass');
+  assert.equal(checked.allowed, false);
+  const reopened = migrateProjectDoc(JSON.parse(JSON.stringify(unanchored)))!;
+  assert.equal((await checkCopyProduction(reopened, null)).code, 'copy_finding_evidence_invalid', 'save/reopen cannot rehabilitate the quote');
+  const read = await executeTool('read_clipmentor_analysis', { view: 'copy_review' }, context(unanchored).ctx) as {
+    analysis: { copy_review: { receipt: { verdict: string } } }; production_gate: { code: string };
+  };
+  assert.equal(read.analysis.copy_review.receipt.verdict, 'pass', 'historical raw verdict remains readable');
+  assert.equal(read.production_gate.code, 'copy_finding_evidence_invalid');
+  for (const executor of [executeTool, executeOfflineTool]) {
+    const { ctx, draft } = context(unanchored);
+    const before = JSON.stringify(draft.getDoc());
+    for (const tool of ['submit_voice', 'set_aspect_ratio']) {
+      const blocked = await executor(tool, { text: goodLine.narration_ms, ratio: '1:1' }, ctx) as { production_gate?: { code: string } };
+      assert.equal(blocked.production_gate?.code, 'copy_finding_evidence_invalid');
+    }
+    assert.equal(JSON.stringify(draft.getDoc()), before, 'invalid evidence blocks before any media or timeline mutation');
+  }
+}
+for (const kind of ['missing', 'duplicate', 'redundant', 'awkward', 'uncertain', 'missing_loss', 'null_necessity'] as const) {
+  const deficient = structuredClone(approved);
+  const u = deficient.clipMentorAnalysis!.production_copy_review!.units[0];
+  if (kind === 'missing') delete u.narration_checks;
+  else if (kind === 'duplicate') u.narration_checks!.push(u.narration_checks![0]);
+  else if (kind === 'redundant') u.narration_checks![0].necessity = 'redundant';
+  else if (kind === 'awkward') u.narration_checks![0].naturalness = 'awkward';
+  else if (kind === 'missing_loss') u.narration_checks![0].omission_loss = ' ';
+  else if (kind === 'null_necessity') Object.assign(u.narration_checks![0], { necessity: null });
+  else u.narration_checks![0].naturalness = 'uncertain';
+  assert.equal((await checkCopyProduction(deficient, null)).code,
+    kind === 'missing_loss' || kind === 'null_necessity' ? 'copy_review_invalid' : 'copy_narration_review_not_passed');
+}
+assert.equal(assessNarrationChecks(subject.units[0].lines, receipt.units[0].narration_checks).verdict, 'pass');
+
+// JSON enum fields must be scalar strings, never coercible arrays or other values.
+for (const field of ['necessity', 'naturalness'] as const) {
+  for (const scalar of field === 'necessity' ? ['necessary', 'redundant', 'uncertain'] : ['natural', 'awkward', 'uncertain']) {
+    const valid = structuredClone(receipt.units[0].narration_checks!);
+    Object.assign(valid[0], { [field]: scalar });
+    assert.equal(assessNarrationChecks(subject.units[0].lines, valid).verdict,
+      scalar === 'redundant' || scalar === 'awkward' ? 'needs_revision' : scalar === 'uncertain' ? 'insufficient_evidence' : 'pass');
+    for (const invalid of [[scalar], [[scalar]], null, {}, true, 0]) {
+      const checks = structuredClone(valid); Object.assign(checks[0], { [field]: invalid });
+      assert.equal(assessNarrationChecks(subject.units[0].lines, checks).verdict, 'insufficient_evidence', `${field} cannot coerce ${JSON.stringify(invalid)}`);
+      const malformed = structuredClone(approved);
+      malformed.clipMentorAnalysis!.production_copy_review!.units[0].narration_checks = checks;
+      assert(!isCopyProductionReview(malformed.clipMentorAnalysis!.production_copy_review));
+      assert.equal((await checkCopyProduction(malformed, null)).code, 'copy_review_invalid');
+      const blocked = await executeTool('submit_voice', {}, context(malformed).ctx) as { production_gate?: { code: string } };
+      assert.equal(blocked.production_gate?.code, 'copy_review_invalid', 'invalid enum cannot reach production tools');
+    }
+  }
+}
+for (const [field, allowed] of [
+  ['connection', ['purchase_connected', 'function_only', 'action_only', 'supporting_context', 'auxiliary_transition', 'not_explained']],
+  ['basis', ['in_copy', 'within_unit', 'background_only', 'none']],
+  ['source_support', ['supported', 'uncertain', 'contradicted']],
+  ['meaning_alignment', ['aligned', 'uncertain', 'misaligned']],
+] as const) {
+  for (const invalid of [...allowed.map(v => [v]), ...allowed.map(v => [[v]]), null, {}, true, 0]) {
+    const raw = structuredClone(teaching.review); Object.assign(raw.units[0].points[0], { [field]: invalid });
+    assert.equal(assessTeachingReview(teaching.packet, raw).verdict, 'insufficient_evidence', `invalid teaching ${field}`);
+  }
+}
+for (const target of ['root_verdict', 'unit_verdict', 'severity', 'channel', 'role'] as const) {
+  const malformed = structuredClone(receipt);
+  if (target === 'root_verdict') Object.assign(malformed, { verdict: ['pass'] });
+  if (target === 'unit_verdict') Object.assign(malformed.units[0], { verdict: ['pass'] });
+  if (target === 'severity') malformed.units[0].findings.push({ severity: ['blocking'] as unknown as 'blocking', quote: 'test', reason: 'test' });
+  if (target === 'channel') Object.assign(malformed.teaching_review!.review.units[0].points[0].quotes[0], { channel: ['narration'] });
+  if (target === 'role') Object.assign(malformed.teaching_review!.packet.units[0].points[0], { role: ['primary'] });
+  assert(!isCopyProductionReview(malformed), `invalid receipt ${target}`);
+}
+
 assert.equal((await checkCopyProduction(approved, null, { ...calibration, qualified: false })).code, 'copy_review_method_unqualified');
 // Synthetic qualified method tests ONLY the policy's positive branch. It is never
 // passed to either real dispatcher and is not a production review qualification.
@@ -187,13 +488,17 @@ assert.equal(oldCalibration.qualified, false, 'preserve the V1 miss; do not rewr
 assert.equal(calibration.cases.find((c) => c.label === 'revision95')?.actual, 'needs_revision');
 assert.equal(calibration.cases.filter((c) => c.kind === 'positive' && c.actual === 'pass').length, 3);
 assert.equal(calibration.qualified, true);
-// The production request builder reproduces exactly what the independent reviewer
-// saw; labels/oracles/author arguments are not model inputs.
+// Preserve the recorded historical input/hash. Current review adds new criteria;
+// it must not be presented as the same independently validated prompt.
 const requestCases = teachingRegression.blind_input.cases as unknown as Array<{ case_id: string; packet: TeachingPacket }>;
 const request = buildCopyTeachingReviewRequest(requestCases.map((c) => ({ ...c, expected: 'pass', author_self_review: 'pass' })));
-assert.deepEqual(request.input, teachingRegression.blind_input);
-assert.equal(request.instructions, teachingRegression.instructions);
-assert.equal(createHash('sha256').update(request.instructions).digest('hex'), teachingRegression.pre_registration['protocol.txt']);
+const originalContentOnly = { cases: request.input.cases.map((c) => ({ case_id: c.case_id, packet: { ...c.packet,
+  units: c.packet.units.map(({ omission_views: _views, ...unit }) => unit),
+} })) };
+assert.deepEqual(originalContentOnly, teachingRegression.blind_input, 'new omission references do not rewrite historical copy, context or evidence');
+assert(request.instructions.startsWith(teachingRegression.instructions));
+assert.equal(createHash('sha256').update(teachingRegression.instructions).digest('hex'), teachingRegression.pre_registration['protocol.txt']);
+assert.notEqual(createHash('sha256').update(request.instructions).digest('hex'), teachingRegression.pre_registration['protocol.txt'], 'new criteria are not the historical calibrated prompt');
 assert.equal(createHash('sha256').update(`${JSON.stringify(teachingRegression.blind_input, null, 2)}\n`).digest('hex'), teachingRegression.pre_registration['input.json']);
 assert(!JSON.stringify(request.input).includes('author_self_review'));
 assert(!JSON.stringify(request.input).includes('"expected"'));

@@ -125,6 +125,7 @@ const MODEL_ROUTING_NAMES = [
   'ELEVENLABS_TTS_MODEL', 'ELEVENLABS_SOUND_MODEL',
   'OPENAI_TTS_MODEL', 'GEMINI_TTS_MODEL', 'MISTRAL_TTS_MODEL', 'CARTESIA_TTS_MODEL',
   'OPENAI_TRANSCRIPTION_MODEL', 'MISTRAL_TRANSCRIPTION_MODEL', 'DEEPGRAM_TRANSCRIPTION_MODEL',
+  'CLIPMENTOR_FUNASR_ENDPOINT',
   'GROQ_TRANSCRIPTION_MODEL', 'ELEVENLABS_TRANSCRIPTION_MODEL', 'CARTESIA_TRANSCRIPTION_MODEL', 'GROQ_BASE_URL',
   'DOUBAO_TTS_RESOURCE_ID', 'SEEDANCE_VIDEO_MODEL', 'KLING_VIDEO_MODEL', 'MUREKA_MUSIC_MODEL',
   'MINIMAX_TTS_MODEL', 'MINIMAX_VIDEO_MODEL', 'MINIMAX_MUSIC_MODEL', 'MINIMAX_IMAGE_MODEL',
@@ -162,14 +163,18 @@ assert.deepStrictEqual(
   'NON_SECRET_NAMES = explicit routing/config names plus per-vendor Base URL/model only',
 );
 
-// seed one SECRET + one non-secret on top of the state above (seeds accumulate in-process)
-seedKeystore({ ...isolatedSeed, LLM_API_KEY: 'sec-x', MINIMAX_TTS_MODEL: 'speech-2.8-hd' } as Record<string, string>);
+// Seed secrets plus non-secret config; credential values must never reach status.
+seedKeystore({ ...isolatedSeed, LLM_API_KEY: 'sec-x', CLIPMENTOR_FUNASR_API_KEY: 'funasr-test-secret', MINIMAX_TTS_MODEL: 'speech-2.8-hd' } as Record<string, string>);
 const st2 = keyStatus();
 assert.equal(st2.models['MINIMAX_TTS_MODEL'], 'speech-2.8-hd', 'non-secret model value echoed in models');
 assert.equal(st2.models['KLING_VIDEO_MODEL'], '', 'unset non-secret name echoes empty string');
 assert.ok(!('LLM_API_KEY' in st2.models), 'SECRET key has no field in models at all');
 assert.equal(st2.keys.LLM_API_KEY.configured, true, 'SECRET key still reported as configured boolean');
 assert.ok(!JSON.stringify(st2).includes('sec-x'), 'SECRET value appears NOWHERE in the serialized status');
+assert.ok(!NON_SECRET_NAMES.has('CLIPMENTOR_FUNASR_API_KEY'), 'Fun-ASR credential stays secret');
+assert.ok(!('CLIPMENTOR_FUNASR_API_KEY' in st2.models), 'Fun-ASR credential has no field in models');
+assert.equal(st2.keys.CLIPMENTOR_FUNASR_API_KEY.configured, true, 'Fun-ASR credential exposes only configuration status');
+assert.ok(!JSON.stringify(st2).includes('funasr-test-secret'), 'Fun-ASR credential appears NOWHERE in serialized status');
 
 seedKeystore({
   ...isolatedSeed,

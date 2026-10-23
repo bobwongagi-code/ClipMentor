@@ -55,6 +55,15 @@ try {
   (x:any)=>{x.lines[0].line_id='unknown';},
   (x:any)=>{x.windows[0].evidence[0].start_seconds=NaN;},
  ]) {const invalid=good();mutate(invalid);assert.equal(inspectSourceObservation(invalid,input).status,'invalid');}
+ for (const scalar of ['supported', 'not_supported', 'insufficient_evidence']) {
+  const valid=good();valid.lines[0].status=scalar;
+  assert.equal(inspectSourceObservation(valid,input).status,'valid');
+  for (const value of [[scalar],[[scalar]],null,{},true,0]) {
+   const invalid=good();Object.assign(invalid.lines[0],{status:value});
+   assert.equal(inspectSourceObservation(invalid,input).status,'invalid','line status must be a scalar enum');
+  }
+ }
+
  const negative=good();negative.lines[0].status='not_supported';assert.equal(inspectSourceObservation(negative,input).status,'valid','valid structure does not upgrade a negative semantic result');
  // Offline recovery uses the frozen request and unchanged original response, not another post().
  const legacy={...request,operationId:randomUUID()},originalBody=buildSourceVideoRequest(video,legacy);

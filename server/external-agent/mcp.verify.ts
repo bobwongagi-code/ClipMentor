@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { setImmediate as nextEventLoop } from 'node:timers/promises';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
   pendingEditorCallsForTest,
@@ -162,7 +163,36 @@ try {
     body: '{',
   });
   assert.equal(invalidJson.status, 400, 'MCP POST JSON is parsed before transport dispatch');
-  const boundA = await connectClient(mcpUrl, 'openchatcut-mcp-binding-a');
+  // SDK connect() starts its notification GET without awaiting it. Hold that
+  // request so the verifier must wait for the real subscription, on any Node version.
+  const previousFetch = globalThis.fetch;
+  let getStarted!: () => void;
+  let releaseGet!: () => void;
+  const notificationGet = new Promise<void>((resolve) => { getStarted = resolve; });
+  const allowGet = new Promise<void>((resolve) => { releaseGet = resolve; });
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === 'GET') {
+      getStarted();
+      await allowGet;
+    }
+    return previousFetch(input, init);
+  };
+  let connectionReturned = false;
+  const connecting = connectClient(mcpUrl, 'openchatcut-mcp-binding-a').then((connection) => {
+    connectionReturned = true;
+    return connection;
+  });
+  let boundA: ConnectedClient;
+  try {
+    await notificationGet;
+    await nextEventLoop();
+    assert.equal(connectionReturned, false, 'MCP verifier connection must await its notification stream');
+    releaseGet();
+    boundA = await connecting;
+  } finally {
+    releaseGet();
+    globalThis.fetch = previousFetch;
+  }
   clients.push(boundA);
   let notify!: () => void;
   const changed = new Promise<void>((resolve) => { notify = resolve; });

@@ -79,6 +79,7 @@ try {
     'references/reproduction-lessons.md',
     'references/pre-edit-analysis.md',
     'references/analysis-method.md',
+    'references/review-boundaries.md',
   ]) {
     const loaded = loader.execPluginSkillTool('load_skill', { name: 'clipmentor', file, offset: 0 });
     assert(loaded && typeof loaded === 'object' && 'contents' in loaded, `cannot load ${file}`);
@@ -87,7 +88,20 @@ try {
     assert(expected.trim().length > 0, `${file} must not be empty`);
     assert.equal(result.contents[file], expected, `${file} must load completely`);
     assert.equal(result.nextOffset, null);
+    if (file === 'references/planning.md') {
+      for (const requirement of ['Production review checkpoints', '1. Blueprint review', '2. Audio-visual capacity review',
+        '3. Continuous viewing review', 'group_checks.L1', 'omission_loss']) assert(result.contents[file].includes(requirement));
+    }
+    if (file === 'references/delivery-checklist.md') assert(result.contents[file].includes('三个审核检查点'));
+    if (file === 'references/review-boundaries.md') {
+      for (const requirement of ['Ownership and authorization', 'Resolve uncertain items', 'Malay quality',
+        'independent_current_subject_v1', 'Pending preview to final delivery', 'diff:delivery-check']) assert(result.contents[file].includes(requirement));
+    }
   }
+
+  const clipMentor = pluginFiles.PLUGIN_SKILLS.find(skill => skill.slug === 'clipmentor')!;
+  assert(clipMentor.body.includes('Review responsibilities and priority'));
+  assert(clipMentor.body.includes('teaching first → measured audio/picture fit → continuous preview acceptance'));
 
   const withSupport = pluginFiles.PLUGIN_SKILLS.find((skill) => skill.files.length > 0);
   assert(withSupport, 'at least one bundled skill must expose a support file');

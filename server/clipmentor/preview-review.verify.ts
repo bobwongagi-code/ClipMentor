@@ -20,6 +20,19 @@ const good = (): PreviewTeachingJudgment => ({
     relation: 'recap', narrative: finding(), teaching: finding() }],
 });
 
+for (const value of [['narration'], [['narration']], null, {}, true, 0]) {
+  const invalid = structuredClone(input); Object.assign(invalid.reference_text[0], { channel: value });
+  assert.throws(() => validatePreviewReviewInput(invalid), 'reference channel must be scalar');
+}
+for (const [target, field] of [['receipt', 'channel'], ['finding', 'status'], ['continuity', 'relation']] as const) {
+  for (const value of [null, {}, true, 0, ['supported'], ['recap'], ['narration']]) {
+    const invalid = good();
+    const row = target === 'receipt' ? invalid.coverage[0].teaching.evidence[0] : target === 'finding' ? invalid.coverage[0].teaching : invalid.continuity[0];
+    Object.assign(row, { [field]: value });
+    assert.equal(evaluatePreviewTeachingJudgment(invalid, input).status, 'review_required', `invalid ${target}.${field}`);
+  }
+}
+
 assert.doesNotThrow(() => assertExternalVideoUrlSize(14_525_235));
 assert.throws(() => assertExternalVideoUrlSize(42_647_784), /15MB/);
 assert.doesNotThrow(() => assertExternalVideoUrlSize(15_000_000));

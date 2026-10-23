@@ -56,12 +56,12 @@ export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
       && strings(s.visible_evidence_ids) && strings(s.claim_evidence_ids) && strings(s.interpretation_evidence_ids) && strings(s.unknowns))
     || !rows(v.points, (p) => text(p.point_id) && strings(p.segment_ids) && p.segment_ids.length > 0
       && text(p.buying_concern) && text(p.teaching_question) && strings(p.filming_conditions)
-      && ['primary', 'supporting', 'auxiliary'].includes(String(p.role))
-      && ['must_explain', 'should_explain', 'optional'].includes(String(p.importance))
+      && (typeof p.role === 'string' && ['primary', 'supporting', 'auxiliary'].includes(p.role))
+      && (typeof p.importance === 'string' && ['must_explain', 'should_explain', 'optional'].includes(p.importance))
       && (p.supports_point_id === undefined || text(p.supports_point_id)) && (p.change_reason === undefined || text(p.change_reason)))
     || !rows(v.units, (u) => text(u.unit_id) && strings(u.original_segment_ids) && strings(u.explanation_segment_ids)
       && (u.original_source_ranges === undefined || (Array.isArray(u.original_source_ranges) && u.original_source_ranges.length > 0 && u.original_source_ranges.every(range)))
-      && rows(u.coverage, (c) => text(c.point_id) && ['explain', 'merged', 'visual_only', 'omit'].includes(String(c.treatment))
+      && rows(u.coverage, (c) => text(c.point_id) && (typeof c.treatment === 'string' && ['explain', 'merged', 'visual_only', 'omit'].includes(c.treatment))
         && (c.reason === undefined || text(c.reason)) && (c.merged_into_point_id === undefined || text(c.merged_into_point_id)))
       && rows(u.revisits, (r) => text(r.from_segment_id) && text(r.to_segment_id) && text(r.reason))
       && (u.placement === undefined || (row(u.placement) && text(u.placement.timeline_id)
@@ -89,6 +89,56 @@ export function breakdownRevisionError(previous: SourceBreakdown | undefined, ne
   return null;
 }
 
+/** Preserve a per-point before/after decision in the existing analysis audit, not a second ledger. */
+export function selectedPointChanges(previous: SourceBreakdown | undefined, next: SourceBreakdown) {
+  if (!previous) return [];
+  const state = (b: SourceBreakdown, id: string) => ({
+    definition: Object.fromEntries(['segment_ids', 'buying_concern', 'teaching_question', 'filming_conditions', 'role', 'supports_point_id', 'importance', 'change_reason']
+      .map(key => [key, (b.points.find(p => p.point_id === id) as unknown as Row)?.[key]])),
+    coverage: b.units.flatMap(u => u.coverage.filter(c => c.point_id === id).map(c => ({ unit_id: u.unit_id,
+      treatment: c.treatment, reason: c.reason, merged_into_point_id: c.merged_into_point_id }))).sort((a, b) => a.unit_id.localeCompare(b.unit_id)),
+  });
+  return previous.points.flatMap(p => {
+    const before = state(previous, p.point_id), after = state(next, p.point_id);
+    return JSON.stringify(before) === JSON.stringify(after) ? [] : [{ point_id: p.point_id, before, after }];
+  });
+}
+
+export const copyLineKeys = ['id', 'point_ids', 'narration_ms', 'caption_lines', 'zh', 'source_seconds', 'labels'];
+
+/** Redundant copy in a picture plan is a mirror, never a second current manuscript. */
+export function picturePlanCopyError(plan: unknown, candidate: unknown): string | null {
+  if (!row(plan) || !row(candidate) || !Array.isArray(candidate.lines)) return null;
+  const lines = candidate.lines;
+  const same = (value: unknown) => Array.isArray(value) && value.length === lines.length && value.every((line, i) =>
+    row(line) && row(lines[i]) && copyLineKeys.every(key => JSON.stringify(line[key]) === JSON.stringify(lines[i][key])));
+  if (plan.selected_narration !== undefined && !same(plan.selected_narration)) return 'picture_plan_copy_mismatch: use set_copy_candidate to change narration';
+  if (Array.isArray(plan.lines) && plan.lines.some(line => row(line) && ('narration_ms' in line || 'caption_lines' in line))
+    && !same(plan.lines)) return 'picture_plan_copy_mismatch: use set_copy_candidate to change narration';
+  return null;
+}
+
+/** New copy and its active pointer must be committed together; historical records remain readable. */
+export function blueprintRevisionError(previous: NonNullable<ProjectDoc['clipMentorAnalysis']>['blueprint'], next: NonNullable<ProjectDoc['clipMentorAnalysis']>['blueprint']) {
+  for (const unit of next) {
+    const internal = (unit as unknown as Row).internal_review;
+    const old = (previous.find(p => p.unit_id === unit.unit_id) as unknown as Row | undefined)?.internal_review;
+    if (row(old) && ['current_script_candidate', 'current_picture_plan'].some(key =>
+      text(old[key]) && (!row(internal) || !text(internal[key])))) return 'Existing active copy/picture state cannot disappear';
+    if (!row(internal)) continue;
+    if (internal.current_script_candidate !== undefined && (!text(internal.current_script_candidate)
+      || !row(internal[internal.current_script_candidate]) || !Array.isArray((internal[internal.current_script_candidate] as Row).lines))) return 'Current copy pointer must resolve to a saved candidate';
+    if (internal.current_picture_plan !== undefined && (!text(internal.current_picture_plan) || !row(internal[internal.current_picture_plan])
+      || (internal[internal.current_picture_plan] as Row).script_candidate_id !== internal.current_script_candidate)) return 'Current picture plan must bind the current copy';
+    const copyError = picturePlanCopyError(text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined,
+      text(internal.current_script_candidate) ? internal[internal.current_script_candidate] : undefined);
+    if (copyError) return copyError;
+    if (Object.keys(internal).some(key => key !== internal.current_picture_plan && row(internal[key]) && Array.isArray(internal[key].lines)
+      && JSON.stringify(internal[key]) !== JSON.stringify(row(old) ? old[key] : undefined) && internal.current_script_candidate !== key)) return 'Save new copy with its current pointer atomically; use set_copy_candidate';
+  }
+  return null;
+}
+
 export function breakdownPointEvidence(b: SourceBreakdown, pointId: string): string[] {
   const point = b.points.find((p) => p.point_id === pointId);
   return [...new Set(b.segments.filter((s) => point?.segment_ids.includes(s.segment_id))
@@ -112,6 +162,51 @@ function rangesCover(ranges: Array<[number, number]>, target: [number, number], 
   return end + tolerance >= target[1];
 }
 
+export interface CopySourceBinding {
+  evidence_source_ranges: Array<{ segment_id: string; source_range_seconds: [number, number] }>;
+  context_source_ranges: Array<{ segment_id: string; source_range_seconds: [number, number]; purpose: string }>;
+}
+
+/** source_seconds is an envelope. Only these bound ranges are evidence/context, never the gaps. */
+export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown['units'][number], line: Row, plan: unknown): CopySourceBinding | null {
+  if (!range(line.source_seconds)) return null;
+  const window = line.source_seconds;
+  const ids = strings(line.point_ids) ? line.point_ids : text(line.point) ? [line.point] : [];
+  if (!ids.length) return null;
+  const directIds = new Set(ids.flatMap((id) => b.points.find((p) => p.point_id === id)?.segment_ids ?? []));
+  const direct = b.segments.filter((s) => unit.explanation_segment_ids.includes(s.segment_id) && directIds.has(s.segment_id));
+  const evidence = direct.flatMap((s) => {
+    const start = Math.max(window[0], s.source_range_seconds[0]), end = Math.min(window[1], s.source_range_seconds[1]);
+    return end > start ? [{ segment_id: s.segment_id, source_range_seconds: [start, end] as [number, number] }] : [];
+  });
+  if (ids.some((id) => !b.points.find((p) => p.point_id === id)?.segment_ids.some((segment) => evidence.some((e) => e.segment_id === segment)))) return null;
+  const phases = row(plan) && Array.isArray(plan.phases) ? plan.phases.filter((p) => row(p) && p.line_id === line.id) : [];
+  if (phases.length > 1) return null;
+  const declared = row(phases[0]) ? phases[0].context_source_ranges : undefined;
+  if (declared !== undefined && !Array.isArray(declared)) return null;
+  const contexts: CopySourceBinding['context_source_ranges'] = [];
+  for (const c of (declared ?? []) as unknown[]) {
+    if (!row(c) || Object.keys(c).some((key) => !['segment_id', 'source_range_seconds', 'purpose'].includes(key))
+      || !text(c.segment_id) || !text(c.purpose) || !Array.isArray(c.source_range_seconds) || c.source_range_seconds.length !== 2
+      || !c.source_range_seconds.every((n) => typeof n === 'number' && Number.isFinite(n))
+      || c.source_range_seconds[0] > c.source_range_seconds[1]) return null;
+    const segment = b.segments.find((s) => s.segment_id === c.segment_id);
+    const [start, end] = c.source_range_seconds as [number, number];
+    if (!segment || !unit.explanation_segment_ids.includes(segment.segment_id) || directIds.has(segment.segment_id)
+      || start < segment.source_range_seconds[0] || start >= segment.source_range_seconds[1] || end > segment.source_range_seconds[1]
+      || start < window[0] || end > window[1]) return null;
+    contexts.push({ segment_id: segment.segment_id, source_range_seconds: [start, end], purpose: c.purpose });
+  }
+  if (!contexts.length) {
+    if (!rangesCover(evidence.map((e) => e.source_range_seconds), window, 0)) return null;
+  } else {
+    // Contexts are explicit selected pictures, not a request to play the envelope continuously.
+    const used = [...evidence, ...contexts].map((e) => e.source_range_seconds);
+    if (Math.min(...used.map((r) => r[0])) !== window[0] || Math.max(...used.map((r) => r[1])) !== window[1]) return null;
+  }
+  return { evidence_source_ranges: evidence, context_source_ranges: contexts };
+}
+
 export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
   const issues: Array<{ code: string; id: string }> = [];
   const bindings: Array<{ unit_id: string; phase: string; item_id: string; source_range_seconds: [number, number]; segment_ids: string[] }> = [];
@@ -120,7 +215,10 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
   const b = a?.source_breakdown;
   const result = () => ({ status: issues.length ? 'review_required' as const : 'structurally_ready' as const,
     scope: checkTimeline ? 'registered_timeline_ranges_only' : 'registered_points_and_plan_only', issues, bindings,
-    semantic_review_required: true as const, complete_film_accepted: false as const });
+    semantic_review_required: true as const, complete_film_accepted: false as const,
+    ...(issues.some((i) => i.code === 'copy_picture_outside_explanation') ? {
+      copy_source_binding_help: 'Each line needs its own registered point evidence. Additional same-unit context goes in current picture plan phases[].context_source_ranges: [{segment_id, source_range_seconds:[start,end], purpose}]. A still may use [t,t]. source_seconds encloses these selected ranges; it does not authorize playback of intervening gaps. Context does not prove the teaching claim.',
+    } : {}) });
   if (!a || !b) { issue('source_breakdown_missing', 'analysis'); return result(); }
   if (!isSourceBreakdown(b)) { issue('source_breakdown_invalid', 'analysis'); return result(); }
   const asset = doc.assets.find((v) => v.id === a.source.asset_id);
@@ -185,6 +283,14 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
     for (const r of u.revisits) if (!order.includes(r.from_segment_id) || !order.includes(r.to_segment_id)) issue('revisit_segment_missing', u.unit_id);
     const internal = (blueprint as unknown as Row | undefined)?.internal_review;
     const candidate = row(internal) && typeof internal.current_script_candidate === 'string' ? internal[internal.current_script_candidate] : null;
+    if (row(internal) && internal.current_script_candidate !== undefined && (!text(internal.current_script_candidate)
+      || !row(candidate) || !Array.isArray(candidate.lines))) issue('copy_candidate_pointer_invalid', u.unit_id);
+    if (row(internal) && internal.current_picture_plan !== undefined) {
+      const plan = text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : null;
+      if (!row(plan)) issue('picture_plan_pointer_invalid', u.unit_id);
+      else if (plan.script_candidate_id !== internal.current_script_candidate) issue('picture_plan_candidate_mismatch', u.unit_id);
+      else if (picturePlanCopyError(plan, candidate)) issue('picture_plan_copy_mismatch', u.unit_id);
+    }
     if (row(candidate) && Array.isArray(candidate.lines)) {
       const linePoints = new Set<string>();
       for (const line of candidate.lines) {
@@ -192,10 +298,8 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
         const ids = strings(line.point_ids) ? line.point_ids : text(line.point) ? [line.point] : [];
         ids.forEach((id) => linePoints.add(id));
         if (!ids.length || ids.some((id) => !u.coverage.some((c) => c.point_id === id))) issue('copy_point_not_registered', String(line.id));
-        if (!range(line.source_seconds) || !u.explanation_segment_ids.some((id) => {
-          const r = segments.get(id)?.source_range_seconds;
-          return r && range(line.source_seconds) && line.source_seconds[0] >= r[0] && line.source_seconds[1] <= r[1];
-        })) issue('copy_picture_outside_explanation', String(line.id));
+        const plan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
+        if (!copyLineSourceBinding(b, u, line, plan)) issue('copy_picture_outside_explanation', String(line.id));
       }
       for (const c of u.coverage) if (['explain', 'merged'].includes(c.treatment) && !linePoints.has(c.point_id)) issue('selected_point_missing_from_copy', c.point_id);
     }

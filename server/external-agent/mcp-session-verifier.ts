@@ -41,8 +41,40 @@ export async function connectClient(
 ): Promise<ConnectedClient> {
   const before = new Set(mcpSessionsForTest().map((session) => session.id));
   const client = new Client({ name, version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
-  await client.connect(transport);
+  let streamReady!: () => void;
+  let streamFailed!: (error: unknown) => void;
+  const notificationStream = new Promise<void>((resolve, reject) => {
+    streamReady = resolve;
+    streamFailed = reject;
+  });
+  const transport = new StreamableHTTPClientTransport(url, {
+    requestInit: { headers },
+    fetch: async (input, init) => {
+      try {
+        const response = await fetch(input, init);
+        if (init?.method === 'GET') {
+          assert.equal(response.status, 200, 'the MCP notification subscription must connect');
+          assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+          streamReady();
+        }
+        return response;
+      } catch (error) {
+        if (init?.method === 'GET') streamFailed(error);
+        throw error;
+      }
+    },
+  });
+  // The SDK starts GET in the background after initialized. A tools/list POST
+  // can finish first; notifications sent then are dropped by an unattached stream.
+  const timeout = setTimeout(() => streamFailed(new Error('MCP notification stream connection timeout')), 30_000);
+  try {
+    await Promise.all([client.connect(transport), notificationStream]);
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   const session = mcpSessionsForTest().find((candidate) => !before.has(candidate.id));
   assert(session, 'initialization registers exactly one new MCP session');
   return { client, sessionId: session.id };

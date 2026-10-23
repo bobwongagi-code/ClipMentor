@@ -2,7 +2,8 @@ import type { AgentContext } from '../agent/context';
 import type { CopyReviewRequest, CopyReviewResult } from '../../shared/clipmentor-copy-review';
 import { bindCopyProductionReview, checkCopyProduction, copyReviewSubject, copyTeachingPacketFromDoc, isCopyProductionReview } from './production-gate';
 
-/** Only the independent host result is written. The model cannot submit an approval. */
+/** Always an isolated current-subject review, even when its author worked collaboratively.
+ * Only the independent host result is written. The author cannot inject history, modes or approvals. */
 export async function requestClipMentorCopyReview(args: Record<string, unknown>, ctx: AgentContext): Promise<unknown> {
   if (Object.keys(args).some((k) => !['operationId', 'maxRequests', 'expectedRevision'].includes(k))
     || typeof args.operationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(args.operationId)
@@ -45,7 +46,7 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
       inspection: result.inspection, complete_film_accepted: false };
   } catch (error) {
     if (!requestSent) {
-      const code = error instanceof Error && ['picture_plan_candidate_mismatch', 'source_breakdown_not_ready', 'copy_candidate_missing', 'copy_candidate_incomplete', 'copy_unit_not_registered'].includes(error.message)
+      const code = error instanceof Error && ['picture_plan_candidate_mismatch', 'copy_candidate_pointer_invalid', 'picture_plan_pointer_invalid', 'source_breakdown_not_ready', 'copy_candidate_missing', 'copy_candidate_incomplete', 'copy_unit_not_registered'].includes(error.message)
         ? error.message : 'current_review_material_not_ready';
       return { error: `Independent review preflight failed: ${code}. No model request sent.`, requestsSent: 0 };
     }

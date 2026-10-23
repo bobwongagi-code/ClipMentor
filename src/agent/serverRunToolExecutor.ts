@@ -441,7 +441,7 @@ export class ServerRunToolExecutor {
         try {
           await this.callbacks.onToolAction(outcome);
         } catch (retryError) {
-          return this.reportFailure(session, toolCallId, request, retryError, false);
+          return this.reportFailure(session, toolCallId, request, retryError, false, draftDocBeforeTool);
         }
       }
       return this.finishExecution(session, toolCallId, request, update.execution.result);

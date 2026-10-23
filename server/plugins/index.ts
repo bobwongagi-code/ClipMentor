@@ -23,6 +23,7 @@ import { assemblyAiUploadPlugin } from "./assemblyai-upload.ts";
 import { transcriptionPlugin } from "./transcription.ts";
 import { clipMentorFunAsrPlugin } from './clipmentor-funasr.ts';
 import { clipMentorSourceVideoPlugin } from './clipmentor-source-video.ts';
+import { clipMentorPreviewReviewPlugin } from './clipmentor-preview-review.ts';
 import { clipMentorCopyReviewPlugin } from './clipmentor-copy-review.ts';
 import { extractFramesPlugin } from "./extract-frames.ts";
 import { sceneDetectionPlugin } from "./scene-detection.ts";
@@ -94,6 +95,7 @@ export function serverPlugins(options: { projectStoreHttp?: boolean } = {}): Plu
     clipMentorFunAsrPlugin(),
     clipMentorCopyReviewPlugin(),
     clipMentorSourceVideoPlugin(),
+    clipMentorPreviewReviewPlugin(),
     extractFramesPlugin(),
     sceneDetectionPlugin(),
     autoGradePlugin(),

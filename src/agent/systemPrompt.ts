@@ -37,7 +37,7 @@ export function assembleSystemPrompt(stable: readonly string[], volatilePart: st
 
 export function agentLanguagePrompt(locale: Locale): string {
   const language = localeLanguageName(locale);
-  return `\n\n# Response Language\nThe interface language is ${language}. Write all user-facing responses, questions, summaries, and generated editing instructions in ${language}.`;
+  return `\n\n# Response Language\nThe interface language is ${language}. By default, write user-facing responses, questions, summaries, and generated editing instructions in ${language}. An explicit user request for a different output language takes precedence. Preserve quoted source speech in its original language.`;
 }
 
 export function editorStatePrompt(ctx: AgentContext): string {

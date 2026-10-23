@@ -22,6 +22,29 @@ const actor: AnalysisActor = { operator: 'test-operator', executor: 'verificatio
 const assetId = '12546aa7-70fd-42c1-852a-8bf50f2abf58';
 const analysis = importTeashellAnalysis(fixture, assetId, actor, 1);
 assert(isClipMentorAnalysis(analysis));
+const enumAnalysis = structuredClone(analysis);
+enumAnalysis.observations = [{ observation_id: 'test-observation', source_hash: analysis.source.sourceContentHash!, requested_times_seconds: [60],
+  frame_evidence_ids: [], status: 'images_returned', sampling: 'sequence', method: 'source_frames_for_main_agent', at: 1 }];
+enumAnalysis.reviews = [{ point_id: analysis.points[0].point_id, state: 'confirmed', source_hash: analysis.source.sourceContentHash,
+  content_digest: 'a'.repeat(64), actor, at: 1, reason: 'Synthetic structural check only' }];
+assert(isClipMentorAnalysis(enumAnalysis));
+for (const [collection, index, field, allowed] of [
+  ['observations', 0, 'status', ['images_returned', 'failed']],
+  ['observations', 0, 'sampling', ['explicit_times', 'sequence']],
+  ['evidence', analysis.evidence.findIndex(e => e.kind === 'source_frame'), 'kind', ['source_frame']],
+  ['evidence', 0, 'call_status', ['historical_unknown', 'unknown', 'failed', 'succeeded']],
+  ['reviews', 0, 'state', ['confirmed', 'needs_revision', 'stale']],
+] as const) {
+  for (const scalar of allowed) {
+    const valid = structuredClone(enumAnalysis); Object.assign(valid[collection]![index], { [field]: scalar });
+    assert(isClipMentorAnalysis(valid), `valid ${collection}.${field}:${scalar}`);
+    for (const value of [[scalar], [[scalar]], null, {}, true, 0]) {
+      const invalid = structuredClone(valid); Object.assign(invalid[collection]![index], { [field]: value });
+      assert(!isClipMentorAnalysis(invalid), `reject non-string ${collection}.${field}`);
+    }
+  }
+}
+
 assert.equal(analysis.points.length, 6);
 assert.equal(analysis.transcripts[0].words.length, 362);
 assert.equal(analysis.evidence.find((e) => e.evidence_id === 'TS-A04')?.status, 'uncertain');
@@ -55,7 +78,9 @@ for (const tool of CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS) {
   assert(TOOL_SCHEMAS.some((t) => t.name === tool.name), 'tool registered in the actual Agent catalog');
   assert(activated.includes(tool.name), 'loading the bundled skill activates the analysis tool');
 }
-for (const tool of CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS) assert(isExternalDraftTool(tool.name));
+const browserOnlyPreviewTools = new Set(['edit_clipmentor_preview', 'review_clipmentor_preview']);
+for (const tool of CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS) assert.equal(isExternalDraftTool(tool.name), !browserOnlyPreviewTools.has(tool.name),
+  'preview host routes are not generic external draft tools; keep their explicit permit/call boundaries');
 assert.equal(policyForTool('transcribe_clipmentor_source').effect, 'irreversible_external');
 assert(isExternalReadTool('read_clipmentor_analysis'));
 assert.equal(policyForTool('read_clipmentor_analysis').effect, 'read');
@@ -63,6 +88,17 @@ assert.equal(policyForTool('revise_clipmentor_analysis').effect, 'reversible_edi
 assert.equal(policyForTool('review_clipmentor_analysis').effect, 'reversible_edit');
 const importArgs = { action: 'import', fixture: 'teashell_historical_v1', assetId, actor, reason: 'test historical import', expectedRevision: 0 };
 assert((await call('revise_clipmentor_analysis', importArgs)).ok);
+const beforeInvalidEnum = JSON.stringify(engine.getDoc());
+for (const [name, args] of [
+  ['read_clipmentor_analysis', { view: ['full'] }],
+  ['read_clipmentor_analysis', { view: 'copy_review', reviewPart: ['result'] }],
+  ['review_clipmentor_analysis', { state: ['confirmed'], pointId: 'TS-CMP-01' }],
+  ['revise_clipmentor_analysis', { action: 'revise', collection: ['points'], id: 'TS-CMP-01', record: analysis.points[0] }],
+] as const) {
+  assert((await call(name, { ...args, actor, reason: 'Invalid enum test', expectedRevision: engine.getDoc().clipMentorAnalysis!.revision })).error);
+  assert.equal(JSON.stringify(engine.getDoc()), beforeInvalidEnum, 'invalid tool enums never write');
+}
+
 assert((await call('revise_clipmentor_analysis', importArgs)).error, 'stale write rejected');
 assert.equal((await checkAnalysisHandoff(engine.getDoc())).status, 'review_required');
 const originalTimeline = JSON.stringify(engine.getDoc().timelines);

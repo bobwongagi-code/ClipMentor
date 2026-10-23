@@ -52,7 +52,7 @@ export function inspectSourceObservation(value: unknown, input: ObservationInput
   }
   for (const l of value.lines) {
     if (!object(l) || !expectedLines.some(e => e.unit_id === l.unit_id && e.line_id === l.line_id)
-      || !['supported', 'not_supported', 'insufficient_evidence'].includes(String(l.status)) || !text(l.reason)
+      || !(typeof l.status === 'string' && ['supported', 'not_supported', 'insufficient_evidence'].includes(l.status)) || !text(l.reason)
       || !Array.isArray(l.window_ids) || !l.window_ids.length || new Set(l.window_ids).size !== l.window_ids.length
       || !l.window_ids.every(id => input.units.find(u => u.unit_id === l.unit_id)?.windows.some(w => w.window_id === id))) error('invalid_line_finding');
   }

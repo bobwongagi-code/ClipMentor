@@ -125,19 +125,16 @@ function validImagePayload(value: unknown): value is Array<{ base64: string }> {
 function dynamicToolResult(body: CodexToolResultRequest): Record<string, unknown> {
   const shaped = object(body.result);
   if (validImagePayload(shaped?.__images)) {
-    const note = typeof shaped?.note === 'string'
-      ? shaped.note.slice(0, 4_000)
-      : `${shaped.__images.length} frames rendered`;
+    // Nested code-mode tools expose a string result, not app-server image
+    // attachments. Keep an explicit MCP image envelope for image(block).
+    const { __images, ...metadata } = shaped!;
     return {
-      contentItems: [
-        // The current CLI's tool-image preparation can consume trailing text
-        // as part of a data URL. Put metadata first; preserve image bytes.
-        { type: 'inputText', text: note },
-        ...shaped.__images.map((image) => ({
-          type: 'inputImage',
-          imageUrl: `data:image/jpeg;base64,${image.base64}`,
+      contentItems: [{ type: 'inputText', text: JSON.stringify({
+        metadata,
+        content: ( __images as Array<{ base64: string }>).map((image) => ({
+          type: 'image', data: image.base64, mimeType: 'image/jpeg',
         })),
-      ],
+      }) }],
       success: body.success,
     };
   }
@@ -194,6 +191,9 @@ function baseInstructions(request: CodexTurnRequest): string {
     `The requested project id is ${JSON.stringify(request.projectId)}. Do not switch to another project.`,
     mode,
     'Shell, direct filesystem edits, web search, image-view, and multi-agent tools are disabled.',
+    'functions.exec runs isolated JavaScript, not Node.js or a browser. structuredClone is not available in functions.exec; do not use it while preparing tool arguments. For JSON-only tool data, copy with JSON.parse(JSON.stringify(value)); this is not a general clone for non-JSON values. Read tools may return JSON strings: parse those once before accessing fields. Keep current revision and IDs from the readback; copying data does not authorize changes or approval.',
+    'JSON clone example: const copy = JSON.parse(JSON.stringify(value));',
+    'Image tool results in functions.exec are JSON strings containing {metadata, content:[{type:"image",data,mimeType}]}. Parse a string result with JSON.parse; call image(block) for each image content block and text(result.metadata) for coordinates. Never text/JSON.stringify the image payload or claim you saw it without emitting it. This applies to all editor tools returning pictures.',
   ].filter(Boolean).join('\n\n');
 }
 

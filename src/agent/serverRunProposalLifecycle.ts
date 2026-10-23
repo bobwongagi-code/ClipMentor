@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { makeDraft, replayActions } from '../editor/store';
 import type { ProjectDoc } from '../editor/types';
+import { saveProject } from '../persist/projectStore';
 import { saveAutomaticVersion } from '../persist/versionStore';
 import type { AgentContext } from './context';
 import {
@@ -142,6 +143,53 @@ function applyToolActions(
   turn.draftCtx = next.draftCtx;
 }
 
+/** Preparation survives later review failure; this never commits a timeline proposal. */
+function copyCandidateCheckpointDoc(turn: AgentTurn, input: ServerRunToolAction): ProjectDoc | null {
+  if (input.name !== 'revise_clipmentor_analysis'
+    || !['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(input.args.action))
+    || input.error !== undefined || isFailedToolResult(input.result) || !input.actions.length) return null;
+  if (turn.askOnly || turn.abortController.signal.aborted) throw new Error('Candidate checkpoint is not authorized in a read-only or cancelled run.');
+  if (turn.ops.length || turn.persistentOps.length) throw new Error('Save the copy candidate in a preparation-only step, without pending project edits.');
+  const before = turn.draft.getDoc();
+  const after = replayActions(before, input.actions);
+  const { clipMentorAnalysis: oldAnalysis, ...beforeMedia } = before;
+  const { clipMentorAnalysis: nextAnalysis, ...afterMedia } = after;
+  if (!oldAnalysis || !nextAnalysis || nextAnalysis.revision !== oldAnalysis.revision + 1
+    || input.args.expectedRevision !== oldAnalysis.revision
+    || JSON.stringify(beforeMedia) !== JSON.stringify(afterMedia)
+    || JSON.stringify(turn.baseDoc.clipMentorAnalysis) !== JSON.stringify(oldAnalysis)) {
+    throw new Error('Candidate checkpoint requires one current analysis-only revision; nothing committed.');
+  }
+  return after;
+}
+
+async function checkpointCopyCandidate(turn: AgentTurn, input: ServerRunToolAction): Promise<boolean> {
+  const after = copyCandidateCheckpointDoc(turn, input);
+  if (!after) return false;
+  const live = turn.state.ctxRef.current.getDoc();
+  let durableDoc = live;
+  // On recovery the tool journal can predate an already durable checkpoint.
+  if (serverRunDraftBaseChanged(after, live)) {
+    if (turn.draftInvalidated || serverRunDraftBaseChanged(turn.baseDoc, live)) throw new Error('Project changed before candidate checkpoint; nothing committed.');
+    const next = { ...live, clipMentorAnalysis: after.clipMentorAnalysis };
+    const durable: AgentTurn = { ...turn, persistentBeforeDoc: live,
+      persistentOps: [buildOperation(input.name, input.args, [{ type: 'tl.setDoc', doc: next }])],
+      persistentSaveError: undefined,
+      persistentSnapshot: saveAutomaticVersion(turn.projectId, '文案候选登记前', live).then(() => undefined, (error) => { durable.persistentSaveError = error; }),
+    };
+    if (!await commitPersistentOperations(durable, saveProject)) throw new Error('Candidate checkpoint could not be saved; no production approval was granted.');
+    durableDoc = next;
+  }
+  // Rebase the run after its independently saved preparation step. No proposed action remains.
+  // Keep the exact committed object: later persistent edits use identity to detect concurrency.
+  turn.baseDoc = durableDoc;
+  turn.proposalBaseDoc = durableDoc;
+  const next = turnContext(turn.state.ctxRef.current, durableDoc);
+  turn.draft = next.draft;
+  turn.draftCtx = next.draftCtx;
+  return true;
+}
+
 function draftBase(
   input: ServerRunPreparation | ServerRunStart,
   baseDoc: ProjectDoc,
@@ -181,17 +229,36 @@ async function loadStartDraft(projectId: string, input: ServerRunStart) {
   return { recovered, baseDoc };
 }
 
-function restoreToolActions(
+async function restoreToolActions(
   turn: AgentTurn,
   input: ServerRunStart,
   tools: readonly ServerRunDraftToolBody[],
   baseDoc: ProjectDoc,
   ref: ProposalRunRef,
   projectId: string,
-): void {
-  for (const tool of tools) {
+): Promise<void> {
+  const live = turn.state.ctxRef.current.getDoc();
+  let replay = baseDoc, committedThrough = -1;
+  for (let i = 0; i < tools.length; i++) {
+    const tool = tools[i];
+    if (tool.error !== undefined || isFailedToolResult(tool.result)) continue;
+    replay = replayActions(replay, [...tool.actions]);
+    if (tool.name === 'revise_clipmentor_analysis'
+      && ['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(tool.args.action))
+      && !serverRunDraftBaseChanged(replay, live)) committedThrough = i;
+  }
+  if (committedThrough >= 0) {
+    turn.baseDoc = live;
+    turn.proposalBaseDoc = live;
+    const next = turnContext(turn.state.ctxRef.current, live);
+    turn.draft = next.draft;
+    turn.draftCtx = next.draftCtx;
+  }
+  for (let i = 0; i < tools.length; i++) {
+    const tool = tools[i];
     ref.current.seenToolCalls.add(tool.toolCallId);
-    applyToolActions(turn, {
+    if (i <= committedThrough) continue;
+    const action: ServerRunToolAction = {
       runId: input.runId,
       toolCallId: tool.toolCallId,
       argsDigest: tool.argsDigest,
@@ -200,7 +267,8 @@ function restoreToolActions(
       ...(tool.error === undefined ? { result: tool.result } : { error: tool.error }),
       actions: [...tool.actions],
       baseDoc,
-    }, projectId);
+    };
+    if (!await checkpointCopyCandidate(turn, action)) applyToolActions(turn, action, projectId);
   }
 }
 
@@ -216,7 +284,7 @@ async function startServerRun(
   const tools = recovered?.tools ?? [];
   ref.current.turn = turn;
   ref.current.seenToolCalls = new Set();
-  restoreToolActions(turn, input, tools, baseDoc, ref, projectId);
+  await restoreToolActions(turn, input, tools, baseDoc, ref, projectId);
   return {
     tools: tools.map((tool) => ({
       name: tool.name,
@@ -224,7 +292,7 @@ async function startServerRun(
       argsDigest: tool.argsDigest,
       ...(tool.error === undefined ? { result: tool.result } : { error: tool.error }),
     })),
-    baseDoc,
+    baseDoc: turn.baseDoc,
     draftDoc: turn.draft.getDoc(),
   };
 }
@@ -242,6 +310,8 @@ async function persistToolAction(
   if (input.error === undefined && !isFailedToolResult(input.result) && input.actions.length) {
     replayActions(turn.draft.getDoc(), input.actions);
   }
+  // Reject an invalid preparation step before journaling it as a successful tool.
+  copyCandidateCheckpointDoc(turn, input);
   await saveServerRunDraftTool(projectId, input.runId, {
     toolCallId: input.toolCallId,
     argsDigest: input.argsDigest,
@@ -250,8 +320,17 @@ async function persistToolAction(
     ...(input.error === undefined ? { result: input.result } : { error: input.error }),
     actions: input.actions,
   });
+  try {
+    if (!await checkpointCopyCandidate(turn, input)) applyToolActions(turn, input, projectId);
+  } catch (error) {
+    // A storage/concurrency failure after journaling must not replay as success on reload.
+    await saveServerRunDraftTool(projectId, input.runId, {
+      toolCallId: input.toolCallId, argsDigest: input.argsDigest, name: input.name, args: input.args,
+      error: 'Local tool actions were not committed; recovery must not replay this result.', actions: [],
+    });
+    throw error;
+  }
   ref.current.seenToolCalls.add(input.toolCallId);
-  applyToolActions(turn, input, projectId);
 }
 
 function beginTerminal(turn: AgentTurn, input: ServerRunTerminal): void {

@@ -1,18 +1,31 @@
 export { CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS, CLIPMENTOR_ANALYSIS_TOOL_NAMES } from './schemas/clipmentor-analysis-tools';
 import type { AgentContext } from '../context';
+import type { ProjectDoc } from '../../editor/types';
 import { checkAnalysisHandoff, invalidateChangedReviews, isAnalysisActor, isClipMentorAnalysis, pointDigest } from '../../clipmentor/analysis';
 import teashellHistorical from '../../clipmentor/fixtures/teashell-historical.json';
 import { importTeashellAnalysis } from '../../clipmentor/import-teashell';
 import { transcribeClipMentorAsset } from '../../clipmentor/transcribe-source';
 import { observeClipMentorSource } from '../../clipmentor/observe-source';
 import { requestSourceVideo, readSourceVideo } from '../../clipmentor/request-source-video';
+import { editClipMentorPreview } from '../../clipmentor/preview-edit';
+import { requestPreviewReview } from '../../clipmentor/request-preview-review';
 import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-review';
 import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmentor/append-findings';
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview } from '../../clipmentor/production-gate';
-import { checkSourceBreakdown, isSourceBreakdown, breakdownRevisionError } from '../../clipmentor/source-breakdown';
+import { checkSourceBreakdown, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
 
 type Args = Record<string, unknown>;
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const text = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
+// An incomplete current copy must remain repairable. Baseline/source errors still block preparation;
+// the strict production/review gate always checks all issues, including incomplete copy/plan issues.
+function copyPreparationReady(doc: ProjectDoc): boolean {
+  return checkSourceBreakdown(doc).issues.every((i) => ['copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch'].includes(i.code));
+}
+
 export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: AgentContext): Promise<unknown> {
+  if (name === 'edit_clipmentor_preview') return editClipMentorPreview(args, ctx);
+  if (name === 'review_clipmentor_preview') return requestPreviewReview(args, ctx);
   if (name === 'read_clipmentor_source_video') return readSourceVideo(args, ctx);
   if (name === 'observe_clipmentor_source_video') return requestSourceVideo(args, ctx);
   if (name === 'request_clipmentor_copy_review') return requestClipMentorCopyReview(args, ctx);
@@ -21,8 +34,14 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
   const doc = ctx.getDoc();
   if (name === 'read_clipmentor_analysis') {
     const view = args.view ?? 'full';
-    if (!['full', 'source_breakdown', 'current_copy', 'evidence', 'copy_review'].includes(String(view))) return { error: 'Invalid analysis read view' };
+    if (!(typeof view === 'string' && ['full', 'source_breakdown', 'current_copy', 'evidence', 'copy_review'].includes(view))) return { error: 'Invalid analysis read view' };
     if (view !== 'copy_review' && args.reviewPart !== undefined) return { error: 'reviewPart requires the copy_review view' };
+    if (view !== 'current_copy' && args.copyPart !== undefined) return { error: 'copyPart requires the current_copy view' };
+    const pagingRequested = ['packetOffset', 'packetLimit', 'packetDigest'].some((key) => args[key] !== undefined);
+    if (pagingRequested && (view !== 'copy_review' || args.reviewPart !== 'packet')) return { error: 'Packet paging requires copy_review with reviewPart=packet' };
+    const copyPart = args.copyPart ?? 'all';
+    if (view === 'current_copy' && (!(typeof copyPart === 'string' && ['all', 'summary', 'candidate', 'picture_plan'].includes(copyPart))
+      || (copyPart !== 'all' && typeof args.unitId !== 'string'))) return { error: 'A valid copyPart and unitId are required for a narrow current-copy read' };
     const a = doc.clipMentorAnalysis;
     const selected = a?.blueprint.filter((unit) => args.unitId === undefined || unit.unit_id === args.unitId) ?? [];
     if (view !== 'copy_review' && args.unitId !== undefined && (typeof args.unitId !== 'string' || !selected.length)) return { error: 'Analysis unit not found' };
@@ -32,7 +51,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     if (view !== 'evidence' && evidenceIds !== undefined) return { error: 'evidenceIds requires the evidence view' };
     if (view === 'copy_review') {
       const part = args.reviewPart ?? 'result';
-      if (!['result', 'packet'].includes(String(part))) return { error: 'Invalid reviewPart' };
+      if (!(typeof part === 'string' && ['result', 'packet'].includes(part))) return { error: 'Invalid reviewPart' };
       if (part === 'packet' && typeof args.unitId !== 'string') return { error: 'Read the frozen review packet one unit at a time with unitId' };
       const receipt = a?.production_copy_review;
       if (args.unitId !== undefined && (typeof args.unitId !== 'string' || !receipt?.units.some((unit) => unit.unit_id === args.unitId))) return { error: 'Review unit not found' };
@@ -48,14 +67,47 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       const units = teaching_review?.packet.units.filter(matches) ?? [];
       const ids = new Set(units.flatMap((unit) => unit.points.flatMap((point) => point.evidence_ids)));
       const operationId = receipt?.reviewer_run_id.match(/^clipmentor-review:([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/)?.[1] ?? null;
-      return {
+      const productionGate = await checkCopyProduction(doc, ctx.getCreativeMode());
+      const result = {
         analysis: { copy_review: { operation_id: operationId, binding, unit_filter: args.unitId ?? null,
           receipt: receipt ? { ...metadata, units: receipt.units.filter(matches) } : null,
           ...(part === 'result' ? { teaching_review: teaching_review ? { units: teaching_review.review.units.filter(matches) } : null } : {}),
           packet_included: part === 'packet',
           ...(part === 'packet' ? { packet: teaching_review ? { ...teaching_review.packet, units,
             source_evidence: teaching_review.packet.source_evidence.filter((entry) => ids.has(entry.evidence_id)) } : null } : {}) } },
-        revision: a?.revision ?? 0, production_gate: await checkCopyProduction(doc, ctx.getCreativeMode()),
+        revision: a?.revision ?? 0, production_gate: productionGate,
+      };
+      // Keep small legacy reads unchanged. Large reads page the exact frozen input, never a summary
+      // of its picture plan. 12k leaves headroom below the model's 16k result budget.
+      if (part !== 'packet' || (!pagingRequested && JSON.stringify(result).length <= 12_000)) return result;
+      if (!receipt || !teaching_review) return { error: 'No frozen review packet is available' };
+      const offset = args.packetOffset === undefined ? 0 : args.packetOffset, limit = args.packetLimit === undefined ? 6000 : args.packetLimit;
+      if (!Number.isSafeInteger(offset) || Number(offset) < 0 || !Number.isSafeInteger(limit) || Number(limit) < 256 || Number(limit) > 6000
+        || (args.packetOffset === undefined && (args.packetLimit !== undefined || args.packetDigest !== undefined))) return { error: 'Use packetOffset >= 0 and packetLimit 256–6000 (UTF-16 characters)' };
+      if ((Number(offset) > 0 && args.packetDigest === undefined)
+        || (args.packetDigest !== undefined && (typeof args.packetDigest !== 'string' || !/^[a-f0-9]{64}$/.test(args.packetDigest)))) return { error: 'Continue with packetDigest from the first page; do not mix frozen reviews' };
+      // Shared source evidence is retained verbatim. Filtering only by point IDs would lose context-only observations.
+      const serialized = JSON.stringify({ operation_id: operationId, analysis_revision: receipt.analysis_revision,
+        content_digest: receipt.content_digest, reviewed_at: receipt.reviewed_at,
+        reviewer_run_id: receipt.reviewer_run_id, packet: { ...teaching_review.packet, units } });
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized));
+      const digest = [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      if (args.packetDigest !== undefined && args.packetDigest !== digest) return { error: 'Frozen packet changed; restart reading from packetOffset=0, not a new review' };
+      if (Number(offset) >= serialized.length) return { error: 'packetOffset is outside this frozen packet' };
+      const end = Math.min(serialized.length, Number(offset) + Number(limit));
+      return {
+        analysis: { copy_review: { operation_id: operationId, binding, unit_filter: args.unitId,
+          receipt_summary_only: true,
+          receipt: { analysis_revision: receipt.analysis_revision, content_digest: receipt.content_digest,
+            reviewed_at: receipt.reviewed_at, verdict: receipt.verdict,
+            units: receipt.units.filter(matches).map(({ unit_id, candidate_id, verdict }) => ({ unit_id, candidate_id, verdict })) },
+          packet_included: false,
+          packet_page: { offset, end_offset: end, total_chars: serialized.length, digest,
+            json_text: serialized.slice(Number(offset), end), next_offset: end < serialized.length ? end : null,
+            is_last_page: end === serialized.length, read_complete: false,
+            note: 'Exact frozen JSON page, not the current replacement. Continue with next_offset and the same digest until null. Concatenate json_text in offset order; a last page does not prove earlier pages were read. Read result separately for all judgments. No new review or approval.' },
+        } },
+        revision: a?.revision ?? 0, production_gate: productionGate,
       };
     }
     const evidence = view === 'evidence' ? a?.evidence.filter((entry) => (evidenceIds as string[]).includes(entry.evidence_id)) ?? [] : [];
@@ -67,11 +119,27 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       const internal = (unit as unknown as { internal_review?: Record<string, unknown> }).internal_review;
       const id = internal?.current_script_candidate;
       const pictureId = internal?.current_picture_plan;
+      const candidate = typeof id === 'string' && object(internal?.[id]) ? internal[id] as Record<string, unknown> : null;
+      if (view === 'current_copy' && copyPart !== 'all') return {
+        unit_id: unit.unit_id, candidate_id: typeof id === 'string' ? id : null,
+        picture_plan_id: typeof pictureId === 'string' ? pictureId : null,
+        ...(copyPart === 'summary' ? { line_ids: Array.isArray(candidate?.lines) ? candidate.lines.filter(object).map((line) => line.id) : [] } : {}),
+        ...(copyPart === 'candidate' ? { candidate: candidate ? {
+          status: candidate.status, review_status: candidate.review_status, production_allowed: candidate.production_allowed,
+          lines: Array.isArray(candidate.lines) ? candidate.lines.filter(object).map((line) =>
+            Object.fromEntries(copyLineKeys.filter((key) => Object.hasOwn(line, key)).map((key) => [key, line[key]]))) : [],
+        } : null } : {}),
+        ...(copyPart === 'picture_plan' ? { picture_plan: typeof pictureId === 'string' ? internal?.[pictureId] ?? null : null } : {}),
+      };
       return { unit_id: unit.unit_id, line_guidance: unit.line_guidance, candidate_id: typeof id === 'string' ? id : null,
         candidate: typeof id === 'string' ? internal?.[id] : null,
         picture_plan_id: typeof pictureId === 'string' ? pictureId : null,
         picture_plan: typeof pictureId === 'string' ? internal?.[pictureId] ?? null : null };
     });
+    if (view === 'current_copy' && copyPart !== 'all') return {
+      analysis: { current_copy: current }, revision: a?.revision ?? 0,
+      production_gate: await checkCopyProduction(doc, ctx.getCreativeMode()),
+    };
     return {
       analysis: view === 'full' ? a ?? null : view === 'source_breakdown'
         ? { source: a?.source ?? null, product: a?.product ?? null, source_breakdown: a?.source_breakdown ?? null }
@@ -108,7 +176,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     } else {
       if (!a) return { error: 'No analysis imported' };
       if (name === 'review_clipmentor_analysis') {
-        if (!['confirmed', 'needs_revision'].includes(String(args.state))) return { error: 'Invalid review state' };
+        if (!(typeof args.state === 'string' && ['confirmed', 'needs_revision'].includes(args.state))) return { error: 'Invalid review state' };
         const point = a.points.find((p) => p.point_id === args.pointId);
         if (!point) return { error: 'Point not found' };
         const check = await checkAnalysisHandoff(doc);
@@ -118,6 +186,53 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           content_digest: await pointDigest(a, point.point_id), source_hash: a.source.sourceContentHash,
           actor: args.actor, at: now, reason: args.reason };
         a.reviews = [...a.reviews.filter((r) => r.point_id !== point.point_id), review];
+      } else if (args.action === 'set_copy_candidate') {
+        const unit = a.blueprint.find((entry) => entry.unit_id === args.id);
+        const input = args.record;
+        const internal = (unit as unknown as { internal_review?: Record<string, unknown> } | undefined)?.internal_review;
+        if (!unit || !object(internal) || !object(input)
+          || Object.keys(input).some((key) => !['source_candidate_id', 'candidate_id', 'lines', 'plan_id', 'plan', 'line_guidance'].includes(key))
+          || !text(internal.current_script_candidate) || input.source_candidate_id !== internal.current_script_candidate
+          || !text(input.candidate_id) || !/^script_candidate_[A-Za-z0-9_-]+$/.test(input.candidate_id) || Object.hasOwn(internal, input.candidate_id)
+          || !text(input.plan_id) || !/^picture_plan_[A-Za-z0-9_-]+$/.test(input.plan_id) || Object.hasOwn(internal, input.plan_id)
+          || !Array.isArray(input.lines) || !input.lines.length || !object(input.plan) || !text(input.line_guidance)) {
+          return { error: 'Current source candidate, new script_candidate_/picture_plan_ IDs, complete lines, plan and guidance required; history cannot be overwritten' };
+        }
+        if (!a.source.sourceContentHash || doc.assets.find((asset) => asset.id === a!.source.asset_id)?.sourceContentHash !== a.source.sourceContentHash
+          || !copyPreparationReady(doc)) return { error: 'Resolve source identity and breakdown before registering copy' };
+        const registered = a.source_breakdown!.units.find((entry) => entry.unit_id === unit.unit_id);
+        if (!registered) return { error: 'Register this unit in source_breakdown before writing copy' };
+        const pointIds = new Set(registered.coverage.map((entry) => entry.point_id));
+        const normalize = (value: string) => value.trim().replace(/\s+/g, ' ');
+        const lines = input.lines;
+        if (lines.some((line) => !object(line) || Object.keys(line).some((key) => !copyLineKeys.includes(key))
+          || !text(line.id) || !text(line.narration_ms) || !text(line.zh)
+          || !Array.isArray(line.caption_lines) || !line.caption_lines.length || !line.caption_lines.every(text)
+          || normalize(line.narration_ms) !== normalize(line.caption_lines.join(' '))
+          || !Array.isArray(line.point_ids) || !line.point_ids.length || !line.point_ids.every((id) => text(id) && pointIds.has(id))
+          || new Set(line.point_ids).size !== line.point_ids.length
+          || !Array.isArray(line.source_seconds) || line.source_seconds.length !== 2
+          || !line.source_seconds.every((s) => typeof s === 'number' && Number.isFinite(s) && s >= 0)
+          || line.source_seconds[0] >= line.source_seconds[1] || line.source_seconds[1] > a!.source.duration_seconds
+          || (line.labels !== undefined && (!Array.isArray(line.labels) || !line.labels.every(text))))
+          || new Set(lines.map((line) => line.id)).size !== lines.length) return { error: 'Copy lines require unique IDs, registered point_ids, in-range source_seconds, matching narration/captions and Chinese meaning' };
+        const covered = new Set(lines.flatMap((line) => line.point_ids));
+        if (registered.coverage.some((entry) => entry.treatment === 'explain' && !covered.has(entry.point_id))) return { error: 'New copy would remove a registered teaching point; nothing changed' };
+        if (input.plan.selected_narration !== undefined && (!Array.isArray(input.plan.selected_narration)
+          || input.plan.selected_narration.length !== lines.length
+          || input.plan.selected_narration.some((line, i) => !object(line) || Object.keys(line).some((key) => !copyLineKeys.includes(key))
+            || copyLineKeys.some((key) => JSON.stringify(line[key]) !== JSON.stringify(lines[i][key]))))) {
+          return { error: 'Plan selected_narration must match the submitted copy lines; nothing changed' };
+        }
+        internal[input.candidate_id] = { status: 'candidate', review_status: 'pending', production_allowed: false,
+          lines: structuredClone(lines), base_revision: a.revision, source_candidate_id: input.source_candidate_id };
+        internal[input.plan_id] = { ...structuredClone(input.plan), status: 'candidate', review_status: 'pending', production_allowed: false,
+          selected_narration: structuredClone(lines), script_candidate_id: input.candidate_id,
+          source_binding: structuredClone(a.source), base_analysis_revision: a.revision };
+        internal.current_script_candidate = input.candidate_id;
+        internal.current_picture_plan = input.plan_id;
+        unit.line_guidance = input.line_guidance;
+        await invalidateChangedReviews(a);
       } else if (args.action === 'select_copy_lines') {
         const unit = a.blueprint.find((entry) => entry.unit_id === args.id);
         const input = args.record as Record<string, unknown> | undefined;
@@ -133,7 +248,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           || !input.plan || typeof input.plan !== 'object' || Array.isArray(input.plan)
           || typeof input.line_guidance !== 'string' || !input.line_guidance.trim()) return { error: 'Existing current copy, distinct existing line IDs, new script_candidate_/picture_plan_ IDs, plan and guidance required; no new wording accepted' };
         if (!a.source.sourceContentHash || doc.assets.find((asset) => asset.id === a!.source.asset_id)?.sourceContentHash !== a.source.sourceContentHash
-          || checkSourceBreakdown(doc).status !== 'structurally_ready') return { error: 'Resolve source identity and breakdown before selecting copy' };
+          || !copyPreparationReady(doc)) return { error: 'Resolve source identity and breakdown before selecting copy' };
         const source = internal[input.source_candidate_id as string] as { lines?: Array<Record<string, unknown>> };
         const selectedIds = input.line_ids as string[];
         const lines = selectedIds.map((id) => source?.lines?.find((line) => line.id === id));
@@ -165,7 +280,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           || input.script_candidate_id !== internal.current_script_candidate
           || !input.plan || typeof input.plan !== 'object' || Array.isArray(input.plan)
           || typeof input.line_guidance !== 'string' || !input.line_guidance.trim()) return { error: 'New picture_plan_ ID, matching current script, plan object and line_guidance required; history is never overwritten' };
-        if (checkSourceBreakdown(doc).status !== 'structurally_ready') return { error: 'Resolve source breakdown before saving a picture plan', breakdown_check: checkSourceBreakdown(doc) };
+        if (!copyPreparationReady(doc)) return { error: 'Resolve source breakdown before saving a picture plan', breakdown_check: checkSourceBreakdown(doc) };
         internal[input.plan_id] = { ...structuredClone(input.plan as Record<string, unknown>),
           status: 'candidate', review_status: 'pending', production_allowed: false,
           script_candidate_id: internal.current_script_candidate, source_binding: structuredClone(a.source), base_analysis_revision: a.revision };
@@ -176,13 +291,16 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         if (!isSourceBreakdown(args.record)) return { error: 'Invalid source breakdown; nothing changed' };
         const error = breakdownRevisionError(a.source_breakdown, args.record);
         if (error) return { error };
+        const changes = selectedPointChanges(a.source_breakdown, args.record);
         a.source_breakdown = structuredClone(args.record);
         const check = checkSourceBreakdown({ ...doc, clipMentorAnalysis: a });
         // Incomplete coverage is saved as pending so the Agent can read and repair it; invalid references are not evidence.
         if (check.issues.some((i) => ['source_hash_missing_or_changed', 'segment_time_out_of_bounds', 'segment_evidence_kind_or_reference', 'segment_evidence_outside_range', 'point_segment_missing', 'unit_segment_missing', 'breakdown_unit_missing', 'coverage_point_missing', 'supporting_primary_missing', 'unrecognized_unit_field', 'original_playback_out_of_bounds', 'original_segment_outside_playback'].includes(i.code))) return { error: 'Resolve breakdown source/reference issues before saving', breakdown_check: check };
+        for (const change of changes) a.audit.push({ revision: a.revision + 1, action: 'selected_point_changed',
+          target_id: change.point_id, actor: args.actor, at: now, reason: JSON.stringify({ instruction_reason: args.reason, ...change }) });
         await invalidateChangedReviews(a);
       } else {
-        if (args.action !== 'revise' || !['evidence', 'points', 'blueprint', 'transcripts'].includes(String(args.collection))) return { error: 'Invalid revision collection/action' };
+        if (args.action !== 'revise' || !(typeof args.collection === 'string' && ['evidence', 'points', 'blueprint', 'transcripts'].includes(args.collection))) return { error: 'Invalid revision collection/action' };
         const collection = args.collection as 'evidence' | 'points' | 'blueprint' | 'transcripts';
         const key = { evidence: 'evidence_id', points: 'point_id', blueprint: 'unit_id', transcripts: 'source_id' }[collection];
         const rows = a[collection] as unknown as Record<string, unknown>[];
@@ -206,7 +324,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         await invalidateChangedReviews(a);
       }
       a.revision += 1;
-      a.audit.push({ revision: a.revision, action: name === 'review_clipmentor_analysis' ? String(args.state) : args.action === 'set_source_breakdown' ? 'set_source_breakdown' : args.action === 'set_picture_plan' ? 'set_picture_plan' : 'revise',
+      a.audit.push({ revision: a.revision, action: name === 'review_clipmentor_analysis' ? String(args.state) : args.action === 'set_source_breakdown' ? 'set_source_breakdown' : args.action === 'set_picture_plan' ? 'set_picture_plan' : args.action === 'set_copy_candidate' ? 'set_copy_candidate' : 'revise',
         target_id: args.action === 'set_source_breakdown' ? 'source_breakdown' : args.wordIndex === undefined ? String(args.pointId ?? args.id) : `${String(args.id)}:words:${String(args.wordIndex)}`, actor: args.actor, at: now, reason: args.reason });
     }
     if (!isClipMentorAnalysis(a)) return { error: 'Invalid analysis schema; nothing changed' };
@@ -218,6 +336,8 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     const writingCopy = a.blueprint.some((u) => candidate(u) !== undefined
       && candidate(u) !== candidate(doc.clipMentorAnalysis?.blueprint.find((old) => old.unit_id === u.unit_id)));
     if (writingCopy && !a.source_breakdown) return { error: 'Register source_breakdown before writing or replacing a copy candidate; existing manuscripts remain readable', breakdown_check: checkSourceBreakdown({ ...doc, clipMentorAnalysis: a }) };
+    const pointerError = blueprintRevisionError(doc.clipMentorAnalysis?.blueprint ?? [], a.blueprint);
+    if (pointerError) return { error: pointerError };
     // Recheck after asynchronous hashing; never overwrite concurrent project changes.
     if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; read again' };
     const next = { ...doc, clipMentorAnalysis: a };

@@ -55,6 +55,7 @@ const work = await mkdtemp(join(tmpdir(), 'openchatcut-scene-verify-'));
 try {
   const video = join(work, 'cuts.mp4');
   const motionVideo = join(work, 'continuous-motion.mp4');
+  const staticVideo = join(work, 'no-cuts.mp4');
   await run(ffmpegBin(), [
     '-hide_banner', '-loglevel', 'error', '-y',
     '-f', 'lavfi', '-i', 'color=c=red:s=320x180:d=1:r=10',
@@ -67,6 +68,11 @@ try {
     '-hide_banner', '-loglevel', 'error', '-y',
     '-f', 'lavfi', '-i', 'testsrc2=s=320x180:d=3:r=30',
     motionVideo,
+  ]);
+  await run(ffmpegBin(), [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'color=c=red:s=320x180:d=3:r=30',
+    staticVideo,
   ]);
   const progress: Array<{ phase: string; progress: number; processedMs: number }> = [];
   const result = await detectScenesInFile(video, {
@@ -91,11 +97,20 @@ try {
     (error: unknown) => error instanceof Error && error.name === 'AbortError',
   );
 
-  const continuousMotion = await detectScenesInFile(motionVideo, {
-    threshold: 0.3,
-    minSceneMs: 500,
-  });
-  assert.equal(continuousMotion.scenes.length, 0);
+  for (const zeroCutVideo of [motionVideo, staticVideo]) {
+    const zeroCutProgress: Array<{ phase: string; processedMs: number }> = [];
+    const zeroCuts = await detectScenesInFile(zeroCutVideo, {
+      threshold: 0.3,
+      minSceneMs: 500,
+      onProgress: (update) => zeroCutProgress.push(update),
+    });
+    assert.deepEqual(zeroCuts.scenes, [], 'continuous motion and static content must return zero scene changes');
+    assert.equal(zeroCuts.durationMs, 3000);
+    assert.ok(zeroCutProgress.some((update) => update.phase === 'detecting' && update.processedMs > 0),
+      'zero selected frames must still decode the clock branch and advance progress');
+    assert.equal(zeroCutProgress.at(-1)!.phase, 'finalizing');
+    assert.equal(zeroCutProgress.at(-1)!.processedMs, zeroCuts.durationMs);
+  }
   console.log('scene-detection.verify: ok');
 } finally {
   await rm(work, { recursive: true, force: true });

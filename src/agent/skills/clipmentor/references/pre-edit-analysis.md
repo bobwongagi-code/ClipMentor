@@ -53,6 +53,14 @@
 
 历史较多时不要反复全量读取：`read_clipmentor_analysis {view:"source_breakdown"}` 读取正式拆解与当前revision，`{view:"current_copy",unitId:"U-02"}` 只读该组现行候选、不夹带旧稿与转写。全量读取仍可用于需要历史证据的任务，但超长返回不能当作已成功读到后部字段。
 
+**冻结审核输入的有限回读。** 先按单元用 `read_clipmentor_analysis {view:"copy_review",reviewPart:"result",unitId}` 读原判和门禁，再用 `reviewPart:"packet"` 核对冻结输入，不拿当前替换稿冒充已审稿。小包保持原对象返回；大包自动返回 `packet_page`，其中 `json_text` 是冻结JSON原文的一页，`offset/end_offset/total_chars` 用UTF-16字符定位。继续用同一单元、`packetOffset:next_offset`、`packetDigest:digest` 读取，直到 `next_offset:null`；默认每页6000字符，也可显式指定256–6000的 `packetLimit`。按offset顺序拼接可恢复完整冻结输入，包括原画面方案和共享证据，不能只看preview或最后一页就称完整自核。摘要改变则从0重新读同一已保存结果，不请求新审核。`is_last_page`只表示该页到达末尾，`read_complete:false`不是通过或失败结论；原判、current/stale绑定与制作门禁始终分别保留。本入口只读，不修稿、不签发批准、不调用模型。
+
+**局部登记新稿不需要读整份历史蓝图。** 先用 `read_clipmentor_analysis {view:"current_copy",unitId:"实际单元ID",copyPart:"summary"}` 取当前指针/revision；再用同单元 `copyPart:"candidate"` 取口播、同文字幕、中文、重点及源范围。画面另用 `copyPart:"picture_plan"` 读取，避免和稿件一起堆大；默认all保留原行为。摘要不包含历史或画面大对象。不要把被限长的返回当完整记录来重建历史。
+
+要登记新的文字版本，用 `revise_clipmentor_analysis {action:"set_copy_candidate",id:"实际单元ID",expectedRevision,actor,reason,record:{source_candidate_id:"刚读到的当前稿ID",candidate_id:"script_candidate_新ID",lines:[{id,point_ids,narration_ms,caption_lines,zh,source_seconds,labels?}],plan_id:"picture_plan_新ID",plan:{本次紧凑画面方案},line_guidance:"与新稿和方案一致的交接"}}`。提交该单元完整的有序句子，不发送旧候选、旧画面方案或历史。未改句子逐字保留；若本次只授权同步已有作者稿，就不得借登记重写。每句只用这些字段，字幕与口播同文，源范围合法且引用本单元已登记重点，不能丢掉explain任务。代码核对的是格式、引用、范围与同文，不证明中文忠实或教学讲透。
+
+该操作原子保存新候选、新画面方案与两个current指针，源绑定及 `selected_narration` 由宿主建立；若提交重复的selected_narration，必须与lines一致。旧记录原样保留，新稿/方案固定candidate、pending、production_allowed=false；保存使旧审核过期，不继承声音适配或制作批准。每次写入仍记录actor/reason、校验revision和当前稿ID，冲突/失败不覆盖也不自动重试。随后分开回读candidate和picture_plan，核对新revision、原文、方案和制作门禁。只选旧句仍用select_copy_lines，只改画面仍用set_picture_plan，不为小改动重传整条blueprint。
+
 需要已登记的动作窗口、帧ID或采样状态时，使用`read_clipmentor_analysis {view:"evidence",evidenceIds:["实际已有证据ID"]}`（每批1–8项）。返回这些既有记录、其直接关联帧记录与观察元数据，不重新抽帧、不返回图片，也不构成新观察。读不到的引用会列出缺失，不把“当前稿没带出帧索引”说成原片缺证据；仍不能把采样或历史描述当作本轮连续观看。
 
 画面承载方案用局部操作保存，不能为它重传整条含历史的blueprint：`revise_clipmentor_analysis {action:"set_picture_plan",id:"U-02",expectedRevision,actor,reason,record:{plan_id:"picture_plan_自定新ID",script_candidate_id:"当前current_script_candidate值",plan:{作者自己的画面承载方案},line_guidance:"指向同一当前稿、正式原声范围及新画面方案的交接说明"}}`。同一ID不可覆盖，旧方案保留；代码绑定源素材与当前稿，只存candidate/pending，生产false，旧批准失效。`current_copy`窄读取同时返回`picture_plan_id`和`picture_plan`，保存后据此回读。这里的方案仍需核对画面作用与实际声长，不是已执行的时间线，也不填placement来凑通过。
