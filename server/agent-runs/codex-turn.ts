@@ -10,7 +10,7 @@ import {
 import { summarizeConversation } from '../../src/agent/context-summary';
 import type { AgentToolSchema } from '../../src/agent/tool-schema';
 import { codexToolHistoryEntry } from '../../src/agent/codex/tool-history';
-import { isFailedToolResult, toolFailureReason } from '../../src/agent/toolFailure';
+import { isFailedToolResult, toolFailureReason, structuredToolFailure } from '../../src/agent/toolFailure';
 import type { AgentContextUsage } from '../../src/agent/context-compaction';
 import {
   persistServerCheckpoint,
@@ -201,11 +201,12 @@ export async function executeServerCodexTurn(
         settle(event.callId, success, delivered ?? null);
       } catch (error) {
         const message = toolFailureReason(error);
+        const result = structuredToolFailure(error) ?? { error: message };
         toolHistory.push(codexToolHistoryEntry(
           { name: event.name, args: event.args },
-          { success: false, result: { error: message } },
+          { success: false, result },
         ));
-        settle(event.callId, false, { error: message });
+        settle(event.callId, false, result);
       }
     })();
   };

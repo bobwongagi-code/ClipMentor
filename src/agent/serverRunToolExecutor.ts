@@ -17,7 +17,7 @@ import { permanentServerRunRecoveryError } from './serverRunRecovery';
 import { ServerRunToolRequestQueue } from './serverRunEvents';
 import { toolExecutionMode } from './tools/execution-modes';
 import { environmentFailureHint } from './serverRunToolEnvironment';
-import { isFailedToolResult, toolFailureReason } from './toolFailure';
+import { isFailedToolResult, toolFailureReason, structuredToolFailure } from './toolFailure';
 import {
   beginStoredToolAttempt,
   captureStoredToolResult,
@@ -304,14 +304,17 @@ export class ServerRunToolExecutor {
     draftDocBeforeTool?: ProjectDoc,
   ): Promise<boolean> {
     if (!this.current(session)) return false;
-    const message = environmentFailureHint(error);
+    const details = structuredToolFailure(error);
+    const message = environmentFailureHint(details?.error ?? (isFailedToolResult(error) ? toolFailureReason(error) : error));
     const outcome: ServerRunToolAction = {
       runId: session.runId,
       toolCallId,
       argsDigest: request.argsDigest,
       name: request.name,
       args: request.args,
-      error: message,
+      // Keep the failed-result envelope intact for journal/reload. Its nonempty
+      // error still drives isFailedToolResult, rollback and server rejection.
+      ...(details ? { result: details } : { error: message }),
       actions: persist ? (this.draft?.takeActions() ?? []) : [],
       baseDoc: this.baseDoc ?? this.callbacks.ctx().getDoc(),
     };
@@ -320,7 +323,8 @@ export class ServerRunToolExecutor {
       await Promise.resolve(this.callbacks.onToolAction(outcome)).catch(() => undefined);
       if (!this.current(session)) return false;
     }
-    const recovered = { name: request.name, argsDigest: request.argsDigest, error: message };
+    const recovered = { name: request.name, argsDigest: request.argsDigest,
+      ...(details ? { result: details } : { error: message }) };
     void captureStoredToolResult(this.projectId, toolCallId, recovered);
     this.recovered.set(toolCallId, recovered);
     if (!await this.postResult(session, toolCallId, recovered)) {
@@ -417,7 +421,7 @@ export class ServerRunToolExecutor {
           session,
           toolCallId,
           request,
-          toolFailureReason(update.execution.result),
+          update.execution.result,
           true,
           draftDocBeforeTool,
         );

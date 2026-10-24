@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import type { SourceVideoRequest, SourceVideoResult, SourceVideoReceipt } from '../../shared/clipmentor-source-video';
+import type { SourceVideoRequest, SourceVideoResult, SourceVideoReceipt, SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { buildCopyTeachingReviewRequest } from '../../src/clipmentor/production-gate';
 import { isSafeUploadName, resolveUploadFile } from '../media-dir';
 import { sha256File } from '../../shared/node-content-hash';
@@ -12,9 +11,10 @@ import { runtimeProfile } from '../runtime-profile';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import { getKey } from '../keystore';
 import { ffprobeBin } from '../media-binaries';
-import { INLINE_REQUEST_MAX_BYTES, PREVIEW_REVIEW_ENDPOINT, PREVIEW_REVIEW_MODEL, PREVIEW_REVIEW_TIMEOUT_MS, PREVIEW_REVIEW_MAX_OUTPUT_TOKENS } from './preview-review';
+import { INLINE_REQUEST_MAX_BYTES, PREVIEW_REVIEW_MODEL, PREVIEW_REVIEW_TIMEOUT_MS, PREVIEW_REVIEW_MAX_OUTPUT_TOKENS } from './preview-review';
 import { inspectSourceObservation, validateSourceObservation, SourceObservationValidationError } from './source-video-validation';
 export { inspectSourceObservation, validateSourceObservation } from './source-video-validation';
+import { postSourceVideoTransport, safeSourceTransportDiagnostic, SourceVideoTransportError } from './source-video-transport';
 const VERSION = 'source-continuous-observation-v1';
 const hash = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -54,7 +54,7 @@ export function buildSourceVideoRequest(video: Uint8Array, request: SourceVideoR
 export interface SourceVideoDependencies {
   directory:string; key:string; resolve(name:string):string|null; hash(file:string):Promise<string>;
   audioPresent(file:string):Promise<boolean>; read(file:string):Promise<Buffer>; size(file:string):Promise<number>;
-  post(body:string,key:string,signal:AbortSignal,operationId:string):Promise<{status:number;body:unknown}>;
+  post(body:string,key:string,signal:AbortSignal,operationId:string):Promise<{status:number;body:unknown;diagnostic?:SourceVideoTransportDiagnostic}>;
 }
 export async function observeSourceVideo(value: unknown, deps: SourceVideoDependencies, outer?: AbortSignal): Promise<SourceVideoResult> {
   const request = value as SourceVideoRequest, input = sourceVideoInput(request);
@@ -71,11 +71,12 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Reservation failed');
     const old = JSON.parse(await readFile(ledger,'utf8'));
     if (old.fingerprint !== fingerprint || old.status !== 'completed') throw new Error('Operation consumed or unknown; no retry');
-    return {...old.result,cached:true};
+    return {...publicTransportRecord(old.result,request.operationId),cached:true};
   }
   let attempts = 0;
   let phase = 'prepare';
   let httpStatus: number | null = null;
+  let transportDiagnostic: SourceVideoTransportDiagnostic | undefined;
   let safeResponse: unknown = null;
   let frozenInput: ReturnType<typeof sourceVideoInput> | null = null;
   let requestHash: string | null = null;
@@ -92,6 +93,7 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     phase = 'gateway_request';
     const response = await deps.post(prepared.body,deps.key,signal,request.operationId);
     httpStatus = response.status;
+    transportDiagnostic = safeSourceTransportDiagnostic(response.diagnostic,deps.key,request.operationId);
     signal.throwIfAborted();
     if (response.status !== 200 || !object(response.body)) throw new Error('Gateway request failed');
     const encoded = JSON.stringify(response.body);
@@ -110,36 +112,28 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
       validation:inspectSourceObservation(parsed,input),
       input_media:{full_original_video:true,audio_stream_present:true,video_fps_requested:5},raw_observation:observation,
       finish_reasons:[candidates[0].finishReason],usage:response.body.usageMetadata??null,
+      ...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),
       scope:'source_windows_and_planned_capacity_only',actual_handoff_verified:false,complete_film_accepted:false};
-    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'completed',requests_attempted:1,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,input:prepared.input,raw_response:response.body,result}));
+    phase = 'save_result';
+    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'completed',requests_attempted:1,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,input:prepared.input,...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),raw_response:response.body,result}));
     return result;
   } catch (error) {
+    if(error instanceof SourceVideoTransportError){transportDiagnostic=safeSourceTransportDiagnostic(error.diagnostic,deps.key,request.operationId);httpStatus=transportDiagnostic?.http_status??httpStatus;}
     const validation = error instanceof SourceObservationValidationError ? error.validation : undefined;
-    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'failed',requests_attempted:attempts,projectId:request.projectId,
+    let receiptPersisted=true;
+    try {await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'failed',requests_attempted:attempts,projectId:request.projectId,
       subject:request.subject,source_hash:request.source.hash,input:frozenInput,request_sha256:requestHash,video_bytes:videoBytes,
-      phase,http_status:httpStatus,raw_response:safeResponse,validation,error:validation ? 'source_observation_validation_failed' : 'source_observation_failed_or_unknown'}));
+      phase,http_status:httpStatus,raw_response:safeResponse,validation,...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),error:validation ? 'source_observation_validation_failed' : phase==='save_result'?'source_receipt_persist_failed':'source_observation_failed_or_unknown'}));} catch {receiptPersisted=false;}
     throw new SourceVideoOperationError({ operationId:request.operationId, status:'failed', requestsAttempted:attempts, requestsSent:httpStatus === null && attempts > 0 ? 'unknown' : attempts > 0 ? 1 : 0,
       projectId:request.projectId, subject:request.subject,source_hash:request.source.hash,phase,upstream_http_status:httpStatus,
-      validation, error:validation ? 'source_observation_validation_failed' : 'source_observation_failed_or_unknown',
+      ...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),
+      receipt_persisted:receiptPersisted,
+      validation, error:!receiptPersisted || phase==='save_result'?'source_receipt_persist_failed':validation ? 'source_observation_validation_failed' : 'source_observation_failed_or_unknown',
       raw_response_available:!!safeResponse,receipt_reference:request.operationId,actual_handoff_verified:false,complete_film_accepted:false });
   }
 }
 export async function postSourceVideo(body:string,key:string,signal:AbortSignal,operationId:string) {
-  const directory = await mkdtemp(join(runtimeProfile().rootDir,'source-video-'));
-  try {
-    const request = join(directory,'request.json'), response = join(directory,'response.json');
-    await writeFile(request,body,{mode:0o600});
-    const status = await new Promise<number>((accept,reject) => {
-      const c = spawn('curl',['--disable','-sS','--http1.1','--noproxy','*','--proto','=https','--max-redirs','0','--retry','0','--connect-timeout','30','--max-time','600','--max-filesize','1048576',
-        '-H','@-','-H','Content-Type: application/json','-H',`Idempotency-Key: ${operationId}`,'--data-binary',`@${request}`,'--output',response,'--write-out','%{http_code}',PREVIEW_REVIEW_ENDPOINT],{stdio:['pipe','pipe','ignore'],signal});
-      let code=''; c.stdout.on('data',chunk=>{if(code.length<16)code+=String(chunk);});
-      c.on('error',()=>reject(new Error('Source transport failed')));c.on('close',exit=>exit===0&&/^\d{3}$/.test(code)?accept(Number(code)):reject(new Error('Source transport failed')));
-      c.stdin.on('error',()=>undefined);c.stdin.end(`Authorization: Bearer ${key}\n`);
-    });
-    let result:unknown=null;
-    if(status===200) {try {result=JSON.parse(await readFile(response,'utf8'));} catch {/* rejected by caller */}}
-    return {status,body:result};
-  } finally {await rm(directory,{recursive:true,force:true});}
+  return postSourceVideoTransport(body,key,signal,operationId,runtimeProfile().rootDir);
 }
 export function sourceVideoDependencies():SourceVideoDependencies {
   return {directory:join(runtimeProfile().rootDir,'clipmentor-source-video'),key:getKey('ROOTIFY_GATEWAY_API_KEY'),resolve:resolveUploadFile,hash:sha256File,
@@ -160,6 +154,14 @@ function publicObservation(raw: unknown): unknown {
   return JSON.parse(content.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, ''));
 }
 
+/** Project every duplicate diagnostic on read, including nested and offline-revalidated results. */
+function publicTransportRecord(value:any,operationId:string):any {
+  if(!object(value))return value;
+  const {transport_diagnostic,...rest}=value;
+  const safe=safeSourceTransportDiagnostic(transport_diagnostic,'',operationId);
+  return {...rest,...(safe?{transport_diagnostic:safe}:{})};
+}
+
 /** No credential or network is required to inspect a retained operation. Legacy unbound records require explicit offline recovery. */
 export async function readSourceVideoReceipt(operationId: string, projectId: string, deps: Pick<SourceVideoDependencies, 'directory'>): Promise<SourceVideoReceipt> {
   if (!OPERATION_ID.test(operationId) || !text(projectId)) throw new Error('Invalid receipt identity');
@@ -173,16 +175,19 @@ export async function readSourceVideoReceipt(operationId: string, projectId: str
     const saved = JSON.parse(derived);
     if (saved.operationId !== operationId || saved.projectId !== projectId || saved.revalidation?.original_record_sha256 !== hash(originalText)
       || saved.revalidation?.requestsSent !== 0 || saved.result?.actual_handoff_verified !== false || saved.result?.complete_film_accepted !== false) throw new Error('Invalid recovered receipt binding');
-    return saved as SourceVideoReceipt;
+    const safeSaved=publicTransportRecord(saved,operationId);
+    return {...safeSaved,...(saved.result?{result:publicTransportRecord(saved.result,operationId)}:{})} as SourceVideoReceipt;
   }
   if (original.projectId !== projectId || !object(original.subject) || !text(original.source_hash)
     || !['preparing', 'reserved', 'failed', 'completed'].includes(original.status)) throw new Error('Receipt not bound to project; offline recovery required');
   let observed: unknown;
   try { observed = publicObservation(original.raw_response); } catch { /* Raw response remains private for diagnosis. */ }
+  const transportDiagnostic=safeSourceTransportDiagnostic(original.transport_diagnostic,'',operationId);
   return { operationId,projectId,status:original.status,subject:original.subject,source_hash:original.source_hash,
-    requestsAttempted:original.requests_attempted,requestsSent:0,phase:original.phase,upstream_http_status:original.http_status,
+    requestsAttempted:original.requests_attempted,requestsSent:0,receipt_persisted:true,phase:original.phase,upstream_http_status:original.http_status??transportDiagnostic?.http_status,
     error:original.error,validation:original.validation,raw_observation:observed,
-    ...(original.status === 'completed' ? {result:original.result} : {}),raw_response_available:!!original.raw_response,
+    ...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),
+    ...(original.status === 'completed' ? {result:publicTransportRecord(original.result,operationId)} : {}),raw_response_available:!!original.raw_response,
     receipt_reference:operationId,actual_handoff_verified:false,complete_film_accepted:false };
 }
 

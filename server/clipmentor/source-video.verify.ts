@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { waitForToolResult, claimToolRequest, settleToolResult } from '../agent-runs/store-tools';
+import type { ServerRun } from '../agent-runs/store-types';
+import { structuredToolFailure } from '../../src/agent/toolFailure';
+import { postSourceVideoTransport, SourceVideoTransportError, safeSourceTransportDiagnostic } from './source-video-transport';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -9,7 +14,7 @@ import type { ProjectDoc } from '../../src/editor/types';
 import { executeTool } from '../../src/agent/tools';
 import { copyReviewSubject } from '../../src/clipmentor/production-gate';
 import type { ViteDevServer } from 'vite';
-import type { SourceVideoRequest } from '../../shared/clipmentor-source-video';
+import type { SourceVideoRequest, SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { sourceVideoInput, buildSourceVideoRequest, validateSourceObservation, inspectSourceObservation, observeSourceVideo, recoverSourceVideoReceipt, readSourceVideoReceipt, type SourceVideoDependencies } from './source-video';
 import { clipMentorSourceVideoPlugin } from '../plugins/clipmentor-source-video';
 import { policyForTool } from '../../src/agent/execution-policy';
@@ -30,6 +35,32 @@ const key='test-only-sensitive-sentinel';
 const deps:SourceVideoDependencies={directory:root,key,resolve:()=>'/synthetic',hash:async()=>digest,audioPresent:async()=>true,size:async()=>video.length,read:async()=>video,
  post:async(body,credential,_signal,operation)=>{calls++;assert.equal(credential,key);assert.equal(operation,request.operationId);const b=JSON.parse(body);assert.deepEqual(Buffer.from(b.contents[0].parts[0].inlineData.data,'base64'),video);assert.equal(b.contents[0].parts[0].videoMetadata.fps,5);return {status:200,body:{modelVersion:'mock-returned-model',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(good())}]}}]}}}};
 try {
+ // A second storage failure must not erase already captured transport facts.
+ const persistDirectory=join(root,'blocked-persist'),persistBackup=persistDirectory+'.reserved';await mkdir(persistDirectory);
+ const persistRequest={...request,operationId:randomUUID()};let persistPosts=0,persistFailure:any;
+ const persistDiagnostic:SourceVideoTransportDiagnostic={version:'source-transport-v1',operation_id:persistRequest.operationId,
+  started_at:'2026-01-01T00:00:00.000Z',ended_at:'2026-01-01T00:00:01.000Z',request_bytes:100,curl_exit_code:0,error_kind:'none',http_status:504,
+  metrics:{size_upload:100},first_byte_may_be_interim:true,request_ids:{'x-request-id':'persistence-fixture'},response_body:{format:'html',bytes:0,inspected_bytes:0,truncated:false,message_class:'timeout'}};
+ try {
+  const persistDeps={...deps,directory:persistDirectory,post:async()=>{persistPosts++;await rename(persistDirectory,persistBackup);await writeFile(persistDirectory,'simulate unavailable directory');return {status:504,body:null,diagnostic:persistDiagnostic};}};
+  try{await observeSourceVideo(persistRequest,persistDeps);}catch(e){persistFailure=e;}
+  assert.equal(persistFailure?.receipt?.transport_diagnostic?.http_status,504,'failed receipt write must not erase captured transport facts');
+  assert.equal(persistFailure.receipt.receipt_persisted,false,'do not claim a failed receipt was persisted');
+  const unsettled=structuredToolFailure({error:'Source observation failed; read the saved receipt, do not retry',receipt:persistFailure.receipt}) as any;
+  assert.equal(unsettled.receipt_persisted,false);assert.equal(unsettled.source_error_code,'source_receipt_persist_failed');assert.equal(unsettled.source_phase,'gateway_request');assert.equal(unsettled.requestsSent,1);
+
+ } finally {await rm(persistDirectory,{force:true});await rename(persistBackup,persistDirectory);}
+ assert.equal(persistPosts,1);assert.equal((await readSourceVideoReceipt(persistRequest.operationId,'project',{directory:persistDirectory})).status,'reserved','original reservation survives; no fabricated durable failure');
+ const saveDirectory=join(root,'blocked-success-save'),saveBackup=saveDirectory+'.reserved';await mkdir(saveDirectory);
+ const saveRequest={...request,operationId:randomUUID()};let saveFailure:any,savePosts=0;
+ try {
+  try{await observeSourceVideo(saveRequest,{...deps,directory:saveDirectory,post:async()=>{savePosts++;await rename(saveDirectory,saveBackup);await writeFile(saveDirectory,'storage unavailable');return {status:200,body:{modelVersion:'mock',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(good())}]}}]},diagnostic:{...persistDiagnostic,operation_id:saveRequest.operationId,http_status:200}};}});}catch(e){saveFailure=e;}
+  assert.equal(saveFailure.receipt.phase,'save_result','successful model response followed by disk failure is not a model validation failure');
+  assert.equal(saveFailure.receipt.receipt_persisted,false);assert.equal(saveFailure.receipt.error,'source_receipt_persist_failed');assert.equal(saveFailure.receipt.transport_diagnostic.http_status,200);
+  const saveEnvelope=structuredToolFailure({error:'Source observation failed; read the saved receipt, do not retry',receipt:saveFailure.receipt}) as any;
+  assert.equal(saveEnvelope.source_phase,'save_result');assert.equal(saveEnvelope.source_error_code,'source_receipt_persist_failed');assert.equal(saveEnvelope.receipt_persisted,false);
+ } finally {await rm(saveDirectory,{force:true});await rename(saveBackup,saveDirectory);}
+ assert.equal(savePosts,1);
  const prepared=buildSourceVideoRequest(video,request);
  assert.ok(!prepared.body.includes('DO_NOT_SEND_HISTORICAL_ANSWER'));assert.ok(!prepared.body.includes('DO_NOT_SEND_AUTHOR_VERDICT'));assert.ok(prepared.body.includes('CURRENT_PLAN'));
  const result=await observeSourceVideo(request,deps);assert.equal(calls,1);assert.equal(result.returned_model,'mock-returned-model');assert.equal(result.actual_handoff_verified,false);assert.equal(result.complete_film_accepted,false);assert.equal(result.raw_observation.lines[0].status,'insufficient_evidence');
@@ -97,10 +128,133 @@ try {
   const saved=await readFile(join(root,`${r.operationId}.json`),'utf8');assert.ok(!saved.includes(key));assert.equal(JSON.parse(saved).requests_attempted,1);
   await assert.rejects(observeSourceVideo(r,broken));assert.equal(attempts,1);
  }
+ // Hermetic process tests exercise the real curl adapter. The injected launcher NEVER starts curl/network.
+ const cli=join(root,'transport-fixture.cjs');
+ await writeFile(cli,String.raw`const fs=require('node:fs'),assert=require('node:assert/strict');
+const config=JSON.parse(process.env.SOURCE_TRANSPORT_FIXTURE);const args=process.argv.slice(2);
+const arg=n=>args[args.indexOf(n)+1];assert.equal(arg('--retry'),'0');assert.equal(arg('--max-time'),'600');assert.equal(arg('--connect-timeout'),'30');
+assert.equal(arg('--proto'),'=https');assert.equal(arg('--max-redirs'),'0');assert.equal(arg('--noproxy'),'*');
+assert.equal(args.at(-1),'https://rootifyaiapi.rootifyglobal.com/v1beta/models/gemini-3.8-flash:generateContent');
+let auth='';process.stdin.on('data',b=>auth+=b);process.stdin.on('end',()=>{
+assert.equal(auth,'Authorization: Bearer '+config.key+'\n');assert(!args.some(x=>x.includes(config.key)));
+if(config.mode==='abort'){setTimeout(()=>{},10000);return;}
+const body=fs.readFileSync(arg('--data-binary').slice(1));const metrics={http_code:config.status,size_upload:config.partial?body.length/2:body.length,size_download:100,time_namelookup:0.001,time_connect:0.01,time_appconnect:0.02,time_pretransfer:0.021,time_starttransfer:0.03,time_total:190.8};
+fs.writeFileSync(arg('--dump-header'),'HTTP/1.1 100 Continue\r\nx-request-id: interim-only\r\n\r\nHTTP/1.1 '+config.status+' Result\r\nx-oneapi-request-id: final-gateway-id\r\nx-request-id: '+config.key+'\r\nSet-Cookie: cookie-sensitive\r\nLocation: https://private.invalid/key=hidden\r\n\r\n');
+if(config.response!==undefined)fs.writeFileSync(arg('--output'),config.response);
+process.stdout.write(config.malformed?'not metrics':JSON.stringify(metrics).replace('\"http_code\":0','\"http_code\":000'));process.exit(config.exit||0);
+});`);
+ let launched=0;
+ const launcher=(config:Record<string,unknown>)=>((command:any,args:any,options:any)=>{
+  assert.equal(command,'curl');launched++;assert.equal(options.stdio[2],'ignore');
+  return spawn(process.execPath,[cli,...args],{...options,env:{...process.env,SOURCE_TRANSPORT_FIXTURE:JSON.stringify({...config,key})}});
+ }) as typeof spawn;
+ const upstreamHtml='<html>504 Gateway Timeout '+key+' https://private.invalid/token=hidden /private/secret.txt</html>';
+ const original=buildSourceVideoRequest(video,request).body;
+ const failedTransport=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:504,response:upstreamHtml}));
+ assert.equal(failedTransport.status,504);assert.equal(failedTransport.body,null);
+ assert.equal(failedTransport.diagnostic.response_body.message_class,'timeout');assert.equal(failedTransport.diagnostic.upload_matches_request_bytes,true);
+ assert.deepEqual(failedTransport.diagnostic.request_ids,{'x-oneapi-request-id':'final-gateway-id'});
+ assert.equal(failedTransport.diagnostic.metrics.time_starttransfer,0.03);assert.equal(failedTransport.diagnostic.first_byte_may_be_interim,true);
+ for(const bad of [key,'cookie-sensitive','private.invalid','/private/secret.txt','interim-only'])assert(!JSON.stringify(failedTransport.diagnostic).includes(bad));
+ const okTransport=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:200,response:JSON.stringify({candidates:[]})}));
+ assert.deepEqual(okTransport.body,{candidates:[]});assert.equal(okTransport.diagnostic.http_status,200);
+ for(const partial of [true,false]) {
+  const op=randomUUID();let caught:any;
+  try{await postSourceVideoTransport(original,key,new AbortController().signal,op,root,launcher({status:0,exit:28,partial}));}catch(e){caught=e;}
+  assert(caught instanceof SourceVideoTransportError);assert.equal(caught.diagnostic.error_kind,'curl_timeout');assert.equal(caught.diagnostic.curl_exit_code,28);
+  assert.equal(caught.diagnostic.http_status,null);assert.equal(caught.diagnostic.upload_matches_request_bytes,!partial);
+ }
+ let abortError:any;try{await postSourceVideoTransport(original,key,AbortSignal.timeout(100),randomUUID(),root,launcher({mode:'abort'}));}catch(e){abortError=e;}
+ assert(abortError instanceof SourceVideoTransportError);assert.equal(abortError.diagnostic.error_kind,'aborted');
+ assert.equal(abortError.diagnostic.http_status,null);
+ const countBeforeAbort=launched;await assert.rejects(postSourceVideoTransport(original,key,AbortSignal.abort(),randomUUID(),root,launcher({status:200})));assert.equal(launched,countBeforeAbort);
+ let spawnError:any;try{await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,(()=>{throw new Error(key);}) as unknown as typeof spawn);}catch(e){spawnError=e;}
+ assert(spawnError instanceof SourceVideoTransportError);assert.equal(spawnError.diagnostic.error_kind,'spawn_failed');assert(!String(spawnError).includes(key));
+ const big=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:504,response:'timeout '+key+'x'.repeat(20000)}));
+ assert.equal(big.diagnostic.response_body.truncated,true);assert.equal(big.diagnostic.response_body.inspected_bytes,16384);assert(!JSON.stringify(big.diagnostic).includes(key));
+ let malformedError:any;try{await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:200,malformed:true}));}catch(e){malformedError=e;}
+ assert(malformedError instanceof SourceVideoTransportError);assert.equal(malformedError.diagnostic.error_kind,'invalid_metrics');
+ let oversizedError:any;try{await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:200,exit:63,response:'x'.repeat(20000)}));}catch(e){oversizedError=e;}
+ assert(oversizedError instanceof SourceVideoTransportError);assert.equal(oversizedError.diagnostic.curl_exit_code,63);assert.equal(oversizedError.diagnostic.error_kind,'curl_failed');
+ let cleanupCalls=0,cleanupResult:any,cleanupError:any;
+ try {cleanupResult=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,
+  launcher({status:200,response:JSON.stringify({candidates:[]})}),async()=>{cleanupCalls++;throw new Error('synthetic cleanup failure');});}catch(e){cleanupError=e;}
+ assert.equal(cleanupCalls,1,'cleanup failure seam was actually reached');
+ try {assert.equal(cleanupError,undefined,'temporary cleanup failure must not replace a valid remote result');assert.equal(cleanupResult.status,200);assert.equal(cleanupResult.diagnostic.cleanup_status,'failed');}
+ finally {for(const name of await readdir(root))if(name.startsWith('source-video-'))await rm(join(root,name),{recursive:true,force:true});}
+ const warningBefore=await readdir(root);
+ const cleanup504=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:504,response:upstreamHtml}),async()=>{throw new Error('cleanup');});
+ assert.equal(cleanup504.status,504);assert.equal(cleanup504.diagnostic.cleanup_status,'failed');assert.equal(cleanup504.diagnostic.response_body.message_class,'timeout');
+ for(const name of await readdir(root))if(name.startsWith('source-video-')&&!warningBefore.includes(name))await rm(join(root,name),{recursive:true,force:true});
+ const structured200Error=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:200,response:JSON.stringify({error:{code:504,type:'upstream_error',message:'upstream timed out'}})}));
+ assert.equal(structured200Error.diagnostic.response_body.message_class,'timeout','a genuine error object is not exempt merely because HTTP says 200');
+ const harmless=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:200,response:JSON.stringify({candidates:[{content:{parts:[{text:'The clip mentions timeout and authentication as visible words, not a transport failure.'}]}}]})}));
+ assert.equal(harmless.diagnostic.response_body.message_class,'none','valid 200 model content must not be classified as a transport error');
+ const normalTransportOp={...request,operationId:randomUUID()};
+ const normalResult=await observeSourceVideo(normalTransportOp,{...deps,post:async(...args)=>postSourceVideoTransport(...args,root,launcher({status:200,response:JSON.stringify({modelVersion:'mock',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(good())}]}}]})}))});
+ assert.equal(normalResult.transport_diagnostic?.http_status,200);assert.equal(normalResult.actual_handoff_verified,false);
+ const normalRead=await readSourceVideoReceipt(normalTransportOp.operationId,'project',{directory:root});assert.equal(normalRead.status,'completed');assert.equal(normalRead.transport_diagnostic?.http_status,200);
+ // Diagnostics are duplicated in completed results and recovered receipts: all copies must be projected.
+ const normalFile=join(root,normalTransportOp.operationId+'.json'),normalBefore=await readFile(normalFile,'utf8');
+ const recoveredFile=join(root,legacy.operationId+'.revalidated.json'),recoveredBefore=await readFile(recoveredFile,'utf8');
+ const leaked=[];
+ try {
+  const record=JSON.parse(normalBefore);record.result.transport_diagnostic={...record.transport_diagnostic,extra:'diagnostic-extra-must-not-leak',request_ids:{'x-request-id':'https://private.invalid/token=hidden'}};
+  await writeFile(normalFile,JSON.stringify(record));
+  const reread=await readSourceVideoReceipt(normalTransportOp.operationId,'project',{directory:root});
+  if(JSON.stringify(reread.result?.transport_diagnostic).includes('diagnostic-extra-must-not-leak'))leaked.push('completed_nested_diagnostic');
+  const cachedAgain=await observeSourceVideo(normalTransportOp,{...deps,post:async()=>assert.fail('cache read must not make another request')});assert.equal(cachedAgain.cached,true);
+  if(JSON.stringify(cachedAgain.transport_diagnostic).includes('diagnostic-extra-must-not-leak'))leaked.push('completed_cache_diagnostic');
+
+  const derived=JSON.parse(recoveredBefore);derived.transport_diagnostic={...record.result.transport_diagnostic,operation_id:legacy.operationId};derived.result.transport_diagnostic=derived.transport_diagnostic;
+  await writeFile(recoveredFile,JSON.stringify(derived));
+  const derivedRead=await readSourceVideoReceipt(legacy.operationId,'project',{directory:root});
+  if(JSON.stringify(derivedRead.transport_diagnostic).includes('diagnostic-extra-must-not-leak')||JSON.stringify(derivedRead.result?.transport_diagnostic).includes('diagnostic-extra-must-not-leak'))leaked.push('revalidated_diagnostics');
+ } finally {await writeFile(normalFile,normalBefore);await writeFile(recoveredFile,recoveredBefore);}
+ assert.deepEqual(leaked,[],'all diagnostic read paths must retain only the closed safe fields');
+ const timedOutOp={...request,operationId:randomUUID()};let timedOutFailure:any;
+ try{await observeSourceVideo(timedOutOp,{...deps,post:async(...args)=>postSourceVideoTransport(...args,root,launcher({status:0,exit:28,partial:true}))});}catch(e){timedOutFailure=e;}
+ assert.equal(timedOutFailure.receipt.requestsSent,'unknown');const timeoutEnvelope=structuredToolFailure({error:'Source observation failed; read the saved receipt, do not retry',receipt:timedOutFailure.receipt}) as any;assert.equal(timeoutEnvelope.requestsSent,'unknown');assert.equal(timedOutFailure.receipt.transport_diagnostic.error_kind,'curl_timeout');
+ assert.equal((await readSourceVideoReceipt(timedOutOp.operationId,'project',{directory:root})).transport_diagnostic?.upload_matches_request_bytes,false);
+ const jsonError=await postSourceVideoTransport(original,key,new AbortController().signal,randomUUID(),root,launcher({status:502,response:JSON.stringify({error:{code:504,type:'upstream_error',message:'timed out '+key}})}));
+ assert.equal(jsonError.diagnostic.response_body.error_code,504);assert.equal(jsonError.diagnostic.response_body.error_type,'upstream_error');assert(!JSON.stringify(jsonError.diagnostic).includes(key));
+ assert.equal(safeSourceTransportDiagnostic({...failedTransport.diagnostic,operation_id:'other'},key,request.operationId),undefined);
+ // A raw dependency cannot smuggle arbitrary diagnostics through the persistence boundary.
+ const projected=safeSourceTransportDiagnostic({...failedTransport.diagnostic,extra:key,request_ids:{Authorization:key,'x-request-id':'https://private.invalid'},response_body:{...failedTransport.diagnostic.response_body,message:key}},key,failedTransport.diagnostic.operation_id)!;
+ assert.deepEqual(projected.request_ids,{});assert(!JSON.stringify(projected).includes(key));
+ const entries=await import('node:fs/promises');assert(!(await entries.readdir(root)).some(x=>x.startsWith('source-video-')),'private temporary request/response files must be cleaned');
+ // Regression: a non-200 transport receipt must survive durable failure and same-op readback.
+ const diagnosticOp={...request,operationId:randomUUID()};let diagnosticPosts=0;
+ const diagnostic:SourceVideoTransportDiagnostic={version:'source-transport-v1',operation_id:diagnosticOp.operationId,started_at:'2026-10-24T05:56:57.654Z',ended_at:'2026-10-24T06:00:08.546Z',
+  request_bytes:32830285,curl_exit_code:0,error_kind:'none',http_status:504,
+  metrics:{size_upload:32830285,time_total:190.8},request_ids:{'x-oneapi-request-id':'saved-gateway-id'},
+  first_byte_may_be_interim:true,response_body:{format:'html',bytes:100,inspected_bytes:100,truncated:false,message_class:'timeout'}};
+ const diagnosticDeps={...deps,post:async()=>{diagnosticPosts++;return {status:504,body:null,diagnostic};}};
+ let diagnosticFailure:any;try{await observeSourceVideo(diagnosticOp,diagnosticDeps);}catch(e){diagnosticFailure=e;}
+ assert.equal(diagnosticFailure.receipt.transport_diagnostic?.http_status,504,'HTTP failure must retain transport diagnosis');
+ const sourceEnvelope=structuredToolFailure({error:'Source observation failed; read the saved receipt, do not retry',receipt:diagnosticFailure.receipt});
+ assert.equal((sourceEnvelope as any)?.source_diagnostic?.http_status,504,'Agent failure settlement must not erase safe source transport diagnostic');
+ const diagnosticRead=await readSourceVideoReceipt(diagnosticOp.operationId,'project',{directory:root});
+ assert.equal((diagnosticRead as any).transport_diagnostic?.request_ids['x-oneapi-request-id'],'saved-gateway-id');
+ assert.equal(structuredToolFailure({...sourceEnvelope,ok:true}),undefined,'successful tools cannot acquire failure metadata');
+ assert.equal(structuredToolFailure({...sourceEnvelope,operationId:randomUUID()}),undefined,'cross-operation failure metadata is rejected');
+ assert.deepEqual(structuredToolFailure(sourceEnvelope),sourceEnvelope,'repeated runtime settlement preserves the safe envelope');
+ // The real shared failed-settlement function must reject (not resolve) while retaining safe metadata in events and reload.
+ const settlementEvents:unknown[]=[];const settlementRun={toolRequests:new Map()} as unknown as ServerRun;
+ const settlementDeps={isRunTerminal:()=>false,mirrorTool:async()=>undefined,pushRunEvent:(_run:ServerRun,_type:string,data:unknown)=>{settlementEvents.push(data);}};
+ const pendingFailure=waitForToolResult(settlementDeps,settlementRun,'source-call','observe_clipmentor_source_video','args',2000).then(()=>assert.fail('failure became success'),e=>e);
+ assert.equal(claimToolRequest(settlementDeps,settlementRun,{toolCallId:'source-call',argsDigest:'args',claimId:'claim'}),'claimed');
+ assert.equal(settleToolResult(settlementDeps,settlementRun,{toolCallId:'source-call',argsDigest:'args',claimId:'claim',result:{error:'Source observation failed; read the saved receipt, do not retry',receipt:diagnosticFailure.receipt}}),'accepted');
+ const settledFailure=await pendingFailure;assert.deepEqual(structuredToolFailure(settledFailure),sourceEnvelope);
+ assert.deepEqual(structuredToolFailure(JSON.parse(JSON.stringify(settlementEvents[0])).result),sourceEnvelope);
+
+ assert.equal(diagnosticRead.status,'failed');assert.equal(diagnosticRead.requestsSent,0);assert.equal(diagnosticRead.actual_handoff_verified,false);
+ await assert.rejects(observeSourceVideo(diagnosticOp,diagnosticDeps));assert.equal(diagnosticPosts,1);
  // Real endpoint wrapper, with mock upstream: same-origin guard and one-result cache.
- let routePosts=0;
+ let routePosts=0;const gatewayRouteOp=randomUUID();
  const routeDeps={...deps,post:async(...args:Parameters<SourceVideoDependencies['post']>)=>{
    if(args[3]===request.operationId)return deps.post(...args);
+   if(args[3]===gatewayRouteOp){routePosts++;return postSourceVideoTransport(...args,root,launcher({status:504,response:upstreamHtml}));}
    routePosts++;const invalid=good();invalid.windows[1].evidence[0].end_seconds=4.1;
    return {status:200,body:{modelVersion:'mock',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(invalid)}]}}]}};
  }};
@@ -112,13 +266,24 @@ try {
   const savedResponse=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Origin:`http://127.0.0.1:${port}`,'Sec-Fetch-Site':'same-origin'},body:JSON.stringify({action:'read_receipt',operationId:legacy.operationId,projectId:'project'})});
   assert.equal(savedResponse.status,200);const saved=await savedResponse.json();assert.equal(saved.requestsSent,0);assert.equal(saved.validation.status,'valid');assert.equal(saved.status,'failed');assert.equal(calls,1);
   const denied=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Origin:`http://127.0.0.1:${port}`,'Sec-Fetch-Site':'same-origin'},body:JSON.stringify({action:'read_receipt',operationId:legacy.operationId,projectId:'other'})});assert.equal(denied.status,400);
+  const gatewayHeaders={'Content-Type':'application/json',Origin:`http://127.0.0.1:${port}`,'Sec-Fetch-Site':'same-origin'};
+  const gatewayResponse=await fetch(url,{method:'POST',headers:gatewayHeaders,body:JSON.stringify({...request,operationId:gatewayRouteOp})});
+  assert.equal(gatewayResponse.status,502);const gatewayFailure=await gatewayResponse.json();
+  assert.equal(gatewayFailure.receipt.transport_diagnostic.http_status,504,'local HTTP 502 must retain remote HTTP 504');
+  assert.equal((structuredToolFailure({error:'Source observation failed; read the saved receipt, do not retry',receipt:gatewayFailure.receipt}) as any).source_diagnostic.request_ids['x-oneapi-request-id'],'final-gateway-id');
+  const gatewayRead=await fetch(url,{method:'POST',headers:gatewayHeaders,body:JSON.stringify({action:'read_receipt',operationId:gatewayRouteOp,projectId:'project'})});
+  assert.equal(gatewayRead.status,200);const gatewaySaved=await gatewayRead.json();
+  assert.deepEqual(gatewaySaved.transport_diagnostic,gatewayFailure.receipt.transport_diagnostic);assert.equal(gatewaySaved.status,'failed');assert.equal(gatewaySaved.requestsSent,0);
+  const fakePostsBefore=routePosts;assert.equal((await fetch(url,{method:'POST',headers:gatewayHeaders,body:JSON.stringify({...request,operationId:gatewayRouteOp})})).status,400);
+  assert.equal(routePosts,fakePostsBefore,'a consumed failed operation must not reach the transport again');
+  assert(!JSON.stringify(gatewaySaved).includes(key));
   const failedOp=randomUUID(),headers={'Content-Type':'application/json',Origin:`http://127.0.0.1:${port}`,'Sec-Fetch-Site':'same-origin'};
   const invalidResponse=await fetch(url,{method:'POST',headers,body:JSON.stringify({...request,operationId:failedOp})});assert.equal(invalidResponse.status,422);
   const invalidReceipt=(await invalidResponse.json()).receipt;assert.equal(invalidReceipt.upstream_http_status,200);assert.equal(invalidReceipt.phase,'validate_response');
   assert.equal(invalidReceipt.validation.status,'invalid');assert.ok(Math.abs(invalidReceipt.validation.issues[0].delta_ms-100)<1e-7);assert.equal(invalidReceipt.requestsAttempted,1);assert.equal(invalidReceipt.requestsSent,1);
   const failureRead=await fetch(url,{method:'POST',headers,body:JSON.stringify({action:'read_receipt',operationId:failedOp,projectId:'project'})});assert.equal(failureRead.status,200);
-  const fullFailure=await failureRead.json();assert.equal(fullFailure.validation.status,'invalid');assert.equal(fullFailure.raw_observation.windows[1].evidence[0].end_seconds,4.1);assert.equal(fullFailure.requestsSent,0);assert.equal(routePosts,1);
-  const retry=await fetch(url,{method:'POST',headers,body:JSON.stringify({...request,operationId:failedOp})});assert.equal(retry.status,400);assert.equal(routePosts,1);
+  const fullFailure=await failureRead.json();assert.equal(fullFailure.validation.status,'invalid');assert.equal(fullFailure.raw_observation.windows[1].evidence[0].end_seconds,4.1);assert.equal(fullFailure.requestsSent,0);assert.equal(routePosts,2);
+  const retry=await fetch(url,{method:'POST',headers,body:JSON.stringify({...request,operationId:failedOp})});assert.equal(retry.status,400);assert.equal(routePosts,2);
 
 
  } finally {await new Promise<void>(r=>server.close(()=>r()));}
@@ -137,13 +302,23 @@ try {
   }) as typeof fetch;
   const read=await executeTool('read_clipmentor_source_video',{operationId:legacy.operationId},readCtx) as any;
   assert.equal(read.ok,true);assert.equal(read.current_binding,'current');assert.equal(read.requestsSent,0);assert.equal(read.receipt.status,'failed');
+  globalThis.fetch=(async(_url,init)=>{reads++;assert.equal(JSON.parse(String(init?.body)).action,'read_receipt');
+   return Response.json(await readSourceVideoReceipt(gatewayRouteOp,'project',{directory:root}));
+  }) as typeof fetch;
+  const gatewayToolRead=await executeTool('read_clipmentor_source_video',{operationId:gatewayRouteOp},readCtx) as any;
+  assert.equal(gatewayToolRead.ok,true);assert.equal(gatewayToolRead.receipt.transport_diagnostic.http_status,504);
+  assert.equal(gatewayToolRead.receipt.transport_diagnostic.response_body.message_class,'timeout');
+  assert.equal(gatewayToolRead.receipt.status,'failed');assert.equal(gatewayToolRead.requestsSent,0);
+  globalThis.fetch=(async(_url,init)=>{reads++;assert.equal(JSON.parse(String(init?.body)).action,'read_receipt');
+   return Response.json({...recovered,subject:{...recovered.subject,revision:subject.revision,digest:subject.digest}});
+  }) as typeof fetch;
   activeDoc={...doc,clipMentorAnalysis:{...doc.clipMentorAnalysis!,revision:146}};
   assert.equal((await executeTool('read_clipmentor_source_video',{operationId:legacy.operationId},readCtx) as any).current_binding,'stale');
   activeDoc={...doc,assets:doc.assets.map(a=>({...a,sourceContentHash:'b'.repeat(64)}))};
   assert.equal((await executeTool('read_clipmentor_source_video',{operationId:legacy.operationId},readCtx) as any).current_binding,'stale');
-  assert.equal(JSON.stringify(doc),beforeDoc);assert.equal(reads,3);assert.equal(calls,beforeOfflineCalls);
+  assert.equal(JSON.stringify(doc),beforeDoc);assert.equal(reads,4);assert.equal(calls,beforeOfflineCalls);
  } finally {globalThis.fetch=savedFetch;}
  assert.equal(policyForTool('observe_clipmentor_source_video').effect,'irreversible_external');assert.equal(policyForTool('observe_clipmentor_source_video').recovery,'outcome_unknown');assert.equal(isExternalDraftTool('observe_clipmentor_source_video'),true);
  assert.equal(policyForTool('read_clipmentor_source_video').effect,'read');
- console.log('source video: timestamp tolerance/negative bounds, immutable offline recovery, project-bound readback, full bytes/audio preflight, current input, bounded size, typed windows, once-only ledger, failures, secret redaction, route and no approval passed');
+ console.log('source video: offline curl/process failures, diagnostic persistence/Agent settlement/readback, normal controls and no retry; legacy observation validation/recovery/isolation passed');
 } finally {await rm(root,{recursive:true,force:true});}

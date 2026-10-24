@@ -1,3 +1,4 @@
+import { safeSourceTransportDiagnostic, type SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { getLocale } from '../i18n/locale';
 
 export interface ToolExecutionOutcome {
@@ -13,6 +14,55 @@ function recordResult(result: unknown): Record<string, unknown> | null {
   return result !== null && typeof result === 'object' && !Array.isArray(result)
     ? result as Record<string, unknown>
     : null;
+}
+
+interface SourceObservationToolFailure {
+  error: 'Source observation failed; read the saved receipt, do not retry';
+  operationId: string;
+  source_diagnostic: SourceVideoTransportDiagnostic;
+  requestsSent?: 0 | 1 | 'unknown';
+  receipt_persisted?: boolean;
+  source_phase?: 'prepare' | 'gateway_request' | 'validate_response' | 'save_result';
+  source_error_code?: 'source_observation_failed_or_unknown' | 'source_observation_validation_failed' | 'source_receipt_persist_failed';
+  diagnostic?: never;
+  requestsAttempted: 1;
+  production_approved: false;
+}
+type StructuredToolFailure = SourceObservationToolFailure;
+
+/** Retain only the closed, identity-bound diagnostic, never arbitrary error data. */
+export function structuredToolFailure(value: unknown): StructuredToolFailure | undefined {
+  if (value instanceof ToolResultError) return value.result;
+  const item = recordResult(value);
+  // The source tool returns a receipt; only its closed transport projection crosses failed-tool settlement.
+  const r=recordResult(item?.receipt);
+  const source=recordResult(item?.source_diagnostic);
+  const op=r?.operationId ?? item?.operationId;
+  const d=typeof op==='string'?safeSourceTransportDiagnostic(r?.transport_diagnostic??source,'',op):undefined;
+  const sent=r?.requestsSent??item?.requestsSent,persisted=r?.receipt_persisted??item?.receipt_persisted;
+  const phase=r?.phase??item?.source_phase,code=r?.error??item?.source_error_code;
+  if(item && isFailedToolResult(item) && item.error==='Source observation failed; read the saved receipt, do not retry' && d
+    && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(String(op))
+    && ((r?.status==='failed' && r.requestsAttempted===1 && r.actual_handoff_verified===false && r.complete_film_accepted===false)
+      || (!r && item?.requestsAttempted===1 && item.production_approved===false))) {
+    return {error:'Source observation failed; read the saved receipt, do not retry',operationId:String(op),
+      source_diagnostic:d,requestsAttempted:1,production_approved:false,
+      ...([0,1,'unknown'].includes(sent as any)?{requestsSent:sent as 0|1|'unknown'}:{}),
+      ...(typeof persisted==='boolean'?{receipt_persisted:persisted}:{}),
+      ...(['prepare','gateway_request','validate_response','save_result'].includes(phase as any)?{source_phase:phase as SourceObservationToolFailure['source_phase']}:{}),
+      ...(['source_observation_failed_or_unknown','source_observation_validation_failed','source_receipt_persist_failed'].includes(code as any)?{source_error_code:code as SourceObservationToolFailure['source_error_code']}:{})};
+  }
+  return;
+}
+
+/** The promise still rejects; metadata does not turn a failed tool into success. */
+export class ToolResultError extends Error {
+  readonly result: StructuredToolFailure;
+  constructor(result: StructuredToolFailure) {
+    super(result.error);
+    this.name = 'ToolResultError';
+    this.result = result;
+  }
 }
 
 /** Tool handlers may report a rejected operation as data instead of throwing. */

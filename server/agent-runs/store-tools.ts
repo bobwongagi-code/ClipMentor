@@ -1,5 +1,5 @@
 import { compactToolResultForModel } from '../../src/agent/tool-result-compaction';
-import { isFailedToolResult, toolFailureReason } from '../../src/agent/toolFailure';
+import { isFailedToolResult, toolFailureReason, structuredToolFailure, ToolResultError } from '../../src/agent/toolFailure';
 import {
   MAX_SERVER_TOOL_REQUESTS,
   SERVER_TOOL_RESULT_TIMEOUT_MS,
@@ -33,7 +33,7 @@ type SettleToolInput = {
 
 function normalizeToolSettlement(input: SettleToolInput): SettleToolInput {
   if (input.error !== undefined || !isFailedToolResult(input.result)) return input;
-  return { ...input, result: undefined, error: toolFailureReason(input.result) };
+  return { ...input, result: structuredToolFailure(input.result), error: toolFailureReason(input.result) };
 }
 
 type ReadyToolSettlement = {
@@ -130,7 +130,8 @@ function validateToolSettlement(
   if (!request.claimId) return 'unclaimed';
   if (request.claimId !== input.claimId) return 'mismatch';
   const outcomeDigest = digestValue(
-    input.error === undefined ? { result: input.result } : { error: input.error },
+    input.error === undefined ? { result: input.result }
+      : { error: input.error, ...(input.result !== undefined ? { result: input.result } : {}) },
   );
   if (request.status === 'settled') {
     return request.outcomeDigest === outcomeDigest ? 'duplicate' : 'mismatch';
@@ -160,6 +161,7 @@ function deliverToolSettlement(
     request,
     input.error === undefined ? 'allowed' : 'denied',
   );
+  const details = structuredToolFailure(input.result);
   const eventResult = input.error === undefined
     ? compactToolResultForModel(input.result)
     : undefined;
@@ -168,13 +170,14 @@ function deliverToolSettlement(
       toolCallId: request.toolCallId,
       toolName: request.toolName,
       argsDigest: request.argsDigest,
-      ...(input.error === undefined ? { result: eventResult } : { error: input.error }),
+      ...(input.error === undefined ? { result: eventResult }
+        : { error: input.error, ...(details ? { result: details } : {}) }),
     });
   } catch {
     // Event-cap settlement is handled by the transport terminal queue.
   }
   if (input.error === undefined) request.resolve(input.result);
-  else request.reject(new Error(input.error));
+  else request.reject(details ? new ToolResultError(details) : new Error(input.error));
 }
 
 export function settleToolResult(
