@@ -77,6 +77,7 @@ export function buildServerRunPrompt(input: ServerRunMessageInput): {
 }
 
 export interface ServerContextInput {
+  beforeRequest?:()=>Promise<void>;
   readonly run: ServerRun;
   readonly messages: readonly ModelMessage[];
   readonly instructions: string;
@@ -108,6 +109,7 @@ export async function prepareServerContext(
       input.maxOutputTokens,
       async (prompt: string, maxOutputTokens: number, systemPrompt?: string) => {
         if (!systemPrompt) throw new Error('Context summary system prompt is unavailable.');
+        await input.beforeRequest?.();
         const result = await generateText({
           model: input.model,
           system: systemPrompt,

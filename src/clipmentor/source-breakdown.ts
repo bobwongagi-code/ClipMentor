@@ -197,13 +197,10 @@ export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown[
       || start < window[0] || end > window[1]) return null;
     contexts.push({ segment_id: segment.segment_id, source_range_seconds: [start, end], purpose: c.purpose });
   }
-  if (!contexts.length) {
-    if (!rangesCover(evidence.map((e) => e.source_range_seconds), window, 0)) return null;
-  } else {
-    // Contexts are explicit selected pictures, not a request to play the envelope continuously.
-    const used = [...evidence, ...contexts].map((e) => e.source_range_seconds);
-    if (Math.min(...used.map((r) => r[0])) !== window[0] || Math.max(...used.map((r) => r[1])) !== window[1]) return null;
-  }
+  // Direct evidence and context are selected pictures, not a request to play
+  // the envelope continuously. Both edges must still resolve to registered use.
+  const used = [...evidence, ...contexts].map((e) => e.source_range_seconds);
+  if (Math.min(...used.map((r) => r[0])) !== window[0] || Math.max(...used.map((r) => r[1])) !== window[1]) return null;
   return { evidence_source_ranges: evidence, context_source_ranges: contexts };
 }
 

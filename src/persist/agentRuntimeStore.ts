@@ -244,6 +244,13 @@ export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<b
     try {
       const mutation = await mutateOnce(record.projectId, (current) => {
         if (!current.runs.some((run) => run.runId === record.runId)) return [current, false];
+        // Admission and browser recovery can retry this immutable snapshot
+        // before their sidecar cache observes the first server-side write.
+        if (record.kind === 'server-run-draft' && record.toolName === 'server_run_draft_base') {
+          const bases = current.artifacts.filter((item) => item.runId === record.runId
+            && item.kind === 'server-run-draft' && item.toolName === 'server_run_draft_base');
+          if (bases.length) return [current, bases.every((item) => item.bodySha256 === record.bodySha256)];
+        }
         const bytes = current.artifacts.reduce((sum, item) => sum + item.originalBytes, 0);
         if (current.artifacts.length >= MAX_PROJECT_ARTIFACTS
             || bytes + record.originalBytes > MAX_PROJECT_ARTIFACT_BYTES) return [current, false];
@@ -252,7 +259,7 @@ export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<b
           ? { ...run, artifactIds: [...new Set([...run.artifactIds, record.artifactId])] } : run);
         return [{ ...current, runs, artifacts: [...current.artifacts, index] }, true];
       });
-      if (!mutation.result) await kvDel(key);
+      if (!mutation.result || !mutation.next.artifacts.some((item) => item.artifactId === record.artifactId)) await kvDel(key);
       const retained = new Set(mutation.next.artifacts.map((item) => item.artifactId));
       await Promise.all(mutation.previous.artifacts
         .filter((item) => !retained.has(item.artifactId))

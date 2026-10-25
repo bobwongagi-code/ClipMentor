@@ -1,3 +1,4 @@
+import { CLIPMENTOR_SERVER_TOOL_SCHEMAS } from '../../src/agent/tools/schemas/clipmentor-analysis-tools';
 import catalogData from '../../assets/agent/openchatcut-tool-schemas.json';
 import { assertValidAgentToolSchemas, validateAgentToolInvocation } from '../../src/agent/execution-policy';
 import type { AgentToolSchema } from '../../src/agent/tool-schema';
@@ -73,8 +74,9 @@ function sameSchema(
 }
 export function canonicalServerRunToolCatalog(
   askOnly: boolean,
+  serverOwned = false,
 ): readonly AgentToolSchema[] {
-  const canonical = askOnly ? ASK_TOOL_SCHEMAS : EDIT_TOOL_SCHEMAS;
+  const canonical = askOnly ? ASK_TOOL_SCHEMAS : serverOwned ? [...EDIT_TOOL_SCHEMAS, ...CLIPMENTOR_SERVER_TOOL_SCHEMAS] : EDIT_TOOL_SCHEMAS;
   return canonical;
 }
 
@@ -82,8 +84,9 @@ export function canonicalServerRunToolCatalog(
 export function resolveServerRunToolCatalog(
   requested: readonly unknown[],
   askOnly: boolean,
+  serverOwned = false,
 ): readonly AgentToolSchema[] {
-  const canonical = canonicalServerRunToolCatalog(askOnly);
+  const canonical = canonicalServerRunToolCatalog(askOnly, serverOwned);
   const byName = new Map(canonical.map((schema) => [schema.name, schema]));
   const selected: AgentToolSchema[] = [];
   const names = new Set<string>();

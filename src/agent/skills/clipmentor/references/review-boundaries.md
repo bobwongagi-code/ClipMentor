@@ -14,6 +14,16 @@ Use this reference for review ownership, escalation or delivery-status questions
 
 Independent calls require an explicit applicable task budget. Keep stable operation IDs; failed/unknown attempts consume that budget; no automatic retry. Existing saved results, local reads and deterministic checks need no new model call. Self-review cannot satisfy independent approval. An approved business input is not an independent quality verdict. Never fabricate an operator sign-off.
 
+Use the existing brief and delivery record to separate production, repair and experiments; do not create another mode, ledger or approval layer. Before a run, bind the code commit plus working-patch hash, current project/copy/picture IDs, acceptance scope, repair-round limit and per-service call budgets. Record actual latency/cost when known; estimates and unknowns remain explicit.
+
+| Observable signal | Switch and stop condition | Resume only when |
+| --- | --- | --- |
+| Current state cannot be identified, saved or read reliably; transport or receipt validation fails and code must change | Freeze affected production at the saved snapshot. Transfer the exact failure to development; do not rewrite copy to satisfy a broken interface or pay to diagnose it | The saved failure and valid/invalid controls pass the actual runtime path without real calls. A fixed tool does not renew consumed authorization or make an old review pass |
+| Current input and a valid review are available, but teaching, wording or handoff fails | Return the affected unit to the author within the brief's remaining content-repair rounds; retain unaffected content. Stop when rounds are exhausted | The affected relationship and version-bound review meet the frozen acceptance criteria within explicit budgets |
+| The purpose becomes comparing models, prompts or autonomy, with changed frozen inputs/criteria/roles | Stop the production run and record a separately authorized bounded experiment, with its own sample, budget and end condition | Report that experiment's actual result, including blocked execution; never merge it into production approval |
+
+Missing business facts, material or authorization stop only their dependent checkpoint. Normal Agent authorship/execution is production, not inherently an experiment. No budget is inferred from an old run; without a defined applicable allowance, paid work and content repair wait. A blocking failure/unknown outcome stops that attempt; do not change operation IDs, acceptance criteria or round names to continue. A nonblocking optional suggestion does not start a repair loop. At the agreed acceptance or budget limit, deliver one result/blocker and end the run rather than silently extending it. These are operating instructions, not a newly implemented automatic mode switch.
+
 ## Resolve uncertain items instead of accumulating labels
 
 Use the current review/brief record. Each unresolved item names **unit/point/line ID → exact missing evidence or decision → owner → permitted resolution method → stage it must be resolved before → blocking scope**. The owner is normally the author for existing material, the reviewer for a contradictory/incomplete judgment, and the operator only for missing business facts/permissions. “Later” alone is not a deadline; specify before synthesis, before editing or before final delivery.

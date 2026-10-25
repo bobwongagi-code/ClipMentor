@@ -8,7 +8,7 @@ import { putMediaBlob, resetMediaBlobMemory } from '../persist/mediaBlobStore';
 import { executeTool } from '../agent/tools';
 import type { AgentContext } from '../agent/context';
 import type { ProjectDoc } from '../editor/types';
-import { ASR_AUDIO, FUNASR_MODEL, type SourceTranscription } from '../../shared/clipmentor-asr';
+import { ASR_AUDIO, FUNASR_MODEL, isSourceTranscription, type SourceTranscription } from '../../shared/clipmentor-asr';
 import { checkAnalysisHandoff, isClipMentorAnalysis } from './analysis';
 
 const media = new TextEncoder().encode('synthetic original master');
@@ -22,6 +22,21 @@ const result = (): SourceTranscription => ({ schema_version: 1, operation_id: op
   status: 'completed', requests_attempted: 1, chunks: [{ chunk_id: 'chunk-1', offset_seconds: 0, end_seconds: 10, status: 'completed', audio_bytes: 3, audio_sha256: hash,
     words: [{ text: 'original', start_seconds: 0.1, end_seconds: 0.5 }], detected_language: null }],
   words: [{ text: 'original', start_seconds: 0.1, end_seconds: 0.5 }], conflicts: [], issues: [] });
+for (const [target, field, allowed] of [
+  ['root', 'status', ['completed', 'partial', 'failed']],
+  ['chunk', 'status', ['completed', 'failed', 'not_requested']],
+  ['chunk', 'failure_stage', ['network', 'http', 'json', 'timestamps']],
+] as const) {
+  for (const scalar of allowed) {
+    const valid = result(); Object.assign(target === 'root' ? valid : valid.chunks[0], { [field]: scalar });
+    assert(isSourceTranscription(valid), `valid ASR ${target}.${field}:${scalar}`);
+    for (const value of [[scalar], [[scalar]], null, {}, true, 0]) {
+      const invalid = structuredClone(valid); Object.assign(target === 'root' ? invalid : invalid.chunks[0], { [field]: value });
+      assert(!isSourceTranscription(invalid), `reject non-string ASR ${target}.${field}`);
+    }
+  }
+}
+
 const originalFetch = globalThis.fetch;
 let response = result(), changeDuringCall = false, calls = 0;
 let engine = makeDraft(base);

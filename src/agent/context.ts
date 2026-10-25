@@ -39,6 +39,8 @@ export function isSelectionReference(ref: AgentReference): ref is SelectionRefer
 
 /** What the agent's tools operate on: the live editor. */
 export interface AgentContext {
+  /** Host-only transport for service-owned tools. Never supplied by model arguments. */
+  hostFetch?: typeof fetch;
   commands: EditorCommands;
   /** the ACTIVE timeline (per-clip tools read this) */
   getState: () => TimelineState;

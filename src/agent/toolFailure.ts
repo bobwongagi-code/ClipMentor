@@ -1,5 +1,6 @@
 import { safeSourceTransportDiagnostic, type SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { getLocale } from '../i18n/locale';
+import { isCopyReviewFailure, type CopyReviewFailure } from '../../shared/clipmentor-copy-review';
 
 export interface ToolExecutionOutcome {
   readonly success: boolean;
@@ -16,6 +17,15 @@ function recordResult(result: unknown): Record<string, unknown> | null {
     : null;
 }
 
+interface CopyReviewToolFailure {
+  source_diagnostic?: never;
+  error: string;
+  operationId: string;
+  diagnostic: CopyReviewFailure;
+  requestsAttempted: CopyReviewFailure['requestsAttempted'];
+  production_approved: false;
+}
+
 interface SourceObservationToolFailure {
   error: 'Source observation failed; read the saved receipt, do not retry';
   operationId: string;
@@ -28,7 +38,7 @@ interface SourceObservationToolFailure {
   requestsAttempted: 1;
   production_approved: false;
 }
-type StructuredToolFailure = SourceObservationToolFailure;
+type StructuredToolFailure = CopyReviewToolFailure | SourceObservationToolFailure;
 
 /** Retain only the closed, identity-bound diagnostic, never arbitrary error data. */
 export function structuredToolFailure(value: unknown): StructuredToolFailure | undefined {
@@ -52,7 +62,12 @@ export function structuredToolFailure(value: unknown): StructuredToolFailure | u
       ...(['prepare','gateway_request','validate_response','save_result'].includes(phase as any)?{source_phase:phase as SourceObservationToolFailure['source_phase']}:{}),
       ...(['source_observation_failed_or_unknown','source_observation_validation_failed','source_receipt_persist_failed'].includes(code as any)?{source_error_code:code as SourceObservationToolFailure['source_error_code']}:{})};
   }
-  return;
+  if (!item || !isFailedToolResult(item) || typeof item.error !== 'string'
+    || item.production_approved !== false || !isCopyReviewFailure(item.diagnostic)
+    || typeof item.operationId !== 'string' || item.operationId !== item.diagnostic.operationId
+    || item.requestsAttempted !== item.diagnostic.requestsAttempted) return;
+  return { error: item.error, operationId: item.operationId, diagnostic: item.diagnostic,
+    requestsAttempted: item.diagnostic.requestsAttempted, production_approved: false };
 }
 
 /** The promise still rejects; metadata does not turn a failed tool into success. */

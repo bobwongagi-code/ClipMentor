@@ -39,7 +39,7 @@ type Verdict = 'pass' | 'needs_revision' | 'insufficient_evidence';
 export interface GroupReview {
   scope: 'planned_group_teaching_only';
   L1: { verdict: Verdict; learner_takeaway: string; reason: string };
-  L2: { verdict: Verdict; viewer_chain: string; stage_cues: string; reason: string };
+  L2: { verdict: Verdict; viewer_chain: string; stage_cues: string | string[]; reason: string };
 }
 export interface NarrationCheck {
   line_id: string;
@@ -77,7 +77,9 @@ const verdict = (v: unknown): v is Verdict => (typeof v === 'string' && ['pass',
 function groupReviewShape(v: unknown): v is GroupReview {
   return row(v) && v.scope === 'planned_group_teaching_only'
     && row(v.L1) && verdict(v.L1.verdict) && text(v.L1.learner_takeaway) && text(v.L1.reason)
-    && row(v.L2) && verdict(v.L2.verdict) && text(v.L2.viewer_chain) && text(v.L2.stage_cues) && text(v.L2.reason);
+    && row(v.L2) && verdict(v.L2.verdict) && text(v.L2.viewer_chain)
+    && (text(v.L2.stage_cues) || (Array.isArray(v.L2.stage_cues) && v.L2.stage_cues.length > 0 && v.L2.stage_cues.every(text)))
+    && text(v.L2.reason);
 }
 /** Structural completeness and declared verdicts only; this cannot prove teaching quality. */
 export function assessGroupReview(v: unknown) {
@@ -253,7 +255,7 @@ const PREPARATION = new Set([
   'search_media', 'search_stock_media', 'search_fonts', 'track_progress', 'track_export', 'probe_media',
   'inspect_color', 'analyze_scene_quality', 'report_user_friction', 'get_editor_url',
   'revise_clipmentor_analysis', 'review_clipmentor_analysis', 'observe_clipmentor_source',
-  'transcribe_clipmentor_source', 'transcribe_track', 'import_media', 'download_media', 'push_asset',
+  'save_clipmentor_source_frame', 'transcribe_clipmentor_source', 'transcribe_track', 'import_media', 'download_media', 'push_asset',
   'import_url_asset', 'finalize_uploaded_asset', 'create_upload_session', 'get_upload_session',
   'ask_followup_questions', 'list_projects', 'target_project',
 ]);

@@ -74,6 +74,33 @@ assert(isClipMentorAnalysis(base.clipMentorAnalysis));
 assert.equal(checkSourceBreakdown(base).status, 'structurally_ready');
 assert.equal(checkSourceBreakdown(base, true).status, 'structurally_ready');
 
+// A primary teaching point may use two selected source windows without playing
+// the intervening gap. The copy range is their envelope, not a continuous clip.
+const disjointCopy = structuredClone(base);
+const db = disjointCopy.clipMentorAnalysis!.source_breakdown!;
+db.segments.push({ ...structuredClone(db.segments[0]), segment_id: 'S2', source_range_seconds: [65, 66], visible_evidence_ids: ['F2'] });
+disjointCopy.clipMentorAnalysis!.evidence.push({ ...structuredClone(disjointCopy.clipMentorAnalysis!.evidence[0]), evidence_id: 'F2', time_seconds: 65.5, source_frame: 1965 });
+db.points[0].segment_ids.push('S2');
+Object.assign(db.units[0], { original_segment_ids: ['S1', 'S2'], original_source_ranges: [[59.4, 66]], explanation_segment_ids: ['S1', 'S2'],
+  revisits: [{ from_segment_id: 'S2', to_segment_id: 'S1', reason: 'Explain the two selected stages after the full demonstration' }],
+  placement: { timeline_id: 'tl', original_frames: [0, 198], explanation_frames: [210, 324] } });
+(disjointCopy.clipMentorAnalysis!.blueprint[0] as any).internal_review.copy.lines[0].source_seconds = [59.4, 66];
+disjointCopy.timelines[0].items = [clip('original', 0, 1782, 198), clip('stage-one', 210, 1782, 84), clip('stage-two', 294, 1950, 30)];
+assert.equal(checkSourceBreakdown(disjointCopy).status, 'structurally_ready', 'registered disjoint direct evidence does not require invented context');
+assert.equal(checkSourceBreakdown(disjointCopy, true).status, 'structurally_ready');
+const disjointPacket = await copyTeachingPacketFromDoc(disjointCopy);
+assert.deepEqual((disjointPacket.units[0].picture_plan!.line_source_ranges[0] as any).evidence_source_ranges,
+  [{ segment_id: 'S1', source_range_seconds: [59.4, 62.2] }, { segment_id: 'S2', source_range_seconds: [65, 66] }]);
+for (const range of [[59, 66], [59.4, 67]]) {
+  const unbound = structuredClone(disjointCopy);
+  (unbound.clipMentorAnalysis!.blueprint[0] as any).internal_review.copy.lines[0].source_seconds = range;
+  assert(checkSourceBreakdown(unbound).issues.some(i => i.code === 'copy_picture_outside_explanation'), 'unregistered envelope edges remain blocked');
+}
+const playedGap = structuredClone(disjointCopy);
+playedGap.timelines[0].items[1].durationInFrames = 114;
+assert(checkSourceBreakdown(playedGap, true).issues.some(i => i.code === 'timeline_source_range_mismatch'), 'an envelope never authorizes playback through its unselected gap');
+assert.equal((await checkCopyProduction(disjointCopy, null)).allowed, false, 'structural binding never supplies independent teaching approval');
+
 // One line can use a registered comparison frame as context for a different point.
 // Its source_seconds is a search envelope, not permission to play unindexed gaps.
 const contextualCopy = structuredClone(base);

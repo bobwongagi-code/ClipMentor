@@ -9,7 +9,7 @@ export async function requestPreviewReview(args: Record<string, unknown>, ctx: A
     || Object.keys(args).some(k=>!['action','operationId','maxRequests','src','videoSha256','input','executionManifest'].includes(k))) return {error:'Host context, stable operation and one-request budget required'};
   try {
     const timeout = AbortSignal.timeout(680_000), outer = ctx.getAgentRunSignal?.();
-    const response = await fetch('/api/clipmentor/review-preview', { method:'POST',headers:{'Content-Type':'application/json'},
+    const response = await (ctx.hostFetch ?? fetch)('/api/clipmentor/review-preview', { method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({...args,projectId}),signal:outer?AbortSignal.any([outer,timeout]):timeout });
     if (!response.ok) return {error:`Continuous preview review unavailable (HTTP ${response.status}); retain operationId; no retry`};
     const receipt = await response.json();

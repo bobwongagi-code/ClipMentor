@@ -85,6 +85,13 @@ const visual = good(); visual.coverage[0].teaching.evidence = [{ start_seconds: 
   channel: 'visual_organization', observed: '两侧在同一近镜中并置，可同时观察对应位置' }];
 assert.equal(evaluatePreviewTeachingJudgment(visual, input).status, 'pass'); // No mandatory spoken formula.
 
+const emptyVisual=structuredClone(visual);emptyVisual.coverage[0].teaching.evidence[0].quote='';
+assert.equal(evaluatePreviewTeachingJudgment(emptyVisual,input).status,'pass','optional visual quote does not require invented speech');
+const emptySpoken=good();emptySpoken.coverage[0].teaching.evidence[0].quote='';
+assert.equal(evaluatePreviewTeachingJudgment(emptySpoken,input).status,'review_required','spoken claims still need verified words');
+const emptyOriginal=structuredClone(appearance);emptyOriginal.coverage[0].teaching.evidence[0].quote='';
+assert.notEqual(evaluatePreviewTeachingJudgment(emptyOriginal,input).status,'pass','original appearance is not teaching approval');
+
 let calls = 0;
 const result = await reviewClipMentorPreview(video, input, { key: 'private-test-value', post: async (body, key, signal) => {
   calls++; assert.equal(key, 'private-test-value'); assert.equal(body.includes(key), false); assert.ok(signal);

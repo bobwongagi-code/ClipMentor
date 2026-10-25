@@ -14,8 +14,8 @@ import type { ProjectDoc } from '../../src/editor/types';
 import { executeTool } from '../../src/agent/tools';
 import { copyReviewSubject } from '../../src/clipmentor/production-gate';
 import type { ViteDevServer } from 'vite';
-import type { SourceVideoRequest, SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
-import { sourceVideoInput, buildSourceVideoRequest, validateSourceObservation, inspectSourceObservation, observeSourceVideo, recoverSourceVideoReceipt, readSourceVideoReceipt, type SourceVideoDependencies } from './source-video';
+import type { SourceVideoRequest, SourceVideoTask, SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
+import { sourceVideoInput, buildSourceVideoRequest, validateSourceObservation, inspectSourceObservation, inspectSourceVideoObservation, observeSourceVideo, recoverSourceVideoReceipt, readSourceVideoReceipt, type SourceVideoDependencies } from './source-video';
 import { clipMentorSourceVideoPlugin } from '../plugins/clipmentor-source-video';
 import { policyForTool } from '../../src/agent/execution-policy';
 import { isExternalDraftTool } from '../../src/agent/external-tool-policy';
@@ -27,7 +27,23 @@ packet.units[0].picture_plan={original_source_ranges:[[0,2]],explanation_source_
   execution_plan:{plan_id:'plan',script_candidate_id:'copy',content:{composition:'CURRENT_PLAN',self_review:'DO_NOT_SEND_AUTHOR_VERDICT'}}};
 packet.source_evidence[0].observation='DO_NOT_SEND_HISTORICAL_ANSWER';
 const request:SourceVideoRequest={operationId:randomUUID(),maxRequests:1,projectId:'project',authorRunId:'author',source:{src:'/media/uploads/test.mp4',hash:digest,fps:30,duration:5},subject:{revision:145,digest:'a'.repeat(64),units:[{unit_id:packet.units[0].unit_id,candidate_id:'copy'}]},packet};
+const observationTask:SourceVideoTask={version:'source-boundaries-v1',contexts:[{context_id:'context',unit_id:packet.units[0].unit_id,source_range_seconds:[1,4.8],boundary_seconds:[1.5,3],goals:['speech_boundaries','material_continuity']}]};
+const taskRequest={...request,operationId:randomUUID(),observationTask};
+const taskInput=sourceVideoInput(taskRequest);
+assert.deepEqual(taskInput.observation_task,observationTask,'neutral observation context must survive without modifying production windows');
 const input=sourceVideoInput(request);
+assert.deepEqual(taskInput.units,input.units,'observation context never extends production windows');
+for(const mutate of [
+ (t:any)=>{t.contexts[0].unit_id='unknown';},
+ (t:any)=>{t.contexts[0].source_range_seconds=[-1,4.8];},
+ (t:any)=>{t.contexts[0].source_range_seconds=[1,6];},
+ (t:any)=>{t.contexts[0].boundary_seconds=[0];},
+ (t:any)=>{t.contexts[0].boundary_seconds=[1.5,1.5];},
+ (t:any)=>{t.contexts[0].goals=[];},
+ (t:any)=>{t.contexts[0].goals=[['speech_boundaries']];},
+ (t:any)=>{t.contexts[0].expected_verdict='pass';},
+ (t:any)=>{t.contexts.push(t.contexts[0]);},
+]) {const t=structuredClone(observationTask);mutate(t);assert.throws(()=>sourceVideoInput({...request,observationTask:t}));}
 const good=()=>({windows:input.units.flatMap(u=>u.windows.map(w=>({window_id:w.window_id,observed_sequence:'Continuous candidate action',endpoint:'Action incomplete at endpoint',evidence:[{start_seconds:w.source_range_seconds[0],end_seconds:w.source_range_seconds[1],visible:'Action in motion',audible:'Unclear; unknown'}]}))),
   lines:input.units.flatMap(u=>u.lines.map(l=>({unit_id:u.unit_id,line_id:l.line_id,status:'insufficient_evidence',reason:'Source cannot establish edited narration sync',window_ids:[u.windows[1].window_id]}))),limitations:['No assembled handoff observed']});
 const root=await mkdtemp(join(tmpdir(),'clipmentor-source-video-test-'));let calls=0;
@@ -61,6 +77,46 @@ try {
   assert.equal(saveEnvelope.source_phase,'save_result');assert.equal(saveEnvelope.source_error_code,'source_receipt_persist_failed');assert.equal(saveEnvelope.receipt_persisted,false);
  } finally {await rm(saveDirectory,{force:true});await rename(saveBackup,saveDirectory);}
  assert.equal(savePosts,1);
+ const taskBody=JSON.parse(buildSourceVideoRequest(video,taskRequest).body);
+ assert(taskBody.contents[0].parts[1].text.includes('task_observation'));
+ assert(taskBody.contents[0].parts[1].text.includes('source-boundaries-v1'));
+ const taskGood=()=>({...good(),task_observation:{
+  boundaries:observationTask.contexts[0].boundary_seconds.map(t=>({context_id:'context',boundary_seconds:t,status:'uncertain',
+   before:{status:'unclear',quote:null},after:{status:'unclear',quote:null},start_seconds:t-0.2,end_seconds:t+0.2,reason:'Unintelligible fixture, no sentence claim',time_uncertainty:'unknown'})),
+  contexts:[{context_id:'context',sequence:[{start_seconds:4,end_seconds:4.8,visible:'fixture outside production but inside observation',audible:'unclear'}],
+   material_ranges:[{start_seconds:4,end_seconds:4.8,role:'uncertain',basis:'fixture only',limitations:['No valid material established']}],limitations:['Unknown source meaning']}],
+ }});
+ assert.equal(inspectSourceVideoObservation(taskGood(),taskInput).status,'valid','unknown speech is a valid result, never approval');
+ const heard=taskGood();Object.assign(heard.task_observation.boundaries[0],{status:'inside_speech',before:{status:'heard',quote:'fixture quote'}});
+ assert.equal(inspectSourceVideoObservation(heard,taskInput).status,'valid');
+ for(const mutate of [
+  (v:any)=>{delete v.task_observation;},
+  (v:any)=>{v.task_observation.boundaries.pop();},
+  (v:any)=>{v.task_observation.boundaries[0].context_id='unknown';},
+  (v:any)=>{v.task_observation.boundaries[0].boundary_seconds=2;},
+  (v:any)=>{v.task_observation.boundaries[0].status='sentence_boundary';},
+  (v:any)=>{v.task_observation.boundaries[0].status=['uncertain'];},
+  (v:any)=>{v.task_observation.boundaries[0].before={status:'heard',quote:null};},
+  (v:any)=>{v.task_observation.boundaries[0].start_seconds=0;},
+  (v:any)=>{v.task_observation.contexts[0].sequence[0].end_seconds=5;},
+  (v:any)=>{v.task_observation.contexts.push(v.task_observation.contexts[0]);},
+  (v:any)=>{v.windows[0].evidence[0].end_seconds=4.8;},
+ ]) {const v=taskGood();mutate(v);assert.equal(inspectSourceVideoObservation(v,taskInput).status,'invalid');}
+ let taskPosts=0;
+ const taskDeps={...deps,post:async()=>{taskPosts++;return {status:200,body:{modelVersion:'mock',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(taskGood())}]}}]}};}};
+ const taskResult=await observeSourceVideo(taskRequest,taskDeps);assert.equal(taskPosts,1);
+ assert.deepEqual(taskResult.observation_task,observationTask);assert.deepEqual(taskResult.raw_observation,taskGood());
+ const taskRead=await readSourceVideoReceipt(taskRequest.operationId,'project',{directory:root});assert.equal(taskRead.requestsSent,0);
+ assert.deepEqual(taskRead.observation_task,observationTask);assert.deepEqual(taskRead.result?.raw_observation,taskGood());
+ assert.equal((await observeSourceVideo(taskRequest,taskDeps)).cached,true);assert.equal(taskPosts,1);
+ const changedTask=structuredClone(observationTask);changedTask.contexts[0].boundary_seconds=[2];
+ await assert.rejects(observeSourceVideo({...taskRequest,observationTask:changedTask},taskDeps));assert.equal(taskPosts,1);
+ const missingTask={...taskRequest,operationId:randomUUID()};let missingPosts=0;
+ const missingDeps={...deps,post:async()=>{missingPosts++;return {status:200,body:{candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(good())}]}}]}};}};
+ await assert.rejects(observeSourceVideo(missingTask,missingDeps));assert.equal(missingPosts,1);
+ const missingRead=await readSourceVideoReceipt(missingTask.operationId,'project',{directory:root});assert.equal(missingRead.status,'failed');
+ assert(missingRead.validation?.issues.some(x=>x.code==='missing_task_observation'));assert.deepEqual(missingRead.observation_task,observationTask);
+ assert.deepEqual(missingRead.raw_observation,good());await assert.rejects(observeSourceVideo(missingTask,missingDeps));assert.equal(missingPosts,1);
  const prepared=buildSourceVideoRequest(video,request);
  assert.ok(!prepared.body.includes('DO_NOT_SEND_HISTORICAL_ANSWER'));assert.ok(!prepared.body.includes('DO_NOT_SEND_AUTHOR_VERDICT'));assert.ok(prepared.body.includes('CURRENT_PLAN'));
  const result=await observeSourceVideo(request,deps);assert.equal(calls,1);assert.equal(result.returned_model,'mock-returned-model');assert.equal(result.actual_handoff_verified,false);assert.equal(result.complete_film_accepted,false);assert.equal(result.raw_observation.lines[0].status,'insufficient_evidence');
@@ -320,5 +376,5 @@ process.stdout.write(config.malformed?'not metrics':JSON.stringify(metrics).repl
  } finally {globalThis.fetch=savedFetch;}
  assert.equal(policyForTool('observe_clipmentor_source_video').effect,'irreversible_external');assert.equal(policyForTool('observe_clipmentor_source_video').recovery,'outcome_unknown');assert.equal(isExternalDraftTool('observe_clipmentor_source_video'),true);
  assert.equal(policyForTool('read_clipmentor_source_video').effect,'read');
- console.log('source video: offline curl/process failures, diagnostic persistence/Agent settlement/readback, normal controls and no retry; legacy observation validation/recovery/isolation passed');
+ console.log('source video: offline curl-process 200/504/timeout/abort/spawn/privacy, durable diagnostics through HTTP/Agent settlement/registered read, no retry; neutral context tasks, boundary/unknown evidence, adjacent ranges without production mutation, complete task readback, failures/no retry; legacy timestamp/recovery/route/isolation checks passed');
 } finally {await rm(root,{recursive:true,force:true});}

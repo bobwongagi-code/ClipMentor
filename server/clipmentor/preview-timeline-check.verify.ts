@@ -39,6 +39,9 @@ const judgment: PreviewTeachingJudgment = { coverage: [
 ] };
 const saved = { judgment, full_film_accepted: false, raw_public_judgment: JSON.stringify(judgment) };
 const before = JSON.stringify({ manifest, saved, input });
+const narrowed=structuredClone(input);
+narrowed.units[0].output_range_seconds=[6,7];
+assert.throws(()=>checkPreviewTimelineObservations(manifest,saved,narrowed),/transition.*range|override/i,'author cannot shrink the computed transition window to exclude a pause');
 const report = checkPreviewTimelineObservations(manifest, saved, input);
 const codes = (index: number) => report.units[index].issues.map(i => i.code);
 assert(codes(0).includes('pause_not_separately_described'));

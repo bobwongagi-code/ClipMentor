@@ -24,7 +24,7 @@ export interface PreviewReferenceText {
 export interface PreviewReviewInput {
   duration_seconds: number;
   points: PreviewFocus[];
-  units: Array<{ unit_id: string; point_ids: string[] }>;
+  units: Array<{ unit_id: string; point_ids: string[]; output_range_seconds?: [number, number] }>;
   reference_text: PreviewReferenceText[];
 }
 export interface ReviewReceipt {
@@ -79,12 +79,14 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
   for (const unit of value.units) {
     if (!object(unit) || !text(unit.unit_id) || units.has(unit.unit_id) || !Array.isArray(unit.point_ids)
       || !unit.point_ids.length || !unit.point_ids.every((id) => typeof id === 'string' && ids.has(id))) throw new Error('Invalid review unit');
+    if (unit.output_range_seconds !== undefined && (!Array.isArray(unit.output_range_seconds) || unit.output_range_seconds.length !== 2
+      || !range({ start_seconds: unit.output_range_seconds[0], end_seconds: unit.output_range_seconds[1] }, value.duration_seconds))) throw new Error('Invalid unit output range');
     units.add(unit.unit_id);
   }
   // Whitelist fields: author reasons, expected verdicts and prior reviews never enter the prompt.
   return { duration_seconds: value.duration_seconds,
     points: value.points.map((p) => ({ point_id: p.point_id, teaching_goal_zh: p.teaching_goal_zh, product_relevance: p.product_relevance })),
-    units: value.units.map((u) => ({ unit_id: u.unit_id, point_ids: [...u.point_ids] })),
+    units: value.units.map((u) => ({ unit_id: u.unit_id, point_ids: [...u.point_ids], ...(u.output_range_seconds === undefined ? {} : { output_range_seconds: [...u.output_range_seconds] as [number, number] }) })),
     reference_text: value.reference_text.map((r) => ({ channel: r.channel, start_seconds: r.start_seconds,
       end_seconds: r.end_seconds, text: r.text })) };
 }
@@ -124,7 +126,7 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
   const issues: string[] = [];
   const receipt = (v: unknown): v is ReviewReceipt => object(v) && range(v, input.duration_seconds)
     && (typeof v.channel === 'string' && ['original', 'narration', 'annotation', 'visual_organization'].includes(v.channel))
-    && text(v.observed) && (v.quote === undefined || text(v.quote));
+    && text(v.observed) && (v.quote === undefined || text(v.quote) || (v.quote === '' && ['original','visual_organization'].includes(String(v.channel))));
   const receipts = (v: unknown): v is ReviewReceipt[] => Array.isArray(v) && v.every(receipt);
   const finding = (v: unknown): v is Finding => object(v)
     && (typeof v.status === 'string' && ['supported', 'not_supported', 'insufficient_evidence'].includes(v.status))

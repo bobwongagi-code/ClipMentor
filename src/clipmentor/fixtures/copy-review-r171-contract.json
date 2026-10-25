@@ -1,0 +1,1039 @@
+{
+  "provenance": {
+    "scope": "saved_response_contract_regression_not_a_new_review",
+    "operationId": "3b3e5bdc-f06d-4994-aad1-1fd85a84d778",
+    "fingerprint": "3894de9fa9769146029b9c48b464df66700426e8ce1d0b021c10d6e3be58f5a3"
+  },
+  "request": {
+    "operationId": "3b3e5bdc-f06d-4994-aad1-1fd85a84d778",
+    "maxRequests": 1,
+    "projectId": "c684afc2-f8f8-4959-bce6-8e44a87b5b0d",
+    "authorRunId": "2d803c6c-3c9e-4695-953d-81572af32c41",
+    "source": {
+      "src": "/media/uploads/1a0608d6-2228-457e-9e7f-8356cce4b8b1.mp4",
+      "hash": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+      "fps": 30,
+      "duration": 99.866667
+    },
+    "subject": {
+      "revision": 171,
+      "digest": "286265a6c0022758146d2602d712d98e762e5509829da519bfae345e6920b0d2",
+      "units": [
+        {
+          "unit_id": "U-02",
+          "candidate_id": "script_candidate_U02_r161_window_sync_v2"
+        },
+        {
+          "unit_id": "U-03",
+          "candidate_id": "script_candidate_U03_r167_two_lines_visual_D_v1"
+        }
+      ]
+    },
+    "packet": {
+      "audience": "给马来西亚创作者学习拍法与商品购买关注的关系；不是消费者广告或功效认证",
+      "product": {
+        "name": "亮肤香皂（品名与品牌待核）",
+        "purchase_concerns": [
+          "局部暗沉/提亮诉求落到肘部试用",
+          "身体皂使用中的体验表达",
+          "看清比较前皮肤的展示状态",
+          "局部皮肤观感比较",
+          "比较后人物讲述承接"
+        ],
+        "unknowns": [
+          "稀疏采样非连续动作；原声句界、品牌原话未核",
+          "吸气、香型、好坏评价未知",
+          "未见完整去泡；对象不同，不是同部位前后效果",
+          "单手到双手的连续运动未连续观看",
+          "84.2为候选检索延展，已记录83.2/84.1同框；两侧身份、曝光、真实功效未知",
+          "原话、情绪及是否强调比较未知；只支持人物讲话姿态",
+          "仅既有抽帧定位，连续动作与候选出点未验；同次手臂至肘侧空间上下文，不把全窗称肘部揉擦。",
+          "连续切接/实际声画阅读待预览；后窗非全程肘擦或闻香。",
+          "历史不执行；当前仅84.4—85.3保守人物动态候选，非精确干净边界。"
+        ]
+      },
+      "source_evidence": [
+        {
+          "evidence_id": "VIS-03",
+          "observation": "[visible_action; agent_observed_candidate] 43秒双手握白色皂体；47、50、54秒一手接触另一侧前臂，前臂有长条状白色覆盖；58秒屈肘把肘臂横向靠近镜头，另一手持白色物接触肘部；65秒双手交叠接触手背，手臂及手背有白色泡沫覆盖。只记录采样阶段，不声称精确次数。",
+          "time_seconds": [
+            43,
+            65
+          ]
+        },
+        {
+          "evidence_id": "VIS-04",
+          "observation": "[visible_action; agent_observed_candidate] 71.5、71.8秒为带泡沫的双手背并置近景；72.1秒已切为湿润肘臂近景，72.4、72.7、73秒延续此构图。相邻样本间发生状态和构图跳转，未采到完整冲洗过程。",
+          "time_seconds": [
+            71.5,
+            73
+          ]
+        },
+        {
+          "evidence_id": "VIS-05",
+          "observation": "[visible_action; agent_observed_candidate] 80秒两只湿润手背靠近镜头并置，其中一只位于画面中心，另一只在右侧；皮肤表面仍有反光。",
+          "time_seconds": [
+            80,
+            80
+          ]
+        },
+        {
+          "evidence_id": "WHY-02",
+          "observation": "[expression_analysis_not_verified_causal_effect; inferred_not_verified_causal_effect] 前面提到具体部位，试用时她又把手肘带近镜头、重点涂抹，让买家把提亮诉求和正在演示的位置连起来。皂体、网袋和泡沫让过程看得清，整段不只剩下口头介绍。",
+          "time_seconds": [
+            22,
+            67
+          ]
+        },
+        {
+          "evidence_id": "WHY-03",
+          "observation": "[expression_analysis_not_verified_causal_effect; inferred_not_verified_causal_effect] 她把两只手靠近镜头，放在同一个画面里，方便对比。带泡沫的同框画面之后，又给出湿润皮肤和双手同框的画面，让比较不只停在一个阶段。",
+          "time_seconds": [
+            67,
+            86
+          ]
+        },
+        {
+          "evidence_id": "VIS-09",
+          "observation": "[visible_action; agent_observed_candidate] 26秒白皂近镜；31秒皂体在网袋中，一手举袋绳；34、37秒双手在皂体与袋口处操作；40秒双手伸向水槽附近，具体接水不可见；44秒一手持白色皂体/包裹物接触另一手掌；56秒一手接触另一前臂，前臂与肘部有大片白色泡沫；60秒双手交叠，手背及前臂有泡沫。不能由采样还原完整步骤、起泡速度或气味。",
+          "time_seconds": [
+            26,
+            60
+          ]
+        },
+        {
+          "evidence_id": "VIS-10",
+          "observation": "[visible_action; agent_observed_candidate] 59.4—59.8秒揉擦带泡沫肘臂；60.2秒抬起前臂，60.6秒低头将鼻子靠近腕/前臂，61秒离开面部，61.4—62.2秒继续揉擦。可见类似嗅闻的体验姿态，图片不能确认吸气、气味或评价。",
+          "time_seconds": [
+            59.4,
+            62.2
+          ]
+        },
+        {
+          "evidence_id": "VIS-11",
+          "observation": "[visible_action; agent_observed_candidate] 80—83.4秒湿润双手背靠近镜头并置，中间一手移前又回到并置；84.2667—85.1333秒转为人物中景，扬眉睁眼、歪头面向镜头；86秒低头。",
+          "time_seconds": [
+            80,
+            86
+          ]
+        },
+        {
+          "evidence_id": "VIS-12",
+          "observation": "[visible_action; agent_observed_candidate] 83.2—84.1秒双手背并置，嘴角略上扬；84.4—85.3秒人物中景，扬眉睁眼、头部倾斜并张合嘴。相邻采样支持比较后讲话的表情配合，不支持惊喜效果或真实满意判断。",
+          "time_seconds": [
+            83.2,
+            85.3
+          ]
+        },
+        {
+          "evidence_id": "VIS-13",
+          "observation": "[visible_action; agent_observed_candidate] 69.8—71.8秒带泡沫双手背近镜并置；72.3—72.8秒画面转为湿润肘臂近景并以另一手托触，73.3秒调整手臂姿态；未见完整去泡过程。",
+          "time_seconds": [
+            69.8,
+            73.3
+          ]
+        },
+        {
+          "evidence_id": "VIS-14",
+          "observation": "[visible_action; agent_observed_candidate] 76.8—78.3秒湿润肘臂近镜、另一手触摸；78.8秒手臂放低，79.3—79.8秒一只手背举近镜头，80.3秒另一手背加入同框。",
+          "time_seconds": [
+            76.8,
+            80.3
+          ]
+        },
+        {
+          "evidence_id": "WHY-05",
+          "observation": "[expression_analysis_not_verified_causal_effect; inferred_not_verified_causal_effect] 提亮购买关注仍由局部试用和后续比较承担；揉擦中抬腕靠近鼻子再继续操作，可作为身体皂使用体验的短补充，让演示不只有外观介绍，但不能讲成香味好或留香。",
+          "time_seconds": [
+            59.4,
+            62.2
+          ]
+        },
+        {
+          "evidence_id": "WHY-06",
+          "observation": "[expression_analysis_not_verified_causal_effect; inferred_not_verified_causal_effect] 泡沫并置、湿润肘臂、湿润双手近镜并置依次提供不同状态的查看条件，回应买家对局部肤色观感的比较关注；比较后扬眉睁眼、歪头的讲话画面把注意力从手部带回讲述者，可解释为表情配合而非提亮效果证明。",
+          "time_seconds": [
+            69.8,
+            85.3
+          ]
+        },
+        {
+          "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1530",
+          "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+          "time_seconds": [
+            51
+          ]
+        },
+        {
+          "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1590",
+          "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+          "time_seconds": [
+            53
+          ]
+        },
+        {
+          "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1875",
+          "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+          "time_seconds": [
+            62.5
+          ]
+        },
+        {
+          "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1935",
+          "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+          "time_seconds": [
+            64.5
+          ]
+        },
+        {
+          "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1866",
+          "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+          "time_seconds": [
+            62.2
+          ]
+        }
+      ],
+      "units": [
+        {
+          "unit_id": "U-02",
+          "lines": [
+            {
+              "line_id": "U02-v12-1",
+              "point_ids": [
+                "R61-02-B"
+              ],
+              "narration_ms": "Dia fokus menggosok sabun pencerah pada siku, bahagian yang orang sering risau nampak kusam.",
+              "caption_lines": [
+                "Dia fokus menggosok",
+                "sabun pencerah pada siku,",
+                "bahagian yang orang sering risau",
+                "nampak kusam."
+              ],
+              "meaning_zh": "她重点把亮肤皂用在手肘上，这正是人们常在意显暗沉的部位。",
+              "labels": []
+            },
+            {
+              "line_id": "U02-v10-2",
+              "point_ids": [
+                "R61-02-B"
+              ],
+              "narration_ms": "Dia rakam dari dekat supaya kita nampak jelas gosokan pada kulit.",
+              "caption_lines": [
+                "Dia rakam dari dekat",
+                "supaya kita nampak jelas",
+                "gosokan pada kulit."
+              ],
+              "meaning_zh": "她拍得近，让我们看清皮肤上的揉擦。",
+              "labels": []
+            },
+            {
+              "line_id": "U02-v10-4",
+              "point_ids": [
+                "R61-02-C"
+              ],
+              "narration_ms": "Gerak ini mengajak kita membayangkan bau sabun semasa digunakan.",
+              "caption_lines": [
+                "Gerak ini mengajak kita",
+                "membayangkan bau sabun",
+                "semasa digunakan."
+              ],
+              "meaning_zh": "这个动作让我们联想到用皂时的气味。",
+              "labels": []
+            }
+          ],
+          "picture_plan": {
+            "original_source_ranges": [
+              [
+                43,
+                65.43
+              ]
+            ],
+            "explanation_source_ranges": [
+              [
+                43,
+                59.4
+              ],
+              [
+                59.4,
+                62.2
+              ],
+              [
+                51,
+                55
+              ],
+              [
+                62.2,
+                64.6
+              ]
+            ],
+            "line_source_ranges": [
+              {
+                "line_id": "U02-v12-1",
+                "source_range_seconds": [
+                  56,
+                  59.4
+                ],
+                "evidence_source_ranges": [
+                  {
+                    "segment_id": "S02-use",
+                    "source_range_seconds": [
+                      56,
+                      59.4
+                    ]
+                  }
+                ],
+                "context_source_ranges": []
+              },
+              {
+                "line_id": "U02-v10-2",
+                "source_range_seconds": [
+                  56,
+                  59.4
+                ],
+                "evidence_source_ranges": [
+                  {
+                    "segment_id": "S02-use",
+                    "source_range_seconds": [
+                      56,
+                      59.4
+                    ]
+                  }
+                ],
+                "context_source_ranges": []
+              },
+              {
+                "line_id": "U02-v10-4",
+                "source_range_seconds": [
+                  59.4,
+                  64.6
+                ],
+                "evidence_source_ranges": [
+                  {
+                    "segment_id": "S02-experience",
+                    "source_range_seconds": [
+                      59.4,
+                      62.2
+                    ]
+                  },
+                  {
+                    "segment_id": "S02-use-return",
+                    "source_range_seconds": [
+                      62.2,
+                      64.6
+                    ]
+                  }
+                ],
+                "context_source_ranges": []
+              }
+            ],
+            "registered_revisits": [
+              {
+                "from_source_range": [
+                  59.4,
+                  62.2
+                ],
+                "to_source_range": [
+                  43,
+                  59.4
+                ]
+              },
+              {
+                "from_source_range": [
+                  59.4,
+                  62.2
+                ],
+                "to_source_range": [
+                  59.4,
+                  62.2
+                ]
+              },
+              {
+                "from_source_range": [
+                  59.4,
+                  62.2
+                ],
+                "to_source_range": [
+                  51,
+                  55
+                ]
+              },
+              {
+                "from_source_range": [
+                  59.4,
+                  62.2
+                ],
+                "to_source_range": [
+                  62.2,
+                  64.6
+                ]
+              }
+            ],
+            "execution_plan": {
+              "plan_id": "picture_plan_U02_r170_remove_border_v1",
+              "script_candidate_id": "script_candidate_U02_r161_window_sync_v2",
+              "content": {
+                "original_source_ranges": [
+                  [
+                    43,
+                    65.43
+                  ]
+                ],
+                "phases": [
+                  {
+                    "line_id": "U02-v12-1",
+                    "source_seconds": [
+                      51,
+                      59.4
+                    ],
+                    "picture": "58.4秒真实肘部参照3.720656秒，接正常源51—55秒4秒；后窗为使用上下文，不全称肘擦。",
+                    "capacity": "既有声音7.720656秒，原安排保留。"
+                  },
+                  {
+                    "line_id": "U02-v10-2",
+                    "source_seconds": [
+                      56,
+                      59.4
+                    ],
+                    "picture": "58.4秒参照2.869406秒，接正常源56—59.4秒3.4秒；操作手、接触点和肘臂关系共同可辨。",
+                    "capacity": "既有声音6.269406秒，原安排保留。"
+                  },
+                  {
+                    "line_id": "U02-v10-4",
+                    "source_seconds": [
+                      59.4,
+                      64.6
+                    ],
+                    "picture": "正常连续近鼻→回揉，156帧/5.2秒；字幕151帧，末5帧连续无字幕。",
+                    "audio_seconds": 5.027125,
+                    "constraints": "无泡沫闪镜、关系卡、循环、慢放或补长；不说好闻留香。"
+                  }
+                ],
+                "experience_group": {
+                  "line_ids": [
+                    "U02-v10-4"
+                  ],
+                  "source_seconds": [
+                    59.4,
+                    64.6
+                  ],
+                  "duration_frames": 156,
+                  "caption_frames": 151,
+                  "tail_without_caption_frames": 5,
+                  "audio_seconds": 5.027125
+                },
+                "excluded_line_ids": [
+                  "U02-v10-3"
+                ],
+                "script_candidate_id": "script_candidate_U02_r161_window_sync_v2",
+                "viewer_stage_cues": {
+                  "scope": "仅U02观众可见阶段提示；叠加现有画面，不新增片长、素材或旁白，不改变任何现有源窗/声音/字幕。",
+                  "layout": {
+                    "original": "保留原构图，左上安全区显示Video asal。",
+                    "revisit": "沿用原画面尺寸与构图，同位置显示两行阶段/动作短标；不是独立卡片，不缩成三框。",
+                    "safe_area": "短标左上，离画边至少5%；最大宽度画面40%，高对比深色小底。避开底部同步字幕、源字幕、操作手/接触点和人物脸；冲突时同一短标整体移至右上空区，不遮挡关键对象。不改字幕位置或文本。"
+                  },
+                  "original": {
+                    "text": "Video asal",
+                    "zh": "原视频",
+                    "enter": "U02原声源43秒首个现有画面起显示",
+                    "exit": "原声源65.43秒排他出点、原声展示结束时退出；不另加尾卡或气口。"
+                  },
+                  "revisit": [
+                    {
+                      "line_ids": [
+                        "U02-v12-1",
+                        "U02-v10-2"
+                      ],
+                      "text": "Ulang lihat · Siku",
+                      "zh": "回看·手肘",
+                      "enter": "原声结束后，第一句解释的首个既有58.4秒肘部参照画面开始即显示；持续覆盖其后51—55使用上下文及第二句既有画面。",
+                      "exit": "切入第三句59.4秒近鼻连续画面时原位换标；不闪黑，不添加过渡帧。",
+                      "meaning": "明确正在回看刚展示过的肘部用皂/近拍片段；51—55仍为使用上下文，不把全部画面称肘擦。"
+                    },
+                    {
+                      "line_ids": [
+                        "U02-v10-4"
+                      ],
+                      "text": "Ulang lihat · Dekat hidung",
+                      "zh": "回看·靠近鼻部",
+                      "enter": "第三句既有59.4秒近鼻→回揉连续画面首帧原位换标。",
+                      "exit": "该连续156帧末帧后与U02解释阶段一起退出；最后5帧仅撤同步字幕，阶段短标保持至组末。",
+                      "meaning": "定位刚展示过的靠近鼻部动作及其后连续回揉，不称好闻/留香。"
+                    }
+                  ],
+                  "handoff": "原声结束与解释开始以现有阶段切点为触发；只改变叠加提示，不插入空白、卡片、重复源帧或固定停顿。声音和全部已有画面时长保持。"
+                }
+              }
+            }
+          },
+          "points": [
+            {
+              "point_id": "R61-02-B",
+              "role": "primary",
+              "question": "试用位置和取景，怎样把这类商品买家在意的问题展示清楚？",
+              "evidence_ids": [
+                "VIS-03",
+                "VIS-09",
+                "WHY-02",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1530",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1590"
+              ],
+              "buying_concern": "局部暗沉/提亮诉求落到肘部试用",
+              "filming_conditions": [
+                "操作手、接触点、肘部轮廓共同可辨；实际接触近镜"
+              ],
+              "treatment": "explain"
+            },
+            {
+              "point_id": "R61-02-C",
+              "role": "primary",
+              "question": "这个使用中的动作让观众联想到哪种使用体验？",
+              "evidence_ids": [
+                "VIS-10",
+                "WHY-05",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1875",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1935",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1866"
+              ],
+              "buying_concern": "身体皂使用中的体验表达",
+              "filming_conditions": [
+                "揉擦→腕/前臂近鼻→离开→回揉擦；鼻部、腕与泡沫同框"
+              ],
+              "treatment": "explain"
+            }
+          ]
+        },
+        {
+          "unit_id": "U-03",
+          "lines": [
+            {
+              "line_id": "U03-C1",
+              "point_ids": [
+                "R61-03-B"
+              ],
+              "narration_ms": "Dia menunjukkan tangan berbuih, kemudian siku dan lengan yang basah dari dekat, supaya penonton dapat mengikuti proses penggunaan sebelum perbandingan tona kulit.",
+              "caption_lines": [
+                "Dia menunjukkan tangan berbuih,",
+                "kemudian siku dan lengan yang basah dari dekat,",
+                "supaya penonton dapat mengikuti proses penggunaan",
+                "sebelum perbandingan tona kulit."
+              ],
+              "meaning_zh": "她先展示带泡沫的双手，再近拍湿润的肘部和手臂，让观众在肤色比较前跟上使用过程。",
+              "labels": []
+            },
+            {
+              "line_id": "U03-C2",
+              "point_ids": [
+                "R61-03-C"
+              ],
+              "narration_ms": "Kedua-dua belakang tangan kemudian ditunjukkan dekat dengan kamera, serentak dalam gambar yang sama, supaya tona kulit mudah dibandingkan.",
+              "caption_lines": [
+                "Kedua-dua belakang tangan kemudian ditunjukkan",
+                "dekat dengan kamera,",
+                "serentak dalam gambar yang sama,",
+                "supaya tona kulit mudah dibandingkan."
+              ],
+              "meaning_zh": "随后，两个手背靠近镜头、同时出现在同一画面里，方便比较肤色。",
+              "labels": []
+            }
+          ],
+          "picture_plan": {
+            "original_source_ranges": [
+              [
+                69.8,
+                73.3
+              ],
+              [
+                76.8,
+                84.2
+              ],
+              [
+                84.4,
+                85.3
+              ]
+            ],
+            "explanation_source_ranges": [
+              [
+                69.8,
+                73.3
+              ],
+              [
+                76.8,
+                84.2
+              ],
+              [
+                80,
+                84.2
+              ]
+            ],
+            "line_source_ranges": [
+              {
+                "line_id": "U03-C1",
+                "source_range_seconds": [
+                  69.8,
+                  73.3
+                ],
+                "evidence_source_ranges": [
+                  {
+                    "segment_id": "S03-states",
+                    "source_range_seconds": [
+                      69.8,
+                      73.3
+                    ]
+                  }
+                ],
+                "context_source_ranges": []
+              },
+              {
+                "line_id": "U03-C2",
+                "source_range_seconds": [
+                  76.8,
+                  84.2
+                ],
+                "evidence_source_ranges": [
+                  {
+                    "segment_id": "S03-approach",
+                    "source_range_seconds": [
+                      76.8,
+                      84.2
+                    ]
+                  },
+                  {
+                    "segment_id": "S03-compare",
+                    "source_range_seconds": [
+                      80,
+                      84.2
+                    ]
+                  }
+                ],
+                "context_source_ranges": []
+              }
+            ],
+            "registered_revisits": [
+              {
+                "from_source_range": [
+                  84.4,
+                  85.3
+                ],
+                "to_source_range": [
+                  69.8,
+                  73.3
+                ]
+              },
+              {
+                "from_source_range": [
+                  84.4,
+                  85.3
+                ],
+                "to_source_range": [
+                  76.8,
+                  84.2
+                ]
+              },
+              {
+                "from_source_range": [
+                  84.4,
+                  85.3
+                ],
+                "to_source_range": [
+                  80,
+                  84.2
+                ]
+              },
+              {
+                "from_source_range": [
+                  76.8,
+                  84.2
+                ],
+                "to_source_range": [
+                  80,
+                  84.2
+                ]
+              }
+            ],
+            "execution_plan": {
+              "plan_id": "picture_plan_U03_r167_two_lines_visual_D_v1",
+              "script_candidate_id": "script_candidate_U03_r167_two_lines_visual_D_v1",
+              "content": {
+                "unit_id": "U-03",
+                "original_source_ranges": [
+                  [
+                    69.8,
+                    73.3
+                  ],
+                  [
+                    76.8,
+                    84.2
+                  ],
+                  [
+                    84.4,
+                    85.3
+                  ]
+                ],
+                "original_playback": {
+                  "ranges": [
+                    [
+                      69.8,
+                      73.3
+                    ],
+                    [
+                      76.8,
+                      84.2
+                    ],
+                    [
+                      84.4,
+                      85.3
+                    ]
+                  ],
+                  "purpose": "按原顺序展示使用状态、近镜真实同框比较、人物表情伴随讲话；不把不连续范围合称完整连续原声段，原声完整句界待核。",
+                  "person_visual_only": {
+                    "point_id": "R61-03-D",
+                    "segment_id": "S03-person",
+                    "source_range_seconds": [
+                      84.4,
+                      85.3
+                    ]
+                  }
+                },
+                "phases": [
+                  {
+                    "line_id": "U03-C1",
+                    "point_ids": [
+                      "R61-03-B"
+                    ],
+                    "source_range_seconds": [
+                      69.8,
+                      73.3
+                    ],
+                    "segment_ids": [
+                      "S03-states"
+                    ],
+                    "picture": "正常速度泡沫双手→湿润肘臂，保留对象与顺序，不称完整冲洗。",
+                    "purpose": "解释使用过程在肤色比较之前的作用。",
+                    "mode": "explanation_revisit"
+                  },
+                  {
+                    "line_id": "U03-C2",
+                    "point_ids": [
+                      "R61-03-C"
+                    ],
+                    "source_range_seconds": [
+                      76.8,
+                      84.2
+                    ],
+                    "segment_ids": [
+                      "S03-approach",
+                      "S03-compare"
+                    ],
+                    "picture": "正常速度近镜、另一手加入、真实同时同框；80.3/83.2为同框依据，82.1托触不充作双手背比较。",
+                    "purpose": "解释近镜与真实同时同框如何方便比较肤色；重叠索引只计一次。",
+                    "mode": "explanation_revisit"
+                  }
+                ],
+                "visual_only_points": [
+                  {
+                    "point_id": "R61-03-D",
+                    "source_range_seconds": [
+                      84.4,
+                      85.3
+                    ],
+                    "segment_id": "S03-person",
+                    "treatment": "original_only"
+                  }
+                ],
+                "revisit_policy": "原声展示后明确标示回看，仅在69.8—73.3及76.8—84.2内按同一顺序解释；不重放人物窗配表情解说。",
+                "constraints": [
+                  "不慢放、循环、长定格或图示填秒",
+                  "不扩到低头/取盒",
+                  "不指定处理侧、情绪、具体原话或功效"
+                ],
+                "excluded_current_lines": [
+                  "U03-C3",
+                  "U03-v11-4"
+                ],
+                "script_candidate_id": "script_candidate_U03_r167_two_lines_visual_D_v1"
+              }
+            }
+          },
+          "points": [
+            {
+              "point_id": "R61-03-B",
+              "role": "supporting",
+              "question": "怎样分清泡沫双手和湿润肘臂，避免混作效果结果？",
+              "evidence_ids": [
+                "VIS-13",
+                "VIS-04",
+                "WHY-06"
+              ],
+              "buying_concern": "看清比较前皮肤的展示状态",
+              "filming_conditions": [
+                "先泡沫双手后湿润肘臂近景；保留不同部位和状态"
+              ],
+              "treatment": "explain",
+              "supports_point_id": "R61-03-C"
+            },
+            {
+              "point_id": "R61-03-C",
+              "role": "primary",
+              "question": "近镜细节及两手真实同框怎样方便比较肤色观感？",
+              "evidence_ids": [
+                "VIS-14",
+                "VIS-11",
+                "VIS-12",
+                "WHY-06",
+                "VIS-05",
+                "WHY-03"
+              ],
+              "buying_concern": "局部皮肤观感比较",
+              "filming_conditions": [
+                "肘臂细节→单手举近→另一手加入；两侧近距离同时可见；不标处理身份"
+              ],
+              "treatment": "explain"
+            },
+            {
+              "point_id": "R61-03-D",
+              "role": "auxiliary",
+              "question": "手部比较后回到人物，表情怎样伴随讲述而不被误写为效果反应？",
+              "evidence_ids": [
+                "VIS-12",
+                "WHY-06"
+              ],
+              "buying_concern": "比较后人物讲述承接",
+              "filming_conditions": [
+                "比较后回人物；保留面部和讲话姿态；不指定情绪或强调对象"
+              ],
+              "treatment": "visual_only",
+              "treatment_reason": "用户本轮明确批准：R61-03-D由原声84.4—85.3比较后人物表情伴随讲话的画面呈现，不在解释回看重复，不另配表情口播。没有充分依据证明少了对可见表情的明说会损失具体可迁移教学知识；代价是不再明说表达作用，不声称已完成全部教学解释，不推断聊天感或正在解释比较。保留原ID、role、importance及历史；仅策划取舍，待审，不继承旧审核。",
+              "visual_evidence": [
+                {
+                  "segment_id": "S03-person",
+                  "phase": "original",
+                  "source_range_seconds": [
+                    84.4,
+                    85.3
+                  ],
+                  "evidence_ids": [
+                    "VIS-12"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "raw_review": {
+    "cases": [
+      {
+        "case_id": "current",
+        "units": [
+          {
+            "unit_id": "U-02",
+            "points": [
+              {
+                "point_id": "R61-02-B",
+                "learner_takeaway": "把亮肤皂的试用落在常被在意暗沉的肘部，再近拍皮肤上的揉擦，让关注部位与实际使用对应。",
+                "connection": "purchase_connected",
+                "basis": "within_unit",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "quotes": [
+                  {
+                    "line_id": "U02-v12-1",
+                    "channel": "narration",
+                    "text": "Dia fokus menggosok sabun pencerah pada siku, bahagian yang orang sering risau nampak kusam."
+                  },
+                  {
+                    "line_id": "U02-v10-2",
+                    "channel": "narration",
+                    "text": "Dia rakam dari dekat supaya kita nampak jelas gosokan pada kulit."
+                  }
+                ],
+                "reason": "前句明确肘部暗沉关注，后句解释近拍要看清实际揉擦；计划保留操作手、接触点与肘臂关系。不是仅靠产品名称补出联系，也未宣称提亮已实现。"
+              },
+              {
+                "point_id": "R61-02-C",
+                "learner_takeaway": "在用皂过程中保留靠近鼻部的动作，可以引出对使用时气味的联想。",
+                "connection": "purchase_connected",
+                "basis": "within_unit",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "quotes": [
+                  {
+                    "line_id": "U02-v10-4",
+                    "channel": "narration",
+                    "text": "Gerak ini mengajak kita membayangkan bau sabun semasa digunakan."
+                  }
+                ],
+                "reason": "口播明确联系用皂时的气味体验，计划短标与近鼻后回揉画面定位“Gerak ini”。这是体验表达的解释，不是确认吸气、香味好坏或留香。采样只支持姿态及阶段，不证明连续动作已验收。"
+              }
+            ]
+          },
+          {
+            "unit_id": "U-03",
+            "points": [
+              {
+                "point_id": "R61-03-B",
+                "learner_takeaway": "在比较肤色前，先让观众跟上带泡沫双手到湿润肘臂的使用状态顺序。",
+                "connection": "supporting_context",
+                "basis": "within_unit",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "quotes": [
+                  {
+                    "line_id": "U03-C1",
+                    "channel": "narration",
+                    "text": "Dia menunjukkan tangan berbuih, kemudian siku dan lengan yang basah dari dekat, supaya penonton dapat mengikuti proses penggunaan sebelum perbandingan tona kulit."
+                  }
+                ],
+                "reason": "明确区分对象、状态和比较前的阶段，为主点提供上下文；未把湿润称为洗净，也未说成同部位前后效果。教学目标不只剩安全限制，还包括比较前的信息铺垫。"
+              },
+              {
+                "point_id": "R61-03-C",
+                "learner_takeaway": "把两个手背靠近镜头并同时放在同一画面，让观众比较肤色观感。",
+                "connection": "purchase_connected",
+                "basis": "in_copy",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "quotes": [
+                  {
+                    "line_id": "U03-C2",
+                    "channel": "narration",
+                    "text": "Kedua-dua belakang tangan kemudian ditunjukkan dekat dengan kamera, serentak dalam gambar yang sama, supaya tona kulit mudah dibandingkan."
+                  }
+                ],
+                "reason": "明确讲出近镜、同时同框以及具体比较对象是肤色，已连接本单元商品关注。计划含真实并置样本，82.1秒托触不充作同框比较；没有指定处理侧或认证效果。"
+              },
+              {
+                "point_id": "R61-03-D",
+                "learner_takeaway": "手部比较之后回到人物中景，由面部及讲话姿态承接展示。",
+                "connection": "auxiliary_transition",
+                "basis": "within_unit",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "quotes": [],
+                "visual_check": {
+                  "evidence_refs": [
+                    {
+                      "segment_id": "S03-person",
+                      "phase": "original",
+                      "evidence_id": "VIS-12",
+                      "source_range_seconds": [
+                        84.4,
+                        85.3
+                      ]
+                    }
+                  ],
+                  "observed_relation": "指定人物窗的采样可见人物面向镜头、头部倾斜及嘴部姿态变化；计划将它接在双手比较之后，使展示对象从手部回到讲述者。",
+                  "sufficiency": "sufficient",
+                  "omission_loss": "其余两句解释状态铺垫与肤色比较，原声展示计划保留比较后人物窗。不给该点另加语言，仍保留从手部回人物的承接，没有损失必须明说的情绪或功效关系；具体原话仍未知。"
+                },
+                "reason": "本点只承担比较后回人物的辅助衔接，画面顺序与人物姿态能够承担，不必推定惊喜、满意或强调比较。此判断不等于连续切接或原声句界已经核验。"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "copy_units": [
+      {
+        "unit_id": "U-02",
+        "verdict": "pass",
+        "findings": [],
+        "group_checks": {
+          "scope": "planned_group_teaching_only",
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "以肘部局部试用对应暗沉关注，用近拍展示实际接触；再以使用中的近鼻动作补充气味体验表达。",
+            "reason": "两项主点均由实际口播与计划画面共同建立关注→拍法→作用。肘部参照与接触关系、近鼻后回揉及鼻部与腕臂的关联均在计划中保留；没有把前臂上下文全称为肘擦，也没有把体验姿态当气味评价。"
+          },
+          "L2": {
+            "verdict": "pass",
+            "viewer_chain": "先展示43—65.43秒使用源段；随后回看肘部参照及使用片段，解释部位选择与近拍；再回看近鼻至回揉片段，解释气味联想。",
+            "stage_cues": [
+              "原声展示计划显示“Video asal”。",
+              "前两句解释计划显示“Ulang lihat · Siku”。",
+              "第三句解释原位换为“Ulang lihat · Dekat hidung”。"
+            ],
+            "reason": "阶段短标给出观众可见的原视频与回看区分，并定位解释对象，不只是后台登记回看理由。结论限拟执行关系；源帧不是实际排版、听审或正常速度连续观看，既有秒数不作实际声长容量通过依据。"
+          }
+        },
+        "narration_checks": [
+          {
+            "line_id": "U02-v12-1",
+            "necessity": "necessary",
+            "omission_loss": "删除后仍能从画面及“Siku”短标识别肘部，并从第二句理解近拍揉擦；但失去为何选肘部、它与暗沉关注如何对应的解释。其余句与短标没有承担这一关系。",
+            "naturalness": "natural",
+            "reason": "“bahagian yang orang sering risau nampak kusam”提供独立的选部位理由，不只是动作复述。表达可理解为具体解释，没有明确妨碍理解的直译结构；不代表母语审校。"
+          },
+          {
+            "line_id": "U02-v10-2",
+            "necessity": "necessary",
+            "omission_loss": "删除后仍保留肘部与暗沉关注，也仍能看到近处接触；但失去把近拍明确提炼为拍法、并引导查看皮肤揉擦的教学说明。第一句与“Siku”只解释部位，没有承担取景作用。",
+            "naturalness": "natural",
+            "reason": "“rakam dari dekat supaya”直接连接取景选择与查看任务；结合前句对象明确，不必重复暗沉理由。句子简明，没有实质自然度障碍。"
+          },
+          {
+            "line_id": "U02-v10-4",
+            "necessity": "necessary",
+            "omission_loss": "删除后仍保留近鼻动作、回揉画面及“Dekat hidung”定位，但只知道动作发生，失去它如何表达用皂时气味体验的解释。其他两句只承担肘部试用与近拍。",
+            "naturalness": "natural",
+            "reason": "“membayangkan bau sabun semasa digunakan”新增体验表达关系；“Gerak ini”有同步画面及短标指向。措辞稍具解释性但意思直接，不因此判生硬，也未承诺好闻。"
+          }
+        ]
+      },
+      {
+        "unit_id": "U-03",
+        "verdict": "insufficient_evidence",
+        "findings": [
+          {
+            "severity": "unknown",
+            "quote": "Dia menunjukkan tangan berbuih, kemudian siku dan lengan yang basah dari dekat, supaya penonton dapat mengikuti proses penggunaan sebelum perbandingan tona kulit.",
+            "reason": "本句作为回看解释接在人物窗之后，但计划只写“明确标示回看”，未给出实际可见或可听的提示内容及出现位置；本句自身也没有回看提示。当前无法核清观众如何辨认阶段重启。"
+          }
+        ],
+        "group_checks": {
+          "scope": "planned_group_teaching_only",
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "比较肤色前先交代不同部位的使用状态，再用近镜、双手背真实同时同框提供比较条件，最后由人物画面承接。",
+            "reason": "C1承担状态与顺序上下文，C2明确比较肤色的拍法和用途；人物辅助点由原声展示计划中的人物窗承担。没有把湿润肘臂与双手误作同部位前后，也没有赋予人物表情效果含义。"
+          },
+          "L2": {
+            "verdict": "insufficient_evidence",
+            "viewer_chain": "计划先按非连续源窗展示泡沫双手、湿润肘臂、手背近镜同框及人物姿态；再回到使用状态片段配C1，随后回到近镜同框片段配C2。",
+            "stage_cues": [
+              "计划登记原声展示后“明确标示回看”，但没有具体提示文本、声音或可辨识的视觉形式。",
+              "C1与C2的“kemudian”说明片段内部先后，不独立说明正在回看。"
+            ],
+            "reason": "讲解内容能对应刚展示的状态和比较画面，但后台回看策略不能替代观众实际收到的阶段提示，故回看关系尚不能核清。未用词数或源窗长度反推可承载；实际声长、连续动作及成片承接仍需另验。"
+          }
+        },
+        "narration_checks": [
+          {
+            "line_id": "U03-C1",
+            "necessity": "necessary",
+            "omission_loss": "删除后仍能看到泡沫双手转湿润肘臂，也能从C2知道同框用于比较肤色；但失去把这些不同对象与状态定位为比较前使用过程的解释。C2不承担这种阶段关系，画面顺序本身也未明说其教学用途。",
+            "naturalness": "natural",
+            "reason": "“supaya penonton dapat mengikuti proses penggunaan sebelum perbandingan tona kulit”给动作列举提供了独立上下文作用。句子较展开但对象和先后清楚，没有明确妨碍理解的表达问题，不因长度判退。"
+          },
+          {
+            "line_id": "U03-C2",
+            "necessity": "necessary",
+            "omission_loss": "删除后仍保留手背靠近和并置画面，C1也会提及肤色比较；但失去近镜、同时同框这两项具体拍法如何服务比较的明确提炼。C1没有解释这些条件的作用，现有独立短标也未承担。",
+            "naturalness": "natural",
+            "reason": "“dekat dengan kamera, serentak dalam gambar yang sama”保留必要拍摄条件，“supaya tona kulit mudah dibandingkan”明确查看目标。说明直接可理解，不是单纯分镜报幕；判断限文本，不声称母语或实际听审通过。"
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostic": {
+    "code": "response_receipt_invalid",
+    "stage": "response_validation",
+    "requestsAttempted": 1,
+    "retryable": false,
+    "operationId": "3b3e5bdc-f06d-4994-aad1-1fd85a84d778"
+  }
+}

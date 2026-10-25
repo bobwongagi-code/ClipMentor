@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import type { SourceVideoRequest, SourceVideoResult, SourceVideoReceipt, SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
+import { validateSourceVideoTask } from '../../shared/clipmentor-source-video';
 import { buildCopyTeachingReviewRequest } from '../../src/clipmentor/production-gate';
 import { isSafeUploadName, resolveUploadFile } from '../media-dir';
 import { sha256File } from '../../shared/node-content-hash';
@@ -12,7 +13,7 @@ import { atomicWriteFile } from '../plugins/project-store-durable';
 import { getKey } from '../keystore';
 import { ffprobeBin } from '../media-binaries';
 import { INLINE_REQUEST_MAX_BYTES, PREVIEW_REVIEW_MODEL, PREVIEW_REVIEW_TIMEOUT_MS, PREVIEW_REVIEW_MAX_OUTPUT_TOKENS } from './preview-review';
-import { inspectSourceObservation, validateSourceObservation, SourceObservationValidationError } from './source-video-validation';
+import { inspectSourceObservation, SourceObservationValidationError } from './source-video-validation';
 export { inspectSourceObservation, validateSourceObservation } from './source-video-validation';
 import { postSourceVideoTransport, safeSourceTransportDiagnostic, SourceVideoTransportError } from './source-video-transport';
 const VERSION = 'source-continuous-observation-v1';
@@ -20,7 +21,7 @@ const hash = (v: string | Uint8Array) => createHash('sha256').update(v).digest('
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 export function sourceVideoInput(request: SourceVideoRequest) {
-  if (!object(request) || Object.keys(request).some(k => !['operationId','maxRequests','projectId','authorRunId','source','subject','packet'].includes(k))
+  if (!object(request) || Object.keys(request).some(k => !['operationId','maxRequests','projectId','authorRunId','source','subject','packet','observationTask'].includes(k))
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(request.operationId)
     || request.maxRequests !== 1 || !text(request.projectId) || !text(request.authorRunId) || !object(request.source)
     || !/^\/media\/uploads\/[^/?#]+\.mp4$/.test(request.source.src) || !/^[a-f0-9]{64}$/.test(request.source.hash)
@@ -30,6 +31,7 @@ export function sourceVideoInput(request: SourceVideoRequest) {
   const packet = buildCopyTeachingReviewRequest([{case_id:'source',packet:request.packet}]).input.cases[0].packet;
   if (!packet.units.length || request.subject.units.length !== packet.units.length
     || new Set(request.subject.units.map(u => u.unit_id)).size !== packet.units.length) throw new Error('Invalid observation scope');
+  if(request.observationTask!==undefined) validateSourceVideoTask(request.observationTask,request.source.duration,packet.units.map(u=>u.unit_id));
   const units = packet.units.map(unit => {
     const p = unit.picture_plan;
     if (!p?.execution_plan || !request.subject.units.some(u => u.unit_id === unit.unit_id && u.candidate_id === p.execution_plan!.script_candidate_id)) throw new Error('Current plan required');
@@ -40,12 +42,66 @@ export function sourceVideoInput(request: SourceVideoRequest) {
       lines:unit.lines, picture_plan:p.execution_plan };
   });
   // Do not prime observations with historical evidence, author verdicts or prior model opinions.
-  return { duration_seconds:request.source.duration, units };
+  return { duration_seconds:request.source.duration, units,
+    ...(request.observationTask===undefined?{}:{observation_task:request.observationTask}) };
+}
+
+/** Context evidence is checked against its own frozen observation range, never the production windows. */
+export function inspectSourceVideoObservation(value: unknown, input: ReturnType<typeof sourceVideoInput>) {
+  const base=inspectSourceObservation(value,input),task=input.observation_task;
+  if(!task) return base;
+  const issues=[...base.issues];
+  const error=(code:string)=>issues.push({code,severity:'error'});
+  const extra=object(value)?value.task_observation:null;
+  if(!object(extra)||!Array.isArray(extra.boundaries)||!Array.isArray(extra.contexts)) {
+    error('missing_task_observation');return {...base,status:'invalid' as const,issues};
+  }
+  const bounded=(v:any,c:typeof task.contexts[number])=>object(v)&&Number.isFinite(v.start_seconds)&&Number.isFinite(v.end_seconds)
+    &&v.start_seconds>=0&&v.end_seconds>v.start_seconds
+    &&v.start_seconds>=c.source_range_seconds[0]-0.010000001&&v.end_seconds<=c.source_range_seconds[1]+0.010000001;
+  const speech=(v:any)=>object(v)&&['heard','unclear','silence'].includes(v.status)
+    &&(v.status==='heard'?text(v.quote):v.quote===null);
+  const expected=task.contexts.flatMap(c=>c.boundary_seconds.map(t=>({c,t})));
+  const seen=new Set<number>();
+  if(extra.boundaries.length!==expected.length) error('incomplete_task_boundaries');
+  for(const b of extra.boundaries) {
+    const index=object(b)?expected.findIndex(x=>x.c.context_id===b.context_id&&typeof b.boundary_seconds==='number'
+      &&Math.abs(x.t-b.boundary_seconds)<=0.01):-1;
+    if(index<0||seen.has(index)){error('invalid_task_boundary_identity');continue;}
+    seen.add(index);const {c,t}=expected[index];
+    if(!bounded(b,c)||b.start_seconds>t||b.end_seconds<t
+      ||!['sentence_boundary','inside_speech','uncertain'].includes(b.status)
+      ||!speech(b.before)||!speech(b.after)||!text(b.reason)||!text(b.time_uncertainty)
+      ||(b.status!=='uncertain'&&b.before.status!=='heard'&&b.after.status!=='heard')) error('invalid_task_boundary_evidence');
+  }
+  const contexts=task.contexts.filter(c=>c.goals.includes('material_continuity'));
+  const seenContexts=new Set<string>();
+  if(extra.contexts.length!==contexts.length) error('incomplete_task_contexts');
+  for(const v of extra.contexts) {
+    const c=object(v)?contexts.find(x=>x.context_id===v.context_id):undefined;
+    if(!c||seenContexts.has(c.context_id)){error('invalid_task_context_identity');continue;}
+    seenContexts.add(c.context_id);
+    if(!Array.isArray(v.sequence)||v.sequence.length>64||!v.sequence.every((e:any)=>bounded(e,c)&&text(e.visible)&&text(e.audible))
+      ||!Array.isArray(v.material_ranges)||v.material_ranges.length>64||!v.material_ranges.every((e:any)=>bounded(e,c)
+        &&['use_process','closeup','same_frame_comparison','person_handoff','other','uncertain'].includes(e.role)&&text(e.basis)
+        &&Array.isArray(e.limitations)&&e.limitations.every(text))
+      ||!Array.isArray(v.limitations)||!v.limitations.every(text)
+      ||((!v.sequence.length||!v.material_ranges.length)&&!v.limitations.length)) error('invalid_task_context_evidence');
+  }
+  return {...base,status:issues.some(i=>i.severity==='error')?'invalid' as const:'valid' as const,issues};
+}
+export function validateSourceVideoObservation(value: unknown, input: ReturnType<typeof sourceVideoInput>) {
+  const validation=inspectSourceVideoObservation(value,input);
+  if(validation.status!=='valid') throw new SourceObservationValidationError(validation);
+  return value as SourceVideoResult['raw_observation'];
 }
 export function buildSourceVideoRequest(video: Uint8Array, request: SourceVideoRequest) {
   const input = sourceVideoInput(request);
   const instruction = `你是剪辑前源片连续视听观察者。完整视频带同步原声，时间为原片绝对秒。重点正常顺序观察以下候选窗口及其前后，核对连续动作起落、出点是否切断动作或进入新内容、现有讲解与计划画面能否对应。计划是待验证假设，不是结论。先写真实看到/听到的连续过程，再判断；没有看清/听清用未知，不猜处理侧、冲洗完成、香味优劣或功效。不改稿、不建议新文案。不能只凭静帧或总秒数判声画成立，不能声称已经看过拟制作的排版或听过其旁白。你收到的是源片而非成片：实际原声→女声承接、字幕同步、停格可读性、完整片验收全部未验证。可指出计划容量的缺口，但不把源片窗时长当成最终可用时长。\n只返回JSON：{\"windows\":[{\"window_id\":\"输入ID\",\"observed_sequence\":\"具体连续动作\",\"endpoint\":\"候选出点处实际状态及限制\",\"evidence\":[{\"start_seconds\":0,\"end_seconds\":1,\"visible\":\"所见\",\"audible\":\"所听或听不清\"}]}],\"lines\":[{\"unit_id\":\"输入单元\",\"line_id\":\"输入行ID\",\"status\":\"supported或not_supported或insufficient_evidence\",\"reason\":\"源片能否支持这句和拟用画面的具体依据与限制\",\"window_ids\":[\"引用窗口\"]}],\"limitations\":[\"未核实内容\"]}。每个窗口及每句各一次，证据时间必须落在该窗口内；需要窗口外证据时写缺口。用中文说明。\n${JSON.stringify(input)}`;
-  const body = {contents:[{role:'user',parts:[{inlineData:{mimeType:'video/mp4',data:''},videoMetadata:{fps:5}},{text:instruction}]}],
+  const taskInstruction=input.observation_task ? `\n本次另有observation_task：这些是仅供观察的上下文，不是新增或批准的制作范围。原windows继续只写其窗口内证据。另在同一JSON增加task_observation，按照观察上下文独立返回：
+{"boundaries":[{"context_id":"输入ID","boundary_seconds":0,"status":"sentence_boundary或inside_speech或uncertain","before":{"status":"heard或unclear或silence","quote":"可听原话或null"},"after":{"status":"heard或unclear或silence","quote":"可听原话或null"},"start_seconds":0,"end_seconds":1,"reason":"边界前后听证及是否跨边界延续","time_uncertainty":"时间定位的不确定性"}],"contexts":[{"context_id":"输入ID","sequence":[{"start_seconds":0,"end_seconds":1,"visible":"连续动作","audible":"原话片段或听不清"}],"material_ranges":[{"start_seconds":0,"end_seconds":1,"role":"use_process或closeup或same_frame_comparison或person_handoff或other或uncertain","basis":"可见关系，不是计划复述","limitations":["限制"]}],"limitations":["缺口"]}]}。
+每个boundary_seconds各返回一次。只对goals包含material_continuity的context各返回一个contexts记录。各项证据必须落在所属观察上下文范围；句界证据须覆盖指定时刻的前后。heard必须附真正听辨的原语言短片段，不翻译冒充原话；unclear/silence的quote用null。无法根据原话判断完整句时选uncertain，不能凭静默、嘴形或动作结束断言句子结束；没有任何可听原话时不得判sentence_boundary/inside_speech。time_uncertainty如实说明，不编造逐帧精度。若上下文仍不够或听不清，记录未知及缺口，不延展或猜句界。material_ranges仅是证据支持的候选范围，不是自动可用/可剪；区分单手、托触和真实同时双手背同框，区分过程、人物与拿盒。允许sequence/material_ranges为空，但须说明证据不足。不要声称已经听过拟配旁白、验证成片承接或批准文稿。\n` : '';
+  const body = {contents:[{role:'user',parts:[{inlineData:{mimeType:'video/mp4',data:''},videoMetadata:{fps:5}},{text:instruction+taskInstruction}]}],
     generationConfig:{maxOutputTokens:PREVIEW_REVIEW_MAX_OUTPUT_TOKENS,temperature:0,responseMimeType:'application/json'}};
   if (!video.byteLength || Buffer.byteLength(JSON.stringify(body)) + 4 * Math.ceil(video.byteLength/3) > INLINE_REQUEST_MAX_BYTES) throw new Error('Source exceeds inline bound; no implicit encoding or split');
   body.contents[0].parts[0].inlineData!.data = Buffer.from(video).toString('base64');
@@ -104,12 +160,13 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     if (!Array.isArray(candidates) || candidates.length !== 1 || candidates[0]?.finishReason !== 'STOP') throw new Error('Incomplete model response');
     const raw = candidates[0]?.content?.parts?.filter((p:any) => !p.thought && typeof p.text === 'string').map((p:any)=>p.text).join('') ?? '';
     const parsed = JSON.parse(raw.replace(/^\s*```(?:json)?\s*/,'').replace(/\s*```\s*$/,''));
-    const observation = validateSourceObservation(parsed,input);
+    const observation = validateSourceVideoObservation(parsed,input);
     if (await deps.hash(file) !== request.source.hash) throw new Error('Source changed');
     const result:SourceVideoResult = {operationId:request.operationId,requestsAttempted:1,subject:request.subject,source_hash:request.source.hash,
       requested_model:PREVIEW_REVIEW_MODEL,returned_model:typeof response.body.modelVersion==='string'?response.body.modelVersion:null,method_version:VERSION,
       request_sha256:hash(prepared.body),input_sha256:prepared.input_sha256,video_bytes:video.length,
-      validation:inspectSourceObservation(parsed,input),
+      validation:inspectSourceVideoObservation(parsed,input),
+      ...(request.observationTask===undefined?{}:{observation_task:request.observationTask}),
       input_media:{full_original_video:true,audio_stream_present:true,video_fps_requested:5},raw_observation:observation,
       finish_reasons:[candidates[0].finishReason],usage:response.body.usageMetadata??null,
       ...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),
@@ -129,6 +186,7 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
       ...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),
       receipt_persisted:receiptPersisted,
       validation, error:!receiptPersisted || phase==='save_result'?'source_receipt_persist_failed':validation ? 'source_observation_validation_failed' : 'source_observation_failed_or_unknown',
+      ...(request.observationTask===undefined?{}:{observation_task:request.observationTask}),
       raw_response_available:!!safeResponse,receipt_reference:request.operationId,actual_handoff_verified:false,complete_film_accepted:false });
   }
 }
@@ -187,6 +245,7 @@ export async function readSourceVideoReceipt(operationId: string, projectId: str
     requestsAttempted:original.requests_attempted,requestsSent:0,receipt_persisted:true,phase:original.phase,upstream_http_status:original.http_status??transportDiagnostic?.http_status,
     error:original.error,validation:original.validation,raw_observation:observed,
     ...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),
+    ...(original.input?.observation_task===undefined?{}:{observation_task:original.input.observation_task}),
     ...(original.status === 'completed' ? {result:publicTransportRecord(original.result,operationId)} : {}),raw_response_available:!!original.raw_response,
     receipt_reference:operationId,actual_handoff_verified:false,complete_film_accepted:false };
 }
@@ -210,17 +269,19 @@ export async function recoverSourceVideoReceipt(request: SourceVideoRequest, res
   if (hash(video) !== request.source.hash) throw new Error('Recovery source changed');
   const prepared = buildSourceVideoRequest(video, request);
   if (hash(prepared.body) !== reservedArchive.request_sha256) throw new Error('Frozen request hash mismatch');
-  const observation = validateSourceObservation(publicObservation(failed.raw_response), input);
-  const validation = inspectSourceObservation(observation, input);
+  const observation = validateSourceVideoObservation(publicObservation(failed.raw_response), input);
+  const validation = inspectSourceVideoObservation(observation, input);
   const raw = failed.raw_response;
   const result: SourceVideoResult = {operationId:request.operationId,requestsAttempted:1,subject:request.subject,source_hash:request.source.hash,
     requested_model:PREVIEW_REVIEW_MODEL,returned_model:typeof raw.modelVersion === 'string' ? raw.modelVersion : null,method_version:VERSION,
     request_sha256:reservedArchive.request_sha256,input_sha256:prepared.input_sha256,video_bytes:video.length,
     input_media:{full_original_video:true,audio_stream_present:true,video_fps_requested:5},validation,raw_observation:observation,
+    ...(request.observationTask===undefined?{}:{observation_task:request.observationTask}),
     finish_reasons:['STOP'],usage:raw.usageMetadata ?? null,scope:'source_windows_and_planned_capacity_only',actual_handoff_verified:false,complete_film_accepted:false};
   const receipt: SourceVideoReceipt = {operationId:request.operationId,projectId:request.projectId,status:'failed',subject:request.subject,
     source_hash:request.source.hash,requestsAttempted:1,requestsSent:0,phase:failed.phase,upstream_http_status:200,
     validation,raw_observation:observation,result,raw_response_available:true,receipt_reference:request.operationId,
+    ...(request.observationTask===undefined?{}:{observation_task:request.observationTask}),
     revalidation:{version:validation.version,parent_status:'failed',original_record_sha256:hash(originalText),requestsSent:0},
     actual_handoff_verified:false,complete_film_accepted:false};
   const derivedPath = join(deps.directory, `${request.operationId}.revalidated.json`);

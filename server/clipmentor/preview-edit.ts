@@ -4,7 +4,7 @@ import {isSafeUploadName} from '../media-dir';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {sha256File} from '../../shared/node-content-hash';
-import {buildPreviewRevision,previewDocDigest,PREVIEW_EDIT_SCOPE,type PreviewEditPlan} from '../../src/clipmentor/preview-edit';
+import {buildPreviewRevision,previewDocDigest,PREVIEW_EDIT_SCOPE,type PreviewEditPlan,type NativeComparisonEdit} from '../../src/clipmentor/preview-edit';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
 
 /** Host installs this bounded authorization from the user's explicit local-preview instruction.
@@ -30,7 +30,13 @@ interface SniffMergePermit extends PreviewEditIdentity {
   captionFrames:number;
   captionReferenceFrame:number;
 }
-export type PreviewEditPermit=OverlayPermit|SniffMergePermit;
+interface NativeComparisonPermit extends PreviewEditIdentity {
+  kind:'native_comparison';
+  native:Omit<NativeComparisonEdit,'annotation'>&{stillSha256:string;
+    boxes:Array<{x:number;y:number;width:number;height:number}>;
+    arrows:Array<{x1:number;y1:number;x2:number;y2:number}>};
+}
+export type PreviewEditPermit=OverlayPermit|SniffMergePermit|NativeComparisonPermit;
 export interface PreviewEditDeps {directory:string; resolve:(name:string)=>string|null; output?:(name:string)=>string|null;
   execute:(args:string[])=>Promise<unknown>;}
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -52,6 +58,12 @@ function validatePermit(p:PreviewEditPermit) {
   if(!uuid.test(p.operationId)||!Number.isFinite(p.expiresAt)||p.expiresAt<=Date.now()
     ||!Number.isInteger(n)||n<=0||n>18000||p.baseline.fps!==30||p.source.fps!==30
     ||p.baseline.width!==720||p.baseline.height!==1280||!p.instruction.trim()) throw new Error('Invalid or expired bounded preview permit');
+  if(p.kind==='native_comparison') {
+    const n=p.native;
+    if(!n||!Array.isArray(n.boxes)||n.boxes.length!==2||!Array.isArray(n.arrows)||n.arrows.length!==2
+      ||!Array.isArray(n.removeIds)||n.removeIds.length>10||!/^[a-f0-9]{64}$/.test(n.stillSha256)) throw new Error('Invalid native comparison permit');
+    return;
+  }
   if(p.kind==='sniff_merge') {
     const [a,b]=p.removeFrames,[x,y]=p.removeAudioSeconds;
     if(![a,b,p.sourceStartFrame,p.pictureFrames,p.captionFrames,p.captionReferenceFrame].every(Number.isInteger)
@@ -82,6 +94,10 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
   const baseline=upload(p.baseline.src,deps),source=upload(p.source.src,deps);
   if(await sha256File(baseline)!==p.baseline.sha256||await sha256File(source)!==p.source.sha256) throw new Error('Source hash changed');
   const doc=body.doc as unknown as ProjectDoc,hash=await previewDocDigest(doc);
+  if(p.kind==='native_comparison') {
+    const t=doc.timelines.find(t=>t.id===p.native.timelineId),still=t?.items.find(i=>i.id===p.native.stillId),video=t?.items.find(i=>i.id===p.native.videoId);
+    if(!still||!video||video.src!==p.source.src||!still.src||await sha256File(upload(still.src,deps))!==p.native.stillSha256) throw new Error('Still material changed or native source mismatch');
+  }
   const stored=await readJson(join(dir,'prepared.json')).catch(()=>null);
   const action=String(body.action);
   const isApplied=stored?.preparedProjectSha256===hash;
@@ -89,25 +105,26 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
   const receipt={allowed:true,scope:PREVIEW_EDIT_SCOPE,full_film_accepted:false,quality_status:'review_required',
     operationId:p.operationId,projectId:p.projectId,baseProjectSha256:p.baseProjectSha256};
   if(action==='read'||action==='check_read') return {...receipt,applied:isApplied,instruction:p.instruction,
-    approved_changes:p.kind==='sniff_merge'?{kind:p.kind,remove_frames:p.removeFrames,remove_audio_seconds:p.removeAudioSeconds,source_start_frame:p.sourceStartFrame,picture_frames:p.pictureFrames,caption_frames:p.captionFrames}:{relation:p.relation,tail:p.tail,label:p.label},render_reserved:!!await stat(join(dir,'render-reserved.json')).catch(()=>null)};
+    approved_changes:p.kind==='native_comparison'?{kind:p.kind,native:p.native}:p.kind==='sniff_merge'?{kind:p.kind,remove_frames:p.removeFrames,remove_audio_seconds:p.removeAudioSeconds,source_start_frame:p.sourceStartFrame,picture_frames:p.pictureFrames,caption_frames:p.captionFrames}:{relation:p.relation,tail:p.tail,label:p.label},render_reserved:!!await stat(join(dir,'render-reserved.json')).catch(()=>null)};
   if(action==='check_apply') {
     if(isApplied) throw new Error('Already applied; do not repeat');
-    if(p.kind!=='sniff_merge'&&body.tailFrame!==undefined&&!p.tail.allowedSourceFrames.includes(Number(body.tailFrame))) throw new Error('Tail frame outside approval');
+    if(p.kind!=='sniff_merge'&&p.kind!=='native_comparison'&&body.tailFrame!==undefined&&!p.tail.allowedSourceFrames.includes(Number(body.tailFrame))) throw new Error('Tail frame outside approval');
     return receipt;
   }
   if(action==='check_render'||action==='reserve_render') {
     if(!isApplied) throw new Error('Exact prepared native project required');
-    for(const material of [...stored.plan.patches.map((patch:{asset:MediaAsset})=>patch.asset),...(stored.plan.audio?[stored.plan.audio]:[])]) if(await sha256File(upload(material.src,deps))!==material.sourceContentHash) throw new Error('Prepared material changed');
+    for(const material of [...stored.plan.patches.map((patch:{asset:MediaAsset})=>patch.asset),...(stored.plan.audio?[stored.plan.audio]:[]),...(stored.plan.native?[stored.plan.native.annotation]:[])]) if(await sha256File(upload(material.src,deps))!==material.sourceContentHash) throw new Error('Prepared material changed');
     if(action==='reserve_render') await writeFile(join(dir,'render-reserved.json'),JSON.stringify({at:Date.now(),projectSha256:hash}),{flag:'wx',mode:0o600});
     else if(await stat(join(dir,'render-reserved.json')).catch(()=>null)) throw new Error('Preview export attempt already consumed');
     return receipt;
   }
-  if(action!=='prepare'||isApplied||(p.kind!=='sniff_merge'&&(!Number.isInteger(body.tailFrame)||!p.tail.allowedSourceFrames.includes(Number(body.tailFrame))))) throw new Error('Authorized tail selection required');
+  if(action!=='prepare'||isApplied||(p.kind!=='sniff_merge'&&p.kind!=='native_comparison'&&(!Number.isInteger(body.tailFrame)||!p.tail.allowedSourceFrames.includes(Number(body.tailFrame))))) throw new Error('Authorized tail selection required');
   if(stored) {
     if(stored.tailFrame!==body.tailFrame) throw new Error('Do not replace prepared input');
     return {...receipt,...stored};
   }
   if(p.kind==='sniff_merge') return {...receipt,...await prepareSniffMerge(p,doc,deps,dir,baseline,source)};
+  if(p.kind==='native_comparison') return {...receipt,...await prepareNativeComparison(p,doc,deps,dir)};
   const prefix=`preview-edit-${p.operationId}`;
   const names=[`${prefix}-relation.png`,`${prefix}-tail.png`,`${prefix}-label.svg`];
   const output=names.map(n=>{const f=(deps.output??deps.resolve)(n);if(!f)throw new Error('Output path unavailable');return f;});
@@ -128,6 +145,35 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
   await mkdir(dir,{recursive:true});
   await writeFile(join(dir,'prepared.json'),JSON.stringify(prepared),{flag:'wx',mode:0o600});
   return {...receipt,...prepared};
+}
+
+async function prepareNativeComparison(p:NativeComparisonPermit,doc:ProjectDoc,deps:PreviewEditDeps,dir:string) {
+  const t=doc.timelines.find(t=>t.id===p.native.timelineId);
+  if(!t) throw new Error('Invalid native comparison timeline');
+  const inside=(x:number,y:number)=>Number.isFinite(x)&&Number.isFinite(y)&&x>=0&&y>=0&&x<=t.width&&y<=t.height;
+  if(p.native.boxes.some(b=>!inside(b.x,b.y)||!inside(b.x+b.width,b.y+b.height)||b.width<=0||b.height<=0)
+    ||p.native.arrows.some(a=>!inside(a.x1,a.y1)||!inside(a.x2,a.y2))) throw new Error('Invalid native annotation bounds');
+  const name=`preview-edit-${p.operationId}-comparison.svg`,path=(deps.output??deps.resolve)(name);
+  if(!path) throw new Error('Output unavailable');
+  const {stillSha256:_hash,boxes,arrows,...edit}=p.native;
+  const annotation:MediaAsset={id:`preview-${p.operationId}-comparison`,name:'比较区域框与箭头',kind:'image',src:`/media/uploads/${name}`,width:t.width,height:t.height,
+    durationInFrames:p.native.range[1]-p.native.range[0]-p.native.videoFrames};
+  const plan:PreviewEditPlan={operationId:p.operationId,projectId:p.projectId,baseline:asset('unused',p.baseline.src,'锁定前版', 'video',p,p.baseline.sha256),
+    fps:p.baseline.fps,totalFrames:p.baseline.totalFrames,patches:[],native:{...edit,annotation}};
+  // Validate the entire native delta before creating any output.
+  buildPreviewRevision(doc,plan);
+  const shapes=boxes.map(b=>`<rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" rx="12"/>`).join('');
+  const lines=arrows.map(a=>{
+    const angle=Math.atan2(a.y2-a.y1,a.x2-a.x1),len=20;
+    const x=a.x2-len*Math.cos(angle-.5),y=a.y2-len*Math.sin(angle-.5),xx=a.x2-len*Math.cos(angle+.5),yy=a.y2-len*Math.sin(angle+.5);
+    return `<path d="M ${a.x1} ${a.y1} L ${a.x2} ${a.y2} M ${x} ${y} L ${a.x2} ${a.y2} L ${xx} ${yy}"/>`;
+  }).join('');
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${t.width}" height="${t.height}" viewBox="0 0 ${t.width} ${t.height}"><g fill="none" stroke-linejoin="round" stroke-linecap="round"><g stroke="#111111" stroke-width="10">${shapes}${lines}</g><g stroke="#FFD83D" stroke-width="5">${shapes}${lines}</g></g></svg>`;
+  await mkdir(dirname(path),{recursive:true});await writeFile(path,svg,{flag:'wx',mode:0o600});
+  annotation.sourceContentHash=await sha256File(path);
+  const prepared={plan,preparedProjectSha256:await previewDocDigest(buildPreviewRevision(doc,plan))};
+  await writeFile(join(dir,'prepared.json'),JSON.stringify(prepared),{flag:'wx',mode:0o600});
+  return prepared;
 }
 
 /** Reuses exact mixed audio and subtitle pixels. Only the host-approved sentence is removed.

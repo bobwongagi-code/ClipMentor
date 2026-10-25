@@ -1,5 +1,6 @@
 import type { AgentContext } from '../agent/context';
 import type { CopyReviewRequest, CopyReviewResult } from '../../shared/clipmentor-copy-review';
+import { isCopyReviewFailure } from '../../shared/clipmentor-copy-review';
 import { bindCopyProductionReview, checkCopyProduction, copyReviewSubject, copyTeachingPacketFromDoc, isCopyProductionReview } from './production-gate';
 
 /** Always an isolated current-subject review, even when its author worked collaboratively.
@@ -26,9 +27,17 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
     ctx.onToolProgress?.('独立审核当前文案与画面计划；未进行配音或剪辑');
     const timeout = AbortSignal.timeout(660_000), cancellation = ctx.getAgentRunSignal?.();
     requestSent = true;
-    const response = await fetch('/api/clipmentor/review-copy', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const response = await (ctx.hostFetch ?? fetch)('/api/clipmentor/review-copy', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input), signal: cancellation ? AbortSignal.any([timeout, cancellation]) : timeout });
-    if (!response.ok) return { error: `Independent review unavailable (HTTP ${response.status}); keep operationId, do not automatically retry` };
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      const diagnostic = body && typeof body === 'object' && !Array.isArray(body)
+        ? (body as Record<string, unknown>).diagnostic : undefined;
+      const valid = isCopyReviewFailure(diagnostic) && diagnostic.operationId === args.operationId;
+      return { error: `Independent review unavailable (HTTP ${response.status}${valid ? `; ${diagnostic.stage}/${diagnostic.code}` : ''}); keep operationId, do not automatically retry`,
+        operationId: args.operationId, ...(valid ? { diagnostic, requestsAttempted: diagnostic.requestsAttempted } : {}),
+        production_approved: false };
+    }
     const result = await response.json() as CopyReviewResult;
     if (result.operationId !== args.operationId || !isCopyProductionReview(result.receipt)
       || result.receipt.author_run_id !== author || result.receipt.reviewer_run_id !== `clipmentor-review:${args.operationId}`) return { error: 'Invalid independent review response; no project write' };

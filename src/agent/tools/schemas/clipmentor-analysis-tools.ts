@@ -24,7 +24,7 @@ export const CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS: AgentToolSchema[] = [
     input_schema: {type:'object',additionalProperties:false,properties:{
       action:{type:'string',enum:['request','read']},operationId:{type:'string',format:'uuid'},
       maxRequests:{type:'integer',const:1},src:{type:'string'},videoSha256:{type:'string',pattern:'^[a-f0-9]{64}$'},
-      input:{type:'object',description:'duration_seconds, points[{point_id,teaching_goal_zh,product_relevance}], units[{unit_id,point_ids}], reference_text[{channel:narration|annotation,start_seconds,end_seconds,text}]. Exact preview/output times, legitimate goals and actual copy only. No prior verdicts.'},
+      input:{type:'object',description:'duration_seconds, points[{point_id,teaching_goal_zh,product_relevance}], units[{unit_id,point_ids,output_range_seconds?:[start,end]}], reference_text[{channel:narration|annotation,start_seconds,end_seconds,text}]. Exact preview/output times, legitimate goals and actual copy only. No prior verdicts.'},
       executionManifest:{type:'object',description:'Actual frame-based scenes/audios execution record for this exact preview, same object used by verify_export. request freezes it; read uses frozen copy. Legacy read may supply it with videoSha256, but remains unbound/review_required. Never hand-fill a substitute Shot table.'},
     },required:['action','operationId']},
   },
@@ -35,9 +35,18 @@ export const CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS: AgentToolSchema[] = [
   },
   {
     name: 'observe_clipmentor_source_video',
-    description: 'ONE explicitly authorized Gemini 3.8 continuous ORIGINAL video plus synchronized source audio observation via server. Host freezes current copy, picture plans and source windows; no author verdict input. Checks source action sequence, candidate endpoints and planned narration capacity. NOT actual edited handoff, synthesized narration listening, caption sync, copy approval or film acceptance. Read-only project; exact result retained in server ledger. Failed/unknown calls consume budget; never automatically retry or change operationId. Requires saved current picture plans and host project/run context.',
+    description: 'ONE explicitly authorized Gemini 3.8 continuous ORIGINAL video plus synchronized source audio observation via server. Host freezes current copy, picture plans and source windows; no author verdict input. Optional observationTask adds neutral speech-boundary/material-continuity goals and context ranges ONLY for observation, never new production ranges. The full source MP4 is sent; synthesized narration is not heard. Unknown speech remains unknown. NOT actual edited handoff, caption sync, copy approval or film acceptance. Read-only project; exact result retained in server ledger. Failed/unknown calls consume budget; never automatically retry or change operationId. Requires saved current picture plans and host project/run context.',
     input_schema: {type:'object',additionalProperties:false,properties:{
       operationId:{type:'string',format:'uuid'},maxRequests:{type:'integer',const:1},expectedRevision:{type:'integer',minimum:1},
+      observationTask:{type:'object',additionalProperties:false,properties:{
+        version:{type:'string',const:'source-boundaries-v1'},
+        contexts:{type:'array',minItems:1,maxItems:8,items:{type:'object',additionalProperties:false,properties:{
+          context_id:{type:'string',pattern:'^[\\w:-]{1,80}$'},unit_id:{type:'string',minLength:1},
+          source_range_seconds:{type:'array',minItems:2,maxItems:2,items:{type:'number',minimum:0}},
+          boundary_seconds:{type:'array',maxItems:16,uniqueItems:true,items:{type:'number',minimum:0}},
+          goals:{type:'array',minItems:1,maxItems:2,uniqueItems:true,items:{type:'string',enum:['speech_boundaries','material_continuity']}},
+        },required:['context_id','unit_id','source_range_seconds','boundary_seconds','goals']}},
+      },required:['version','contexts']},
     },required:['operationId','maxRequests','expectedRevision']},
   },
   {
@@ -131,3 +140,9 @@ export const CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS: AgentToolSchema[] = [
   },
 ];
 export const CLIPMENTOR_ANALYSIS_TOOL_NAMES = new Set(CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS.map((t) => t.name));
+
+/** Internal host tools must never be activated in a browser session. */
+export const CLIPMENTOR_SERVER_TOOL_SCHEMAS: AgentToolSchema[] = [
+  {name:'save_clipmentor_source_frame',description:'Save a hash-bound source-video frame as a reusable image asset with source provenance. Local extraction only, no model call. Available in server-owned production.',
+   input_schema:{type:'object',additionalProperties:false,properties:{assetId:{type:'string'},seconds:{type:'number',minimum:0}},required:['assetId','seconds']}},
+];

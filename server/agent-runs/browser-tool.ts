@@ -5,7 +5,7 @@ import type { AgentToolSchema } from '../../src/agent/tool-schema';
 import { toolResultModelOutput } from '../../src/agent/tool-result-output';
 import {
   isFailedToolResult,
-  toolFailureReason,
+  toolFailureReason,structuredToolFailure,
   ToolFailureTracker,
 } from '../../src/agent/toolFailure';
 import { toolExecutionMode } from '../../src/agent/tools/execution-modes';
@@ -18,7 +18,16 @@ import {
   type ServerRun,
 } from './store';
 
+export interface ServerToolHost {
+  execute(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;
+  beforeRequest():Promise<void>;
+  signal?:AbortSignal;
+  maxTurns:number;
+  deadlineAt:number;
+}
+
 export interface ActivationState {
+  host?:ServerToolHost;
   current: ToolActivation;
   tail: Promise<void>;
   followupText: string | null;
@@ -56,6 +65,7 @@ export async function executeBrowserTool(
     await previous;
   }
   try {
+    activation.host?.signal?.throwIfAborted();
     activation.current = activation.current.admit(schema.name);
     assertCanonicalToolInvocation(schema, args, activation.current.schemas());
     const argsDigest = digestToolArgs(args);
@@ -71,8 +81,11 @@ export async function executeBrowserTool(
     }
     activation.repeatGuardNote = undefined;
     activation.lastSuccessfulPureTool = undefined;
-    pushRunEvent(run, 'tool-request', { toolCallId, name: schema.name, args, argsDigest });
-    const delivered = await waitForToolResult(run, toolCallId, schema.name, argsDigest);
+    pushRunEvent(run, activation.host ? 'server-tool-request' : 'tool-request', { toolCallId, name: schema.name, args, argsDigest });
+    const delivered = activation.host
+      ? await activation.host.execute(schema.name,args,toolCallId)
+      : await waitForToolResult(run, toolCallId, schema.name, argsDigest);
+    if(activation.host) pushRunEvent(run,'server-tool-result',{toolCallId,name:schema.name,success:!isFailedToolResult(delivered)});
     const followup = delivered && typeof delivered === 'object'
       && '__followup' in delivered && typeof delivered.__followup === 'string'
       ? delivered.__followup
@@ -80,7 +93,13 @@ export async function executeBrowserTool(
     if (followup) activation.followupText = followup;
     const shaped = activation.current.withToolResult(schema.name, delivered);
     activation.current = shaped.activation;
-    if (isFailedToolResult(shaped.result)) throw new Error(toolFailureReason(shaped.result));
+    if (isFailedToolResult(shaped.result)) {
+      if(!activation.host)throw new Error(toolFailureReason(shaped.result));
+      activation.toolFailures.record(schema.name,{success:false,result:shaped.result});
+      const r=shaped.result as Record<string,unknown>;
+      pushRunEvent(run,'server-tool-diagnostic',{toolCallId,name:schema.name,...(structuredToolFailure(r)??{error:toolFailureReason(r),production_gate:r.production_gate,issues:r.issues,breakdown_check:r.breakdown_check})});
+      return shaped.result;
+    }
     activation.toolFailures.record(schema.name, { success: true, result: shaped.result });
     if (!followup) recordTool(activation, schema, args);
     if (cacheablePureTool(schema.name)) {

@@ -1,10 +1,58 @@
 import type { CopyReviewRequest } from './clipmentor-copy-review';
-export type SourceVideoRequest = CopyReviewRequest;
+export interface SourceVideoTask {
+  version: 'source-boundaries-v1';
+  contexts: Array<{
+    context_id: string; unit_id: string; source_range_seconds: [number, number];
+    boundary_seconds: number[]; goals: Array<'speech_boundaries' | 'material_continuity'>;
+  }>;
+}
+export type SourceVideoRequest = CopyReviewRequest & { observationTask?: SourceVideoTask };
+export interface SourceTaskObservation {
+  boundaries: Array<{
+    context_id: string; boundary_seconds: number;
+    status: 'sentence_boundary' | 'inside_speech' | 'uncertain';
+    before: { status: 'heard' | 'unclear' | 'silence'; quote: string | null };
+    after: { status: 'heard' | 'unclear' | 'silence'; quote: string | null };
+    start_seconds: number; end_seconds: number; reason: string; time_uncertainty: string;
+  }>;
+  contexts: Array<{
+    context_id: string;
+    sequence: Array<{start_seconds:number;end_seconds:number;visible:string;audible:string}>;
+    material_ranges: Array<{start_seconds:number;end_seconds:number;
+      role:'use_process'|'closeup'|'same_frame_comparison'|'person_handoff'|'other'|'uncertain';
+      basis:string;limitations:string[]}>;
+    limitations: string[];
+  }>;
+}
+
+/** Bounded, neutral observation targets only; never an alternate picture plan or an author verdict. */
+export function validateSourceVideoTask(value: unknown, duration: number, unitIds: string[]): asserts value is SourceVideoTask {
+  const obj=(v:unknown):v is Record<string,any>=>!!v&&typeof v==='object'&&!Array.isArray(v);
+  const keys=(v:Record<string,unknown>,allowed:string[])=>Object.keys(v).every(k=>allowed.includes(k));
+  const id=(v:unknown):v is string=>typeof v==='string'&&/^[\w:-]{1,80}$/.test(v);
+  if(!obj(value)||!keys(value,['version','contexts'])||value.version!=='source-boundaries-v1'
+    ||!Array.isArray(value.contexts)||!value.contexts.length||value.contexts.length>8) throw new Error('Invalid observation task');
+  const ids=new Set<string>();
+  for(const c of value.contexts) {
+    if(!obj(c)||!keys(c,['context_id','unit_id','source_range_seconds','boundary_seconds','goals'])
+      ||!id(c.context_id)||ids.has(c.context_id)||!unitIds.includes(c.unit_id)
+      ||!Array.isArray(c.source_range_seconds)||c.source_range_seconds.length!==2
+      ||!c.source_range_seconds.every((x:unknown)=>typeof x==='number'&&Number.isFinite(x))
+      ||c.source_range_seconds[0]<0||c.source_range_seconds[1]>duration||c.source_range_seconds[1]<=c.source_range_seconds[0]
+      ||!Array.isArray(c.goals)||!c.goals.length||c.goals.length>2||new Set(c.goals).size!==c.goals.length
+      ||!c.goals.every((x:unknown)=>x==='speech_boundaries'||x==='material_continuity')
+      ||!Array.isArray(c.boundary_seconds)||c.boundary_seconds.length>16||new Set(c.boundary_seconds).size!==c.boundary_seconds.length
+      ||!c.boundary_seconds.every((x:unknown)=>typeof x==='number'&&Number.isFinite(x)&&x>=c.source_range_seconds[0]&&x<=c.source_range_seconds[1])
+      ||(c.goals.includes('speech_boundaries') ? !c.boundary_seconds.length : c.boundary_seconds.length!==0)) throw new Error('Invalid observation context');
+    ids.add(c.context_id);
+  }
+}
 export interface SourceVideoObservation {
   windows: Array<{ window_id: string; observed_sequence: string; endpoint: string;
     evidence: Array<{ start_seconds: number; end_seconds: number; visible: string; audible: string }> }>;
   lines: Array<{ unit_id: string; line_id: string; status: 'supported' | 'not_supported' | 'insufficient_evidence'; reason: string; window_ids: string[] }>;
   limitations: string[];
+  task_observation?: SourceTaskObservation;
 }
 export interface SourceVideoValidationIssue {
   code: string; severity: 'notice' | 'error'; window_id?: string; evidence_index?: number;
@@ -42,6 +90,7 @@ export interface SourceVideoReceipt {
   raw_observation?: unknown; result?: SourceVideoResult; raw_response_available: boolean;
   revalidation?: { version: string; parent_status: 'failed'; original_record_sha256: string; requestsSent: 0 };
   receipt_reference: string; actual_handoff_verified: false; complete_film_accepted: false;
+  observation_task?: SourceVideoTask;
   transport_diagnostic?: SourceVideoTransportDiagnostic;
   /** False means the returned failure is not the latest durable state; keep the operation consumed. */
   receipt_persisted?: boolean;
@@ -55,6 +104,7 @@ export interface SourceVideoResult {
   validation: SourceVideoValidation;
   raw_observation: SourceVideoObservation; finish_reasons: string[]; usage: unknown;
   scope: 'source_windows_and_planned_capacity_only'; actual_handoff_verified: false; complete_film_accepted: false;
+  observation_task?: SourceVideoTask;
   transport_diagnostic?: SourceVideoTransportDiagnostic;
 }
 

@@ -15,6 +15,7 @@ import {
 } from './runtime-artifact';
 import { SERVER_RUN_CAPABILITY_HEADER } from './serverRunProtocol';
 import { readStoredServerRun } from './serverRunSessionStorage';
+import { permanentServerRunRecoveryError } from './serverRunRecovery';
 
 function storedRunCapabilityHeader(projectId: string, runId: string): Record<string, string> {
   const stored = readStoredServerRun(projectId);
@@ -200,6 +201,7 @@ export async function loadServerRunDraft(projectId: string, runId: string): Prom
     .sort((left, right) => left.createdAt - right.createdAt);
   const records = await Promise.all(indexes.map((item) => loadAgentArtifact(projectId, item.artifactId)));
   let base: ServerRunDraftBaseBody | null = null;
+  let baseDigest: string | null = null;
   const tools = new Map<string, ServerRunDraftToolBody>();
   for (const artifact of records) {
     if (!artifact) throw new Error('Server run draft artifact is unavailable.');
@@ -207,8 +209,16 @@ export async function loadServerRunDraft(projectId: string, runId: string): Prom
     try { value = JSON.parse(artifact.body); } catch { throw new Error('Server run draft artifact is invalid.'); }
     const nextBase = parseBase(value);
     if (nextBase) {
-      if (base) throw new Error('Server run draft contains multiple base snapshots.');
+      if (base) {
+        // Older runs can contain identical retries under different IDs.
+        // Only identical verified bodies are safe to treat as one snapshot.
+        if (baseDigest !== artifact.bodySha256) {
+          throw permanentServerRunRecoveryError('Server run draft contains conflicting base snapshots.');
+        }
+        continue;
+      }
       base = nextBase;
+      baseDigest = artifact.bodySha256;
       continue;
     }
     const tool = parseTool(value);

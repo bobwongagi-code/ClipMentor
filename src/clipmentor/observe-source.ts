@@ -31,7 +31,7 @@ export async function observeClipMentorSource(args: Record<string, unknown>, ctx
   const ms = times.map((t) => Math.round(t * 1000));
   let images: Array<{ frame: number; base64: string }> = [];
   try {
-    const res = await fetch('/api/extract-frames', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const res = await (ctx.hostFetch ?? fetch)('/api/extract-frames', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ src: asset.src, sourceTimesMs: ms, output: 'frames' }), signal: AbortSignal.timeout(60_000) });
     if (res.ok) {
       const data = await res.json();

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { editorCredentialAuthorized } from '../editor-auth';
-import { copyReviewDependencies, reviewClipMentorCopy, type CopyReviewDependencies } from '../clipmentor/copy-review';
+import { CopyReviewError, copyReviewDependencies, reviewClipMentorCopy, type CopyReviewDependencies } from '../clipmentor/copy-review';
 
 /** Local-editor endpoint. No key, verdict or reviewer identity comes from the author. */
 export function clipMentorCopyReviewPlugin(deps?: CopyReviewDependencies): Plugin {
@@ -16,10 +16,14 @@ export function clipMentorCopyReviewPlugin(deps?: CopyReviewDependencies): Plugi
       res.on('close', onClose);
       try {
         let size = 0; const parts: Buffer[] = [];
-        for await (const part of req) { size += part.length; if (size > 2 * 1024 * 1024) throw new Error('Body too large'); parts.push(Buffer.from(part)); }
-        send(200, await reviewClipMentorCopy(JSON.parse(Buffer.concat(parts).toString('utf8')), deps ?? copyReviewDependencies(), abort.signal));
-      } catch {
-        send(400, { error: 'Independent review unavailable, invalid or outcome unknown. Keep operationId; no automatic retry. No source or credential details are returned.' });
+        for await (const part of req) { size += part.length; if (size > 2 * 1024 * 1024) { send(413, { error: 'Review request exceeds 2 MiB; no reviewer started' }); return; } parts.push(Buffer.from(part)); }
+        let value: unknown;
+        try { value = JSON.parse(Buffer.concat(parts).toString('utf8')); }
+        catch { send(400, { error: 'Invalid JSON; no reviewer started' }); return; }
+        send(200, await reviewClipMentorCopy(value, deps ?? copyReviewDependencies(), abort.signal));
+      } catch (error) {
+        if (error instanceof CopyReviewError) send(error.status, { error: error.message, diagnostic: error.diagnostic, production_approved: false });
+        else send(500, { error: 'Review service failed; outcome unknown. Keep operationId; no automatic retry.', production_approved: false });
       } finally { res.off('close', onClose); }
     });
   } };

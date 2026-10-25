@@ -7,15 +7,31 @@ import { createServer } from 'node:http';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { AgentContext } from '../../src/agent/context';
 import type { CopyReviewRequest } from '../../shared/clipmentor-copy-review';
-import { makeDraft } from '../../src/editor/store';
+import { makeDraft, replayActions } from '../../src/editor/store';
 import { executeTool } from '../../src/agent/tools';
 import { policyForTool } from '../../src/agent/execution-policy';
 import { isExternalDraftTool } from '../../src/agent/external-tool-policy';
 import { copyReviewSubject, copyTeachingPacketFromDoc, checkCopyProduction } from '../../src/clipmentor/production-gate';
-import { reviewClipMentorCopy, runIsolatedCodexReview, type CopyReviewDependencies } from './copy-review';
+import { CopyReviewError, reviewClipMentorCopy, runIsolatedCodexReview, type CopyReviewDependencies } from './copy-review';
 import { clipMentorCopyReviewPlugin } from '../plugins/clipmentor-copy-review';
 import type { ViteDevServer } from 'vite';
 import regression from '../../src/clipmentor/fixtures/copy-teaching-blind-v2-20261019.json';
+import contract171 from '../../src/clipmentor/fixtures/copy-review-r171-contract.json';
+import { createMiniConnect } from '../../desktop/mini-connect';
+import { agentRunsPlugin } from '../agent-runs/routes';
+import { createRunWithCapability, flushRunPersistence, setRunStatus } from '../agent-runs/store';
+import { executeServerCodexTurn } from '../agent-runs/codex-turn';
+import { codexTurnManager } from '../codex/turn-manager';
+import { ToolActivation } from '../../src/agent/tool-activation';
+import { TOOL_SCHEMAS } from '../../src/agent/tools';
+import { ToolFailureTracker, isFailedToolResult, structuredToolFailure } from '../../src/agent/toolFailure';
+import { createAcceptanceLoop } from '../agent-runs/acceptance-loop';
+import { ServerRunToolExecutor } from '../../src/agent/serverRunToolExecutor';
+import { FakeLockManager, MemoryStorage } from '../../src/agent/serverRunToolExecutor.verify-helpers';
+import { saveStoredServerRun, readStoredServerRun } from '../../src/agent/serverRunSessionStorage';
+import { runtimeEvent } from '../agent-runs/store-values';
+import { saveServerRunDraftBase, saveServerRunDraftTool, loadServerRunDraft } from '../../src/agent/serverRunDraftStore';
+import { migrateProjectDoc } from '../../src/persist/projectStore';
 
 const oracle = regression.regression_oracles.find((o) => o.label === 'qualified_scent_excerpt_from_revision95')!;
 const positive = regression.blind_input.cases.find((c) => c.case_id === oracle.case_id)!.packet.units[0];
@@ -29,7 +45,8 @@ const base: ProjectDoc = {
     source: { asset_id: 'source', sourceContentHash: 'a'.repeat(64), duration_seconds: 100, fps: 30 },
     product: { name: 'Test soap', category: 'soap' }, import_origin: 'synthetic_test', points: [], transcripts: [], reviews: [], audit: [],
     evidence: [{ evidence_id: 'F1', kind: 'source_frame', text: 'Test position; not a real observation', status: 'historical_unknown',
-      supporting_evidence_ids: [], source_ids: [], time_seconds: 60 }],
+      supporting_evidence_ids: [], source_ids: [], time_seconds: 60, source_frame: 1800,
+      observation_method: 'synthetic_test', call_status: 'historical_unknown' }],
     blueprint: [{ unit_id: 'U1', point_ids: ['P1'], intent_zh: 'test use experience', line_guidance: '',
       ...{ internal_review: { current_script_candidate: 'copy', current_picture_plan: 'picture_plan_test',
         copy: { lines: [{ id: line.line_id, point_ids: ['P1'], narration_ms: line.narration_ms, caption_lines: line.caption_lines,
@@ -63,6 +80,7 @@ const goodRaw = () => ({ cases: [{ case_id: 'current', units: [{ unit_id: 'U1', 
       L2: { verdict: 'pass', viewer_chain: 'Synthetic original then revisit', stage_cues: 'Synthetic visible revisit title', reason: 'Synthetic planned handoff, not actual viewing' } },
     narration_checks: [{ line_id: line.line_id, necessity: 'necessary',
     omission_loss: 'Synthetic test: scent-use relation would be lost', naturalness: 'natural', reason: 'Synthetic reviewer only, not a real naturalness judgment' }] }] });
+assert(migrateProjectDoc(base), 'the runtime fixture must be a readable persisted project, not just a tool-shaped object');
 const root = await mkdtemp(join(tmpdir(), 'clipmentor-copy-review-test-'));
 let calls = 0, extracted = 0;
 let mode: 'pass' | 'fail' | 'unknown' | 'copy_block' | 'copy_unmatched' | 'throw' | 'invalid' = 'pass';
@@ -112,6 +130,17 @@ async function request(operationId = randomUUID()): Promise<CopyReviewRequest> {
 }
 const nativeFetch = globalThis.fetch;
 try {
+  const diagnosticEnvelope = { error: 'Offline saved failure', operationId: contract171.request.operationId,
+    diagnostic: contract171.diagnostic, requestsAttempted: 1, production_approved: false };
+  assert.deepEqual(structuredToolFailure({ ...diagnosticEnvelope, raw_review: 'must-not-reach-author', private_path: '/private' }), diagnosticEnvelope,
+    'only closed failure metadata may cross the rejected-promise bridge');
+  for (const bad of [
+    { ...diagnosticEnvelope, operationId: randomUUID() },
+    { ...diagnosticEnvelope, requestsAttempted: 0 },
+    { ...diagnosticEnvelope, ok: true },
+    { ...diagnosticEnvelope, diagnostic: { ...contract171.diagnostic, private_path: '/private' } },
+    { ...diagnosticEnvelope, diagnostic: { ...contract171.diagnostic, retryable: true } },
+  ]) assert.equal(structuredToolFailure(bad), undefined, 'invalid or successful envelopes must not acquire trusted failure metadata');
   assert.equal(policyForTool('request_clipmentor_copy_review').effect, 'irreversible_external');
   assert(isExternalDraftTool('request_clipmentor_copy_review'));
   const first = await request();
@@ -123,6 +152,30 @@ try {
   assert.equal(JSON.parse(await readFile(join(root, first.operationId + '.json'), 'utf8')).input_policy, pass.inspection.input_policy);
   assert.deepEqual(await reviewClipMentorCopy(first, deps), { ...pass, cached: true });
   assert.equal(calls, 1); assert.equal(extracted, 6, 'completed replay does not repeat extraction or model turn');
+  // The real r171 response returned a list of visible stage cues, not a scalar.
+  // Replay the frozen evidence in a temporary ledger only; do not amend its old failure.
+  const savedRequest = structuredClone(contract171.request) as CopyReviewRequest;
+  let savedRuns = 0;
+  const savedDeps: CopyReviewDependencies = { ...deps, resolve: () => 'offline-source',
+    hash: async () => savedRequest.source.hash,
+    run: async () => { savedRuns++; return structuredClone(contract171.raw_review); } };
+  const saved = await reviewClipMentorCopy(savedRequest, savedDeps);
+  assert.equal(saved.receipt.verdict, 'insufficient_evidence');
+  assert.equal(saved.receipt.units[0].verdict, 'pass');
+  assert.equal(saved.receipt.units[1].group_checks!.L2.verdict, 'insufficient_evidence');
+  assert.deepEqual(saved.receipt.units.map(u => u.group_checks), contract171.raw_review.copy_units.map(u => u.group_checks),
+    'preserve both cue lists and original reviewer opinions without text coercion');
+  const savedLedger = JSON.parse(await readFile(join(root, savedRequest.operationId + '.json'), 'utf8'));
+  assert.deepEqual(savedLedger.raw_review, contract171.raw_review);
+  assert.deepEqual(await reviewClipMentorCopy(savedRequest, savedDeps), { ...saved, cached: true });
+  assert.equal(savedRuns, 1, 'offline cache readback must not rerun even the fake reviewer');
+  for (const cues of ['', ' ', [], [''], ['valid', 3], [['nested']], null, {}, 2, true]) {
+    const raw = structuredClone(contract171.raw_review);
+    (raw.copy_units[0].group_checks.L2 as Record<string, unknown>).stage_cues = cues;
+    await assert.rejects(reviewClipMentorCopy({ ...savedRequest, operationId: randomUUID() },
+      { ...savedDeps, run: async () => raw }), (e: unknown) => e instanceof CopyReviewError && e.diagnostic.code === 'response_receipt_invalid',
+    'only a nonempty string or a nonempty list of nonblank strings is a valid cue description');
+  }
   await assert.rejects(reviewClipMentorCopy({ ...first, projectId: 'different' }, deps)); assert.equal(calls, 1);
   await assert.rejects(reviewClipMentorCopy({ ...first, verdict: 'pass' }, deps));
   await assert.rejects(reviewClipMentorCopy({ ...first, mode: 'collaborative', context: { knownIssues: ['Expected answer'] } }, deps));
@@ -343,7 +396,49 @@ try {
   assert(!ledger.includes(sensitive)); assert.equal(JSON.parse(ledger).requests_attempted, 1);
   const consumed = calls;
   await assert.rejects(reviewClipMentorCopy(failure, deps)); assert.equal(calls, consumed, 'failed attempt never auto-replays');
-  mode = 'invalid'; await assert.rejects(reviewClipMentorCopy(await request(), deps));
+  await assert.rejects(reviewClipMentorCopy(failure, { ...deps, hash: async () => { throw new Error('Source vanished after failure'); } }), (e: unknown) => e instanceof CopyReviewError && e.diagnostic.code === 'model_turn_failed' && e.diagnostic.requestsAttempted === 1);
+  assert.equal(calls, consumed, 'source changes do not erase the historical consumed attempt or cause replay');
+  mode = 'invalid';
+  const invalidOutputRequest = await request();
+  await assert.rejects(reviewClipMentorCopy(invalidOutputRequest, deps), (e: unknown) => e instanceof CopyReviewError && e.diagnostic.code === 'response_scope_invalid');
+  const invalidOutput = JSON.parse(await readFile(join(root, `${invalidOutputRequest.operationId}.json`), 'utf8'));
+  assert.deepEqual(invalidOutput.raw_review, {}, 'typed rejection must retain the actual returned structure for offline diagnosis');
+  assert.equal(invalidOutput.diagnostic.stage, 'response_validation');
+  assert.equal(invalidOutput.diagnostic.requestsAttempted, 1);
+  for (const [code, mutate] of [
+    ['response_teaching_invalid', (raw: any) => { raw.cases[0].units = {}; }],
+    ['response_copy_unit_invalid', (raw: any) => { raw.copy_units[0].findings = null; }],
+    ['response_receipt_invalid', (raw: any) => { raw.copy_units[0].findings = [{ severity: ['blocking'], quote: line.narration_ms, reason: 'Synthetic malformed type' }]; }],
+  ] as const) {
+    const req = await request(), raw = goodRaw();
+    mutate(raw);
+    await assert.rejects(reviewClipMentorCopy(req, { ...deps, run: async () => raw }), (e: unknown) => e instanceof CopyReviewError && e.diagnostic.code === code);
+    const stored = JSON.parse(await readFile(join(root, `${req.operationId}.json`), 'utf8'));
+    assert.deepEqual(stored.raw_review, raw);
+    assert.equal(stored.diagnostic.requestsAttempted, 1);
+  }
+  const legacyRequest = await request();
+  mode = 'throw';
+  await assert.rejects(reviewClipMentorCopy(legacyRequest, deps));
+  const legacyPath = join(root, `${legacyRequest.operationId}.json`);
+  const legacy = JSON.parse(await readFile(legacyPath, 'utf8'));
+  delete legacy.diagnostic;
+  await writeFile(legacyPath, JSON.stringify(legacy));
+  const legacyBytes = await readFile(legacyPath, 'utf8'), beforeLegacy = calls;
+  await assert.rejects(reviewClipMentorCopy(legacyRequest, deps), (e: unknown) => e instanceof CopyReviewError
+    && e.diagnostic.code === 'legacy_failure_details_missing' && e.diagnostic.requestsAttempted === 1);
+  assert.equal(await readFile(legacyPath, 'utf8'), legacyBytes, 'legacy failures cannot be retroactively assigned an invented cause');
+  assert.equal(calls, beforeLegacy);
+  const parseFailure = await request();
+  const incompleteText = '{"cases":';
+  await assert.rejects(reviewClipMentorCopy(parseFailure, { ...deps, run: async () => {
+    throw new CopyReviewError({ code: 'response_not_json', stage: 'response_parse', requestsAttempted: 1, retryable: false,
+      inspection: { expectedBatches: 1, deliveredBatches: 1, invalidBatchCalls: 0, outputChars: incompleteText.length } }, incompleteText);
+  } }));
+  const parseLedger = JSON.parse(await readFile(join(root, `${parseFailure.operationId}.json`), 'utf8'));
+  assert.equal(parseLedger.raw_output, incompleteText);
+  assert.equal(parseLedger.diagnostic.inspection.deliveredBatches, 1);
+  assert(!JSON.stringify(parseLedger.diagnostic).includes(incompleteText));
   const cancelled = await request(), controller = new AbortController();
   await assert.rejects(reviewClipMentorCopy(cancelled, { ...deps, run: async () => { controller.abort(); return goodRaw(); } }, controller.signal));
   assert.equal(JSON.parse(await readFile(join(root, `${cancelled.operationId}.json`), 'utf8')).requests_attempted, 1, 'cancellation after a dispatched turn consumes its attempt and cannot approve');
@@ -418,7 +513,13 @@ try {
     run: async (...args: Parameters<CopyReviewDependencies['run']>) => args[0].includes('"treatment":"visual_only"')
       ? visualDeps.run(args[0], args[1]) : deps.run(...args) });
   (plugin.configureServer as (server: ViteDevServer) => void)({ middlewares: { use: (_path: string, cb: typeof handler) => { handler = cb; } } } as unknown as ViteDevServer);
-  const server = createServer((req, res) => { void handler!(req, res); });
+  const runRoutes = createMiniConnect((error) => { throw error; });
+  const runPlugin = agentRunsPlugin({ activatePersistence: () => undefined });
+  (runPlugin.configureServer as (server: ViteDevServer) => void)({ middlewares: runRoutes } as unknown as ViteDevServer);
+  const server = createServer((req, res) => {
+    if (req.url?.startsWith('/api/agent-runs')) runRoutes.handle(req, res);
+    else void handler!(req, res);
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const address = server.address() as { port: number };
@@ -433,6 +534,174 @@ try {
     const visualBody = await visualResponse.json();
     assert.equal(visualBody.receipt.verdict, 'pass');
     assert.equal(visualBody.receipt.teaching_review.review.units[0].points[1].quotes.length, 0);
+    // A runner failure is not a bad author request. Preserve safe diagnostics through
+    // real HTTP -> author tool; a failed same-operation read must not run again.
+    mode = 'throw';
+    const failedRequest = await request();
+    const beforeFailure = calls;
+    const failedResponse = await nativeFetch(url, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(failedRequest) });
+    assert.equal(failedResponse.status, 502, 'execution failures must not be flattened to HTTP400');
+    const failedBody = await failedResponse.json();
+    assert.equal(failedBody.diagnostic.code, 'model_turn_failed');
+    assert.equal(failedBody.diagnostic.requestsAttempted, 1);
+    assert.equal(failedBody.diagnostic.operationId, failedRequest.operationId);
+    assert(!JSON.stringify(failedBody).includes(sensitive));
+    const failedLedger = JSON.parse(await readFile(join(root, `${failedRequest.operationId}.json`), 'utf8'));
+    assert.deepEqual(failedLedger.diagnostic, failedBody.diagnostic);
+    const replayFailure = await nativeFetch(url, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(failedRequest) });
+    assert.deepEqual((await replayFailure.json()).diagnostic, failedBody.diagnostic);
+    assert.equal(calls, beforeFailure + 1, 'failed operation readback never retries the reviewer');
+    const beforeBadRequest = calls;
+    const invalidResponse = await nativeFetch(url, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(invalidResponse.status, 400);
+    assert.equal((await invalidResponse.json()).diagnostic.code, 'request_invalid');
+    assert.equal(calls, beforeBadRequest, 'invalid input is still 400 and never starts the reviewer');
+    const tooLarge = await nativeFetch(url, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ huge: 'x'.repeat(2 * 1024 * 1024) }) });
+    assert.equal(tooLarge.status, 413);
+    assert.equal(calls, beforeBadRequest, 'oversized input remains blocked without a model call');
+    active = context();
+    globalThis.fetch = (async () => Response.json(failedBody, { status: 502 })) as typeof fetch;
+    const failedTool = await executeTool('request_clipmentor_copy_review', { ...toolArgs(), operationId: failedRequest.operationId }, active.ctx) as any;
+    assert.deepEqual(failedTool.diagnostic, failedBody.diagnostic);
+    assert.equal(failedTool.production_approved, false);
+    assert.equal(active.draft.getDoc().clipMentorAnalysis!.production_copy_review, undefined);
+    for (const malformedDiagnostic of [
+      { ...failedBody.diagnostic, operationId: randomUUID() },
+      { ...failedBody.diagnostic, detail: sensitive },
+      { ...failedBody.diagnostic, stage: 'request' },
+    ]) {
+      globalThis.fetch = (async () => Response.json({ diagnostic: malformedDiagnostic, error: sensitive }, { status: 502 })) as typeof fetch;
+      const rejectedDiagnostic = await executeTool('request_clipmentor_copy_review', { ...toolArgs(), operationId: failedRequest.operationId }, active.ctx) as any;
+      assert.equal(rejectedDiagnostic.diagnostic, undefined);
+      assert(!JSON.stringify(rejectedDiagnostic).includes(sensitive));
+      assert.equal(rejectedDiagnostic.production_approved, false);
+    }
+    globalThis.fetch = nativeFetch;
+    // Full runtime boundary, not just executeTool: HTTP review -> browser draft
+    // executor -> authenticated HTTP settlement -> server ledger -> Codex bridge.
+    // Only runTurn and the reviewer are fakes; no model process is started.
+    const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', { value: new MemoryStorage(), configurable: true });
+    const originalSettle = codexTurnManager.settleToolResult;
+    try {
+      for (const runtimeMode of ['throw', 'invalid', 'unknown', 'fail', 'pass'] as const) {
+        mode = runtimeMode;
+        active = context();
+        const { run, capability } = createRunWithCapability({ projectId: 'test-project', sessionGeneration: 'legacy',
+          backend: 'codex', provider: 'openai', model: 'offline-no-model' });
+        await setRunStatus(run, 'running');
+        assert(saveStoredServerRun('test-project', { projectId: 'test-project', runId: run.id, capability, attempts: [] }));
+        let browserFailure: unknown;
+        let transportFailure = '';
+        const locks = new class extends FakeLockManager {
+          override async request<T>(name: string, options: { readonly mode: 'exclusive' }, callback: () => T | PromiseLike<T>): Promise<T> {
+            try { return await super.request(name, options, callback); }
+            catch (error) { browserFailure = error; throw error; }
+          }
+        }();
+        const executor = new ServerRunToolExecutor('test-project', {
+          ctx: () => active.ctx, settings: () => ({} as never),
+          onToolAction: async (action) => {
+            await saveServerRunDraftTool('test-project', run.id, action);
+            if (action.error || isFailedToolResult(action.result)) assert.equal(action.actions.length, 0, 'review failure must not mutate the draft');
+            else active.draft.commands.applyDoc(replayActions(active.draft.getDoc(), action.actions));
+          }, updateMessages: () => undefined, setLiveTool: () => undefined,
+          retryStream: () => assert.fail('no replay is permitted: ' + transportFailure), abandonRecovery: () => assert.fail('unexpected transport failure: ' + transportFailure),
+        }, locks);
+        executor.start({ capability, baseDoc: active.draft.getDoc(), activation: new ToolActivation(TOOL_SCHEMAS, []),
+          runId: run.id, abort: new AbortController(), recovered: new Map() });
+        globalThis.fetch = (async (input, init) => {
+          const response = await nativeFetch(new URL(String(input), origin), {
+            ...init, headers: { ...init?.headers, Origin: origin, 'Sec-Fetch-Site': 'same-origin' },
+          });
+          if (String(input).includes('/api/agent-runs')) {
+            if (!response.ok) transportFailure = `runtime transport ${String(input)}: ${response.status} ${await response.clone().text()}`;
+            assert(response.ok, transportFailure);
+          }
+          return response;
+        }) as typeof fetch;
+        await saveServerRunDraftBase('test-project', run.id, {
+          baseDoc: active.draft.getDoc(), text: 'offline test', content: 'offline test', askOnly: false, references: [],
+        });
+        const activation = { current: new ToolActivation(TOOL_SCHEMAS, []), tail: Promise.resolve(), followupText: null,
+          toolFailures: new ToolFailureTracker(), acceptance: createAcceptanceLoop(false, 3) };
+        const runtimeArgs = toolArgs(), callId = 'copy-review-runtime';
+        let settlement: { success: boolean; result: any } | undefined;
+        const { promise: settled, resolve: settleDone } = Promise.withResolvers<void>();
+        codexTurnManager.settleToolResult = ((body: any) => {
+          settlement = body; settleDone(); return Promise.resolve('ok');
+        }) as typeof originalSettle;
+        const beforeRuntime = calls;
+        const outcome = await executeServerCodexTurn({ run, messages: [{ role: 'user', content: 'offline runtime regression' }],
+          instructions: 'Offline verification only', schemas: TOOL_SCHEMAS, model: 'offline-no-model', askOnly: false,
+          projectId: 'test-project', maxInputTokens: 1_000_000, maxOutputTokens: 1024, contextWindowTokens: 1_000_000,
+          contextWindowEstimated: false, signal: AbortSignal.timeout(15_000), activation, requestIndex: 1 }, {
+          runTurn: async (_request, emit) => {
+            emit({ type: 'tool-start', callId, name: 'request_clipmentor_copy_review', args: runtimeArgs });
+            // executeBrowserTool schedules its request on the activation queue.
+            for (let tries = 0; !run.toolRequests.has(callId) && tries < 100; tries++) {
+              await new Promise(resolve => setTimeout(resolve, 1));
+            }
+            const request = run.toolRequests.get(callId);
+            assert(request, 'the real server request exists before browser execution');
+            assert(await executor.handle(run.id, callId, 'request_clipmentor_copy_review', runtimeArgs, request.argsDigest, () => true), String(browserFailure));
+            await settled;
+            emit({ type: 'done' });
+          },
+        });
+        assert.equal(calls, beforeRuntime + 1, 'one fake review, never a provider request or automatic retry');
+        assert(settlement);
+        const technicalFailure = runtimeMode === 'throw' || runtimeMode === 'invalid';
+        assert.equal(settlement.success, !technicalFailure);
+        const event = run.events.find(e => e.type === 'tool-result')!;
+        assert(event);
+        if (technicalFailure) {
+          const diagnostic = (settlement.result as any).diagnostic;
+          assert.equal(diagnostic?.code, runtimeMode === 'throw' ? 'model_turn_failed' : 'response_scope_invalid',
+            'the author must receive structured diagnostics through the actual failed-settlement bridge');
+          assert.equal(diagnostic.requestsAttempted, 1);
+          assert.equal(diagnostic.retryable, false);
+          assert.equal(diagnostic.operationId, runtimeArgs.operationId);
+          assert.equal(settlement.result.production_approved, false);
+          assert.deepEqual((event.data as any).result.diagnostic, diagnostic);
+          assert.equal(runtimeEvent(event).outcome?.kind, 'terminal_failure');
+          assert(outcome.messages.some(m => JSON.stringify(m.content).includes(diagnostic.code)));
+          assert(outcome.messages.some(m => JSON.stringify(m.content).includes('requestsAttempted')));
+          assert(activation.toolFailures.hasUnresolved);
+          assert.equal(active.draft.getDoc().clipMentorAnalysis!.production_copy_review, undefined);
+          const failed = JSON.parse(await readFile(join(root, runtimeArgs.operationId + '.json'), 'utf8'));
+          assert.deepEqual(diagnostic, failed.diagnostic);
+          assert.equal(readStoredServerRun('test-project')!.attempts!.length, 0, 'settled recovery state is cleaned');
+          const recovered = await loadServerRunDraft('test-project', run.id);
+          assert(recovered);
+          assert(isFailedToolResult(recovered.tools[0].result), 'reloaded journal remains a failed result, never a successful review');
+          assert.deepEqual(structuredToolFailure(recovered.tools[0].result)?.diagnostic, diagnostic,
+            'durable tool recovery retains the same safe diagnostic');
+        } else {
+          const verdict = runtimeMode === 'pass' ? 'pass' : runtimeMode === 'fail' ? 'needs_revision' : 'insufficient_evidence';
+          assert.equal(settlement.result.verdict, verdict);
+          assert.equal(active.draft.getDoc().clipMentorAnalysis!.production_copy_review!.verdict, verdict);
+          assert.equal((await checkCopyProduction(active.draft.getDoc(), 'clipmentor')).allowed, runtimeMode === 'pass');
+          assert.equal(activation.toolFailures.hasUnresolved, false);
+          if (runtimeMode === 'pass') {
+            const changed = structuredClone(active.draft.getDoc());
+            changed.clipMentorAnalysis!.revision++;
+            changed.clipMentorAnalysis!.blueprint[0].internal_review!.copy.lines[0].zh += ' changed';
+            assert.equal((await checkCopyProduction(changed, 'clipmentor')).allowed, false, 'an edited candidate cannot inherit old approval');
+          }
+        }
+        assert(!JSON.stringify(settlement).includes(sensitive));
+        assert.deepEqual(active.draft.getDoc().assets, base.assets);
+        assert.deepEqual(active.draft.getDoc().timelines, base.timelines);
+        await flushRunPersistence(run);
+      }
+    } finally {
+      codexTurnManager.settleToolResult = originalSettle;
+      globalThis.fetch = nativeFetch;
+      if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);
+      else Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+    mode = 'pass';
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
   // Exercise the actual isolated runner against a fake Codex RPC executable.
   // Assert fresh/read-only thread setup and real image transport, without invoking Codex/model.
@@ -442,8 +711,9 @@ import { createInterface } from 'node:readline';
 if (process.argv.includes('--version')) { console.log('codex 0.146.0'); process.exit(0); }
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const answer = ${JSON.stringify(goodRaw())};
+let testPrompt = '', expectedBatches = 1, batchIndex = 0, frameTotal = 1;
 const done = () => {
-  send({method:'item/agentMessage/delta',params:{threadId:'isolated',turnId:'one',delta:JSON.stringify(answer)}});
+  send({method:'item/agentMessage/delta',params:{threadId:'isolated',turnId:'one',delta:testPrompt.includes('BAD_JSON') ? '{invalid' : JSON.stringify(answer)}});
   send({method:'turn/completed',params:{threadId:'isolated',turn:{id:'one',status:'completed'}}});
 };
 createInterface({input:process.stdin}).on('line', line => {
@@ -453,19 +723,32 @@ createInterface({input:process.stdin}).on('line', line => {
     if (!m.params.ephemeral || m.params.cwd !== null || m.params.sandbox !== 'read-only'
       || m.params.dynamicTools.length !== 1 || m.params.dynamicTools[0].name !== 'read_review_frames'
       || m.params.config.features.unified_exec !== false) process.exit(81);
+    expectedBatches = m.params.dynamicTools[0].inputSchema.properties.batch.maximum + 1;
     return send({id:m.id,result:{thread:{id:'isolated'}}});
   }
   if (m.method === 'turn/start') {
     send({id:m.id,result:{turn:{id:'one'}}});
-    if (m.params.input[0].text.includes('SKIP_FRAMES')) return done();
-    return send({id:'frames',method:'item/tool/call',params:{threadId:'isolated',turnId:'one',callId:'read-one',tool:'read_review_frames',arguments:{batch:0}}});
+    testPrompt = m.params.input[0].text;
+    frameTotal = Number(testPrompt.match(/FRAME_COUNT=(\\d+)/)?.[1] ?? ((expectedBatches - 1) * 8 + 1));
+    if (testPrompt.includes('MODEL_ERROR')) {
+      send({method:'error',params:{threadId:'isolated',turnId:'one',error:{message:'synthetic failure'},willRetry:false}});
+      return;
+    }
+    if (testPrompt.includes('SKIP_FRAMES')) return done();
+    return send({id:'frames',method:'item/tool/call',params:{threadId:'isolated',turnId:'one',callId:'read-one',tool:'read_review_frames',arguments:{batch:testPrompt.includes('BAD_BATCH') ? -1 : 0}}});
   }
   if (m.id === 'frames') {
+    if (testPrompt.includes('BAD_BATCH')) {
+      if (m.result.success !== false) process.exit(83);
+      return done();
+    }
     const payload = JSON.parse(m.result.contentItems[0].text);
     if (!m.result.success || m.result.contentItems.length !== 1 || m.result.contentItems[0].type !== 'inputText'
-      || !payload.metadata.note.includes('U1/original') || payload.content.length !== 1
+      || !payload.metadata.note.includes('U1/original') || payload.content.length !== Math.min(8, frameTotal - batchIndex * 8)
       || payload.content[0].type !== 'image' || payload.content[0].mimeType !== 'image/jpeg'
       || payload.content[0].data !== 'aGVsbG8=') process.exit(82);
+    batchIndex++;
+    if (testPrompt.includes('READ_ALL') && batchIndex < expectedBatches) return send({id:'frames',method:'item/tool/call',params:{threadId:'isolated',turnId:'one',callId:'read-'+batchIndex,tool:'read_review_frames',arguments:{batch:batchIndex}}});
     return done();
   }
   if (m.id !== undefined) send({id:m.id,result:{}});
@@ -477,10 +760,33 @@ createInterface({input:process.stdin}).on('line', line => {
   try {
     const frames = [{ unit_id: 'U1', phase: 'original' as const, source_seconds: 60, base64: 'aGVsbG8=' }];
     assert.deepEqual(await runIsolatedCodexReview('transport test', frames, 'test-isolated', 'test-project', AbortSignal.timeout(15_000)), goodRaw());
-    await assert.rejects(runIsolatedCodexReview('SKIP_FRAMES', frames, 'test-skip', 'test-project', AbortSignal.timeout(15_000)), /Incomplete/);
+    for (const [prompt, expectedCode, delivered, invalidCalls] of [
+      ['SKIP_FRAMES', 'frame_inspection_incomplete', 0, 0],
+      ['BAD_BATCH', 'frame_inspection_incomplete', 0, 1],
+      ['BAD_JSON', 'response_not_json', 1, 0],
+      ['MODEL_ERROR', 'model_turn_failed', 0, 0],
+    ] as const) {
+      await assert.rejects(runIsolatedCodexReview(prompt, frames, `test-${prompt}`, 'test-project', AbortSignal.timeout(15_000)), (e: unknown) => {
+        assert(e instanceof CopyReviewError);
+        assert.equal(e.diagnostic.code, expectedCode);
+        assert.equal(e.diagnostic.inspection!.deliveredBatches, delivered);
+        assert.equal(e.diagnostic.inspection!.invalidBatchCalls, invalidCalls);
+        if (prompt === 'BAD_JSON') assert.equal(e.rawOutput, '{invalid');
+        return true;
+      });
+    }
+    assert.deepEqual(await runIsolatedCodexReview('READ_ALL FRAME_COUNT=32', Array(32).fill(frames[0]), 'test-current-volume', 'test-project', AbortSignal.timeout(15_000)), goodRaw(), 'current revision171 volume: four image batches can complete without a model');
+    assert.deepEqual(await runIsolatedCodexReview('READ_ALL', [...frames, ...Array(8).fill(frames[0])], 'test-full', 'test-project', AbortSignal.timeout(15_000)), goodRaw());
+    await assert.rejects(runIsolatedCodexReview('transport test', [...frames, ...Array(8).fill(frames[0])], 'test-partial', 'test-project', AbortSignal.timeout(15_000)), (e: unknown) => {
+      assert(e instanceof CopyReviewError);
+      assert.equal(e.diagnostic.code, 'frame_inspection_incomplete');
+      assert.equal(e.diagnostic.inspection!.expectedBatches, 2);
+      assert.equal(e.diagnostic.inspection!.deliveredBatches, 1);
+      return true;
+    });
   } finally {
     if (priorPath === undefined) delete process.env.OPENCHATCUT_CODEX_PATH;
     else process.env.OPENCHATCUT_CODEX_PATH = priorPath;
   }
-  console.log('Copy review: real tool/draft + HTTP route, isolated packet/current picture plan, pass/fail/unknown, stale race, no retry and redacted errors passed. Fake reviewer only; no model/TTS/render calls.');
+console.log('Copy review: saved r171 cue-list contract + real browser/durable journal/HTTP settlement/Codex bridge; pass/fail/unknown, stale race, no retry and safe diagnostics passed. Fake reviewer/RPC only; no model/TTS/render calls.');
 } finally { globalThis.fetch = nativeFetch; await rm(root, { recursive: true, force: true }); }

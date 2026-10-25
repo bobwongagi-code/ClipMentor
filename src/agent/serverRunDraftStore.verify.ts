@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
+import { CURRENT_PROJECT_VERSION } from '../../shared/project-version.ts';
+import type { ProjectDoc } from '../editor/types.ts';
+import { migrateProjectDoc } from '../persist/projectStore.ts';
 import {
+  agentArtifactKey,
   loadAgentArtifact,
   loadAgentRuntimeSidecar,
   resetAgentRuntimeStoreMemory,
   storeAgentArtifact,
+  mutate,
+  sha256Text,
 } from '../persist/agentRuntimeStore.ts';
+import { kvKeys, kvSet } from '../persist/sharedKv.ts';
 import { startAgentRun } from './runtime-ledger.ts';
-import { saveServerRunDraftTool } from './serverRunDraftStore.ts';
+import { loadServerRunDraft, saveServerRunDraftBase, saveServerRunDraftTool } from './serverRunDraftStore.ts';
+import { isPermanentServerRunRecoveryError } from './serverRunRecovery.ts';
 
 // The draft endpoint is server-side; emulate it with a local artifact write.
 const originalFetch = globalThis.fetch;
@@ -25,7 +33,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       projectId: string; artifact: Record<string, unknown>;
     };
     const a = body.artifact;
-    await storeAgentArtifact({
+    const accepted = await storeAgentArtifact({
       version: 1,
       artifactId: String(a.artifactId),
       projectId: body.projectId,
@@ -42,7 +50,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...(typeof a.toolName === 'string' ? { toolName: a.toolName } : {}),
     });
     return new Response(JSON.stringify({ ok: true }), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
+      status: accepted ? 200 : 409, headers: { 'Content-Type': 'application/json' },
     });
   }
   return originalFetch(input, init);
@@ -91,6 +99,53 @@ assert.match(body.args.gcs, /X-Goog-Signature=\[REDACTED\]/);
 assert.match(body.error, /\[REDACTED\]/);
 await recorder.finalize('interrupted', 'privacy verifier complete');
 
+// Admission and recovery may both submit the same base before the browser's
+// sidecar cache sees the server write. Retrying must not poison later recovery.
+const baseRecorder = await startAgentRun({ projectId, userInput: 'base recovery', askOnly: false });
+const baseDoc: ProjectDoc = {
+  version: CURRENT_PROJECT_VERSION, assets: [], mediaFolders: [], activeTimelineId: 'base-timeline',
+  timelines: [{ id: 'base-timeline', name: 'Base', order: 0, fps: 30, width: 1080, height: 1920, items: [], selectedId: null }],
+};
+const baseInput = { text: 'base recovery', content: 'base recovery', askOnly: false, references: [], baseDoc };
+await Promise.all([
+  saveServerRunDraftBase(projectId, baseRecorder.runId, baseInput),
+  saveServerRunDraftBase(projectId, baseRecorder.runId, baseInput),
+]);
+const baseIndexes = (await loadAgentRuntimeSidecar(projectId)).artifacts
+  .filter((item) => item.runId === baseRecorder.runId && item.toolName === 'server_run_draft_base');
+assert.equal(baseIndexes.length, 1, 'identical concurrent base writes retain one canonical snapshot');
+await assert.rejects(saveServerRunDraftBase(projectId, baseRecorder.runId, { ...baseInput, content: 'conflicting base' }), /HTTP 409/);
+assert.equal((await kvKeys()).filter((key) => key.startsWith(agentArtifactKey(projectId, ''))).length,
+  (await loadAgentRuntimeSidecar(projectId)).artifacts.length, 'deduplicated and rejected base writes leave no orphan bodies');
+const baseArtifact = await loadAgentArtifact(projectId, baseIndexes[0].artifactId);
+assert(baseArtifact);
+
+// Seed the old format directly: distinct artifact IDs with duplicate base
+// bodies already exist in interrupted projects and must remain recoverable.
+const seedLegacyBase = async (artifactId: string, body: string) => {
+  const record = { ...baseArtifact, artifactId, body, bodySha256: await sha256Text(body),
+    originalBytes: new TextEncoder().encode(body).byteLength, originalChars: body.length, createdAt: Date.now() };
+  await kvSet(agentArtifactKey(projectId, artifactId), record);
+  const { body: _body, version: _version, ...index } = record;
+  await mutate(projectId, (current) => [{ ...current, artifacts: [...current.artifacts, index],
+    runs: current.runs.map((run) => run.runId === baseRecorder.runId
+      ? { ...run, artifactIds: [...run.artifactIds, artifactId] } : run) }, undefined]);
+};
+await seedLegacyBase('srd_legacy_same', baseArtifact.body);
+await saveServerRunDraftTool(projectId, baseRecorder.runId, {
+  toolCallId: 'saved-analysis', argsDigest: 'analysis-digest', name: 'revise_clipmentor_analysis',
+  args: {}, result: { ok: true, revision: 12 }, actions: [],
+});
+const recoveredDraft = await loadServerRunDraft(projectId, baseRecorder.runId);
+assert.deepEqual(recoveredDraft?.base.baseDoc, migrateProjectDoc(baseDoc), 'identical historical bases recover the same normalized project');
+assert.equal(recoveredDraft?.tools.length, 1, 'historical duplicate bases do not duplicate saved tool actions');
+assert.deepEqual(recoveredDraft?.tools[0].result, { ok: true, revision: 12 }, 'recovery retains the latest saved tool result');
+await seedLegacyBase('srd_legacy_conflict', JSON.stringify({ ...JSON.parse(baseArtifact.body), content: 'conflicting base' }));
+await assert.rejects(loadServerRunDraft(projectId, baseRecorder.runId), (error: unknown) =>
+  isPermanentServerRunRecoveryError(error) && error instanceof Error && /conflicting base/.test(error.message),
+  'conflicting historical bases fail closed without an infinite transient retry');
+await baseRecorder.finalize('interrupted', 'base recovery verifier complete');
+
 // Error hints carry the real reason (the bare 'could not be persisted' hid
 // the capability loss after tab switches/reloads).
 {
@@ -106,4 +161,4 @@ await recorder.finalize('interrupted', 'privacy verifier complete');
   await expectHint('draft-other-500', /HTTP 500/);
 }
 
-console.log('serverRunDraftStore.verify: recovery drafts redact credentials');
+console.log('serverRunDraftStore.verify: privacy, idempotent bases, historical duplicates and conflict refusal passed');

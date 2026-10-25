@@ -139,6 +139,23 @@ try {
   const beforeInvalid=calls;
   await assert.rejects(previewBridge({...body(),input:cleanInput,executionManifest:{...manifest,total_frames:301}},passDeps));
   assert.equal(calls,beforeInvalid,'invalid manifest is rejected before any paid invocation');
+  // Whole-film teaching units use actual output ranges, independently of mechanical candidates.
+  const filmManifest={fps:30,total_frames:300,scenes:[{start_frame:0,end_frame:300,kind:'video',content:0}]};
+  const filmInput={...cleanInput,units:[{unit_id:'U02',point_ids:['P'],output_range_seconds:[0,10]}]};
+  const filmJudgment=structuredClone(judgment);filmJudgment.continuity[0].unit_id='U02';
+  for(const r of [...filmJudgment.continuity[0].previous,...filmJudgment.continuity[0].current,...filmJudgment.continuity[0].narrative.evidence,...filmJudgment.continuity[0].teaching.evidence])r.observed='连续动态视频';
+  const filmDeps={...deps,run:async(args:string[])=>{calls++;
+    const clean=JSON.parse(await readFile(args[args.indexOf('--input')+1],'utf8'));
+    assert.deepEqual(clean,filmInput,'actual unit ranges survive neutral input projection');
+    await writeFile(args[args.indexOf('--out')+1],JSON.stringify({video_sha256:videoSha256,input_sha256:createHash('sha256').update(JSON.stringify(clean)).digest('hex'),raw_public_judgment:JSON.stringify(filmJudgment),judgment:filmJudgment,status:'pass',full_film_accepted:false}));}};
+  const film={...body(),input:filmInput,executionManifest:filmManifest};
+  const filmResult=await previewBridge(film,filmDeps);
+  assert.equal(filmResult.effective_review.can_use_as_pass,true,'no mechanical candidate does not prevent genuine teaching review');
+  assert.equal((await previewBridge({action:'read',projectId:'project-a',operationId:film.operationId},filmDeps)).effective_review.can_use_as_pass,true);
+  const beforeBadFilm=calls;
+  for(const range of [[0,11],[5,4],[0],[0,null]])await assert.rejects(previewBridge({...film,operationId:randomUUID(),input:{...filmInput,units:[{...filmInput.units[0],output_range_seconds:range}]}},filmDeps));
+  await assert.rejects(previewBridge({...film,operationId:randomUUID(),input:{...filmInput,units:[{unit_id:'U02',point_ids:['P']}]}},filmDeps),'unmapped teaching units remain refused');
+  assert.equal(calls,beforeBadFilm,'invalid ranges rejected before invocation');
   // The browser must not accept a legacy server response that omits the new evidence gate.
   const localFetch=globalThis.fetch;
   globalThis.fetch=(async()=>new Response(JSON.stringify({operationId:approved.operationId,projectId:'project-a',status:'completed',

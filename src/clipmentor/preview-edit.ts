@@ -1,7 +1,19 @@
 import type { AgentContext } from '../agent/context';
 import type { MediaAsset, ProjectDoc, Timeline } from '../editor/types';
+import { sourceRevisionOf } from '../editor/mediaSourceRevision';
 
 export const PREVIEW_EDIT_SCOPE = 'authorized_local_preview_revision';
+export interface NativeComparisonEdit {
+  timelineId: string;
+  range: [number, number];
+  videoId: string;
+  stillId: string;
+  removeIds: string[];
+  replaceAnnotationId?: string;
+  sourceStartFrame: number;
+  videoFrames: number;
+  annotation: MediaAsset;
+}
 export interface PreviewEditPlan {
   operationId: string;
   projectId: string;
@@ -11,6 +23,7 @@ export interface PreviewEditPlan {
   totalFrames: number;
   baseSegments?: Array<{ startFrame: number; durationInFrames: number; srcInFrame: number }>;
   audio?: MediaAsset;
+  native?: NativeComparisonEdit;
 }
 export async function previewDocDigest(doc: ProjectDoc): Promise<string> {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(doc)));
@@ -20,6 +33,7 @@ export async function previewDocDigest(doc: ProjectDoc): Promise<string> {
 export function buildPreviewRevision(doc: ProjectDoc, plan: PreviewEditPlan): ProjectDoc {
   const id = `preview_${plan.operationId}`;
   if (doc.timelines.some(t => t.id === id)) throw new Error('Preview revision already exists');
+  if (plan.native) return buildNativeComparisonRevision(doc, plan, id);
   const timeline: Timeline = {
     id, name: plan.audio ? 'Teashell两段 · 近鼻讲解精简（待审）' : '88秒基线 · 已授权局部修订（待审）', order: Math.max(-1, ...doc.timelines.map(t => t.order)) + 1,
     fps: plan.fps, width: plan.baseline.width!, height: plan.baseline.height!, fit: 'contain',
@@ -45,6 +59,42 @@ export function buildPreviewRevision(doc: ProjectDoc, plan: PreviewEditPlan): Pr
   };
   return {...doc, assets:[...doc.assets, plan.baseline, ...plan.patches.map(p=>p.asset), ...(plan.audio?[plan.audio]:[])],
     timelines:[...doc.timelines,timeline],activeTimelineId:id};
+}
+
+/** Exact host-bound native picture delta. Text, audio, analysis and the original timeline survive unchanged. */
+function buildNativeComparisonRevision(doc:ProjectDoc,plan:PreviewEditPlan,id:string):ProjectDoc {
+  const n=plan.native!,t=doc.timelines.find(t=>t.id===n.timelineId),[a,b]=n.range;
+  const invalid=()=>{throw new Error('Invalid native comparison scope');};
+  if(!t||doc.activeTimelineId!==t.id||t.fps!==plan.fps||!Number.isInteger(a)||!Number.isInteger(b)||a<0||b<=a
+    ||b>plan.totalFrames||Math.max(...t.items.map(i=>i.startFrame+i.durationInFrames))!==plan.totalFrames
+    ||!Number.isInteger(n.videoFrames)||n.videoFrames<=0||n.videoFrames>=b-a||!Number.isInteger(n.sourceStartFrame)||n.sourceStartFrame<0) return invalid();
+  const ids=[n.videoId,n.stillId,...n.removeIds];
+  const video=t.items.find(i=>i.id===n.videoId),still=t.items.find(i=>i.id===n.stillId);
+  if(new Set(ids).size!==ids.length||!video||video.kind!=='video'||video.volume!==0||!still||still.kind!=='image'||video.track!==still.track) return invalid();
+  const selected=t.items.filter(i=>ids.includes(i.id)).sort((x,y)=>x.startFrame-y.startFrame);
+  let edge=a;
+  for(const item of selected) {
+    if(!['video','image'].includes(item.kind)||item.track!==video.track||item.startFrame!==edge) return invalid();
+    edge=item.startFrame+item.durationInFrames;
+  }
+  if(selected.length!==ids.length||edge!==b||t.items.some(i=>i.track===video.track&&!ids.includes(i.id)&&i.startFrame<b&&i.startFrame+i.durationInFrames>a)
+    ||n.annotation.kind!=='image'||n.annotation.width!==t.width||n.annotation.height!==t.height
+    ||doc.assets.some(x=>x.id===n.annotation.id)) return invalid();
+  const track=`${id}_emphasis`;
+  const previousAnnotation=n.replaceAnnotationId?t.items.find(i=>i.id===n.replaceAnnotationId):undefined;
+  if(n.replaceAnnotationId&&(!previousAnnotation||previousAnnotation.kind!=='image'||previousAnnotation.name!=='比较区域框与箭头'
+    ||!previousAnnotation.track.endsWith('_emphasis')||previousAnnotation.startFrame!==a+n.videoFrames
+    ||previousAnnotation.durationInFrames!==b-a-n.videoFrames||ids.includes(previousAnnotation.id))) return invalid();
+  const annotation={...n.annotation,sourceRevision:sourceRevisionOf(n.annotation)};
+  const items=t.items.filter(i=>!n.removeIds.includes(i.id)&&i.id!==n.replaceAnnotationId).map(i=>i.id===n.videoId?{...i,startFrame:a,durationInFrames:n.videoFrames,srcInFrame:n.sourceStartFrame}:
+    i.id===n.stillId?{...i,startFrame:a+n.videoFrames,durationInFrames:b-a-n.videoFrames}:i);
+  items.push({id:`${id}_annotation`,name:'比较区域框与箭头',track,kind:'image',startFrame:a+n.videoFrames,
+    durationInFrames:b-a-n.videoFrames,src:annotation.src,sourceAssetId:annotation.id,width:t.width,height:t.height,sourceRevision:annotation.sourceRevision});
+  const timeline:Timeline={...t,id,name:'Teashell · 比较对象与框箭头修正（待审）',order:Math.max(...doc.timelines.map(t=>t.order))+1,
+    selectedId:null,selectedIds:[],items,trackOrder:[track,...(t.trackOrder??Object.keys(t.tracks??{}))],tracks:{...t.tracks,[track]:{kind:'video',name:'比较区域重点强调'}},
+    markers:[...(t.markers??[]),{id:`${id}_pending`,scope:'project',fromFrame:a,durationFrames:b-a,color:'yellow',
+      note:`${PREVIEW_EDIT_SCOPE} ${plan.operationId}；仅比较画面与框箭头；文字/音频/其他段落不变，旧审核不恢复，待用户看片。`}]};
+  return {...doc,assets:[...doc.assets,annotation],timelines:[...doc.timelines,timeline],activeTimelineId:id};
 }
 
 export async function previewEditRequest(action: string, args: Record<string,unknown>, ctx: AgentContext) {
@@ -84,7 +134,8 @@ export async function editClipMentorPreview(args: Record<string,unknown>, ctx: A
       if(ctx.getDoc()!==before) throw new Error('Project changed before export; attempt consumed');
       const snapshotContext: AgentContext = {...ctx,getDoc:()=>before,
         getState:()=>before.timelines.find(t=>t.id===before.activeTimelineId)!};
-      return {...await execExportTool('submit_render_job',{format:'video',codec:'h264',name:before.timelines.find(t=>t.id===before.activeTimelineId)?.name.includes('近鼻讲解精简')?'Teashell-近鼻讲解精简-待审.mp4':'Teashell-88秒-局部承接修订-待审.mp4'},snapshotContext) as object,
+      const native=before.timelines.find(t=>t.id===before.activeTimelineId)?.name.includes('比较对象与框箭头');
+      return {...await execExportTool('submit_render_job',{format:'video',codec:'h264',...(native?{resolution:'720p',fps:30,videoBitrate:3000000,saveToMediaPool:true}:{}),name:native?'Teashell-比较段最小修正-待审.mp4':before.timelines.find(t=>t.id===before.activeTimelineId)?.name.includes('近鼻讲解精简')?'Teashell-近鼻讲解精简-待审.mp4':'Teashell-88秒-局部承接修订-待审.mp4'},snapshotContext) as object,
         scope:PREVIEW_EDIT_SCOPE,full_film_accepted:false,quality_status:'review_required'};
     }
     throw new Error('Unknown preview action');

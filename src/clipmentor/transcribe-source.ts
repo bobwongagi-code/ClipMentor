@@ -11,7 +11,7 @@ export async function transcribeClipMentorAsset(args: Record<string, unknown>, c
   if (!asset || asset.kind !== 'video') return { error: 'Exact original video asset ID required' };
   let result: unknown;
   try {
-    const response = await fetch('/api/clipmentor/transcribe-source', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const response = await (ctx.hostFetch ?? fetch)('/api/clipmentor/transcribe-source', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ src: asset.src, expectedSourceHash: asset.sourceContentHash, sourceSize: asset.sourceSize,
         language: args.language ?? 'auto', operationId: args.operationId, maxRequests: args.maxRequests }) });
     if (!response.ok) return { error: `Source ASR request was not completed (HTTP ${response.status}); do not automatically retry. Keep the operationId to inspect/recover its result.` };

@@ -64,6 +64,7 @@ const ctx: AgentContext = { commands: engine.commands, getDoc: engine.getDoc, ge
 async function call(name: string, args: Record<string, unknown>) {
   return await executeTool(name, args, ctx) as { ok?: boolean; error?: string; revision?: number };
 }
+assert(!TOOL_SCHEMAS.some(t=>t.name==='save_clipmentor_source_frame'),'server-only extraction is not advertised to browser Agent');
 assertValidAgentToolSchemas(CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS);
 const serverCatalog = JSON.parse(readFileSync(new URL('../../assets/agent/openchatcut-tool-schemas.json', import.meta.url), 'utf8'));
 for (const tool of CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS) {

@@ -54,7 +54,7 @@ import {
   decideAcceptanceAfterTurn,
   turnDisposition,
 } from './acceptance-loop';
-import { createServerTools, type ActivationState } from './browser-tool';
+import { createServerTools, type ActivationState, type ServerToolHost } from './browser-tool';
 export { executeBrowserTool, type ActivationState } from './browser-tool';
 export { turnDisposition, type TurnDisposition } from './acceptance-loop';
 export {
@@ -70,6 +70,8 @@ function safeError(error: unknown): string {
     || 'Agent provider request failed.';
 }
 export interface ServerRunInput {
+  /** Internal service host; deliberately not part of the HTTP create-run input. */
+  readonly host?: ServerToolHost;
   readonly messages: ModelMessage[];
   readonly backend?: string;
   readonly provider: string;
@@ -144,7 +146,7 @@ async function runServerTurnOnce(
   hitMaxTokens: boolean;
 }> {
   const schemas = input.activation.current.schemas();
-  const prepared = await prepareServerContext({ ...input, schemas });
+  const prepared = await prepareServerContext({ ...input, schemas,beforeRequest:input.activation.host?.beforeRequest });
   const tools = createServerTools(
     input.run,
     schemas,
@@ -152,6 +154,7 @@ async function runServerTurnOnce(
   );
   pushRunEvent(input.run, 'text-start', {});
   const options = serverProviderOptions(input.provider, input.apiMode, input.cacheMode);
+  await input.activation.host?.beforeRequest();
   const result = streamText({
     model: input.model,
     instructions: input.instructions,
@@ -211,7 +214,7 @@ function createExecutionPlan(run: ServerRun, input: ServerRunInput) {
   const provider = normalizeLlmProvider(input.provider);
   const apiMode = normalizeOpenAiApiMode(input.openAiApiMode);
   const backend = input.backend === 'codex' ? 'codex' : 'api';
-  const requested = resolveServerRunToolCatalog(input.tools, run.askOnly);
+  const requested = resolveServerRunToolCatalog(input.tools, run.askOnly, !!input.host);
   const capabilities = resolveServerRunCapabilities(provider, backend, input.model);
   const maxOutputTokens = resolveServerRunMaxOutputTokens(
     input.maxOutputTokens,
@@ -222,8 +225,9 @@ function createExecutionPlan(run: ServerRun, input: ServerRunInput) {
     ? Math.max(1, capabilities.contextWindowTokens.value - maxOutputTokens)
     : capabilities.maxInputTokens.value;
   const activation: ActivationState = {
+    host:input.host,
     current: new ToolActivation(
-      canonicalServerRunToolCatalog(run.askOnly),
+      input.host?requested:canonicalServerRunToolCatalog(run.askOnly),
       input.messages,
       requested.map((schema) => schema.name),
     ),
@@ -276,7 +280,8 @@ async function executeRunTurns(
   // stop beside "no more tool calls" is an output-token cutoff, which would
   // otherwise feed truncated text back into the loop.
   for (let turn = 0; ; turn += 1) {
-    const outcome = await runServerTurnWithRetry(run, turn + 1, signal, () =>
+    if(input.host&&(turn>=input.host.maxTurns||Date.now()>=input.host.deadlineAt)) throw new Error('Production request/time budget exhausted');
+    const attempt = () =>
       plan.backend === 'codex'
         ? (async () => (await import('./codex-turn')).executeServerCodexTurn({
           run,
@@ -309,8 +314,8 @@ async function executeRunTurns(
           signal,
           activation: plan.activation,
           requestIndex: turn + 1,
-        }),
-    );
+        });
+    const outcome = input.host ? await attempt() : await runServerTurnWithRetry(run, turn + 1, signal, attempt);
     if (outcome.followupText) {
       if (plan.activation.acceptance.phase === 'checking') {
         pushRunEvent(run, 'acceptance', {
@@ -404,13 +409,20 @@ export async function executeRun(
   input: ServerRunInput,
 ): Promise<void> {
   const abort = new AbortController();
+  const timer=input.host?setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,input.host.deadlineAt-Date.now())):undefined;
+  const externalAbort=()=>abort.abort(input.host?.signal?.reason);
+  input.host?.signal?.addEventListener('abort',externalAbort,{once:true});
+  if(input.host?.signal?.aborted)externalAbort();
   run.abort = abort;
   try {
+    if(input.host&&input.backend!=='api')throw new Error('Server production requires API backend; desktop fallback is forbidden');
     await setRunStatus(run, 'running');
     await executeRunTurns(run, input, abort.signal);
   } catch (error) {
     await settleRunFailure(run, abort, error);
   } finally {
+    if(timer) clearTimeout(timer);
+    input.host?.signal?.removeEventListener('abort',externalAbort);
     if (run.abort === abort) run.abort = undefined;
   }
 }

@@ -51,16 +51,16 @@ export function isSourceTranscription(v: unknown): v is SourceTranscription {
     && (v.detected_language === null || typeof v.detected_language === 'string')
     && hash(v.source_hash) && num(v.duration_seconds) && v.duration_seconds > 0 && num(v.fps) && v.fps > 0
     && obj(v.audio) && Object.entries(ASR_AUDIO).every(([k, value]) => audio[k] === value)
-    && ['completed', 'partial', 'failed'].includes(String(v.status))
+    && (typeof v.status === 'string' && ['completed', 'partial', 'failed'].includes(v.status))
     && Number.isSafeInteger(v.requests_attempted) && Number(v.requests_attempted) >= 0 && words(v.words)
     && Array.isArray(v.chunks) && v.chunks.every((c) => obj(c) && typeof c.chunk_id === 'string'
       && num(c.offset_seconds) && num(c.end_seconds) && c.end_seconds > c.offset_seconds
-      && ['completed', 'failed', 'not_requested'].includes(String(c.status)) && num(c.audio_bytes)
+      && (typeof c.status === 'string' && ['completed', 'failed', 'not_requested'].includes(c.status)) && num(c.audio_bytes)
       && c.audio_bytes <= ASR_MAX_BYTES && hash(c.audio_sha256) && words(c.words)
       && (c.detected_language === null || typeof c.detected_language === 'string')
       && (c.request_id === undefined || typeof c.request_id === 'string') && (c.error === undefined || typeof c.error === 'string')
       && (c.http_status === undefined || (Number.isInteger(c.http_status) && Number(c.http_status) >= 100 && Number(c.http_status) <= 599))
-      && (c.failure_stage === undefined || ['network', 'http', 'json', 'timestamps'].includes(String(c.failure_stage)))
+      && (c.failure_stage === undefined || (typeof c.failure_stage === 'string' && ['network', 'http', 'json', 'timestamps'].includes(c.failure_stage)))
       && (c.separator_entries_skipped === undefined || (Number.isSafeInteger(c.separator_entries_skipped) && Number(c.separator_entries_skipped) >= 0)))
     && Array.isArray(v.conflicts) && v.conflicts.every((c) => obj(c) && Array.isArray(c.range_seconds)
       && c.range_seconds.length === 2 && c.range_seconds.every(num) && c.range_seconds[1] > c.range_seconds[0]

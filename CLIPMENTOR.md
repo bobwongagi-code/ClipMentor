@@ -1,6 +1,6 @@
 # ClipMentor modified version
 
-Modification notice: 2026-10-06; updated 2026-10-24.
+Modification notice: 2026-10-06; updated 2026-10-26.
 
 This repository is a modified version of [OpenChatCut](https://github.com/0xsline/OpenChatCut), by 0xsline and its contributors. ClipMentor is not an official upstream OpenChatCut release. Original author metadata, license notices and upstream commit history are retained. No claim is made that ClipMentor owns the upstream code or branding.
 
@@ -37,3 +37,9 @@ Targeted skill, Codex, tool-catalog and H.264 audio checks passed before the app
 The earlier incomplete local ONNX Runtime installation was restored to the exact lockfile-pinned package without changing dependency versions. The Node TypeScript project now includes the existing desktop API declaration rather than adding substitute types. This is a source update, not an installer release or a claim that a new video has passed editorial acceptance.
 
 Verification on 2026-10-24 used Node 24 and an isolated checkout containing the intended changes without unrelated worktree edits. Full `npm test` (pretest, 165 main test segments and posttest), lint, the TypeScript/frontend build and targeted ClipMentor/server-run regressions passed. The frontend build skipped native Whisper provisioning; a fresh dependency installation, native installer build and real editorial acceptance were not performed. Existing lint/build warnings remain.
+
+## Source checkpoint on 2026-10-26
+
+This checkpoint retains existing preparation work for server-owned editing, API copy review and staged production tasks. It is not a release, a migration of the current browser workflow, or evidence that autonomous video production is reliable. The new-sample capability test remains separate and has not started. No personal model credentials, production projects or media are included.
+
+Server-only frame extraction is excluded from browser tool discovery and requires an internal execution host. Teaching-unit preview reviews use saved output placement ranges; legacy transition reviews retain their computed candidate ranges and cannot override them. Source-observation receipt recovery reuses the original completed result or returns the saved failure, without resubmission. Regression tests run through the existing production and preview-review verification commands. Native Whisper provisioning still requires CMake or a prebuilt Whisper binary; a frontend-only build is not a successful native provisioning check.

@@ -7,10 +7,27 @@ type Observation = ReviewReceipt & { path: string };
 type IssueCode = 'static_description_over_video' | 'possible_dynamic_omission' | 'pause_not_separately_described'
   | 'pause_used_in_positive_evidence' | 'wording_requires_evidence';
 
+/** Teaching spans are saved output positions, not mechanically generated transition IDs.
+ * Legacy transition reviews keep their original computed grouping and immutable receipts. */
+export function previewReviewWindows(manifest: unknown, inputValue: unknown) {
+  const structural=checkTransitionManifest(manifest),input=validatePreviewReviewInput(inputValue);
+  if(input.duration_seconds!==structural.duration_seconds)throw new Error('Review and manifest durations differ');
+  return input.units.map(unit=>{
+    const range=unit.output_range_seconds;
+    if(range&&/^transition-\d+$/.test(unit.unit_id))throw new Error('Cannot override computed transition review range');
+    if(range)return {group_id:unit.unit_id,start_seconds:range[0],end_seconds:range[1],
+      cut_events:structural.cut_events.filter(c=>c.at_seconds>=range[0]&&c.at_seconds<=range[1])};
+    const group=structural.review_groups.find(g=>g.group_id===unit.unit_id);
+    if(!group)throw new Error('Manifest does not match review units');
+    return group;
+  });
+}
+
 /** Facts are derived from the execution record. Text matching only locates explicit Chinese
  * wording for inspection; it is not a general semantic classifier or a rendered-pixel test. */
 export function checkPreviewTimelineObservations(manifestValue: unknown, resultValue: unknown, inputValue: unknown) {
   const structural = checkTransitionManifest(manifestValue);
+  const windows=previewReviewWindows(manifestValue,inputValue);
   const manifest = manifestValue as Manifest;
   const input = validatePreviewReviewInput(inputValue);
   if (input.duration_seconds !== structural.duration_seconds) throw new Error('Review and manifest durations differ');
@@ -33,7 +50,7 @@ export function checkPreviewTimelineObservations(manifestValue: unknown, resultV
       source_end_exclusive_seconds: moving ? Number(s.content) + b - s.start_frame / fps : null }];
   });
   const units = judgment.continuity.map(unit => {
-    const group = structural.review_groups.find(g => g.group_id === unit.unit_id);
+    const group = windows.find(g => g.group_id === unit.unit_id);
     if (!group) throw new Error('Review unit has no computed transition group');
     const observations: Observation[] = [];
     const add = (path: string, receipts: ReviewReceipt[]) => receipts.forEach((r, i) => observations.push({ ...r, path: `${path}[${i}]` }));
