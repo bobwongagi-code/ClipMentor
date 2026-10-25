@@ -229,6 +229,8 @@ export function buildCommands(dispatch: ProjectDispatch, getDoc: () => ProjectDo
       },
       addTextClip: (at) => {
         const id = uid('item');
+        const canvas = activeTimeline(getDoc());
+        const defaultScale = Math.min(canvas.width / 1920, canvas.height / 1080);
         const align = at?.align === 'left' || at?.align === 'right' ? at.align : 'center';
         dispatchWithTracks({
           type: 'add',
@@ -240,11 +242,12 @@ export function buildCommands(dispatch: ProjectDispatch, getDoc: () => ProjectDo
             durationInFrames: at?.durationInFrames ?? 90,
             kind: 'text',
             name: at?.name?.trim() || '文字',
-            width: 1920,
-            height: 1080,
+            width: canvas.width,
+            height: canvas.height,
             props: {
               text: at?.text?.trim() || '双击编辑文字',
-              fontSize: typeof at?.fontSize === 'number' && Number.isFinite(at.fontSize) ? at.fontSize : 96,
+              fontSize: typeof at?.fontSize === 'number' && Number.isFinite(at.fontSize) ? at.fontSize : 96 * defaultScale,
+              paddingX: 96 * defaultScale,
               color: at?.color?.trim() || '#ffffff',
               fontWeight: typeof at?.fontWeight === 'number' && Number.isFinite(at.fontWeight) ? at.fontWeight : 700,
               align,

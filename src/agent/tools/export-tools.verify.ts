@@ -368,6 +368,68 @@ assert.ok(!('ok' in missing), 'a transport error should not claim ok:true');
   assert.ok(none.error?.includes('renderIds'), 'empty-session latest points at renderIds');
 }
 
+// An Agent may export only a durable, separately committed editing snapshot.
+// An external export failure must leave that saved edit byte-for-byte intact.
+{
+  const { createProject, loadProject, saveProject } = await import('../../persist/projectStore');
+  const committed = structuredClone(draft.getDoc());
+  const meta = await createProject('disposable-export-checkpoint', committed);
+  let current = structuredClone(committed);
+  const agentCtx = { ...ctx, getDoc: () => current, getProjectId: () => meta.id, getAgentRunId: () => 'synthetic-run' };
+  let posts = 0;
+  globalThis.fetch = async (url) => {
+    assert.equal(String(url), '/export/job', 'only the injected local export endpoint is permitted');
+    posts++;
+    return Response.json({ error: 'injected encoder failure' }, { status: 500 });
+  };
+  current.timelines[0].name = 'uncommitted editing';
+  const refused = await execExportTool('submit_render_job', {}, agentCtx) as any;
+  assert.equal(refused.code, 'export_requires_committed_project');
+  assert.equal(posts, 0, 'uncommitted editing must not start an external render');
+  const syncRefused = await executeGenerateCommand('submit_export', { format: 'video' }, agentCtx) as any;
+  assert.equal(syncRefused.code, 'export_requires_committed_project', 'synchronous export obeys the same commit boundary');
+  assert.equal(posts, 0);
+  assert.deepEqual(await loadProject(meta.id), committed, 'refusing export cannot silently commit the draft');
+  await saveProject(meta.id, current);
+  const saved = JSON.stringify(await loadProject(meta.id));
+  const failed = await execExportTool('submit_render_job', {}, agentCtx) as any;
+  assert.match(failed.error, /injected encoder failure/);
+  assert.equal(posts, 1, 'failed export is counted once, with no automatic resubmission');
+  assert.equal(JSON.stringify(await loadProject(meta.id)), saved, 'committed editing survives export failure and reload');
+  assert.equal(failed.ok, undefined, 'failed export cannot claim success');
+  // Ordinary UI selection does not create a false uncommitted-edit warning.
+  current = structuredClone(current); current.timelines[0].selectedId = 'selection-only'; current.timelines[0].selectedIds = ['selection-only'];
+  globalThis.fetch = async () => { posts++; return Response.json({ renderId: 'committed-export' }); };
+  const normal = await execExportTool('submit_render_job', {}, agentCtx) as any;
+  assert.equal(normal.ok, true);
+  assert.equal(posts, 2);
+  let polls = 0;
+  globalThis.fetch = async (url) => {
+    assert.equal(String(url), '/export/job/committed-export'); polls++;
+    return Response.json({ id: 'committed-export', status: 'failed', progress: 15, error: 'injected asynchronous render failure' });
+  };
+  const laterFailure = await execExportTool('track_export', { action: 'status', renderIds: 'committed-export' }, agentCtx) as any;
+  assert.equal(laterFailure.status, 'failed');
+  assert.match(laterFailure.error, /asynchronous render failure/);
+  assert.equal(laterFailure.downloadUrl, undefined, 'failed renderer cannot return a completed output');
+  assert.equal(polls, 1);
+  assert.equal(JSON.stringify(await loadProject(meta.id)), saved, 'asynchronous render failure cannot alter the committed project');
+  // A selection-only immutable live update while reading persistence is safe;
+  // a simultaneous actual editing update is not. Never compare object identity.
+  let reads = 0;
+  const uiOnly = structuredClone(current); uiOnly.timelines[0].selectedId = null; uiOnly.timelines[0].selectedIds = [];
+  globalThis.fetch = async () => { posts++; return Response.json({ renderId: 'selection-update-export' }); };
+  const uiResult = await execExportTool('submit_render_job', {}, { ...agentCtx, getDoc: () => ++reads === 1 ? current : uiOnly }) as any;
+  assert.equal(uiResult.ok, true, 'selection change during persistence read is not an uncommitted edit');
+  const beforeRace = posts;
+  reads = 0;
+  const concurrentEdit = structuredClone(current); concurrentEdit.timelines[0].name = 'new concurrent edit';
+  const raced = await execExportTool('submit_render_job', {}, { ...agentCtx, getDoc: () => ++reads === 1 ? current : concurrentEdit }) as any;
+  assert.equal(raced.code, 'export_requires_committed_project');
+  assert.equal(posts, beforeRace, 'a real edit during persistence read must stop before POST');
+
+}
+
 // registry sanity — the names the integrator wires into tools.ts.
 assert.ok(EXPORT_TOOL_NAMES.has('submit_render_job'));
 assert.ok(EXPORT_TOOL_NAMES.has('track_export'));

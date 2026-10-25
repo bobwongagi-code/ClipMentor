@@ -142,6 +142,48 @@ try {
   assert.equal(afterRefusal[0]?.name, 'Accepted prior edit',
     'reads after callback rejection must roll back only the refused local mutation');
   assert.equal(draft.getDoc().timelines[0]?.name, 'Business failure', 'executor drafts never mutate the live project');
+  // Exercise the real browser executor, not only the export tool's test seam.
+  const { saveProject, loadProject, migrateProjectDoc } = await import('../persist/projectStore');
+  const committedDraft = makeDraft(doc);
+  committedDraft.commands.addTextClip({ text: 'committed title', durationInFrames: 30 });
+  const committed = migrateProjectDoc(committedDraft.getDoc())!;
+  await saveProject(projectId, committed);
+  let exportPosts = 0;
+  const received: Array<{ error?: string }> = [];
+  const exportExecutor = new ServerRunToolExecutor(projectId, {
+    ctx: () => ({ commands: committedDraft.commands, getState: committedDraft.getState,
+      getDoc: () => committed, getCreativeMode: () => null, templates: [], audio: [] }),
+    settings: () => ({} as never), onToolAction: action => { received.push(action); },
+    updateMessages: () => undefined, setLiveTool: () => undefined,
+    retryStream: () => undefined, abandonRecovery: () => undefined,
+  }, new FakeLockManager());
+  const exportRun = 'pending-edit-before-export';
+  assert(saveStoredServerRun(projectId, { projectId, runId: exportRun, attempts: [] }));
+  exportExecutor.start({ capability: 'local-only', baseDoc: committed,
+    activation: new ToolActivation(TOOL_SCHEMAS, []), runId: exportRun,
+    abort: new AbortController(), recovered: new Map() });
+  const protocolFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === '/export/job') { exportPosts++; return Response.json({ error: 'injected export failure' }, { status: 500 }); }
+    return protocolFetch(url, init);
+  };
+  assert.equal(await exportExecutor.handle(exportRun, 'pending-edit', 'manage_timelines', {
+    action: 'update', timelineId: committed.activeTimelineId, name: 'pending edit',
+  }, 'pending-digest', () => true), true);
+  assert.equal(await exportExecutor.handle(exportRun, 'blocked-export', 'submit_render_job', {}, 'export-digest', () => true), true);
+  assert.match(received.at(-1)?.error ?? '', /separately committed/);
+  assert.equal(exportPosts, 0, 'the real host must block export before any external side effect');
+  assert.deepEqual(await loadProject(projectId), committed);
+  // A fresh run sees the committed sequence and may submit exactly once.
+  const committedRun = 'committed-export-failure';
+  assert(saveStoredServerRun(projectId, { projectId, runId: committedRun, attempts: [] }));
+  exportExecutor.start({ capability: 'local-only', baseDoc: committed,
+    activation: new ToolActivation(TOOL_SCHEMAS, []), runId: committedRun,
+    abort: new AbortController(), recovered: new Map() });
+  assert.equal(await exportExecutor.handle(committedRun, 'failed-export', 'submit_render_job', {}, 'failed-export-digest', () => true), true);
+  assert.match(received.at(-1)?.error ?? '', /injected export failure/);
+  assert.equal(exportPosts, 1, 'no implicit retry on the actual host failure path');
+  assert.deepEqual(await loadProject(projectId), committed, 'the committed title and sequence survive failed export');
 } finally {
   globalThis.fetch = originalFetch;
   if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);

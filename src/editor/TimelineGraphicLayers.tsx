@@ -46,11 +46,13 @@ export function TextLayer({ item, canvasW, canvasH, fit }: {
   const dh = item.height ?? 1080;
   const scale = fit === 'cover' ? Math.max(canvasW / dw, canvasH / dh) : Math.min(canvasW / dw, canvasH / dh);
   const props = item.props ?? {};
+  // New native-canvas text records its inset; old saved titles retain 96px.
+  const paddingX = typeof props.paddingX === 'number' && Number.isFinite(props.paddingX) ? Math.max(0, props.paddingX) : 96;
   const align = (props.align === 'left' || props.align === 'right' ? props.align : 'center') as 'left' | 'center' | 'right';
   const justify = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center';
   return (
     <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
-      <div style={{ width: dw, height: dh, flexShrink: 0, transform: `scale(${scale})`, display: 'flex', alignItems: 'center', justifyContent: justify, padding: '0 96px', boxSizing: 'border-box' }}>
+      <div style={{ width: dw, height: dh, flexShrink: 0, transform: `scale(${scale})`, display: 'flex', alignItems: 'center', justifyContent: justify, padding: `0 ${paddingX}px`, boxSizing: 'border-box' }}>
         <div style={{ color: String(props.color ?? '#ffffff'), fontSize: Number(props.fontSize ?? 96), fontWeight: Number(props.fontWeight ?? 700), textAlign: align, width: '100%', fontFamily: 'Geist, system-ui, -apple-system, sans-serif', textShadow: '0 3px 16px rgba(0,0,0,0.55)', whiteSpace: 'pre-wrap', lineHeight: 1.2 }}>{String(props.text ?? '文字')}</div>
       </div>
     </AbsoluteFill>

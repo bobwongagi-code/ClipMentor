@@ -14,6 +14,7 @@ import {
 } from '../../export/agentExportTracking';
 import type { ExportJobResult } from '../../export/exportWorkflowTypes';
 import type { ProjectDoc } from '../../editor/types';
+import { committedAgentExportBlock } from '../../export/agentExportCheckpoint';
 
 // ═════════════════════════════════════ ══════════════════════════════════════
 // Asynchronous rendering job tool
@@ -192,6 +193,10 @@ async function submitRenderJob(args: Args, ctx: AgentContext): Promise<unknown> 
   try {
     const format = args.format === 'audio' ? 'audio' : 'video';
     const project = ctx.getDoc();
+    if (ctx.getAgentRunId?.()) {
+      const checkpoint = await committedAgentExportBlock(ctx, project);
+      if (checkpoint) return checkpoint;
+    }
     const timelineId = project.activeTimelineId;
     const projectId = ctx.getProjectId?.();
     const savePlan = args.saveToMediaPool === true

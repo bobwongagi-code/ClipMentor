@@ -1,4 +1,5 @@
 import type { AgentContext } from '../context';
+import { committedAgentExportBlock } from '../../export/agentExportCheckpoint';
 import type { MediaAsset, ProjectDoc, Timeline, TimelineState } from '../../editor/types';
 import { submitImage } from '../../generate/image';
 import { submitMusic, type MusicGenerationSubmission } from '../../generate/music';
@@ -346,6 +347,10 @@ async function exportXml(args: GenerateArgs, state: TimelineState): Promise<unkn
 async function submitExportHandler(args: GenerateArgs, ctx: AgentContext): Promise<unknown> {
   const format = args.format ?? 'video';
   const target = exportTarget(args, ctx);
+  if (ctx.getAgentRunId?.()) {
+    const checkpoint = await committedAgentExportBlock(ctx, target.project);
+    if (checkpoint) return checkpoint;
+  }
   if (format === 'video' || format === 'xml') {
     const gate = fontFallbackGate(target.state, args.confirmFontFallback);
     if (gate) return gate;

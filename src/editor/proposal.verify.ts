@@ -136,4 +136,32 @@ assert.strictEqual(projectReduce(base, { type: 'tl.setDoc', doc: applied2 }), ap
 const guarded = projectReduce(base, { type: 'tl.setHidden', id: 'tl_a', hidden: true });
 assert.strictEqual(guarded, base, 'cannot hide the last visible timeline');
 
+
+// Text is authored in the active canvas coordinate system, including after a
+// sequence switch. Saving/reloading must not silently shrink portrait titles.
+for (const [width, height] of [[1080, 1920], [1920, 1080], [720, 720]]) {
+  const doc = structuredClone(base); Object.assign(doc.timelines[0], { width, height });
+  const textDraft = makeDraft(doc);
+  textDraft.commands.addTextClip({ text: 'VISIBLE', fontSize: 48 });
+  const text = textDraft.getState().items[0];
+  assert.deepStrictEqual([text.width, text.height], [width, height], 'new text must use the active canvas, not fixed landscape dimensions');
+  assert.equal(text.props?.fontSize, 48);
+}
+
+// Defaults keep the legacy physical size, while explicit font sizes remain
+// native canvas pixels. Switching sequences must re-read the target canvas.
+const responsive = makeDraft(base);
+const portraitId = responsive.commands.createTimeline({ width: 1080, height: 1920, activate: true });
+responsive.commands.addTextClip({ text: 'default portrait' });
+assert.equal(responsive.getState().items[0].props?.fontSize, 54);
+assert.equal(responsive.getState().items[0].props?.paddingX, 54);
+responsive.commands.createTimeline({ width: 320, height: 180, activate: true });
+responsive.commands.addTextClip({ text: 'default small' });
+assert.equal(responsive.getState().items[0].props?.fontSize, 16);
+assert.equal(responsive.getState().items[0].props?.paddingX, 16);
+responsive.commands.switchTimeline(portraitId);
+responsive.commands.addTextClip({ text: 'explicit portrait', fontSize: 48 });
+assert.equal(responsive.getState().items.at(-1)?.props?.fontSize, 48);
+assert.deepStrictEqual([responsive.getState().items.at(-1)?.width, responsive.getState().items.at(-1)?.height], [1080, 1920]);
+
 console.log('proposal.check OK');

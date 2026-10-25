@@ -12,6 +12,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "verify:execution-render": "tsx src/editor/saved-render-visibility.verify.ts",
     "sync:mediapipe": "node scripts/sync-mediapipe.mjs",
     "sync:whisper-cli": "node scripts/sync-whisper-cli.mjs",
     "generate:server-tool-catalog": "tsx server/agent-runs/generate-tool-catalog.mts",

@@ -753,26 +753,108 @@ async function verifyCopyCandidateCheckpoint(): Promise<void> {
     assert((await loadProject(projectId))?.assets.some(a => a.id === 'prepared-audio'), 'checkpoint must not create a false concurrent edit');
     assert.equal(current.clipMentorAnalysis?.revision, 2);
     assert.deepEqual(current.timelines, base.timelines);
-    // Refusing a mixed preparation step must not persist a successful, unrecoverable journal entry.
+    // The new ledger checkpoint cannot commit an earlier timeline draft.
     current = base; await saveProject(projectId, base);
-    const pendingRun = await startAgentRun({ projectId, userInput: 'pending analysis checkpoint rejection', askOnly: false });
+    const mixedLedgerRun = await startAgentRun({ projectId, userInput: 'pending edit then ledger checkpoint', askOnly: false });
+    renderToString(createElement(Harness));
+    await callbacks.onRunStart({ ...input, runId: mixedLedgerRun.runId });
+    const timelineDraft = makeDraft(base); timelineDraft.commands.renameTimeline('tl', 'pending editing');
+    await callbacks.onToolAction({ ...action, runId: mixedLedgerRun.runId, toolCallId: 'pending-timeline', name: 'manage_timelines',
+      args: { action: 'update' }, result: { ok: true }, actions: timelineDraft.takeActions() });
+    const pendingAnalysis = structuredClone(timelineDraft.getDoc()); pendingAnalysis.clipMentorAnalysis!.revision = 2;
+    const mixedLedgerAction = { ...action, runId: mixedLedgerRun.runId, toolCallId: 'blocked-ledger-checkpoint',
+      args: { action: 'set_source_breakdown', expectedRevision: 1 }, actions: [{ type: 'tl.setDoc' as const, doc: pendingAnalysis }] };
+    await assert.rejects(callbacks.onToolAction(mixedLedgerAction), /preparation-only/);
+    const mixedJournal = await loadServerRunDraft(projectId, mixedLedgerRun.runId);
+    assert(!mixedJournal?.tools.some(tool => tool.toolCallId === mixedLedgerAction.toolCallId), 'refused ledger checkpoint cannot be journaled as success');
+    await callbacks.onTerminal({ runId: mixedLedgerRun.runId, status: 'failed', assistantText: 'mixed transaction refused' });
+    assert.deepEqual((await loadProject(projectId))?.timelines, base.timelines, 'refused checkpoint cannot commit an earlier edit');
+    assert.equal((await loadProject(projectId))?.clipMentorAnalysis?.revision, 1);
+    // Formal source registration and current candidate are independently durable
+    // preparation checkpoints in the SAME host run, not incompatible pending edits.
+    current = base; await saveProject(projectId, base);
+    const pendingRun = await startAgentRun({ projectId, userInput: 'source then candidate', askOnly: false });
     renderToString(createElement(Harness));
     const pendingInput = { ...input, runId: pendingRun.runId };
     await callbacks.onRunStart(pendingInput);
-    const pendingDoc = structuredClone(base); pendingDoc.clipMentorAnalysis!.revision = 2;
-    await callbacks.onToolAction({ ...action, runId: pendingRun.runId, toolCallId: 'pending-analysis', args: { action: 'set_source_breakdown' },
-      actions: [{ type: 'tl.setDoc', doc: pendingDoc }] });
-    const refusedDoc = structuredClone(pendingDoc); refusedDoc.clipMentorAnalysis!.revision = 3;
-    const refused = { ...action, runId: pendingRun.runId, toolCallId: 'refused-candidate', args: { action: 'set_copy_candidate', expectedRevision: 2 },
-      actions: [{ type: 'tl.setDoc' as const, doc: refusedDoc }] };
-    await assert.rejects(callbacks.onToolAction(refused), /preparation-only/);
-    await assert.rejects(callbacks.onToolAction(refused), /preparation-only/);
-    const journal = await loadServerRunDraft(projectId, pendingRun.runId);
-    assert(!journal?.tools.some(t => t.toolCallId === 'refused-candidate'), 'rejected action cannot be journaled as a success');
+    const ledgerDraft = makeDraft(base);
+    const ledgerArgs = { action: 'set_source_breakdown', expectedRevision: 1, record: structuredClone(base.clipMentorAnalysis!.source_breakdown), actor,
+      reason: 'Persist the formal mapping before the candidate in one preparation run' };
+    const ledgerResult = await executeTool('revise_clipmentor_analysis', ledgerArgs,
+      { ...ctx, commands: ledgerDraft.commands, getDoc: ledgerDraft.getDoc, getState: ledgerDraft.getState });
+    assert.equal((ledgerResult as any).ok, true, JSON.stringify(ledgerResult));
+    await callbacks.onToolAction({ ...action, runId: pendingRun.runId, toolCallId: 'source-checkpoint', args: ledgerArgs,
+      result: ledgerResult, actions: ledgerDraft.takeActions() });
+    assert.equal((await loadProject(projectId))?.clipMentorAnalysis?.revision, 2, 'formal mapping must be durable before the next preparation tool');
+    const copyDraft = makeDraft(current);
+    const nextArgs = { action: 'set_copy_candidate', id: 'U', expectedRevision: 2, actor, reason: 'Register the current candidate after formal source mapping',
+      record: { source_candidate_id: 'script_candidate_old', candidate_id: 'script_candidate_new', plan_id: 'picture_plan_new',
+        lines: (candidate.getDoc().clipMentorAnalysis!.blueprint[0] as any).internal_review.script_candidate_new.lines,
+        plan: { phases: [{ line_id: 'L', source_seconds: [59, 62], picture: 'existing normal-speed range' }] }, line_guidance: 'existing plan, pending' } };
+    const nextResult = await executeTool('revise_clipmentor_analysis', nextArgs,
+      { ...ctx, commands: copyDraft.commands, getDoc: copyDraft.getDoc, getState: copyDraft.getState });
+    assert.equal((nextResult as any).ok, true, JSON.stringify(nextResult));
+    await callbacks.onToolAction({ ...action, runId: pendingRun.runId, toolCallId: 'candidate-after-source', args: nextArgs,
+      result: nextResult, actions: copyDraft.takeActions() });
+    assert.equal((await loadProject(projectId))?.clipMentorAnalysis?.revision, 3);
+    const readback = await executeTool('read_clipmentor_analysis', { view: 'current_copy', unitId: 'U' }, { ...ctx, getDoc: () => current }) as any;
+    assert.equal(readback.revision, 3);
+    assert.equal(readback.analysis.current_copy[0].candidate_id, 'script_candidate_new');
+    assert.equal(readback.analysis.current_copy[0].picture_plan_id, 'picture_plan_new');
+    assert.deepEqual(current.clipMentorAnalysis!.source_breakdown, ledgerArgs.record, 'formal mapping is not overwritten by the candidate checkpoint');
+    assert(current.clipMentorAnalysis!.audit.some(entry => entry.action === 'set_source_breakdown'));
+    assert(current.clipMentorAnalysis!.audit.some(entry => entry.action === 'set_copy_candidate'));
+    const staleLedger = await executeTool('revise_clipmentor_analysis', ledgerArgs, { ...ctx, getDoc: () => current }) as any;
+    assert(staleLedger.error, 'stale revision cannot overwrite either checkpoint');
+    assert.equal(current.clipMentorAnalysis!.revision, 3);
+    assert.deepEqual((await loadProject(projectId))?.timelines, base.timelines, 'preparation cannot commit or change timeline placement');
     renderToString(createElement(Harness));
     const restored = await callbacks.onRunStart({ ...pendingInput, resumed: true });
-    assert.equal(restored.draftDoc?.clipMentorAnalysis?.revision, 2, 'previous valid pending actions remain recoverable');
-    await callbacks.onTerminal({ runId: pendingRun.runId, status: 'failed', assistantText: 'rejected checkpoint was not replayed' });
+    assert.equal(restored.draftDoc?.clipMentorAnalysis?.revision, 3);
+    assert.equal(restored.baseDoc?.clipMentorAnalysis?.revision, 3);
+    assert.equal((await checkCopyProduction(current, null)).allowed, false, 'successful state synchronization never grants a semantic approval');
+    for (const exportName of ['submit_render_job', 'submit_export']) {
+      const unapprovedExport = await executeTool(exportName, { format: 'video' }, { ...ctx, getAgentRunId: () => pendingRun.runId }) as any;
+      assert.equal(unapprovedExport.production_gate?.allowed, false, 'a committed but unapproved preparation cannot bypass the existing production gate');
+    }
+
+    await callbacks.onTerminal({ runId: pendingRun.runId, status: 'failed', assistantText: 'later failure must preserve preparation checkpoints' });
+    assert.equal((await loadProject(projectId))?.clipMentorAnalysis?.revision, 3);
+    // Real host terminal settlement: a committed edit is not part of the
+    // next run's transaction. A failed later run rolls back ONLY its draft.
+    const committedBase = structuredClone(base); delete committedBase.clipMentorAnalysis;
+    committedBase.timelines[0].name = 'committed editing';
+    const edit = makeDraft(committedBase);
+    edit.commands.addTextClip({ text: 'committed title', durationInFrames: 30 });
+    current = edit.getDoc(); await saveProject(projectId, current);
+    const committedBytes = JSON.stringify(await loadProject(projectId));
+    const exportRun = await startAgentRun({ projectId, userInput: 'separate export failure', askOnly: false });
+    renderToString(createElement(Harness));
+    await callbacks.onRunStart({ ...input, runId: exportRun.runId, baseDoc: current });
+    const { execExportTool } = await import('../agent/tools/export-tools');
+    const draftFetch = globalThis.fetch;
+    let exports = 0;
+    globalThis.fetch = async (url, init) => {
+      if (String(url) === '/export/job') { exports++; return Response.json({ error: 'injected encoder failure' }, { status: 500 }); }
+      return draftFetch(url, init);
+    };
+    try {
+      const failure = await execExportTool('submit_render_job', {}, { ...ctx, getAgentRunId: () => exportRun.runId }) as any;
+      assert.match(failure.error, /injected encoder failure/);
+      await callbacks.onToolAction({ ...action, runId: exportRun.runId, toolCallId: 'export-failed', name: 'submit_render_job', args: {}, error: failure.error, result: undefined, actions: [] });
+      await callbacks.onTerminal({ runId: exportRun.runId, status: 'failed', assistantText: 'export failed once' });
+      assert.equal(exports, 1, 'no automatic external retry');
+      assert.equal(JSON.stringify(await loadProject(projectId)), committedBytes, 'failed export settlement must preserve the prior committed sequence');
+      assert.equal(JSON.stringify(current), committedBytes);
+    } finally { globalThis.fetch = draftFetch; }
+    const uncommittedRun = await startAgentRun({ projectId, userInput: 'atomic failed edit', askOnly: false });
+    renderToString(createElement(Harness));
+    await callbacks.onRunStart({ ...input, runId: uncommittedRun.runId, baseDoc: current });
+    const pendingEdit = makeDraft(current); pendingEdit.commands.addTextClip({ text: 'must roll back', durationInFrames: 30 });
+    await callbacks.onToolAction({ ...action, runId: uncommittedRun.runId, toolCallId: 'uncommitted-edit', name: 'add_text', args: {}, result: { ok: true }, actions: pendingEdit.takeActions() });
+    await callbacks.onTerminal({ runId: uncommittedRun.runId, status: 'failed', assistantText: 'uncommitted transaction failed' });
+    assert.equal(JSON.stringify(await loadProject(projectId)), committedBytes, 'uncommitted edits remain atomic; do not partially commit as an export workaround');
+    assert.equal(JSON.stringify(current), committedBytes);
     assert.equal(realReviewCalls, 0, 'only local stub endpoints, no real model/review/TTS/render');
   } finally { globalThis.fetch = previousFetch; }
 }

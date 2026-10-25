@@ -146,10 +146,10 @@ function applyToolActions(
 /** Preparation survives later review failure; this never commits a timeline proposal. */
 function copyCandidateCheckpointDoc(turn: AgentTurn, input: ServerRunToolAction): ProjectDoc | null {
   if (input.name !== 'revise_clipmentor_analysis'
-    || !['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(input.args.action))
+    || !['set_source_breakdown', 'set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(input.args.action))
     || input.error !== undefined || isFailedToolResult(input.result) || !input.actions.length) return null;
-  if (turn.askOnly || turn.abortController.signal.aborted) throw new Error('Candidate checkpoint is not authorized in a read-only or cancelled run.');
-  if (turn.ops.length || turn.persistentOps.length) throw new Error('Save the copy candidate in a preparation-only step, without pending project edits.');
+  if (turn.askOnly || turn.abortController.signal.aborted) throw new Error('Preparation checkpoint is not authorized in a read-only or cancelled run.');
+  if (turn.ops.length || turn.persistentOps.length) throw new Error('Save analysis preparation in a preparation-only step, without pending project edits.');
   const before = turn.draft.getDoc();
   const after = replayActions(before, input.actions);
   const { clipMentorAnalysis: oldAnalysis, ...beforeMedia } = before;
@@ -158,7 +158,7 @@ function copyCandidateCheckpointDoc(turn: AgentTurn, input: ServerRunToolAction)
     || input.args.expectedRevision !== oldAnalysis.revision
     || JSON.stringify(beforeMedia) !== JSON.stringify(afterMedia)
     || JSON.stringify(turn.baseDoc.clipMentorAnalysis) !== JSON.stringify(oldAnalysis)) {
-    throw new Error('Candidate checkpoint requires one current analysis-only revision; nothing committed.');
+    throw new Error('Preparation checkpoint requires one current analysis-only revision; nothing committed.');
   }
   return after;
 }
@@ -170,14 +170,14 @@ async function checkpointCopyCandidate(turn: AgentTurn, input: ServerRunToolActi
   let durableDoc = live;
   // On recovery the tool journal can predate an already durable checkpoint.
   if (serverRunDraftBaseChanged(after, live)) {
-    if (turn.draftInvalidated || serverRunDraftBaseChanged(turn.baseDoc, live)) throw new Error('Project changed before candidate checkpoint; nothing committed.');
+    if (turn.draftInvalidated || serverRunDraftBaseChanged(turn.baseDoc, live)) throw new Error('Project changed before preparation checkpoint; nothing committed.');
     const next = { ...live, clipMentorAnalysis: after.clipMentorAnalysis };
     const durable: AgentTurn = { ...turn, persistentBeforeDoc: live,
       persistentOps: [buildOperation(input.name, input.args, [{ type: 'tl.setDoc', doc: next }])],
       persistentSaveError: undefined,
-      persistentSnapshot: saveAutomaticVersion(turn.projectId, '文案候选登记前', live).then(() => undefined, (error) => { durable.persistentSaveError = error; }),
+      persistentSnapshot: saveAutomaticVersion(turn.projectId, '分析准备登记前', live).then(() => undefined, (error) => { durable.persistentSaveError = error; }),
     };
-    if (!await commitPersistentOperations(durable, saveProject)) throw new Error('Candidate checkpoint could not be saved; no production approval was granted.');
+    if (!await commitPersistentOperations(durable, saveProject)) throw new Error('Preparation checkpoint could not be saved; no production approval was granted.');
     durableDoc = next;
   }
   // Rebase the run after its independently saved preparation step. No proposed action remains.
@@ -244,7 +244,7 @@ async function restoreToolActions(
     if (tool.error !== undefined || isFailedToolResult(tool.result)) continue;
     replay = replayActions(replay, [...tool.actions]);
     if (tool.name === 'revise_clipmentor_analysis'
-      && ['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(tool.args.action))
+      && ['set_source_breakdown', 'set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(tool.args.action))
       && !serverRunDraftBaseChanged(replay, live)) committedThrough = i;
   }
   if (committedThrough >= 0) {
