@@ -236,6 +236,8 @@ async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectC
       const project = await store.readEntry(projectKey);
       const before = project.found ? normalizedProject(project.value) : null;
       if (!before || revisionOf(before) !== input.expectedRevision) return { status: 'stale' };
+      const policy = await store.readEntry(`${HANDOFF_PREFIX}${input.projectId}`);
+      await assertHandoffProjectWrite(policy.found ? policy.value : undefined, before, input.normalizedDoc);
       const currentMetadata = {
         projects: await store.readEntry('projects'),
         versions: await store.readEntry(versionsKey),
@@ -389,3 +391,5 @@ export async function commitOfflineStoredProject(
   }
   return { status: 'metadata-conflict' };
 }
+import { HANDOFF_PREFIX } from '../../shared/clipmentor-handoff';
+import { assertHandoffProjectWrite } from '../../shared/clipmentor-handoff-write';

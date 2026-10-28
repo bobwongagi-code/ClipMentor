@@ -1,3 +1,4 @@
+import { isHandoffStoreKey } from '../../shared/clipmentor-handoff.ts';
 import { randomUUID } from 'node:crypto';
 import { access, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -276,7 +277,7 @@ export async function mergeStoredEntries(incoming: Record<string, unknown>): Pro
 
 export async function setStoredEntry(key: string, value: unknown): Promise<void> {
   if (!isProjectStoreKey(key)) throw new Error('invalid project store entry key');
-  if (key.startsWith(PROJECT_EDIT_OWNERSHIP_PREFIX)
+  if (isHandoffStoreKey(key) || key.startsWith(PROJECT_EDIT_OWNERSHIP_PREFIX)
     || key.startsWith('agent-session-generation:')) {
     throw new Error('project store entry is server-managed');
   }
@@ -357,8 +358,9 @@ async function purgeProjectLocked(id: string): Promise<void> {
 }
 
 export async function deleteStoredEntry(key: string): Promise<void> {
+  if (isHandoffStoreKey(key)) throw new Error('handoff entry is server-managed');
   if (!isProjectStoreKey(key)) throw new Error('invalid project store entry key');
-  if (key.startsWith(PROJECT_EDIT_OWNERSHIP_PREFIX)
+  if (isHandoffStoreKey(key) || key.startsWith(PROJECT_EDIT_OWNERSHIP_PREFIX)
     || key.startsWith('agent-session-generation:')) {
     throw new Error('project store entry is server-managed');
   }

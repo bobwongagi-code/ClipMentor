@@ -30,7 +30,7 @@ const base: ProjectDoc = {
   },
 };
 const b: SourceBreakdown = {
-  version: 1, segments: [{ segment_id: 'S1', source_range_seconds: [59.4, 62.2], visible_evidence_ids: ['F1'], claim_evidence_ids: [], interpretation_evidence_ids: [], unknowns: ['Scent quality unverified'] }],
+  version: 1, review_scope: { kind: 'local_ranges', source_ranges: [[59.4, 62.2]], instruction: 'Synthetic scoped teaching test' }, segments: [{ segment_id: 'S1', source_range_seconds: [59.4, 62.2], visible_evidence_ids: ['F1'], claim_evidence_ids: [], interpretation_evidence_ids: [], unknowns: ['Scent quality unverified'] }],
   points: [{ point_id: 'P1', segment_ids: ['S1'], buying_concern: 'Use experience', teaching_question: '这个使用中的动作让观众联想到哪种使用体验？', role: 'primary', importance: 'must_explain', filming_conditions: ['Near-nose gesture during use'] }],
   units: [{ unit_id: 'U1', original_segment_ids: ['S1'], explanation_segment_ids: ['S1'], coverage: [{ point_id: 'P1', treatment: 'explain' }],
     revisits: [{ from_segment_id: 'S1', to_segment_id: 'S1', reason: 'Revisit the demonstrated gesture to explain its use experience' }],
@@ -70,6 +70,9 @@ assert.equal(checkSourceBreakdown(base).issues[0].code, 'source_breakdown_missin
 base.clipMentorAnalysis!.source_breakdown = structuredClone(b);
 const clip = (id: string, startFrame: number, srcInFrame: number, durationInFrames: number): TimelineItem => ({ id, kind: 'video', track: 'V1', name: 'source', startFrame, durationInFrames, srcInFrame, sourceAssetId: 'source', src: '/media/test.mp4' });
 base.timelines[0].items = [clip('original', 0, 1782, 84), clip('explanation', 90, 1782, 84)];
+for (const scope of [null, [], {kind:'full_source'}, {kind:'local_ranges',source_ranges:[[2,1]],instruction:'bad'}, {kind:['full_source'],instruction:'bad'}]) {
+  assert(!isSourceBreakdown({...b,review_scope:scope}));
+}
 assert(isClipMentorAnalysis(base.clipMentorAnalysis));
 assert.equal(checkSourceBreakdown(base).status, 'structurally_ready');
 assert.equal(checkSourceBreakdown(base, true).status, 'structurally_ready');
@@ -250,6 +253,7 @@ const receipt = await bindCopyProductionReview(base, { analysis_revision: subjec
   author_run_id: 'test-author', reviewer_run_id: 'test-independent', reviewed_at: 1, verdict: 'pass',
   units: [{ unit_id: 'U1', candidate_id: 'copy', verdict: 'pass', findings: [],
     group_checks: { scope: 'planned_group_teaching_only',
+      source_relations: [{ relation: 'Synthetic source relation', evidence_ids: [packet.units[0].source_context!.evidence_ids[0]], point_ids: ['P1'], line_ids: [goodLine.line_id], assessment: 'covered', reason: 'Synthetic protocol fixture only' }],
       L1: { verdict: 'pass', learner_takeaway: 'Synthetic group relation', reason: 'Synthetic coverage only' },
       L2: { verdict: 'pass', viewer_chain: 'Synthetic original then explanation', stage_cues: 'Synthetic visible revisit title', reason: 'Synthetic plan only' } },
     narration_checks: [{ line_id: goodLine.line_id, necessity: 'necessary', omission_loss: 'Synthetic fixture: use-experience teaching relation',

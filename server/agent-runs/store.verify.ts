@@ -359,12 +359,13 @@ const cancelled = run();
 await setRunStatus(cancelled, 'running');
 const cancelledDigest = digestToolArgs({ itemId: 'clip-1' });
 const pendingTool = waitForToolResult(cancelled, 'call-cancel', 'delete_item', cancelledDigest);
-await cancelRun(cancelled);
-await assert.rejects(
+const pendingToolRejected = assert.rejects(
   pendingTool,
   /cancel|stop|abort/i,
   'cancellation rejects a pending browser tool',
 );
+await cancelRun(cancelled);
+await pendingToolRejected;
 assert.equal(cancelled.status, 'cancelled');
 assert.equal(
   cancelled.toolRequests.get('call-cancel')?.status,

@@ -1,3 +1,4 @@
+import { reserveHandoff } from '../clipmentor/handoff';
 import { jsonSchema, tool } from 'ai';
 import { policyForTool } from '../../src/agent/execution-policy';
 import { ToolActivation } from '../../src/agent/tool-activation';
@@ -68,6 +69,7 @@ export async function executeBrowserTool(
     activation.host?.signal?.throwIfAborted();
     activation.current = activation.current.admit(schema.name);
     assertCanonicalToolInvocation(schema, args, activation.current.schemas());
+    await reserveHandoff(run, 'tool', toolCallId, schema.name, args);
     const argsDigest = digestToolArgs(args);
     const cached = activation.lastSuccessfulPureTool;
     if (cacheablePureTool(schema.name)

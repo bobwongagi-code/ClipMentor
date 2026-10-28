@@ -24,6 +24,7 @@ try{
  const adapter=apiCopyReviewDependencies(config,(async()=>{calls++;return {text:JSON.stringify(contract.raw_review)};}) as unknown as typeof generateText,{} as never);
  const deps={...adapter,directory,resolve:()=>join(directory,'fixture.mp4'),hash:async()=>contract.request.source.hash,frame:async()=> 'YQ=='};
  const request={...structuredClone(contract.request),operationId:randomUUID()};
+ for(const u of request.packet.units)Object.assign(u,{source_context:{scope:'frozen_task_scope',source_ranges:[[0,request.source.duration]],evidence_ids:request.packet.source_evidence.filter(e=>e.time_seconds?.length).map(e=>e.evidence_id),speech:'unavailable'}});
  const result=await reviewClipMentorCopy(request,deps);assert.equal(calls,1);assert.equal(result.operationId,request.operationId);
  const receipt=JSON.parse(await readFile(join(directory,`${request.operationId}.json`),'utf8'));
  assert.equal(receipt.method,'isolated-api-copy-and-picture-v1');assert.equal(receipt.model,config.model);assert.equal(receipt.provider,config.provider);assert.equal(receipt.apiMode,config.apiMode);assert.deepEqual(receipt.raw_review,contract.raw_review);

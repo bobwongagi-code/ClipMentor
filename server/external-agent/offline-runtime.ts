@@ -1,3 +1,4 @@
+import { assertExternalHandoffCommit } from '../../src/clipmentor/handoff-guard';
 import { randomUUID } from 'node:crypto';
 import {
   captureExternalToolActions,
@@ -340,6 +341,7 @@ export class OfflineExternalEditRuntime {
     state: VersionedOfflineSession,
     doc: OfflineStoredProject['doc'],
   ): Promise<OfflineProjectCommitResult> {
+    await assertExternalHandoffCommit(this.projectId,this.baseDoc,doc);
     return this.persistence.commitProject({
       projectId: this.projectId,
       expectedRevision: this.expectedRevision,

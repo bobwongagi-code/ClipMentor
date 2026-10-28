@@ -1,3 +1,5 @@
+import { handoffToolVisible } from '../../shared/clipmentor-handoff';
+import { assertRunHandoff, assertHandoffInput, recordHandoffDispatch, readHandoffPolicy } from '../clipmentor/handoff';
 import {
   streamText,
   type LanguageModelUsage,
@@ -110,8 +112,9 @@ function measuredContextUsage(
   };
 }
 
-async function executeServerTurn(
+export async function executeServerTurn(
   input: ServerTurnInput,
+  runOnce = runServerTurnOnce,
 ): Promise<{
   messages: ModelMessage[];
   text: string;
@@ -120,19 +123,20 @@ async function executeServerTurn(
   hitMaxTokens: boolean;
 }> {
   try {
-    return await runServerTurnOnce(input);
+    return await runOnce(input);
   } catch (error) {
     // A context overflow means the estimate undershot the real tokenizer.
     // Compress once, regardless of the estimated pressure, then retry the
     // exact same turn. Deterministic retries for other failures live in
     // llm-retry.ts; this one must change the request before it can succeed.
-    if (input.signal.aborted
+    if (await readHandoffPolicy(input.run.projectId)
+      || input.signal.aborted
       || input.forceCompact
       || classifyLlmFailure(error).code !== 'CONTEXT_WINDOW_EXCEEDED') {
       throw error;
     }
     pushRunEvent(input.run, 'context-overflow-retry', { requestIndex: input.requestIndex });
-    return runServerTurnOnce({ ...input, forceCompact: true });
+    return runOnce({ ...input, forceCompact: true });
   }
 }
 
@@ -146,7 +150,8 @@ async function runServerTurnOnce(
   hitMaxTokens: boolean;
 }> {
   const schemas = input.activation.current.schemas();
-  const prepared = await prepareServerContext({ ...input, schemas,beforeRequest:input.activation.host?.beforeRequest });
+  const prepared = await prepareServerContext({ ...input, schemas,beforeRequest:input.activation.host?.beforeRequest,
+    beforeSummaryRequest:request=>recordHandoffDispatch(input.run,'summary',request) });
   const tools = createServerTools(
     input.run,
     schemas,
@@ -155,6 +160,7 @@ async function runServerTurnOnce(
   pushRunEvent(input.run, 'text-start', {});
   const options = serverProviderOptions(input.provider, input.apiMode, input.cacheMode);
   await input.activation.host?.beforeRequest();
+  await recordHandoffDispatch(input.run,'author',{backend:'api',model:input.run.model,instructions:input.instructions,messages:prepared.messages,schemas});
   const result = streamText({
     model: input.model,
     instructions: input.instructions,
@@ -210,11 +216,12 @@ export function resolveServerRunCapabilities(
   );
 }
 
-function createExecutionPlan(run: ServerRun, input: ServerRunInput) {
+async function createExecutionPlan(run: ServerRun, input: ServerRunInput) {
+  const handoff = await readHandoffPolicy(run.projectId);
   const provider = normalizeLlmProvider(input.provider);
   const apiMode = normalizeOpenAiApiMode(input.openAiApiMode);
   const backend = input.backend === 'codex' ? 'codex' : 'api';
-  const requested = resolveServerRunToolCatalog(input.tools, run.askOnly, !!input.host);
+  const requested = resolveServerRunToolCatalog(input.tools, run.askOnly, !!input.host).filter(s=>!handoff||handoffToolVisible(handoff.brief,s.name));
   const capabilities = resolveServerRunCapabilities(provider, backend, input.model);
   const maxOutputTokens = resolveServerRunMaxOutputTokens(
     input.maxOutputTokens,
@@ -227,7 +234,7 @@ function createExecutionPlan(run: ServerRun, input: ServerRunInput) {
   const activation: ActivationState = {
     host:input.host,
     current: new ToolActivation(
-      input.host?requested:canonicalServerRunToolCatalog(run.askOnly),
+      input.host?requested:canonicalServerRunToolCatalog(run.askOnly).filter(s=>!handoff||handoffToolVisible(handoff.brief,s.name)),
       input.messages,
       requested.map((schema) => schema.name),
     ),
@@ -274,15 +281,15 @@ async function executeRunTurns(
   input: ServerRunInput,
   signal: AbortSignal,
 ): Promise<void> {
-  const plan = createExecutionPlan(run, input);
+  const plan = await createExecutionPlan(run, input);
   let messages = plan.prompt.messages;
   // No turn cap: the model decides when the task is done. The only automatic
   // stop beside "no more tool calls" is an output-token cutoff, which would
   // otherwise feed truncated text back into the loop.
   for (let turn = 0; ; turn += 1) {
     if(input.host&&(turn>=input.host.maxTurns||Date.now()>=input.host.deadlineAt)) throw new Error('Production request/time budget exhausted');
-    const attempt = () =>
-      plan.backend === 'codex'
+    const attempt = async () => {
+      return plan.backend === 'codex'
         ? (async () => (await import('./codex-turn')).executeServerCodexTurn({
           run,
           messages,
@@ -315,7 +322,9 @@ async function executeRunTurns(
           activation: plan.activation,
           requestIndex: turn + 1,
         });
-    const outcome = input.host ? await attempt() : await runServerTurnWithRetry(run, turn + 1, signal, attempt);
+    };
+    const protectedHandoff = await assertRunHandoff(run);
+    const outcome = input.host || protectedHandoff ? await attempt() : await runServerTurnWithRetry(run, turn + 1, signal, attempt);
     if (outcome.followupText) {
       if (plan.activation.acceptance.phase === 'checking') {
         pushRunEvent(run, 'acceptance', {
@@ -409,17 +418,18 @@ export async function executeRun(
   input: ServerRunInput,
 ): Promise<void> {
   const abort = new AbortController();
-  // Bound the complete native run even without a separate task host.
-  // Existing task/host deadlines may shorten this ceiling, never extend it.
-  const deadlines=[input.host?.deadlineAt,input.backend==='codex'?run.createdAt+30*60_000:undefined].filter((v):v is number=>v!==undefined);
-  const deadlineAt=deadlines.length?Math.min(...deadlines):undefined;
-  const timer=deadlineAt!==undefined?setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadlineAt-Date.now())):undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const externalAbort=()=>abort.abort(input.host?.signal?.reason);
   input.host?.signal?.addEventListener('abort',externalAbort,{once:true});
   if(input.host?.signal?.aborted)externalAbort();
   run.abort = abort;
   try {
+    const handoff = await assertRunHandoff(run);
+    await assertHandoffInput(run,input);
+    const limits=[input.backend==='codex'?run.createdAt+30*60_000:undefined,input.host?.deadlineAt,handoff?.startedAt!=null?handoff.startedAt+handoff.brief.budget.maxElapsedMs:undefined].filter((v):v is number=>v!==undefined);
+    const deadlineAt=limits.length?Math.min(...limits):undefined;
     if(deadlineAt!==undefined && Date.now()>=deadlineAt) throw new Error('Production deadline exceeded');
+    if(deadlineAt!==undefined)timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadlineAt-Date.now()));
     if(input.host&&input.backend!=='api')throw new Error('Server production requires API backend; desktop fallback is forbidden');
     await setRunStatus(run, 'running');
     await executeRunTurns(run, input, abort.signal);

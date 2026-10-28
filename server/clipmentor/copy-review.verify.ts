@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { AgentContext } from '../../src/agent/context';
@@ -64,7 +64,7 @@ const base: ProjectDoc = {
           known_issues: ['AUTHOR_EXPECTATION_MUST_NOT_LEAK'], previous_drafts: ['AUTHOR_HISTORY_MUST_NOT_LEAK'],
           user_feedback: 'AUTHOR_PREFERRED_ANSWER_MUST_NOT_LEAK', expected_answer: 'AUTHOR_PASS_MUST_NOT_LEAK',
           details: { knownIssues: ['AUTHOR_CAMEL_CASE_MUST_NOT_LEAK'], expectedAnswer: 'AUTHOR_NESTED_MUST_NOT_LEAK' } } } } }],
-    source_breakdown: { version: 1,
+    source_breakdown: { version: 1, review_scope: { kind: 'local_ranges', source_ranges: [[59.4, 62.2]], instruction: 'Synthetic local task boundary, independent of playback choices' },
       segments: [{ segment_id: 'S1', source_range_seconds: [59.4, 62.2], visible_evidence_ids: ['F1'], claim_evidence_ids: [], interpretation_evidence_ids: [], unknowns: ['Scent quality unknown'] }],
       points: [{ point_id: 'P1', segment_ids: ['S1'], buying_concern: 'Use experience', teaching_question: positive.points[0].question,
         filming_conditions: ['Near-nose gesture'], role: 'primary', importance: 'must_explain' }],
@@ -76,6 +76,7 @@ const base: ProjectDoc = {
 const goodRaw = () => ({ cases: [{ case_id: 'current', units: [{ unit_id: 'U1', points: [{ ...structuredClone(rawPoint), point_id: 'P1' }] }] }],
   copy_units: [{ unit_id: 'U1', verdict: 'pass', findings: [],
     group_checks: { scope: 'planned_group_teaching_only',
+      source_relations: [{ relation: 'Synthetic source relation', evidence_ids: ['F1'], point_ids: ['P1'], line_ids: [line.line_id], assessment: 'covered', reason: 'Synthetic protocol fixture; not real semantic approval' }],
       L1: { verdict: 'pass', learner_takeaway: 'Synthetic group relationship', reason: 'Synthetic teaching coverage, not a real semantic result' },
       L2: { verdict: 'pass', viewer_chain: 'Synthetic original then revisit', stage_cues: 'Synthetic visible revisit title', reason: 'Synthetic planned handoff, not actual viewing' } },
     narration_checks: [{ line_id: line.line_id, necessity: 'necessary',
@@ -143,25 +144,54 @@ try {
   ]) assert.equal(structuredToolFailure(bad), undefined, 'invalid or successful envelopes must not acquire trusted failure metadata');
   assert.equal(policyForTool('request_clipmentor_copy_review').effect, 'irreversible_external');
   assert(isExternalDraftTool('request_clipmentor_copy_review'));
+  const noTaskScope = structuredClone(base);
+  delete noTaskScope.clipMentorAnalysis!.source_breakdown!.review_scope;
+  const missingScope = await request(); missingScope.packet = await copyTeachingPacketFromDoc(noTaskScope);
+  await assert.rejects(reviewClipMentorCopy(missingScope, deps), (e: unknown) => e instanceof CopyReviewError
+    && e.diagnostic.code === 'source_review_scope_missing' && e.diagnostic.requestsAttempted === 0);
+  assert.equal(calls, 0, 'missing task scope fails locally before a paid turn');
+  const absentContext = await request();delete absentContext.packet.units[0].source_context;
+  await assert.rejects(reviewClipMentorCopy(absentContext, {...deps,resolve:()=>{throw Error('preflight must not run');}}),
+    (e:unknown)=>e instanceof CopyReviewError&&e.diagnostic.code==='source_review_scope_missing'&&e.diagnostic.requestsAttempted===0);
+  assert.equal(calls,0);
+
   const first = await request();
   const pass = await reviewClipMentorCopy(first, deps);
   assert.equal(pass.receipt.verdict, 'pass'); assert.equal(calls, 1);
   assert.deepEqual(pass.receipt.units[0].group_checks, goodRaw().copy_units[0].group_checks);
+  const oldRequest=await request();delete oldRequest.packet.units[0].source_context;
+  const oldResult=structuredClone(pass);oldResult.operationId=oldRequest.operationId;
+  delete oldResult.receipt.teaching_review!.packet.units[0].source_context;
+  delete oldResult.receipt.units[0].group_checks!.source_relations;
+  const oldFingerprint=createHash('sha256').update('isolated-codex-copy-and-picture-v1'+JSON.stringify(oldRequest)).digest('hex');
+  await writeFile(join(root,oldRequest.operationId+'.json'),JSON.stringify({fingerprint:oldFingerprint,status:'completed',requests_attempted:1,result:oldResult}));
+  const oldRead=await reviewClipMentorCopy(oldRequest,{...deps,resolve:()=>{throw Error('history must not preflight');},run:async()=>{throw Error('history must not rerun');}},undefined,true);
+  assert.deepEqual(oldRead,{...oldResult,cached:true},'consumed legacy receipt remains readable without restamping task scope');
   assert.equal(pass.inspection.continuous_viewing, false); assert.equal(pass.inspection.listening, false);
   assert.equal(pass.inspection.input_policy, 'independent_current_subject_v1');
   assert.equal(JSON.parse(await readFile(join(root, first.operationId + '.json'), 'utf8')).input_policy, pass.inspection.input_policy);
   assert.deepEqual(await reviewClipMentorCopy(first, deps), { ...pass, cached: true });
   assert.equal(calls, 1); assert.equal(extracted, 6, 'completed replay does not repeat extraction or model turn');
+  const contextFrames=await request();contextFrames.packet.units[0].source_context!.source_ranges=[[0,100]];
+  await reviewClipMentorCopy(contextFrames,{...deps,run:async(prompt,frames)=>{
+    assert(prompt.includes('context相位是全任务背景'));
+    assert(frames.some(f=>f.phase==='context'&&f.source_seconds===0));
+    assert(frames.filter(f=>f.phase==='original').every(f=>f.source_seconds>=59.4&&f.source_seconds<62.2),'background never proves original playback');
+    assert.equal(frames.filter(f=>f.phase==='context').length,3);return goodRaw();
+  }});
+
   // The real r171 response returned a list of visible stage cues, not a scalar.
   // Replay the frozen evidence in a temporary ledger only; do not amend its old failure.
   const savedRequest = structuredClone(contract171.request) as CopyReviewRequest;
+  for (const u of savedRequest.packet.units) u.source_context = {scope:'frozen_task_scope',source_ranges:[[0,savedRequest.source.duration]],
+    evidence_ids:savedRequest.packet.source_evidence.filter(e=>e.time_seconds?.length).map(e=>e.evidence_id),speech:'unavailable'};
   let savedRuns = 0;
   const savedDeps: CopyReviewDependencies = { ...deps, resolve: () => 'offline-source',
     hash: async () => savedRequest.source.hash,
     run: async () => { savedRuns++; return structuredClone(contract171.raw_review); } };
   const saved = await reviewClipMentorCopy(savedRequest, savedDeps);
   assert.equal(saved.receipt.verdict, 'insufficient_evidence');
-  assert.equal(saved.receipt.units[0].verdict, 'pass');
+  assert.equal(saved.receipt.units[0].verdict, 'insufficient_evidence', 'raw old L1 pass is retained, but does not answer the new source relationship check');
   assert.equal(saved.receipt.units[1].group_checks!.L2.verdict, 'insufficient_evidence');
   assert.deepEqual(saved.receipt.units.map(u => u.group_checks), contract171.raw_review.copy_units.map(u => u.group_checks),
     'preserve both cue lists and original reviewer opinions without text coercion');
@@ -232,6 +262,35 @@ try {
     assert.deepEqual(draft.getDoc().timelines, base.timelines);
     assert.deepEqual(await reviewClipMentorCopy(req, deps), { ...result, cached: true });
     assert.equal(attempts, 1, 'saved negative/unknown rereads never retry the model');
+  }
+  // Source reconstruction can discover a gap outside selected point IDs. Keep raw
+  // opinions, bind the result, and recover it through the actual Agent read entry.
+  for (const [kind, expected] of [['missing', 'insufficient_evidence'], ['material_gap', 'needs_revision'],
+    ['uncertain', 'insufficient_evidence'], ['optional_depth', 'pass'], ['covered', 'pass']] as const) {
+    const req = await request(), raw = goodRaw();
+    if (kind === 'missing') delete (raw.copy_units[0].group_checks as Record<string, unknown>).source_relations;
+    else raw.copy_units[0].group_checks.source_relations[0].assessment = kind;
+    let attempts = 0;
+    const result = await reviewClipMentorCopy(req, { ...deps, run: async () => { attempts++; return raw; } });
+    assert.equal(result.receipt.verdict, expected);
+    const ledger = JSON.parse(await readFile(join(root, req.operationId + '.json'), 'utf8'));
+    assert.deepEqual(ledger.raw_review, raw, 'original opinion remains untouched');
+    const draft = makeDraft(structuredClone(base));
+    const ctx: AgentContext = { ...draft, getCreativeMode: () => 'clipmentor', getProjectId: () => 'test-project',
+      getAgentRunId: () => 'host-author-run', templates: [], audio: [] };
+    globalThis.fetch = (async () => Response.json(result)) as typeof fetch;
+    const tool = await executeTool('request_clipmentor_copy_review', { operationId: req.operationId, maxRequests: 1, expectedRevision: 1 }, ctx) as any;
+    assert(tool.ok);
+    assert.equal(tool.production_gate.allowed, expected === 'pass');
+    const read = await executeTool('read_clipmentor_analysis', { view: 'copy_review' }, ctx) as any;
+    assert.equal(read.analysis.copy_review.receipt.verdict, expected);
+    assert.deepEqual(read.analysis.copy_review.receipt.units[0].group_checks, result.receipt.units[0].group_checks);
+    const frozen = await executeTool('read_clipmentor_analysis', { view: 'copy_review', reviewPart: 'packet', unitId: 'U1' }, ctx) as any;
+    for (const id of frozen.analysis.copy_review.packet.units[0].source_context.evidence_ids)
+      assert(frozen.analysis.copy_review.packet.source_evidence.some((e: any) => e.evidence_id === id), 'raw source context survives the Agent read path');
+    assert.deepEqual(draft.getDoc().assets, base.assets); assert.deepEqual(draft.getDoc().timelines, base.timelines);
+    assert.deepEqual(await reviewClipMentorCopy(req, deps), { ...result, cached: true });
+    assert.equal(attempts, 1, 'readback consumes no additional reviewer request');
   }
   globalThis.fetch = nativeFetch;
   for (const [severity, expected, reason] of [

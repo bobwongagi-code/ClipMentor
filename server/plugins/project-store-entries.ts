@@ -1,3 +1,4 @@
+import { isHandoffStoreKey } from '../../shared/clipmentor-handoff.ts';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -298,7 +299,7 @@ export function mergeProjectEntries(
   const baseMetas = projectMetas(safeBase);
   const incomingMetas = projectMetas(safeIncoming);
   for (const [key, value] of Object.entries(safeIncoming)) {
-    if (key.startsWith('project-edit-ownership:')) continue;
+    if (key.startsWith('project-edit-ownership:') || isHandoffStoreKey(key)) continue;
     if (key.startsWith('project:')) {
       const ownedProjectId = projectIdFromProjectStoreKey(key);
       if (ownedProjectId && `project-edit-ownership:${ownedProjectId}` in safeBase) continue;

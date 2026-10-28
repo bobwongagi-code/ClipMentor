@@ -1,3 +1,4 @@
+import { registerHandoff, prepareHandoff, saveHandoffRun, assertRunHandoff } from '../clipmentor/handoff';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import {
@@ -166,6 +167,8 @@ function runRequestDigests(
       maxAcceptanceIterations: execution.maxAcceptanceIterations,
       tools: execution.tools,
       instructions: execution.instructions,
+      sentInputDigest: digestValue(execution.messages),
+      clientInstructionDigest: digestValue(input.instructions ?? null),
     }),
   };
 }
@@ -196,6 +199,9 @@ function ensureDeferredRunExecution(run: ServerRun, input: ServerRunInput): void
 
 async function handleCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req);
+  if (body.action === 'bind_clipmentor_handoff') {
+    sendJson(res, 200, await registerHandoff(body)); return;
+  }
   const input = validateCreateInput(body);
   const askOnly = body.askOnly === true;
   const origin = requestOrigin(req);
@@ -211,24 +217,25 @@ async function handleCreate(req: IncomingMessage, res: ServerResponse): Promise<
   const effectiveProvider = normalizeLlmProvider(config.provider);
   const effectiveModel = requestedModel || config.model || defaultModelForProvider(effectiveProvider);
   const openAiApiMode = normalizeOpenAiApiMode(body.openAiApiMode);
+  const preparedHandoff = await prepareHandoff(input.projectId, input.messages, input.instructions);
   const tools = resolveServerRunToolCatalog(input.tools, askOnly);
   const existing = getRun(input.runId)
     ?? await recoverServerRun(input.projectId, input.runId);
   const sessionGeneration = existing?.sessionGeneration
     ?? await prepareRunAdmission(input.projectId);
   const execution: ServerRunInput = {
-    messages: input.messages,
+    messages: preparedHandoff?.messages ?? input.messages,
     backend,
     provider: effectiveProvider,
     model: effectiveModel,
     openAiApiMode,
     cacheMode: input.cacheMode,
     maxOutputTokens: input.maxOutputTokens,
-    autonomousAcceptance: input.autonomousAcceptance,
+    autonomousAcceptance: preparedHandoff ? false : input.autonomousAcceptance,
     maxAcceptanceIterations: input.maxAcceptanceIterations,
     origin,
     tools,
-    instructions: input.instructions,
+    instructions: preparedHandoff?.instructions ?? input.instructions,
   };
   const digests = runRequestDigests(input, execution, askOnly, sessionGeneration);
   if (existing) {
@@ -239,6 +246,7 @@ async function handleCreate(req: IncomingMessage, res: ServerResponse): Promise<
       sendJson(res, 409, { error: 'Agent run identity already exists with different input.' });
       return;
     }
+    await assertRunHandoff(existing);
     ensureDeferredRunExecution(existing, execution);
     sendCreatedRun(res, existing, input.capability, 200);
     return;
@@ -257,6 +265,8 @@ async function handleCreate(req: IncomingMessage, res: ServerResponse): Promise<
     ...digests,
   }, input.capability);
   await flushRunPersistence(run);
+  try { if (preparedHandoff) await saveHandoffRun(run, preparedHandoff); }
+  catch (error) { await cancelRun(run); throw error; }
   deferRunExecution(run, execution);
   sendCreatedRun(res, run, capability, 201);
 }
@@ -266,6 +276,7 @@ async function handleStart(req: IncomingMessage, res: ServerResponse, runId: str
   const projectId = requireProjectId(body.projectId);
   const run = await boundRun(req, res, projectId, runId);
   if (!run) return;
+  await assertRunHandoff(run);
   const outcome = startDeferredRun(run);
   if (outcome === 'unavailable') {
     return sendJson(res, 409, { error: 'agent run admission is no longer available' });

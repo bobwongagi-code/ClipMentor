@@ -65,7 +65,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       const { teaching_review, ...metadata } = receipt ?? {};
       const matches = (unit: { unit_id: string }) => args.unitId === undefined || unit.unit_id === args.unitId;
       const units = teaching_review?.packet.units.filter(matches) ?? [];
-      const ids = new Set(units.flatMap((unit) => unit.points.flatMap((point) => point.evidence_ids)));
+      const ids = new Set(units.flatMap((unit) => [...unit.points.flatMap((point) => point.evidence_ids), ...(unit.source_context?.evidence_ids ?? [])]));
       const operationId = receipt?.reviewer_run_id.match(/^clipmentor-review:([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/)?.[1] ?? null;
       const productionGate = await checkCopyProduction(doc, ctx.getCreativeMode());
       const result = {

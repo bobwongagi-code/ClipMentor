@@ -1,3 +1,4 @@
+import { readHandoffPolicy } from '../clipmentor/handoff';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import type {
@@ -370,6 +371,7 @@ function ndjsonWriter(res: ServerResponse): (event: CodexTurnStreamEvent) => voi
 
 async function streamTurn(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>): Promise<void> {
   const request = parseCodexTurnRequest(body);
+  if (await readHandoffPolicy(request.projectId)) throw new HttpError(409, 'handoff_requires_server_run_entry');
   if (codexTurnManager.hasRequest(request.requestId)) throw new HttpError(409, 'requestId is already active');
   const { client } = await requireClient();
   res.statusCode = 200;

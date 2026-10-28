@@ -42,7 +42,9 @@ try{
  await flushServerRunPersistence();resetServerRunStoreForTest();resetAgentRuntimeStoreMemory();activateOfflineAgentRuntimeBackend();
  const recovered=await productionTaskStore.load(input.projectId,created.taskId);assert.equal(recovered.status,'awaiting_review');assert.deepEqual(recovered.completed,task.completed);
  const get=await fetch(`${origin}/api/clipmentor/production-task?projectId=${input.projectId}&taskId=${created.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
- assert.equal(get.status,200);assert.equal((await get.json()).taskId,created.taskId);
+ const readback=await get.json();assert.equal(get.status,200);assert.equal(readback.taskId,created.taskId);
+ assert.equal(readback.blueprintReadiness.code,'project_missing');assert.equal(readback.blueprintReadiness.next,'blueprint');
+ assert.equal(readback.blueprintReadiness.complete_film_accepted,false,'a completed mocked task cannot certify a missing project');
  assert.equal((await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:false})).status,409);
  const accepted=await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:true});assert.equal(accepted.status,200,JSON.stringify(await accepted.json()));
  console.log('production HTTP: origin guard, async no-page execution, duplicate launch refusal, canonical artifact cold recovery/read and final human acceptance passed; mocked stages, zero provider calls');

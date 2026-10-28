@@ -12,6 +12,8 @@ import {
   type ProjectEditOwnershipClaim,
 } from '../external-agent/project-edit-ownership-codec.ts';
 import type { LockedProjectStore, StoredEntryValue } from './project-store.ts';
+import { HANDOFF_PREFIX } from '../../shared/clipmentor-handoff';
+import { assertHandoffProjectWrite } from '../../shared/clipmentor-handoff-write';
 
 type ProjectDocumentWriteRequest = Extract<
   ProjectStoreRequest,
@@ -118,6 +120,8 @@ export function createProjectDocumentStoreOperation(withStoreLock: WithStoreLock
       const project = normalizedProject(request.value);
       if (!project) throw new Error('project document CAS value is invalid or unsupported');
       const projectId = request.key.slice('project:'.length);
+      const policy = await store.readEntry(`${HANDOFF_PREFIX}${projectId}`);
+      await assertHandoffProjectWrite(policy.found ? policy.value : undefined, currentDoc, project);
       return current.found
         ? updateProjectDocument(store, request as ProjectDocumentUpdateRequest, current, project, projectId)
         : createProjectDocument(store, request, project);

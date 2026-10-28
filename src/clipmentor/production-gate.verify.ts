@@ -37,7 +37,7 @@ for (const b of analysis.blueprint) Object.assign(b, { internal_review: {
 } });
 // Synthetic plan uses the same scoped positive in each unit to test policy, not analysis quality.
 analysis.source_breakdown = {
-  version: 1,
+  version: 1, review_scope: { kind: 'local_ranges', source_ranges: [[59.4, 62.2]], instruction: 'Synthetic scoped teaching test' },
   segments: [{ segment_id: 'smell', source_range_seconds: [59.4, 62.2], visible_evidence_ids: ['TS-F1800'], claim_evidence_ids: [], interpretation_evidence_ids: [], unknowns: ['Actual scent evaluation is unverified'] }],
   points: analysis.blueprint.map((u) => ({ point_id: u.point_ids[0], segment_ids: ['smell'], buying_concern: 'Use experience',
     teaching_question: positiveCase.packet.units[0].points[0].question, filming_conditions: ['Near-nose gesture in use'], role: 'primary', importance: 'must_explain' })),
@@ -97,6 +97,54 @@ assert(criteriaRequest.instructions.includes('分类不是旁白必要性的豁�
 assert(criteriaRequest.instructions.includes('固定3/5秒或40%/60%占比'));
 assert.equal(criteriaRequest.input.cases[0].packet.units[0].points[0].question,
   teaching.packet.units[0].points[0].question, 'registered teaching goal/question is carried unchanged, not supplied by the host');
+
+// Handoff projection is tested before any paid review: synthetic four-group controls.
+const phasePacket = structuredClone(teaching.packet);
+const phaseUnit = phasePacket.units[0];
+phaseUnit.lines = [phaseUnit.lines[0]];
+const phaseLine = phaseUnit.lines[0].line_id;
+const groupRanges: Array<[number, number]> = [[0, 10], [10, 19], [19, 28], [28, 37]];
+phaseUnit.picture_plan = {
+  original_source_ranges: groupRanges, explanation_source_ranges: groupRanges,
+  line_source_ranges: [{ line_id: phaseLine, source_range_seconds: [0, 37] }],
+  registered_revisits: groupRanges.map(range => ({ from_source_range: range, to_source_range: range })),
+  execution_plan: { plan_id: 'synthetic-group-plan', script_candidate_id: 'test-candidate', content: {
+    phases: groupRanges.flatMap(range => [
+      { mode: 'original', source_range_seconds: range, picture: 'Original demonstration', purpose: 'Show this group' },
+      { mode: 'explanation', line_id: phaseLine, source_range_seconds: range, picture: 'Revisit this group' },
+    ]),
+    viewer_stage_cues: {
+      original: { text: 'Video asal', enter: 'each original start', exit: 'before its explanation' },
+      revisit: [{ line_ids: [phaseLine], text: 'Ulasan semula', enter: 'each explanation start', exit: 'before next original' }],
+      handoff: 'Original then explanation, four groups in phase order',
+    },
+  } },
+};
+const phaseRequest = () => buildCopyTeachingReviewRequest([{ case_id: 'group-projection', packet: phasePacket }]);
+const phaseProjection = phaseRequest().input.cases[0].packet.units[0].picture_plan!;
+assert.deepEqual(phaseProjection.execution_plan!.content, phaseUnit.picture_plan.execution_plan!.content);
+assert.deepEqual(phaseProjection.registered_revisits, phaseUnit.picture_plan.registered_revisits);
+// Metadata must still be stripped; retaining operational data must not leak author judgments.
+Object.assign((phaseUnit.picture_plan.execution_plan!.content.phases as any[])[0], { self_review: 'AUTHOR_PHASE_VERDICT' });
+assert(!JSON.stringify(phaseRequest()).includes('AUTHOR_PHASE_VERDICT'));
+for (const [name, change, code] of [
+  ['empty projected phase', (v: any) => { v.execution_plan.content.phases[0] = { kind: 'original', group: 'G1', source_frames: [0, 300] }; }, /picture_plan_phase_empty/],
+  ['partly lost phase', (v: any) => { v.execution_plan.content.phases[0].source_frames = [0, 300]; }, /picture_plan_phase_field_unsupported/],
+  ['old full-playback revisit', (v: any) => { v.registered_revisits = [{ from_source_range: [0, 37], to_source_range: [0, 10] }]; }, /picture_plan_revisits_mismatch/],
+  ['reordered original ranges', (v: any) => { v.original_source_ranges.reverse(); }, /picture_plan_original_order_mismatch/],
+  ['missing stage cue', (v: any) => { delete v.execution_plan.content.viewer_stage_cues; }, /picture_plan_stage_cues_missing/],
+  ['coerced phase mode', (v: any) => { v.execution_plan.content.phases[0].mode = ['original']; }, /picture_plan_phase_mode_invalid/],
+  ['unknown line binding', (v: any) => { v.execution_plan.content.phases[1].line_id = 'missing-line'; }, /picture_plan_phase_line_invalid/],
+  ['all modes coerced', (v: any) => { for (const p of v.execution_plan.content.phases) p.mode = [p.mode]; }, /picture_plan_phase_mode_invalid/],
+  ['missing group explanation', (v: any) => { v.execution_plan.content.phases.splice(1, 1); }, /picture_plan_group_explanation_missing/],
+  ['missing last explanation', (v: any) => { v.execution_plan.content.phases.pop(); }, /picture_plan_group_explanation_missing/],
+  ['wrong phase range type', (v: any) => { v.execution_plan.content.phases[0].source_range_seconds = ['0', 10]; }, /picture_plan_phase_range_invalid/],
+] as const) {
+  const bad = structuredClone(phasePacket); change(bad.units[0].picture_plan);
+  assert.throws(() => buildCopyTeachingReviewRequest([{ case_id: name, packet: bad }]), code, name);
+}
+// Existing non-group layouts remain valid and do not acquire new timing obligations.
+assert.doesNotThrow(() => buildCopyTeachingReviewRequest([{case_id:'existing-control',packet:teaching.packet}]));
 
 // Counterfactual inputs are derived from actual group IDs, never authored loss claims.
 const multiLinePacket = structuredClone(teaching.packet);
@@ -215,6 +263,7 @@ const receipt = await bindCopyProductionReview(base, {
   author_run_id: 'test-author', reviewer_run_id: 'test-independent-reviewer', reviewed_at: 1, verdict: 'pass',
   units: subject.units.map((u) => ({ unit_id: u.unit_id, candidate_id: u.candidate_id, verdict: 'pass', findings: [],
     group_checks: { scope: 'planned_group_teaching_only',
+      source_relations: [{ relation: 'Synthetic source relation', evidence_ids: [teaching.packet.units.find(v => v.unit_id === u.unit_id)!.source_context!.evidence_ids[0]], point_ids: u.lines[0].point_ids, line_ids: [u.lines[0].line_id], assessment: 'covered', reason: 'Synthetic protocol fixture only' }],
       L1: { verdict: 'pass', learner_takeaway: 'Synthetic group teaching relation', reason: 'Synthetic complete selected-point coverage, not a quality oracle' },
       L2: { verdict: 'pass', viewer_chain: 'Synthetic original then explanation', stage_cues: 'Synthetic visible revisit label', reason: 'Synthetic planned handoff, not rendered viewing' } },
     narration_checks: u.lines.map((l) => ({ line_id: l.line_id, necessity: 'necessary', omission_loss: 'Synthetic test: use-experience relation',
@@ -496,7 +545,8 @@ const originalContentOnly = { cases: request.input.cases.map((c) => ({ case_id: 
   units: c.packet.units.map(({ omission_views: _views, ...unit }) => unit),
 } })) };
 assert.deepEqual(originalContentOnly, teachingRegression.blind_input, 'new omission references do not rewrite historical copy, context or evidence');
-assert(request.instructions.startsWith(teachingRegression.instructions));
+assert(request.instructions.includes(teachingRegression.instructions));
+assert(request.instructions.indexOf('先读取每单元source_context') < request.instructions.indexOf(teachingRegression.instructions), 'source reconstruction precedes point-by-point evaluation');
 assert.equal(createHash('sha256').update(teachingRegression.instructions).digest('hex'), teachingRegression.pre_registration['protocol.txt']);
 assert.notEqual(createHash('sha256').update(request.instructions).digest('hex'), teachingRegression.pre_registration['protocol.txt'], 'new criteria are not the historical calibrated prompt');
 assert.equal(createHash('sha256').update(`${JSON.stringify(teachingRegression.blind_input, null, 2)}\n`).digest('hex'), teachingRegression.pre_registration['input.json']);

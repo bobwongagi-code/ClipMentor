@@ -1,9 +1,12 @@
+import { isSourceReviewScope, type SourceReviewScope } from './source-alignment';
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
 
 /** One source-bound ledger, shared by analysis, copy review and execution. Not a model verdict. */
 export interface SourceBreakdown {
   version: 1;
+  /** Frozen task scope, never inferred from the clips selected for playback. Missing on legacy drafts. */
+  review_scope?: SourceReviewScope;
   segments: Array<{
     segment_id: string;
     source_range_seconds: [number, number];
@@ -51,7 +54,7 @@ const range = (v: unknown): v is [number, number] => Array.isArray(v) && v.lengt
 const unique = (ids: string[]) => new Set(ids).size === ids.length;
 
 export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
-  if (!row(v) || v.version !== 1
+  if (!row(v) || v.version !== 1 || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
     || !rows(v.segments, (s) => text(s.segment_id) && range(s.source_range_seconds)
       && strings(s.visible_evidence_ids) && strings(s.claim_evidence_ids) && strings(s.interpretation_evidence_ids) && strings(s.unknowns))
     || !rows(v.points, (p) => text(p.point_id) && strings(p.segment_ids) && p.segment_ids.length > 0
@@ -313,6 +316,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
     } : {}) });
   if (!a || !b) { issue('source_breakdown_missing', 'analysis'); return result(); }
   if (!isSourceBreakdown(b)) { issue('source_breakdown_invalid', 'analysis'); return result(); }
+  if (b.review_scope?.kind === 'local_ranges' && b.review_scope.source_ranges.some(r => r[1] > a.source.duration_seconds)) issue('review_scope_out_of_bounds', 'analysis');
   const asset = doc.assets.find((v) => v.id === a.source.asset_id);
   if (!a.source.sourceContentHash || asset?.sourceContentHash !== a.source.sourceContentHash) issue('source_hash_missing_or_changed', a.source.asset_id);
   const segments = new Map(b.segments.map((s) => [s.segment_id, s]));

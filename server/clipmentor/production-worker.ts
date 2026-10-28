@@ -4,22 +4,24 @@ import {executeRun} from '../agent-runs/executor';
 import {canonicalServerRunToolCatalog} from '../agent-runs/tool-policy';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {checkCopyProduction,copyTeachingPacketFromDoc} from '../../src/clipmentor/production-gate';
-import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {isClipMentorAnalysis} from '../../src/clipmentor/analysis';
 import {isExternalServerDirectTool} from '../../src/agent/external-tool-policy';
 import {resolveUploadFile} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
-import {verifyProductionNarration,verifyProductionEditing} from './production-readiness';
+import {verifyProductionNarration,verifyProductionEditing,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
 import {openHeadlessEditor} from './headless-editor';
+import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc,TimelineState} from '../../src/editor/types';
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
-import type {StageWorker} from './production-task';
+import type {StageWorker,ProductionTask} from './production-task';
 
 const hostNames=new Set(['load_skill','edit_item','read_clipmentor_analysis','revise_clipmentor_analysis','observe_clipmentor_source',
  'observe_clipmentor_source_video','read_clipmentor_source_video','view_asset_frames','view_timeline_frames','save_clipmentor_source_frame','submit_voice']);
+const editForbiddenTools=new Set(['revise_clipmentor_analysis','submit_voice','observe_clipmentor_source','observe_clipmentor_source_video']);
+export const productionStageToolAllowed=(stage:ProductionTask['stage'],name:string)=>stage!=='edit'||!editForbiddenTools.has(name);
 const goals={
  analysis:'完整观察原片，理解商品购买理由及结构，登记证据、重点与blueprint。区分所见、原话及推论；不能听清的留未知。不得配音或剪辑。',
- blueprint:'按整组教学关系登记source_breakdown、现行马来语口播/同文字幕/中文意思及picture plan，说明素材有效范围、必要拍法、回看进出与视觉继承。画面承担可以无独立旁白。不得自签审核或剪辑。',
+ blueprint:'先确定完整学习结构与每组说服关系，再登记source_breakdown、现行马来语口播/字幕/中文及picture plan。成绩与学习过渡缺资料时明确记录原因，不静默删掉；按完整话意和动作决定看一组讲一组或其他组织，不固定四组。把卖点、怎么拍、为什么这样拍讲清，原消费者促单与达人阶段邀请分开。每组用既有unit表达原声与解释，必要条件、画面承担、回看进出和视觉继承明确。未配音仅填语义锚点，不编实测秒数；先检查最终审核投影。不得自签审核或剪辑。',
  audio:'只处理已审现行稿。先找同文、同音色现有音频；仅合成缺少的句子，保留实测声长及来源。按整组核承载，缺素材或需改稿时说明冲突，不赶读、慢放、循环或长定格凑时长。',
  edit:'按当前已审蓝图和真实音频执行，保留教学重点和必要拍法，原片/讲解强区分、字幕实底可读且无阴影。源片对象、阶段与讲解意群对应。需要定格时用save_clipmentor_source_frame，不临时编新意思。用实际合成帧自查，保存后停止，不自行导出。'
 };
@@ -45,6 +47,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const doc=editor.getDoc(),a=doc.clipMentorAnalysis!;
   if(a.source.asset_id!==task.input.sourceAssetId)throw new Error('Task/source binding changed');
   if(task.stage==='copy_review'){
+   await prepareProductionBlueprint(doc);
    const result=await editor.execute('request_clipmentor_copy_review',{operationId:operation('independent-review'),maxRequests:1,expectedRevision:a.revision},'copy-review') as Record<string,unknown>;
    if(result.error)throw new Error(String(result.error));
    const gate=await checkCopyProduction(editor.getDoc(),'clipmentor');
@@ -71,37 +74,56 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     executionManifest},'preview-review') as Record<string,unknown>;
    if(result.error)throw new Error(String(result.error));
    if(!(result.effective_review as {can_use_as_pass?:boolean})?.can_use_as_pass)return {artifact:{receipt:result,revision:editor.revision},repair:'edit'};
-   return {artifact:{receipt:result,preview:src,language_review:'final_operator_required',complete_film_accepted:false}};
+   return {artifact:{receipt:result,preview:src,executionReport:task.completed.edit?.artifact.executionReport??null,language_review:'final_operator_required',complete_film_accepted:false}};
   }
   // Only these author stages may call the API model; review/export have separate host paths.
   const prefix=`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
   if(Object.entries(task.effects).some(([id,e])=>id.startsWith(prefix)&&e.kind==='model'))throw new Error('author_stage_already_attempted; inspect saved run before explicit reconciliation, no repeat submission');
   const goal=goals[task.stage];
+  const beforeExecution=task.stage==='edit'?structuredClone(doc):undefined;
+  const taskData=await productionAuthorTaskData(task,doc);
+  if(task.stage==='edit'){
+   const readiness=await productionBlueprintReadiness(doc,task.input.voice);
+   if(!readiness.ready)throw new Error(`production_edit_not_ready:${readiness.code}`);
+  }
   const skills=await editor.loadSkill('clipmentor'),planning=await editor.loadSkill('clipmentor','references/planning.md');
   const run=createRun({projectId:task.projectId,sessionGeneration:await currentAgentSessionGeneration(task.projectId),backend:'api',provider:task.input.author.provider,model:task.input.author.model,context:{productionTaskId:task.taskId,stage:task.stage}});
   await flushRunPersistence(run);
-  const tools=canonicalServerRunToolCatalog(false,true).filter(s=>hostNames.has(s.name)||isExternalServerDirectTool(s.name));
+  const tools=canonicalServerRunToolCatalog(false,true).filter(s=>(hostNames.has(s.name)||isExternalServerDirectTool(s.name))&&productionStageToolAllowed(task.stage,s.name));
   await executeRun(run,{backend:'api',provider:task.input.author.provider,model:task.input.author.model,openAiApiMode:task.input.author.apiMode,cacheMode:'short',maxOutputTokens:8192,
    autonomousAcceptance:false,maxAcceptanceIterations:1,origin:task.input.author.origin,tools,
-   messages:[{role:'user',content:JSON.stringify({task:task.input.brief,stage:task.stage,goal,feedback:task.feedback??null,repairContext:task.repairContext??null,voice:task.input.voice??null,sourceAssetId:task.input.sourceAssetId,revision:a.revision,
-    actor:{operator:'task_operator',executor:'builtin_api_agent',instruction:task.input.brief,identity:'local_declared_not_authenticated'}})}],
+   messages:[{role:'user',content:JSON.stringify(taskData)}],
    instructions:`${skills}\n${planning}\n服务端制作任务；只使用可用工具。不要等待逐阶段人工指令，不能调用本机Codex、文件脚本或自签审核。先读当前工程与现行稿，不读旧稿替代当前指针。阶段目标：${goal}`,
    host:{signal:stage.signal,maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     beforeRequest:()=>stage.effect('model',`author-${task.attempts.model}`,async()=>null).then(()=>undefined),
-    execute:async(name,args,id)=>name==='load_skill'?editor.loadSkillTool(args):editor.execute(name,args,id)}});
+    execute:async(name,args,id)=>{
+     if(!productionStageToolAllowed(task.stage,name))throw new Error(`production_execution_role_forbids:${name}`);
+     return name==='load_skill'?editor.loadSkillTool(args):editor.execute(name,args,id);
+    }}});
   if(run.status!=='completed')throw new Error(run.error??'Author stage failed');
   const next=editor.getDoc(),analysis=next.clipMentorAnalysis;
   if(!isClipMentorAnalysis(analysis)||!analysis.points.length||!analysis.blueprint.length||!analysis.evidence.length)throw new Error('analysis_stage_incomplete');
-  if(task.stage==='blueprint'){
-   const check=checkSourceBreakdown(next);if(check.status!=='structurally_ready')throw new Error(`blueprint_stage_incomplete:${JSON.stringify(check.issues).slice(0,1600)}`);
-   await copyTeachingPacketFromDoc(next);
-  }
+  if(task.stage==='blueprint')await prepareProductionBlueprint(next);
   if(task.stage==='audio')await verifyProductionNarration(next,task.input.voice);
   if(task.stage==='edit')await verifyProductionEditing(next,task.input.voice);
   await editor.commit();
-  return {artifact:{revision:editor.revision,analysisRevision:analysis.revision,runId:run.id,semantic_quality:'not_certified_by_structure'}};
+  const saved=await loadOfflineStoredProject(task.projectId);
+  if(!saved||saved.revision!==editor.revision)throw new Error('production_saved_readback_mismatch');
+  const blueprintReadiness=await productionBlueprintReadiness(saved.doc,task.input.voice);
+  const executionReport=beforeExecution?await productionExecutionReport(beforeExecution,saved.doc,task.input.voice):undefined;
+  return {artifact:{revision:editor.revision,analysisRevision:analysis.revision,runId:run.id,blueprintReadiness,
+   ...(executionReport?{executionReport}:{}),semantic_quality:'not_certified_by_structure'}};
  }finally{await editor.close();}
 };
+
+/** The actual model message is generated from the saved plan, never from a path-only handoff. */
+export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDoc){
+ const goal=goals[task.stage as keyof typeof goals];if(!goal)throw new Error('production_stage_not_authoring');
+ return {task:task.input.brief,stage:task.stage,goal,feedback:task.feedback??null,repairContext:task.repairContext??null,
+  voice:task.input.voice??null,sourceAssetId:task.input.sourceAssetId,revision:doc.clipMentorAnalysis?.revision,
+  frozenBlueprint:task.stage==='edit'?await prepareProductionBlueprint(doc):null,blueprintReadiness:await productionBlueprintReadiness(doc,task.input.voice),
+  actor:{operator:'task_operator',executor:'builtin_api_agent',instruction:task.input.brief,identity:'local_declared_not_authenticated'}};
+}
 
 /** Project actual placements; never substitute teaching IDs with transition candidate IDs. */
 export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:TeachingPacket){

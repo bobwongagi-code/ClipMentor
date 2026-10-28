@@ -1,3 +1,5 @@
+import { kvGetAuthoritative } from '../persist/sharedKv';
+import { HANDOFF_PREFIX } from '../../shared/clipmentor-handoff';
 // Vision bypass: describe images with a separately configured vision model so
 // a text-only main model (e.g. DeepSeek family) can still understand user
 // attachments, rendered timeline frames, and export QA evidence.
@@ -199,4 +201,9 @@ export async function maybeDescribeFramesResult(
   if (!description) return result;
   const { __images, ...rest } = record;
   return { ...rest, visualSummary: description };
+}
+
+/** Bound handoffs must not spend untracked model calls for image descriptions. */
+export async function allowImplicitVision(projectId?: string): Promise<boolean> {
+  return !projectId || await kvGetAuthoritative(`${HANDOFF_PREFIX}${projectId}`) === undefined;
 }

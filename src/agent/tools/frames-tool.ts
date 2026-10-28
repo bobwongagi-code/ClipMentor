@@ -8,7 +8,7 @@ import type { SourceFrameWindow } from '../../editor/sourceLimit';
 import { extractBlobContactSheet, extractBlobImagePreview, isBlobishSrc } from './blob-frames';
 import { prepareBrowserRenderSnapshots } from './renderSnapshotMedia';
 import { resolveTimeline } from './timeline-target';
-import { maybeDescribeFramesResult } from '../vision';
+import { maybeDescribeFramesResult, allowImplicitVision } from '../vision';
 
 // view_timeline_frames + view_asset_frames provide visual inspection tools.
 //
@@ -399,6 +399,7 @@ export async function execFramesTool(name: string, args: Args, ctx: AgentContext
     : name === 'view_asset_frames'
       ? await viewAssetFrames(args, ctx)
       : { error: `unknown tool ${name}` };
+  if (!await allowImplicitVision(ctx.getProjectId?.())) return result;
   return await maybeDescribeFramesResult(
     result,
     name === 'view_asset_frames' ? 'asset-frames' : 'timeline-frames',

@@ -1,3 +1,4 @@
+import { handoffProjectId, isHandoffStoreKey } from './clipmentor-handoff.ts';
 import { parseAgentSessionGenerationRecord } from './agent-session-generation.ts';
 import type { ProjectStoreRequest } from './project-store-transport.ts';
 
@@ -32,6 +33,7 @@ function uploadFinalizeProjectId(key: string): string | undefined {
 
 /** Return the owning project without treating generation or artifact ids as part of it. */
 export function projectIdFromProjectStoreKey(key: string): string | undefined {
+  if (isHandoffStoreKey(key)) return handoffProjectId(key);
   const strictProjectId = STRICT_PROJECT_SCOPED_KEY.exec(key)?.[1];
   if (strictProjectId) return strictProjectId;
   if (key.startsWith('agent-artifact:')) {
@@ -341,7 +343,7 @@ export function isProjectStoreRequest(value: unknown): value is ProjectStoreRequ
     return Object.keys(value).length === 2
       && isProjectStoreKey(value.key)
       && !value.key.startsWith('agent-session-generation:')
-      && !value.key.startsWith('export-recovery:');
+      && !value.key.startsWith('export-recovery:') && !isHandoffStoreKey(value.key);
   }
   if (value.operation === 'purge-project' || value.operation === 'agent-session-rotate') {
     return Object.keys(value).length === 2
@@ -351,13 +353,13 @@ export function isProjectStoreRequest(value: unknown): value is ProjectStoreRequ
   if (value.operation === 'merge') {
     return Object.keys(value).length === 2
       && isProjectStoreEntries(value.entries)
-      && !Object.keys(value.entries).some((key) => key.startsWith('export-recovery:'));
+      && !Object.keys(value.entries).some((key) => key.startsWith('export-recovery:') || isHandoffStoreKey(key));
   }
   if (value.operation === 'set') {
     return Object.keys(value).length === 3
       && isProjectStoreKey(value.key)
       && !value.key.startsWith('agent-session-generation:')
-      && !value.key.startsWith('export-recovery:')
+      && !value.key.startsWith('export-recovery:') && !isHandoffStoreKey(value.key)
       && Object.hasOwn(value, 'value');
   }
   if (value.operation === 'agent-runtime-write') return isAgentRuntimeWriteRequest(value);

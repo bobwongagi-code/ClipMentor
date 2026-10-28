@@ -10,6 +10,7 @@
 
 使用同一份 `clipMentorAnalysis.source_breakdown` 承接下游，不另建只在主Agent桌面可读的重点表：
 
+0. `review_scope`来自本次冻结任务而非已选播放段。完整拆解填`{kind:"full_source",instruction:"任务原要求"}`；明确局部任务填`{kind:"local_ranges",source_ranges:[[起,止]],instruction:"局部范围依据"}`。沿用原任务范围，改变范围须修订登记并使旧批准失效；不为避开遗漏自行缩窄。历史缺此字段仍可读/存草稿，独立审核在调用前返回`source_review_scope_missing`，不花一次调用猜范围。
 1. `segments` 是源片索引。记录源秒、可见动作证据ID、原片宣称证据ID、解释证据ID和未知，三类引用分开。先用现有观察/append工具建立真实证据和蓝图，再登记索引，不伪造帧或调用成功。空的原片宣称数组表示本窗口没有可引用原话，不表示没有讲话。
 2. `points` 是写稿前选定的教学任务。每条有购买关注、值得学什么的审核问题、必要拍法条件、重要性和源片单元ID。`analysis.points` 是分析发现库；这里是从中选择并保留下来的教学基线，不能把最新短稿反过来当基线。不把每个观察动作都选成必讲点。
 3. `units[].original_source_ranges` 是当前选定的完整原声播放源秒范围（可含必要口播上下文）；`original_segment_ids` 是其中教学证据的索引，不能用稀疏索引代替完整播放范围。未填正式范围的历史记录暂按索引推导；新登记应明确填写。不得另造 `original_playback_entry` 等播放权威字段，未知unit字段会报错并拒绝写入；状态、理由与历史候选放在蓝图的 `internal_review`。完整范围必须在素材内并覆盖原声索引。
@@ -23,6 +24,7 @@
 ```json
 {
   "version": 1,
+  "review_scope": {"kind":"local_ranges","source_ranges":[[10,12]],"instruction":"本次明确只拆解此局部使用展示"},
   "segments": [{
     "segment_id": "S-use", "source_range_seconds": [10, 12],
     "visible_evidence_ids": ["VIS-01"], "claim_evidence_ids": [],
@@ -108,7 +110,7 @@
 原片台词候选用 `original_claim`、`status:candidate_unverified_speech`，必须有 `source_ids` 指向已有转写。不要把不清的整句修成确定原话。
 用户补充用 `operator_supplied`、`status:operator_provided_not_independently_verified`，`provenance` 交代真实来源。补充文字可以使用 `transcripts`，字段为 `source_id/provider/origin/status/words`；`status` 固定 `operator_provided_segment_text_not_independently_listened`，每段文字整体用其源时间区间记录在 `words`，这是段落定位，不是逐字时间戳。
 
-主审补入的协作稿也须通过 `revise_clipmentor_analysis` 写回对应工程，保留稳定ID和旧稿审计，标明“主审补入”、保持candidate/pending；写回不等于确认。最终复读核对实际蓝图与交付文档一致，不能只在文件中修稿而让后续工具继续读取旧蓝图。独立测试工程不可用协作答案回填。
+协作模式指定策划者提供的稿件、重点和画面方案也须通过 `revise_clipmentor_analysis` 写回对应工程，保留稳定ID和旧稿审计，标明实际外部/策划来源、保持candidate/pending；执行者登记不等于自主发现或确认。最终复读核对实际蓝图与交付文档一致，不能只在文件中修稿而让后续工具继续读取旧蓝图。独立测试工程不可用协作答案回填。
 
 新增帧必须由观察工具生成，不能用append伪造。新增记录ID不能与旧记录冲突，修改旧记录仍用revise；顺序写入使用最近成功结果的revision，冲突或结果不明时重读，结束时统一复读。按原片顺序组织段落，以时长、解释深度、素材丰富度体现重点，不把钩子移到重点后。普通收尾只短带其促单作用，不虚构套餐数量、价格或购买入口。
 

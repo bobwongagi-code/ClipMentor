@@ -30,6 +30,7 @@ import {
   pushRunEvent,
   resetServerRunStoreForTest,
   settleToolResult,
+  waitForRunEvents,
 } from './store.ts';
 import { canonicalServerRunToolCatalog } from './tool-policy.ts';
 import { createAcceptanceLoop } from './acceptance-loop.ts';
@@ -317,7 +318,12 @@ async function settledTool(
   result: unknown,
 ): Promise<unknown> {
   const pending = executeBrowserTool(cacheRun, schema, args, callId, cacheActivation);
-  await Promise.resolve();
+  // Admission now validates authoritative handoff state asynchronously. Wait for
+  // the public request event rather than assuming one microtask means readiness.
+  while (!cacheRun.events.some(event => event.type === 'tool-request' && (event.data as {toolCallId?: string}).toolCallId === callId)) {
+    const cursor = cacheRun.events.at(-1)?.id ?? 0;
+    await Promise.race([waitForRunEvents(cacheRun, cursor), pending.then(() => { throw new Error('Tool settled before request'); })]);
+  }
   const argsDigest = digestToolArgs(args);
   assert.equal(claimToolRequest(cacheRun, {
     toolCallId: callId, argsDigest, claimId: `browser-${callId}`,

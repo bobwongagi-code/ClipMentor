@@ -3,6 +3,8 @@ import type {IncomingMessage,ServerResponse} from 'node:http';
 import {editorCredentialAuthorized} from '../editor-auth';
 import {createProductionTask,productionTaskStore,advanceProductionTask,productionFeedback,acceptProductionTask,cancelProductionTask,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
 import {productionStageWorker} from '../clipmentor/production-worker';
+import {productionBlueprintReadiness} from '../clipmentor/production-readiness';
+import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 
 async function json(req:IncomingMessage){const parts:Buffer[]=[];let size=0;for await(const part of req){size+=part.length;if(size>128000)throw new Error('Production request exceeds 128KB');parts.push(Buffer.from(part));}return JSON.parse(Buffer.concat(parts).toString('utf8'));}
 /** Local service entry. Formal multi-user hosting remains a separate deployment task. */
@@ -24,7 +26,10 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(req.method==='GET'){
      const url=new URL(req.url??'/',origin),projectId=url.searchParams.get('projectId'),id=url.searchParams.get('taskId');
      if(!projectId||!id)throw new Error('Project and task ID required');
-     const task=await productionTaskStore.load(projectId,id);send(200,{...task,executionActive:active.has(id),recoveryRequired:task.status==='running'&&!active.has(id)});return;
+     const task=await productionTaskStore.load(projectId,id);
+     const snapshot=await loadOfflineStoredProject(projectId);
+     const blueprintReadiness=await productionBlueprintReadiness(snapshot?.doc,task.input.voice);
+     send(200,{...task,blueprintReadiness,executionActive:active.has(id),recoveryRequired:task.status==='running'&&!active.has(id)});return;
     }
     if(req.method!=='POST'){send(405,{error:'GET or POST required'});return;}
     const body=await json(req);

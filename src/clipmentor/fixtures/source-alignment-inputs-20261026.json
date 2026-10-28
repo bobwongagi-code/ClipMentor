@@ -1,0 +1,2102 @@
+{
+  "scope": "real inputs, synthetic outcome-routing regressions only; no new semantic model test",
+  "provenance": {
+    "barely_there": "C1 candidate v1, existing F1 source transcription, frozen 2026-10-26",
+    "teashell": "r182 saved project; r180 current wording and source-bound picture plan; no media changes",
+    "comparison_notes": "Chinese comparisons are test-side diagnosis, never reviewer inputs",
+    "scope": "Test-only declarations copied from the original full C1 and local Teashell task; not persisted to those projects."
+  },
+  "cases": [
+    {
+      "case_id": "source-a",
+      "packet": {
+        "audience": "给马来西亚创作者学习拍法与商品购买关注的关系；不是消费者广告或功效认证",
+        "product": {
+          "name": "Barely There（店铺名，品牌未核）女士内裤",
+          "purchase_concerns": [
+            "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。",
+            "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。",
+            "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。",
+            "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。",
+            "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。"
+          ],
+          "unknowns": [
+            "本轮未正常速度连续听审；保留整段原声，不把抽帧称为连续视听验收。",
+            "不从透光推断透气/无痕。",
+            "手感与实际穿着未知。",
+            "材质与工艺名称不由近镜证明。",
+            "七件为原作者ASR建议，不是已核实套餐。",
+            "衬片材质/功效未知。",
+            "结束原话不作逐字字幕；我们的末句是对创作者的邀请。"
+          ]
+        },
+        "source_evidence": [
+          {
+            "evidence_id": "BT-E001",
+            "observation": "[source_frame; observed_by_external_planner] 撑开的深色面料前，仍可辨认后方的眼鼻轮廓；人穿着日常外衣，商品拿在手中。",
+            "time_seconds": [
+              1.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E002",
+            "observation": "[visible_action; observed_by_external_planner] 0—3秒的6fps序列：举起、撑开布料至脸前，再放低；不是穿在身上的示范。",
+            "time_seconds": [
+              0,
+              3
+            ]
+          },
+          {
+            "evidence_id": "BT-E003",
+            "observation": "[source_frame; observed_by_external_planner] 双手将商品面料向相反方向展开，画面可见面料拉开后的形状。",
+            "time_seconds": [
+              11.333333333333334
+            ]
+          },
+          {
+            "evidence_id": "BT-E004",
+            "observation": "[source_frame; observed_by_external_planner] 展开之后，面料被收拢到手中。",
+            "time_seconds": [
+              13.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E005",
+            "observation": "[visible_action; observed_by_external_planner] 10.5—14.5秒6fps序列呈现展开到收拢的动作；不等于回弹率、舒适度或适用尺码测试。",
+            "time_seconds": [
+              10.5,
+              14.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E006",
+            "observation": "[source_frame; observed_by_external_planner] 商品被拿近镜头，腰边、蝴蝶结和侧边蕾丝/缝接细节可见。",
+            "time_seconds": [
+              17.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E007",
+            "observation": "[visible_action; observed_by_external_planner] 16—19秒6fps序列呈现拿近与退回的变化，近景确实让边缘细节占画面更大。",
+            "time_seconds": [
+              16,
+              19
+            ]
+          },
+          {
+            "evidence_id": "BT-E008",
+            "observation": "[source_frame; observed_by_external_planner] 讲到多件建议的时段，手中仍只展示一件商品；不能把此帧称为七件同框。",
+            "time_seconds": [
+              24
+            ]
+          },
+          {
+            "evidence_id": "BT-E009",
+            "observation": "[original_claim; existing_asr_candidate_not_listening_verified] 既有Fun-ASR在19.31—27.79秒多次识别买七件、划算/省及每天穿/替换的说法；仅作为原作者建议的转写候选，未独立听审。",
+            "time_seconds": [
+              19.31,
+              27.8
+            ]
+          },
+          {
+            "evidence_id": "BT-E010",
+            "observation": "[source_frame; observed_by_external_planner] 翻开商品后，手持白色内侧衬片清楚可见；未见其材质认证或性能测试。",
+            "time_seconds": [
+              30.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E011",
+            "observation": "[visible_action; observed_by_external_planner] 27.5—32.5秒6fps序列：转动、翻开内侧、展开白色衬片、随后收回；不把翻转中的遮挡帧选作细节证据。",
+            "time_seconds": [
+              27.5,
+              32.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E012",
+            "observation": "[original_claim; existing_asr_candidate_not_listening_verified] 既有Fun-ASR在28.15—29.63秒识别“里面有pelapik”附近表述；后段出现购买入口和换新提醒候选；suara/seluar等词存在识别疑义。",
+            "time_seconds": [
+              28.15,
+              37.266667
+            ]
+          },
+          {
+            "evidence_id": "BT-E014",
+            "observation": "[expression_analysis_not_verified_causal_effect; observed_by_external_planner] 用可见参照呈现薄，用手上操作表达触感，用近镜和翻内侧补齐买前想看的细节；这是表达作用分析，不能归因为确定销量提升。"
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:0.12:6.877",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] G ila jar ang spender ni kau orang jar ang gila tau yang mana kau orang teng ah car i spender yang se les a jar ang jar ang nip is nip",
+            "time_seconds": [
+              0.12,
+              6.877
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:6.877:12.808",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] is je pak ai r asa macam tak pak ai su ara dalam kau orang bel i je su ara dalam ni su ara dalam wan ita yang le mb ut mem",
+            "time_seconds": [
+              6.877,
+              12.808
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:12.808:20.512",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] er ik re kan do a bila pak ai r asa macam tak pak ai su ara dalam material dia pun cant ik kemas je kan bel i yang kom bo bel",
+            "time_seconds": [
+              12.808,
+              20.512
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:20.512:27.109",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] i tu ju h ter us lagi ber bal oi lagi jimat jangan lah bel i se lain tak kan nak pak ai se hari je kan bel i ter us tu",
+            "time_seconds": [
+              20.512,
+              27.109
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:27.109:32.387",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] ju h lain okey dalam dia ada pel ap ik macam ni so kal au kak ak dah lama tak tuk ar su ara dalam tu kan us ia de kat beg",
+            "time_seconds": [
+              27.109,
+              32.387
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:32.387:37.266",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] kun ing grab yang ni okey bo leh pak ai se les a do a ni pak ai t uk ar tuk ar dah lama tak tuk ar su ara dalam baru",
+            "time_seconds": [
+              32.387,
+              37.266
+            ]
+          }
+        ],
+        "units": [
+          {
+            "unit_id": "BT-U01",
+            "lines": [
+              {
+                "line_id": "BT-L01",
+                "point_ids": [
+                  "BT-P01"
+                ],
+                "narration_ms": "Tengok semula pembukaannya. Wajah masih nampak di sebalik kain, jadi penonton nampak betapa nipisnya kain itu tanpa perlu dipakai pada badan.",
+                "caption_lines": [
+                  "Tengok semula pembukaannya.",
+                  "Wajah masih nampak",
+                  "di sebalik kain,",
+                  "jadi penonton nampak",
+                  "betapa nipisnya kain itu",
+                  "tanpa perlu dipakai",
+                  "pada badan."
+                ],
+                "meaning_zh": "回看开头。隔着布料还能看到她的脸，不用穿上身，观众也能直观看出面料有多薄。",
+                "labels": [
+                  "Kain nipis"
+                ]
+              },
+              {
+                "line_id": "BT-L02",
+                "point_ids": [
+                  "BT-P02",
+                  "BT-P03"
+                ],
+                "narration_ms": "Bila dia tarik dan ramas kain, rasa lembut dan anjal lebih mudah dibayangkan. Dari dekat, kemasannya pun lebih jelas.",
+                "caption_lines": [
+                  "Bila dia tarik dan ramas kain,",
+                  "rasa lembut dan anjal",
+                  "lebih mudah dibayangkan.",
+                  "Dari dekat,",
+                  "kemasannya pun lebih jelas."
+                ],
+                "meaning_zh": "她拉开、揉拢面料，让人更容易想象柔软和弹性的感觉；再拿近镜头，做工也更清楚。",
+                "labels": [
+                  "Lembut & anjal",
+                  "Kemasan dari dekat"
+                ]
+              },
+              {
+                "line_id": "BT-L03",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia cadangkan tujuh helai untuk tukar pakai harian. Sebab membeli lebih pun jadi jelas.",
+                "caption_lines": [
+                  "Dia cadangkan tujuh helai",
+                  "untuk tukar pakai harian.",
+                  "Sebab membeli lebih",
+                  "pun jadi jelas."
+                ],
+                "meaning_zh": "她建议买七件用于日常替换，让多买几件有了具体理由。",
+                "labels": [
+                  "Tukar pakai harian"
+                ]
+              },
+              {
+                "line_id": "BT-L04",
+                "point_ids": [
+                  "BT-P05"
+                ],
+                "narration_ms": "Dia buka bahagian dalam supaya pembeli boleh lihat pelapiknya, bukan meneka daripada gambar luar sahaja.",
+                "caption_lines": [
+                  "Dia buka bahagian dalam",
+                  "supaya pembeli boleh lihat",
+                  "pelapiknya,",
+                  "bukan meneka daripada",
+                  "gambar luar sahaja."
+                ],
+                "meaning_zh": "她翻开里面，让买家直接看清内侧衬片，不用只凭外观去猜。",
+                "labels": [
+                  "Pelapik bahagian dalam"
+                ]
+              },
+              {
+                "line_id": "BT-L05",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Kalau sesuai, cuba cara ini dengan gaya anda sendiri.",
+                "caption_lines": [
+                  "Kalau sesuai, cuba cara ini",
+                  "dengan gaya anda sendiri."
+                ],
+                "meaning_zh": "如果适合你的风格，可以用自己的方式试试这些拍法。",
+                "labels": []
+              }
+            ],
+            "source_context": {
+              "scope": "frozen_task_scope",
+              "source_ranges": [
+                [
+                  0,
+                  37.266667
+                ]
+              ],
+              "evidence_ids": [
+                "BT-E001",
+                "BT-E002",
+                "BT-E003",
+                "BT-E004",
+                "BT-E005",
+                "BT-E006",
+                "BT-E007",
+                "BT-E008",
+                "BT-E009",
+                "BT-E010",
+                "BT-E011",
+                "BT-E012",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:0.12:6.877",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:6.877:12.808",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:12.808:20.512",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:20.512:27.109",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:27.109:32.387",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:32.387:37.266"
+              ],
+              "speech": "asr_available_not_listening_verified"
+            },
+            "picture_plan": {
+              "original_source_ranges": [
+                [
+                  0,
+                  37.266666666666666
+                ]
+              ],
+              "explanation_source_ranges": [
+                [
+                  0,
+                  10.5
+                ],
+                [
+                  10.5,
+                  16.333333333333332
+                ],
+                [
+                  16.333333333333332,
+                  19.333333333333332
+                ],
+                [
+                  19.333333333333332,
+                  27.833333333333332
+                ],
+                [
+                  27.833333333333332,
+                  32.333333333333336
+                ],
+                [
+                  32.333333333333336,
+                  37.266666666666666
+                ]
+              ],
+              "line_source_ranges": [
+                {
+                  "line_id": "BT-L01",
+                  "source_range_seconds": [
+                    0,
+                    10.5
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-S01",
+                      "source_range_seconds": [
+                        0,
+                        10.5
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L02",
+                  "source_range_seconds": [
+                    10.5,
+                    19.333333333333332
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-S02",
+                      "source_range_seconds": [
+                        10.5,
+                        16.333333333333332
+                      ]
+                    },
+                    {
+                      "segment_id": "BT-S03",
+                      "source_range_seconds": [
+                        16.333333333333332,
+                        19.333333333333332
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L03",
+                  "source_range_seconds": [
+                    19.333333333333332,
+                    27.833333333333332
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-S04",
+                      "source_range_seconds": [
+                        19.333333333333332,
+                        27.833333333333332
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L04",
+                  "source_range_seconds": [
+                    27.833333333333332,
+                    32.333333333333336
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-S05",
+                      "source_range_seconds": [
+                        27.833333333333332,
+                        32.333333333333336
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L05",
+                  "source_range_seconds": [
+                    32.333333333333336,
+                    37.266666666666666
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-S06",
+                      "source_range_seconds": [
+                        32.333333333333336,
+                        37.266666666666666
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                }
+              ],
+              "registered_revisits": [
+                {
+                  "from_source_range": [
+                    0,
+                    37.266666666666666
+                  ],
+                  "to_source_range": [
+                    0,
+                    10.5
+                  ]
+                }
+              ]
+            },
+            "points": [
+              {
+                "point_id": "BT-P01",
+                "role": "primary",
+                "question": "不用试穿，怎样让人直接看见面料有多薄？",
+                "evidence_ids": [
+                  "BT-E001",
+                  "BT-E002",
+                  "BT-E014"
+                ],
+                "buying_concern": "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。",
+                "filming_conditions": [
+                  "布料在脸前撑开，脸的轮廓仍能看到",
+                  "保留举起与放低的上下文，不只截一块灰布"
+                ],
+                "treatment": "explain"
+              },
+              {
+                "point_id": "BT-P02",
+                "role": "primary",
+                "question": "看不到真实穿着时，怎样让柔软和弹性的说法有可观察的参照？",
+                "evidence_ids": [
+                  "BT-E003",
+                  "BT-E004",
+                  "BT-E005",
+                  "BT-E014"
+                ],
+                "buying_concern": "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。",
+                "filming_conditions": [
+                  "同一件商品，先展开再收拢",
+                  "手与面料接触清楚；正常速度保留动作"
+                ],
+                "treatment": "explain"
+              },
+              {
+                "point_id": "BT-P03",
+                "role": "supporting",
+                "question": "远景已经看见款式，为什么还需要拿近看做工？",
+                "evidence_ids": [
+                  "BT-E006",
+                  "BT-E007",
+                  "BT-E014"
+                ],
+                "buying_concern": "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。",
+                "filming_conditions": [
+                  "确实拿近到能看见边缘细节",
+                  "不把手挡住的位置标为缝接证据"
+                ],
+                "treatment": "explain",
+                "supports_point_id": "BT-P02"
+              },
+              {
+                "point_id": "BT-P04",
+                "role": "supporting",
+                "question": "怎样把多件数量变成有日常用途的购买理由？",
+                "evidence_ids": [
+                  "BT-E008",
+                  "BT-E009",
+                  "BT-E014",
+                  "BT-E012"
+                ],
+                "buying_concern": "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。",
+                "filming_conditions": [
+                  "七件只作为原作者建议",
+                  "明确区分消费者购买邀请与创作者学习邀请"
+                ],
+                "treatment": "explain",
+                "supports_point_id": "BT-P01"
+              },
+              {
+                "point_id": "BT-P05",
+                "role": "primary",
+                "question": "外观之外，怎样展示买家关心的内侧衬片？",
+                "evidence_ids": [
+                  "BT-E010",
+                  "BT-E011",
+                  "BT-E012",
+                  "BT-E014"
+                ],
+                "buying_concern": "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。",
+                "filming_conditions": [
+                  "真正翻开到白色内侧衬片展开",
+                  "内侧与外侧对象分清；不拿翻转遮挡段当清楚展示"
+                ],
+                "treatment": "explain"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "source-b",
+      "packet": {
+        "audience": "给马来西亚创作者学习拍法与商品购买关注的关系；不是消费者广告或功效认证",
+        "product": {
+          "name": "亮肤香皂（品名与品牌待核）",
+          "purchase_concerns": [
+            "局部暗沉/提亮诉求落到肘部试用",
+            "身体皂使用中的体验表达",
+            "看清比较前皮肤的展示状态",
+            "局部皮肤观感比较",
+            "比较后人物讲述承接"
+          ],
+          "unknowns": [
+            "稀疏采样非连续动作；原声句界、品牌原话未核",
+            "吸气、香型、好坏评价未知",
+            "未见完整去泡；对象不同，不是同部位前后效果",
+            "单手到双手的连续运动未连续观看",
+            "84.2为候选检索延展，已记录83.2/84.1同框；两侧身份、曝光、真实功效未知",
+            "原话、情绪及是否强调比较未知；只支持人物讲话姿态",
+            "仅既有抽帧定位，连续动作与候选出点未验；同次手臂至肘侧空间上下文，不把全窗称肘部揉擦。",
+            "连续切接/实际声画阅读待预览；后窗非全程肘擦或闻香。",
+            "历史不执行；当前仅84.4—85.3保守人物动态候选，非精确干净边界。",
+            "抽帧证据只定位58.4秒参照，不独立证明全窗连续动作；动态选择沿用已审核计划。",
+            "本地帧为采样证据；连续泡沫展示另由既存源片观察支持，不推定处理侧或功效。",
+            "只登记湿润肘臂状态，不认定洗净、完整冲洗或功效；76秒短参照不是连续动作。",
+            "该阶段为举近动作，不把单手画面认作真实双手背同时同框。",
+            "80秒后包含另一手加入和调整，不把全窗称稳定并排；80.3和83.2参照只承担对象识别及比较条件阅读，不判处理侧或功效。"
+          ]
+        },
+        "source_evidence": [
+          {
+            "evidence_id": "VIS-03",
+            "observation": "[visible_action; agent_observed_candidate] 43秒双手握白色皂体；47、50、54秒一手接触另一侧前臂，前臂有长条状白色覆盖；58秒屈肘把肘臂横向靠近镜头，另一手持白色物接触肘部；65秒双手交叠接触手背，手臂及手背有白色泡沫覆盖。只记录采样阶段，不声称精确次数。",
+            "time_seconds": [
+              43,
+              65
+            ]
+          },
+          {
+            "evidence_id": "VIS-04",
+            "observation": "[visible_action; agent_observed_candidate] 71.5、71.8秒为带泡沫的双手背并置近景；72.1秒已切为湿润肘臂近景，72.4、72.7、73秒延续此构图。相邻样本间发生状态和构图跳转，未采到完整冲洗过程。",
+            "time_seconds": [
+              71.5,
+              73
+            ]
+          },
+          {
+            "evidence_id": "VIS-05",
+            "observation": "[visible_action; agent_observed_candidate] 80秒两只湿润手背靠近镜头并置，其中一只位于画面中心，另一只在右侧；皮肤表面仍有反光。",
+            "time_seconds": [
+              80,
+              80
+            ]
+          },
+          {
+            "evidence_id": "WHY-03",
+            "observation": "[expression_analysis_not_verified_causal_effect; inferred_not_verified_causal_effect] 她把两只手靠近镜头，放在同一个画面里，方便对比。带泡沫的同框画面之后，又给出湿润皮肤和双手同框的画面，让比较不只停在一个阶段。",
+            "time_seconds": [
+              67,
+              86
+            ]
+          },
+          {
+            "evidence_id": "VIS-10",
+            "observation": "[visible_action; agent_observed_candidate] 59.4—59.8秒揉擦带泡沫肘臂；60.2秒抬起前臂，60.6秒低头将鼻子靠近腕/前臂，61秒离开面部，61.4—62.2秒继续揉擦。可见类似嗅闻的体验姿态，图片不能确认吸气、气味或评价。",
+            "time_seconds": [
+              59.4,
+              62.2
+            ]
+          },
+          {
+            "evidence_id": "VIS-11",
+            "observation": "[visible_action; agent_observed_candidate] 80—83.4秒湿润双手背靠近镜头并置，中间一手移前又回到并置；84.2667—85.1333秒转为人物中景，扬眉睁眼、歪头面向镜头；86秒低头。",
+            "time_seconds": [
+              80,
+              86
+            ]
+          },
+          {
+            "evidence_id": "VIS-12",
+            "observation": "[visible_action; agent_observed_candidate] 83.2—84.1秒双手背并置，嘴角略上扬；84.4—85.3秒人物中景，扬眉睁眼、头部倾斜并张合嘴。相邻采样支持比较后讲话的表情配合，不支持惊喜效果或真实满意判断。",
+            "time_seconds": [
+              83.2,
+              85.3
+            ]
+          },
+          {
+            "evidence_id": "VIS-13",
+            "observation": "[visible_action; agent_observed_candidate] 69.8—71.8秒带泡沫双手背近镜并置；72.3—72.8秒画面转为湿润肘臂近景并以另一手托触，73.3秒调整手臂姿态；未见完整去泡过程。",
+            "time_seconds": [
+              69.8,
+              73.3
+            ]
+          },
+          {
+            "evidence_id": "VIS-14",
+            "observation": "[visible_action; agent_observed_candidate] 76.8—78.3秒湿润肘臂近镜、另一手触摸；78.8秒手臂放低，79.3—79.8秒一只手背举近镜头，80.3秒另一手背加入同框。",
+            "time_seconds": [
+              76.8,
+              80.3
+            ]
+          },
+          {
+            "evidence_id": "WHY-06",
+            "observation": "[expression_analysis_not_verified_causal_effect; inferred_not_verified_causal_effect] 泡沫并置、湿润肘臂、湿润双手近镜并置依次提供不同状态的查看条件，回应买家对局部肤色观感的比较关注；比较后扬眉睁眼、歪头的讲话画面把注意力从手部带回讲述者，可解释为表情配合而非提亮效果证明。",
+            "time_seconds": [
+              69.8,
+              85.3
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1530",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              51
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1590",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              53
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1875",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              62.5
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1935",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              64.5
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1866",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              62.2
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f1752",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.4
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f1995",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              66.5
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2052",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              68.4
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2175",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.5
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2280",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              76
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2376",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              79.2
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2409",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80.3
+            ]
+          },
+          {
+            "evidence_id": "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2496",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.2
+            ]
+          },
+          {
+            "evidence_id": "observation:d70c4c09-35a0-4e0c-800a-4d1a927ec011:f1500",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              50
+            ]
+          },
+          {
+            "evidence_id": "observation:d70c4c09-35a0-4e0c-800a-4d1a927ec011:f1950",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              65
+            ]
+          },
+          {
+            "evidence_id": "observation:d70c4c09-35a0-4e0c-800a-4d1a927ec011:f2400",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80
+            ]
+          },
+          {
+            "evidence_id": "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f1290",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              43
+            ]
+          },
+          {
+            "evidence_id": "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f1740",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58
+            ]
+          },
+          {
+            "evidence_id": "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f2100",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              70
+            ]
+          },
+          {
+            "evidence_id": "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f2190",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              73
+            ]
+          },
+          {
+            "evidence_id": "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2145",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.5
+            ]
+          },
+          {
+            "evidence_id": "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2154",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.8
+            ]
+          },
+          {
+            "evidence_id": "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2163",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.1
+            ]
+          },
+          {
+            "evidence_id": "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2172",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.4
+            ]
+          },
+          {
+            "evidence_id": "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2181",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.7
+            ]
+          },
+          {
+            "evidence_id": "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2190",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              73
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1290",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              43
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1410",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              47
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1500",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              50
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1620",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              54
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1740",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1950",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              65
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f2190",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              73
+            ]
+          },
+          {
+            "evidence_id": "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f2400",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80
+            ]
+          },
+          {
+            "evidence_id": "observation:205571c2-0c51-45e6-a59f-373bea9dfd17:f2490",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83
+            ]
+          },
+          {
+            "evidence_id": "observation:205571c2-0c51-45e6-a59f-373bea9dfd17:f2550",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              85
+            ]
+          },
+          {
+            "evidence_id": "observation:91a450f9-c5b2-4e82-88cc-04a135b6b42c:f1320",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              44
+            ]
+          },
+          {
+            "evidence_id": "observation:91a450f9-c5b2-4e82-88cc-04a135b6b42c:f1680",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              56
+            ]
+          },
+          {
+            "evidence_id": "observation:91a450f9-c5b2-4e82-88cc-04a135b6b42c:f1800",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              60
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1782",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              59.4
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1794",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              59.8
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1806",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              60.2
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1818",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              60.6
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1830",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              61
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1842",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              61.4
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1854",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              61.8
+            ]
+          },
+          {
+            "evidence_id": "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1866",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              62.2
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2400",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2425",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80.83333333333333
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2451",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              81.7
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2477",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              82.56666666666666
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2502",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.4
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2528",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.26666666666667
+            ]
+          },
+          {
+            "evidence_id": "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2554",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              85.13333333333334
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2496",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.2
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2505",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.5
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2514",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.8
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2523",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.1
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2532",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.4
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2541",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.7
+            ]
+          },
+          {
+            "evidence_id": "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2550",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              85
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2094",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              69.8
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2109",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              70.3
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2124",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              70.8
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2139",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.3
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2154",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.8
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2169",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.3
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2184",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.8
+            ]
+          },
+          {
+            "evidence_id": "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2199",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              73.3
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2304",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              76.8
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2319",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              77.3
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2334",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              77.8
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2349",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              78.3
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2364",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              78.8
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2379",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              79.3
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2394",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              79.8
+            ]
+          },
+          {
+            "evidence_id": "observation:1188c5ac-691a-4461-845c-7414b9271832:f2409",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80.3
+            ]
+          },
+          {
+            "evidence_id": "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1680",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              56
+            ]
+          },
+          {
+            "evidence_id": "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1716",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              57.2
+            ]
+          },
+          {
+            "evidence_id": "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1752",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.4
+            ]
+          },
+          {
+            "evidence_id": "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1782",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              59.4
+            ]
+          },
+          {
+            "evidence_id": "VIS-U02-local-20261019-final4",
+            "observation": "[visible_action; agent_observed_candidate] 本次直接读56/57.2/58.4/59.4秒四张原比例源图：56秒肘臂泡沫与轮廓可见，操作手明显运动模糊；后三张横向举臂，操作手覆盖肘臂泡沫区，手与肘部空间关系可辨，手指/接触细节仍模糊，未辨认独立皂体。58.4秒适合整体定位操作手与肘部，不适合放大证明细节清晰。所看四图未见叠加字幕。仅采样时刻状态，不证明采样间连续运动、原话、感受或功效。",
+            "time_seconds": [
+              56,
+              59.4
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1728",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              57.6
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1731",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              57.7
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1734",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              57.8
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1737",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              57.9
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1740",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1743",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.1
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1745",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.166666666666664
+            ]
+          },
+          {
+            "evidence_id": "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1749",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.3
+            ]
+          },
+          {
+            "evidence_id": "VIS-U02-rub-local-20261019-r122",
+            "observation": "[visible_action; agent_observed_candidate] 亲自读57.6、57.7、57.8、57.9、58、58.1、58.166666666666664、58.3秒8张原比例图：一臂横向伸在镜头前，肘侧及前臂白色泡沫可辨；另一只手覆在肘侧至近端前臂表面，不同采样手掌位置相对泡沫/肘轮廓往返变化，接触皮肤的揉擦动作关系可辨，不仅是同框定位。操作手有运动模糊，不宜放大展示手指或局部接触细节；不妨碍在这些采样中辨认手在皮肤上揉擦。未辨独立皂体，不证明功效、连续运动、精确次数/切点或语音。",
+            "time_seconds": [
+              57.6,
+              58.3
+            ]
+          },
+          {
+            "evidence_id": "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1728",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              57.6
+            ]
+          },
+          {
+            "evidence_id": "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1743",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.1
+            ]
+          },
+          {
+            "evidence_id": "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1752",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              58.4
+            ]
+          },
+          {
+            "evidence_id": "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1806",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              60.2
+            ]
+          },
+          {
+            "evidence_id": "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1818",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              60.6
+            ]
+          },
+          {
+            "evidence_id": "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1842",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              61.4
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2154",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.8
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2163",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.1
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2379",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              79.3
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2409",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80.3
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2496",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.2
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2523",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.1
+            ]
+          },
+          {
+            "evidence_id": "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2532",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.4
+            ]
+          },
+          {
+            "evidence_id": "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2358",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              78.6
+            ]
+          },
+          {
+            "evidence_id": "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2370",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              79
+            ]
+          },
+          {
+            "evidence_id": "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2379",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              79.3
+            ]
+          },
+          {
+            "evidence_id": "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2409",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              80.3
+            ]
+          },
+          {
+            "evidence_id": "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2496",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.2
+            ]
+          },
+          {
+            "evidence_id": "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2523",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.1
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1470",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              49
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1650",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              55
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1905",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              63.5
+            ]
+          },
+          {
+            "evidence_id": "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1959",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              65.3
+            ]
+          },
+          {
+            "evidence_id": "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1560",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              52
+            ]
+          },
+          {
+            "evidence_id": "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1605",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              53.5
+            ]
+          },
+          {
+            "evidence_id": "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1620",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              54
+            ]
+          },
+          {
+            "evidence_id": "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1635",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              54.5
+            ]
+          },
+          {
+            "evidence_id": "observation:d22386ca-d499-47c4-a33a-70ef8ebf5714:f2532",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.4
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2094",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              69.8
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2112",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              70.4
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2130",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2145",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.5
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2154",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              71.8
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2163",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.1
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2181",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              72.7
+            ]
+          },
+          {
+            "evidence_id": "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2199",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              73.3
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1905",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              63.5
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1935",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              64.5
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1950",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              65
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1962",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              65.4
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1974",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              65.8
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1986",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              66.2
+            ]
+          },
+          {
+            "evidence_id": "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1997",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              66.56666666666666
+            ]
+          },
+          {
+            "evidence_id": "observation:2aae718c-1038-4b38-8e77-667867470094:f2532",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84.4
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1782",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              59.4
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1818",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              60.6
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1842",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              61.4
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1866",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              62.2
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2496",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.2
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2502",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.4
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2508",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              83.6
+            ]
+          },
+          {
+            "evidence_id": "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2520",
+            "observation": "[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending",
+            "time_seconds": [
+              84
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:40.918:51.186",
+            "observation": "[original_asr; fun-asr-flash-2026-06-15; completed; not listening verified; boundary context; sentence boundary unverified] ya med a ket eb al so kita coba ya bak lengan dulu lah ya kita mula ke bal engan dulu oke kita kos ong ya sama ini ya tadi al u",
+            "time_seconds": [
+              40.918,
+              51.186
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:51.186:61.814",
+            "observation": "[original_asr; fun-asr-flash-2026-06-15; completed; not listening verified] put ih serta mer ah ya kita mesti ke per ut anak mem bel i yang mesti ke per ut baru siko to pon o le put ih ya bau ya jus",
+            "time_seconds": [
+              51.186,
+              61.814
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:61.854:71.13",
+            "observation": "[original_asr; fun-asr-flash-2026-06-15; completed; not listening verified] nasi aja macam bau sab un bias a nadi itu wangi oh di med ak bed ak sudah bas uh aku di ul ih med ak sikit tu dah put ih dari",
+            "time_seconds": [
+              61.854,
+              71.13
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:71.13:81.45",
+            "observation": "[original_asr; fun-asr-flash-2026-06-15; completed; not listening verified] se bel ah nya oh ad uh hah yang kau tahu tadi tu dah hal al put ih me lep ak ya sis ni med ak si h bo leh be za",
+            "time_seconds": [
+              71.13,
+              81.45
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:81.45:85.37",
+            "observation": "[original_asr; fun-asr-flash-2026-06-15; completed; not listening verified; boundary context; sentence boundary unverified] satu tu cuk up put ih sis ku dah git u kena berm",
+            "time_seconds": [
+              81.45,
+              85.37
+            ]
+          }
+        ],
+        "units": [
+          {
+            "unit_id": "U-03",
+            "lines": [
+              {
+                "line_id": "U03-C1",
+                "point_ids": [
+                  "R61-03-B"
+                ],
+                "narration_ms": "Dia menunjukkan tangan berbuih, kemudian siku dan lengan yang basah dari dekat, supaya penonton dapat mengikuti proses penggunaan sebelum perbandingan tona kulit.",
+                "caption_lines": [
+                  "Dia menunjukkan tangan berbuih,",
+                  "kemudian siku dan lengan yang basah dari dekat,",
+                  "supaya penonton dapat mengikuti proses penggunaan",
+                  "sebelum perbandingan tona kulit."
+                ],
+                "meaning_zh": "她先展示带泡沫的双手，再近拍湿润的肘部和手臂，让观众在肤色比较前跟上使用过程。",
+                "labels": []
+              },
+              {
+                "line_id": "U03-C2",
+                "point_ids": [
+                  "R61-03-C"
+                ],
+                "narration_ms": "Kedua-dua belakang tangan kemudian ditunjukkan dekat dengan kamera, serentak dalam gambar yang sama, supaya tona kulit mudah dibandingkan.",
+                "caption_lines": [
+                  "Kedua-dua belakang tangan kemudian ditunjukkan",
+                  "dekat dengan kamera,",
+                  "serentak dalam gambar yang sama,",
+                  "supaya tona kulit mudah dibandingkan."
+                ],
+                "meaning_zh": "随后，两个手背靠近镜头、同时出现在同一画面里，方便比较肤色。",
+                "labels": []
+              }
+            ],
+            "source_context": {
+              "scope": "frozen_task_scope",
+              "source_ranges": [
+                [
+                  41,
+                  85.3
+                ]
+              ],
+              "evidence_ids": [
+                "observation:d70c4c09-35a0-4e0c-800a-4d1a927ec011:f1500",
+                "observation:d70c4c09-35a0-4e0c-800a-4d1a927ec011:f1950",
+                "observation:d70c4c09-35a0-4e0c-800a-4d1a927ec011:f2400",
+                "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f1290",
+                "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f1740",
+                "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f2100",
+                "observation:d9197418-43a9-4634-9bca-3bfeb63c9dd1:f2190",
+                "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2145",
+                "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2154",
+                "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2163",
+                "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2172",
+                "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2181",
+                "observation:717ebbc4-9fd6-4127-8241-7b81c6384d0e:f2190",
+                "VIS-03",
+                "VIS-04",
+                "VIS-05",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1290",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1410",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1500",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1620",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1740",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f1950",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f2190",
+                "observation:bb5c5601-99b1-4a81-b7cc-f23f562bc71d:f2400",
+                "observation:205571c2-0c51-45e6-a59f-373bea9dfd17:f2490",
+                "observation:205571c2-0c51-45e6-a59f-373bea9dfd17:f2550",
+                "observation:91a450f9-c5b2-4e82-88cc-04a135b6b42c:f1320",
+                "observation:91a450f9-c5b2-4e82-88cc-04a135b6b42c:f1680",
+                "observation:91a450f9-c5b2-4e82-88cc-04a135b6b42c:f1800",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1782",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1794",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1806",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1818",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1830",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1842",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1854",
+                "observation:03ba6cae-5a27-420a-86a4-ee6905f4b17a:f1866",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2400",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2425",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2451",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2477",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2502",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2528",
+                "observation:183ed138-6029-44ca-a102-ae11ad54f9d2:f2554",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2496",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2505",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2514",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2523",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2532",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2541",
+                "observation:235c6c56-57d2-4840-ab0a-b27d355d318d:f2550",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2094",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2109",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2124",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2139",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2154",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2169",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2184",
+                "observation:eed81e47-76eb-48f5-91e7-be2832ca4b93:f2199",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2304",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2319",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2334",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2349",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2364",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2379",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2394",
+                "observation:1188c5ac-691a-4461-845c-7414b9271832:f2409",
+                "VIS-10",
+                "VIS-12",
+                "VIS-13",
+                "VIS-14",
+                "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1680",
+                "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1716",
+                "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1752",
+                "observation:fde783ec-22ef-4ab9-861e-ffe3c93cf4e7:f1782",
+                "VIS-U02-local-20261019-final4",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1728",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1731",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1734",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1737",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1740",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1743",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1745",
+                "observation:a201e3eb-acc8-4e45-adb5-36ec551791c4:f1749",
+                "VIS-U02-rub-local-20261019-r122",
+                "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1728",
+                "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1743",
+                "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1752",
+                "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1806",
+                "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1818",
+                "observation:07c3f5e7-3f09-4968-b04a-12d85f668230:f1842",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2154",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2163",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2379",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2409",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2496",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2523",
+                "observation:7358f9fb-4bc5-4a46-a4c8-127c158a820a:f2532",
+                "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2358",
+                "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2370",
+                "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2379",
+                "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2409",
+                "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2496",
+                "observation:5f20ae14-165d-47cd-9027-19bad6c17c14:f2523",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1470",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1530",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1590",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1650",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1875",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1905",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1935",
+                "observation:9ec17032-8e12-47dc-bbad-071fc624558a:f1959",
+                "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1560",
+                "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1605",
+                "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1620",
+                "observation:f5864f81-d985-49d7-b14d-01a98c68b7fa:f1635",
+                "observation:d22386ca-d499-47c4-a33a-70ef8ebf5714:f2532",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2094",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2112",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2130",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2145",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2154",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2163",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2181",
+                "observation:1b5f07ee-a761-4c98-89a5-1f3ef89530ce:f2199",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1866",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1905",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1935",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1950",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1962",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1974",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1986",
+                "observation:302761fe-83ef-42b5-b737-c2a13d3eb61d:f1997",
+                "observation:2aae718c-1038-4b38-8e77-667867470094:f2532",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1782",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1818",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1842",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f1866",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2496",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2502",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2508",
+                "observation:b21bcd8f-ed58-4aa3-a02b-e93916127688:f2520",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f1752",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f1995",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2052",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2175",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2280",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2376",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2409",
+                "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2496",
+                "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:40.918:51.186",
+                "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:51.186:61.814",
+                "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:61.854:71.13",
+                "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:71.13:81.45",
+                "raw-speech:19369845-9418-4b1d-8f3d-a7ada01bbb83:81.45:85.37"
+              ],
+              "speech": "asr_available_not_listening_verified"
+            },
+            "picture_plan": {
+              "original_source_ranges": [
+                [
+                  65.43,
+                  85.3
+                ]
+              ],
+              "explanation_source_ranges": [
+                [
+                  66.5,
+                  68.4
+                ],
+                [
+                  72.5,
+                  76.8
+                ],
+                [
+                  76.8,
+                  79.2
+                ],
+                [
+                  80,
+                  84.2
+                ]
+              ],
+              "line_source_ranges": [
+                {
+                  "line_id": "U03-C1",
+                  "source_range_seconds": [
+                    66.5,
+                    76.8
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "S03-foam-selected-r177",
+                      "source_range_seconds": [
+                        66.5,
+                        68.4
+                      ]
+                    },
+                    {
+                      "segment_id": "S03-wet-arm-selected-r177",
+                      "source_range_seconds": [
+                        72.5,
+                        76.8
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "U03-C2",
+                  "source_range_seconds": [
+                    76.8,
+                    84.2
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "S03-approach-selected-r177",
+                      "source_range_seconds": [
+                        76.8,
+                        79.2
+                      ]
+                    },
+                    {
+                      "segment_id": "S03-compare-selected-r177",
+                      "source_range_seconds": [
+                        80,
+                        84.2
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                }
+              ],
+              "registered_revisits": [
+                {
+                  "from_source_range": [
+                    84.4,
+                    85.3
+                  ],
+                  "to_source_range": [
+                    66.5,
+                    68.4
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    84.4,
+                    85.3
+                  ],
+                  "to_source_range": [
+                    72.5,
+                    76.8
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    84.4,
+                    85.3
+                  ],
+                  "to_source_range": [
+                    80,
+                    84.2
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    84.4,
+                    85.3
+                  ],
+                  "to_source_range": [
+                    76.8,
+                    79.2
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    76.8,
+                    84.2
+                  ],
+                  "to_source_range": [
+                    80,
+                    84.2
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    80,
+                    84.2
+                  ],
+                  "to_source_range": [
+                    66.5,
+                    68.4
+                  ]
+                }
+              ]
+            },
+            "points": [
+              {
+                "point_id": "R61-03-B",
+                "role": "supporting",
+                "question": "怎样分清泡沫双手和湿润肘臂，避免混作效果结果？",
+                "evidence_ids": [
+                  "VIS-13",
+                  "VIS-04",
+                  "WHY-06",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f1995",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2052",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2175",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2280"
+                ],
+                "buying_concern": "看清比较前皮肤的展示状态",
+                "filming_conditions": [
+                  "先泡沫双手后湿润肘臂近景；保留不同部位和状态"
+                ],
+                "treatment": "explain",
+                "supports_point_id": "R61-03-C"
+              },
+              {
+                "point_id": "R61-03-C",
+                "role": "primary",
+                "question": "近镜细节及两手真实同框怎样方便比较肤色观感？",
+                "evidence_ids": [
+                  "VIS-14",
+                  "VIS-11",
+                  "VIS-12",
+                  "WHY-06",
+                  "VIS-05",
+                  "WHY-03",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2376",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2409",
+                  "observation:e7874710-db5c-41a9-9771-9312827f33ae:f2496"
+                ],
+                "buying_concern": "局部皮肤观感比较",
+                "filming_conditions": [
+                  "肘臂细节→单手举近→另一手加入；两侧近距离同时可见；不标处理身份"
+                ],
+                "treatment": "explain"
+              },
+              {
+                "point_id": "R61-03-D",
+                "role": "auxiliary",
+                "question": "手部比较后回到人物，表情怎样伴随讲述而不被误写为效果反应？",
+                "evidence_ids": [
+                  "VIS-12",
+                  "WHY-06"
+                ],
+                "buying_concern": "比较后人物讲述承接",
+                "filming_conditions": [
+                  "比较后回人物；保留面部和讲话姿态；不指定情绪或强调对象"
+                ],
+                "treatment": "visual_only",
+                "treatment_reason": "用户本轮明确批准：R61-03-D由原声84.4—85.3比较后人物表情伴随讲话的画面呈现，不在解释回看重复，不另配表情口播。没有充分依据证明少了对可见表情的明说会损失具体可迁移教学知识；代价是不再明说表达作用，不声称已完成全部教学解释，不推断聊天感或正在解释比较。保留原ID、role、importance及历史；仅策划取舍，待审，不继承旧审核。",
+                "visual_evidence": [
+                  {
+                    "segment_id": "S03-person",
+                    "phase": "original",
+                    "source_range_seconds": [
+                      84.4,
+                      85.3
+                    ],
+                    "evidence_ids": [
+                      "VIS-12"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

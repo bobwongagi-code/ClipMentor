@@ -18,6 +18,7 @@ import {
 } from './store-types';
 import { eventBytes, runtimeEvent } from './store-values';
 import { rejectPendingTools } from './store-tools';
+import { archiveHandoffTerminal } from '../clipmentor/handoff-lifecycle';
 
 export interface StoreEventDependencies {
   mirror: (run: ServerRun, work: () => Promise<void>) => Promise<void>;
@@ -221,6 +222,7 @@ async function appendTerminalEvents(
     await dependencies.mirror(run, async () => {
       await patchAgentRun(run.projectId, run.id, { context: run.runtimeContext });
     });
+    await archiveHandoffTerminal(run, status);
     await appendEvent(dependencies, run, 'done', { status, error: run.error });
     run.status = status;
     wakeSubscribers(run);

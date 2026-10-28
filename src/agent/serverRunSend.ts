@@ -7,7 +7,7 @@ import { ToolActivation } from './tool-activation';
 import type { AgentSettings } from './settings/agentSettings';
 import { buildAgentSystemPrompt } from './systemPrompt';
 import { getActiveAgentModelChoice } from './model-selection';
-import { describeImagesForTextModel } from './vision';
+import { describeImagesForTextModel, allowImplicitVision } from './vision';
 import { resolveVisionModel } from './visionConfig';
 import { withoutModelImages } from './messages';
 import { effectiveOutputTokenBudget } from './context-compaction';
@@ -140,9 +140,10 @@ async function prepareServerRunPayload(
   let modelMessages = options.session?.modelMessages() ?? [];
   const supportsImages = choice.capabilities.supportsImages.value;
   const vision = resolveVisionModel(choice);
-  if (!supportsImages && vision) {
+  const implicitVision = await allowImplicitVision(environment.projectId);
+  if (implicitVision && !supportsImages && vision) {
     modelMessages = await describeImagesForTextModel(modelMessages, vision);
-  } else if (!supportsImages) {
+  } else if (implicitVision && !supportsImages) {
     modelMessages = withoutModelImages(modelMessages);
   }
   const payload = buildServerRunPayload(environment.projectId, content, sendOptions, {

@@ -1,3 +1,4 @@
+import { recordHandoffDispatch } from '../clipmentor/handoff';
 import type { ModelMessage } from 'ai';
 import { codexTurnManager } from '../codex/turn-manager';
 import { runServerCodexTurn } from '../plugins/codex-agent';
@@ -74,6 +75,7 @@ async function summarizeWithCodex(
 ): Promise<string> {
   const requestId = `summary-${input.run.id}-${input.requestIndex}-${crypto.randomUUID().slice(0, 8)}`;
   let text = '';
+  await recordHandoffDispatch(input.run,'summary',{backend:'codex',system:systemPrompt,prompt,tools:[]});
   await runServerCodexTurn(
     {
       requestId,
@@ -278,6 +280,7 @@ export async function executeServerCodexTurn(
   const runTurn = deps.runTurn ?? runServerCodexTurn;
   try {
     input.signal.throwIfAborted();
+    await recordHandoffDispatch(input.run,'author',{backend:'codex',model:input.model,system:input.instructions,prompt:serializeMessagesForPrompt([...prepared.messages]),tools:codexToolSpecs(schemas)});
     arm();
     if (input.signal.aborted) onAbort();
     await Promise.race([watchdog, runTurn(

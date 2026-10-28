@@ -1,3 +1,4 @@
+import { isHandoffStoreKey } from '../shared/clipmentor-handoff.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   isProjectStoreEntries,
@@ -158,6 +159,7 @@ async function handleMerge(
 ): Promise<void> {
   const body = await readBody(req);
   if (!isProjectStoreEntries(body.entries)) throw new Error('invalid project store entries');
+  if (Object.keys(body.entries).some(isHandoffStoreKey)) throw new Error('handoff entry is server-managed');
   const merged = await operations.mergeEntries(body.entries);
   const projects = merged.entries.projects;
   sendProjectStoreJson(res, 200, { version: 1, entries: projects === undefined ? {} : { projects } });

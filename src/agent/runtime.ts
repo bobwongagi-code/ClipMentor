@@ -1,3 +1,5 @@
+import { HANDOFF_PREFIX } from '../../shared/clipmentor-handoff';
+import { kvGetAuthoritative } from '../persist/sharedKv';
 import type { ModelMessage } from 'ai';
 import type { AgentContext } from './context';
 import type { CodexAgentToolSpec } from '../../shared/codex-agent';
@@ -388,6 +390,10 @@ export async function runAgent(
   opts?: RunAgentOptions,
 ): Promise<LLMMessage[]> {
   const conv = normalizeLlmMessages(messages);
+  try {
+    const projectId=ctx.getProjectId?.();
+    if(projectId&&await kvGetAuthoritative(HANDOFF_PREFIX+projectId)!==undefined)throw new Error('handoff_requires_server_run_entry');
+  } catch(error) { onEvent({type:'error',message:String(error instanceof Error?error.message:error)});return conv; }
   const active = getActiveAgentModelChoice();
   if (!active) {
     onEvent({ type: 'error', message: 'No Agent model is available.' });

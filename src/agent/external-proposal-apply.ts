@@ -1,3 +1,4 @@
+import { assertExternalHandoffCommit } from '../clipmentor/handoff-guard';
 import type { AgentContext } from './context';
 import {
   ExternalEditSessionOutcomeError,
@@ -142,6 +143,7 @@ export async function commitExternalProposal(
   const chosen = input.proposal.options[0].operations
     .filter((_, index) => input.selected.has(index));
   const result = replayActions(currentDoc, chosen.flatMap((operation) => operation.actions));
+  await assertExternalHandoffCommit(input.projectId,currentDoc,result);
   await input.persistence.saveAutomaticVersion(input.projectId, '外部 Agent 修改前', currentDoc);
   throwIfExternalCallCancelled(input.signal);
   const saved = await input.persistence.saveProject(input.projectId, result);

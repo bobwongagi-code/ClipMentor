@@ -6,6 +6,7 @@ export const COPY_REVIEW_INPUT_POLICY = 'independent_current_subject_v1' as cons
 /** Closed diagnostic vocabulary: never send provider errors, source paths or raw output to the author. */
 export const COPY_REVIEW_FAILURES = {
   request_invalid: [400, 'request'],
+  source_review_scope_missing: [400, 'request'],
   picture_plan_shape_invalid: [400, 'request'],
   source_unavailable_or_changed: [409, 'source'],
   operation_unavailable: [409, 'reservation'],
