@@ -1,7 +1,8 @@
 import { useCallback, useRef } from 'react';
 import { makeDraft, replayActions } from '../editor/store';
 import type { ProjectDoc } from '../editor/types';
-import { saveProject } from '../persist/projectStore';
+import { migrateProjectDoc, saveProject } from '../persist/projectStore';
+import { kvGetAuthoritative } from '../persist/sharedKv';
 import { saveAutomaticVersion } from '../persist/versionStore';
 import type { AgentContext } from './context';
 import {
@@ -143,6 +144,62 @@ function applyToolActions(
   turn.draftCtx = next.draftCtx;
 }
 
+const checkpointReadbacks = new WeakMap<AgentTurn, ProjectDoc>();
+export async function readCommittedEditingProject(projectId: string): Promise<ProjectDoc | null> {
+  return migrateProjectDoc(await kvGetAuthoritative(`project:${projectId}`));
+}
+async function confirmEditingCheckpoint(turn: AgentTurn, read: typeof readCommittedEditingProject): Promise<void> {
+  const expected = checkpointReadbacks.get(turn);
+  if (!expected) return;
+  try {
+    const saved = await read(turn.projectId);
+    if (!saved || serverRunDraftBaseChanged(migrateProjectDoc(expected) ?? expected, saved)) throw new Error('cold read mismatch');
+    checkpointReadbacks.delete(turn);
+  } catch {
+    throw Object.assign(new Error('Editing checkpoint saved but cold readback could not be confirmed; draft journal retained.'),
+      {code:'editing_checkpoint_readback_failed'});
+  }
+}
+
+/** Only the host's existing auto-apply mode can commit editing checkpoints.
+ * One successful tool is atomic; export, failure and manual mode cannot commit it.
+ */
+export async function checkpointAutoAppliedTurn(
+  turn: AgentTurn,
+  persist = saveProject,
+  read = readCommittedEditingProject,
+): Promise<void> {
+  await confirmEditingCheckpoint(turn, read);
+  if (turn.askOnly || turn.state.ctxRef.current.getApprovalMode?.() !== 'auto'
+    || (!turn.ops.length && !turn.persistentOps.length)) return;
+  if (turn.abortController.signal.aborted) throw new Error('Editing checkpoint cancelled; draft retained.');
+  const live = turn.state.ctxRef.current.getDoc();
+  const after = turn.draft.getDoc();
+  if (turn.draftInvalidated || serverRunDraftBaseChanged(turn.baseDoc, live)) {
+    throw new Error('Project changed before editing checkpoint; draft retained, nothing overwritten.');
+  }
+  const durable: AgentTurn = { ...turn, persistentBeforeDoc: live,
+    persistentOps: [buildOperation('editing_checkpoint', {}, [{type:'tl.setDoc',doc:after}])],
+    persistentSaveError: undefined,
+    persistentSnapshot: saveAutomaticVersion(turn.projectId, 'Agent 编辑检查点前', live).then(
+      () => undefined, error => { durable.persistentSaveError = error; }),
+  };
+  if (!await commitPersistentOperations(durable, persist)) throw Object.assign(
+    new Error('Editing checkpoint was not committed; draft retained.'), {code:'editing_checkpoint_commit_failed'});
+  // Rebase immediately after the confirmed save. A readback failure must not
+  // replay this already committed batch or roll it back on a later export.
+  // The saved snapshot is the baseline, not a possibly deferred React ref.
+  turn.baseDoc = after;
+  turn.proposalBaseDoc = after;
+  turn.ops = [];
+  turn.persistentOps = [];
+  turn.persistentBeforeDoc = null;
+  turn.persistentSaveError = undefined;
+  turn.persistentSnapshot = Promise.resolve();
+  checkpointReadbacks.set(turn,after);
+  await confirmEditingCheckpoint(turn,read);
+}
+
 /** Preparation survives later review failure; this never commits a timeline proposal. */
 function copyCandidateCheckpointDoc(turn: AgentTurn, input: ServerRunToolAction): ProjectDoc | null {
   if (input.name !== 'revise_clipmentor_analysis'
@@ -243,9 +300,7 @@ async function restoreToolActions(
     const tool = tools[i];
     if (tool.error !== undefined || isFailedToolResult(tool.result)) continue;
     replay = replayActions(replay, [...tool.actions]);
-    if (tool.name === 'revise_clipmentor_analysis'
-      && ['set_source_breakdown', 'set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(tool.args.action))
-      && !serverRunDraftBaseChanged(replay, live)) committedThrough = i;
+    if (!serverRunDraftBaseChanged(replay, live)) committedThrough = i;
   }
   if (committedThrough >= 0) {
     turn.baseDoc = live;
@@ -272,7 +327,7 @@ async function restoreToolActions(
   }
 }
 
-async function startServerRun(
+export async function startServerRun(
   state: AgentHookState,
   ctx: AgentContext,
   projectId: string,
@@ -297,7 +352,7 @@ async function startServerRun(
   };
 }
 
-async function persistToolAction(
+export async function persistToolAction(
   projectId: string,
   input: ServerRunToolAction,
   ref: ProposalRunRef,
@@ -306,7 +361,10 @@ async function persistToolAction(
   if (!turn || turn.runId !== input.runId) {
     throw new Error('Server run proposal state is unavailable.');
   }
-  if (ref.current.seenToolCalls.has(input.toolCallId)) return;
+  if (ref.current.seenToolCalls.has(input.toolCallId)) {
+    await checkpointAutoAppliedTurn(turn);
+    return;
+  }
   if (input.error === undefined && !isFailedToolResult(input.result) && input.actions.length) {
     replayActions(turn.draft.getDoc(), input.actions);
   }
@@ -331,9 +389,13 @@ async function persistToolAction(
     throw error;
   }
   ref.current.seenToolCalls.add(input.toolCallId);
+  await checkpointAutoAppliedTurn(turn);
 }
 
 function beginTerminal(turn: AgentTurn, input: ServerRunTerminal): void {
+  if (input.status === 'failed' || input.status === 'cancelled') {
+    turn.abortController.abort(new Error(`Server run ${input.status}; pending checkpoint cancelled.`));
+  }
   turn.assistantText = input.assistantText;
   turn.state.abortRef.current = null;
   turn.state.runningRef.current = false;
@@ -346,6 +408,7 @@ async function finalizeCompletedTurn(
 ): Promise<ServerRunTerminalResolution> {
   let committed: boolean;
   try {
+    await confirmEditingCheckpoint(turn,readCommittedEditingProject);
     committed = await commitPersistentOperations(turn);
   } catch (error) {
     await settleServerRun(turn.projectId, input.runId, {
@@ -424,7 +487,7 @@ async function resolveTerminalDisposition(
   return finalizeCompletedTurn(turn, input);
 }
 
-async function finishServerRun(
+export async function finishServerRun(
   projectId: string,
   input: ServerRunTerminal,
   ref: ProposalRunRef,
@@ -442,8 +505,26 @@ async function finishServerRun(
     });
   }
   ref.current.turn = null;
-  await clearServerRunDraft(projectId, input.runId).catch(() => undefined);
+  // A failed/cancelled producer is not authority to discard uncommitted edits.
+  // Retain its journal for explicit recovery; never label it a committed project.
+  if (input.status === 'completed' && !turn.ops.length && !turn.persistentOps.length && !checkpointReadbacks.has(turn)) {
+    await clearServerRunDraft(projectId, input.runId).catch(() => undefined);
+  }
   return disposition;
+}
+
+/** Navigation/transport abandonment is not a request to delete edited work. */
+export async function abandonServerRun(projectId: string, runId: string, ref: ProposalRunRef): Promise<void> {
+  if (ref.current.turn?.runId === runId) {
+    ref.current.turn.abortController.abort(new Error('Server run abandoned; pending checkpoint cancelled.'));
+  }
+  await ref.current.handoffs.clear(runId);
+  if (ref.current.turn?.runId === runId) ref.current.turn = null;
+  try {
+    const journal = await loadServerRunDraft(projectId,runId);
+    if (journal?.tools.some(tool=>tool.actions.length)) return;
+  } catch { return; } // An unreadable journal is evidence, not disposable emptiness.
+  await clearServerRunDraft(projectId,runId);
 }
 
 export function useServerRunProposalCallbacks(
@@ -461,9 +542,7 @@ export function useServerRunProposalCallbacks(
     [projectId],
   );
   const onRunAbandon = useCallback(async (runId: string) => {
-    await ref.current.handoffs.clear(runId);
-    if (ref.current.turn?.runId === runId) ref.current.turn = null;
-    await clearServerRunDraft(projectId, runId);
+    await abandonServerRun(projectId,runId,ref);
   }, [projectId]);
   const onRunStart = useCallback(
     (input: ServerRunStart) => startServerRun(state, ctx, projectId, input, ref),

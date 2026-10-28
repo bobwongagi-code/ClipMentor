@@ -204,6 +204,101 @@ export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown[
   return { evidence_source_ranges: evidence, context_source_ranges: contexts };
 }
 
+/** Resolve executable rows from the CURRENT saved picture plan, never from
+ * observed clips or an author's proposed replacement. The review digest binds
+ * composition.detail already; no analysis rewrite or approval restamp is needed.
+ */
+function executableRows(plan: unknown): unknown {
+  if (!row(plan) || !row(plan.composition) || typeof plan.composition.detail !== 'string') return undefined;
+  let detail: unknown;
+  try { detail = JSON.parse(plan.composition.detail); } catch { return undefined; }
+  return row(detail) ? detail.production_rows : undefined;
+}
+
+function checkPlannedRows(
+  doc: ProjectDoc, b: SourceBreakdown, u: SourceBreakdown['units'][number],
+  candidate: unknown, plan: unknown, raw: unknown,
+  issue: (code: string, id: string) => void,
+  bindings: Array<{unit_id:string;phase:string;item_id:string;source_range_seconds:[number,number];segment_ids:string[]}>,
+): void {
+  const a = doc.clipMentorAnalysis!;
+  const tl = doc.timelines.find(t => t.id === doc.activeTimelineId);
+  if (!tl || tl.fps !== a.source.fps) { issue('source_frame_clock_unverified',u.unit_id); return; }
+  if (!Array.isArray(raw) || !raw.length || !raw.every(row)) { issue('timeline_plan_rows_invalid',u.unit_id); return; }
+  const selected = raw.filter(r => r.unit_id === u.unit_id);
+  const validFrames = (v:unknown): v is [number,number] => range(v) && (v as number[]).every(Number.isSafeInteger);
+  const lines = row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row) : [];
+  const accepted: Array<{row:Row;source:[number,number];output:[number,number]}> = [];
+  for (const r of selected) {
+    const id = typeof r.row_id === 'string' ? r.row_id : u.unit_id;
+    if (!text(r.row_id) || r.source_asset_id !== a.source.asset_id || typeof r.kind !== 'string' || !['original','explanation'].includes(r.kind)
+      || !validFrames(r.source_frames) || !validFrames(r.output_frames_reference)
+      || r.source_frames[1] > a.source.duration_seconds * tl.fps + 1e-5
+      || r.source_frames[1]-r.source_frames[0] !== r.output_frames_reference[1]-r.output_frames_reference[0]
+      || !strings(r.line_ids) || !unique(r.line_ids)) { issue('timeline_plan_row_invalid',id); continue; }
+    const source: [number,number] = [r.source_frames[0]/tl.fps,r.source_frames[1]/tl.fps];
+    const ranges = r.kind === 'original' ? originalPlaybackRanges(b,u) : r.line_ids.flatMap(lineId => {
+      const line = lines.find(l => l.id === lineId);
+      const bound = line && copyLineSourceBinding(b,u,line,plan);
+      if (!bound) {issue('timeline_plan_line_unbound',`${id}:${lineId}`);return [];}
+      const selectedRanges = [...bound.evidence_source_ranges,...bound.context_source_ranges].map(v=>v.source_range_seconds);
+      // A group row may carry several lines, but each needs its own selected
+      // picture in that row. Another line's evidence cannot cover its absence.
+      if (!selectedRanges.some(window => window[0] === window[1]
+        ? window[0] >= source[0] && window[0] < source[1]
+        : window[0] < source[1] && window[1] > source[0])) {
+        issue('timeline_plan_line_picture_missing',`${id}:${lineId}`);
+      }
+      return selectedRanges;
+    });
+    if (r.kind === 'explanation' && !r.line_ids.length) issue('timeline_plan_line_unbound',id);
+    if (!rangesCover(ranges,source,1/tl.fps+1e-6)) issue('timeline_plan_source_unbound',id);
+    accepted.push({row:r,source,output:r.output_frames_reference});
+  }
+  if (!accepted.length || accepted.length !== selected.length || !unique(selected.map(r=>String(r.row_id)))) {
+    issue('timeline_plan_rows_invalid',u.unit_id); return;
+  }
+  const originals = accepted.filter(r=>r.row.kind==='original'), explanations=accepted.filter(r=>r.row.kind==='explanation');
+  if (!originals.length || !explanations.length || lines.some(l=>!explanations.some(r=>(r.row.line_ids as string[]).includes(String(l.id))))) issue('timeline_plan_scope_incomplete',u.unit_id);
+  const originalSources=originals.map(r=>r.source);
+  if (originalPlaybackRanges(b,u).some(r=>!rangesCover(originalSources,r,1/tl.fps+1e-6))) issue('timeline_plan_original_incomplete',u.unit_id);
+  const sorted=[...accepted].sort((x,y)=>x.output[0]-y.output[0]);
+  for(let i=1;i<sorted.length;i++) if(sorted[i].output[0]!==sorted[i-1].output[1]) issue('timeline_plan_output_not_contiguous',String(sorted[i].row.row_id));
+  if (originals.some(o=>explanations.some(e=>o.output[1]>e.output[0]))) issue('unit_output_order_invalid',u.unit_id);
+  if(u.placement && (u.placement.timeline_id!==tl.id
+    || u.placement.original_frames[0]!==Math.min(...originals.map(r=>r.output[0]))
+    || u.placement.original_frames[1]!==Math.max(...originals.map(r=>r.output[1]))
+    || u.placement.explanation_frames[0]!==Math.min(...explanations.map(r=>r.output[0]))
+    || u.placement.explanation_frames[1]!==Math.max(...explanations.map(r=>r.output[1])))) issue('unit_placement_plan_mismatch',u.unit_id);
+  const sourceAsset=doc.assets.find(v=>v.id===a.source.asset_id);
+  const items=tl.items.filter(item=>item.kind==='video' && !tl.tracks?.[item.track]?.hidden && item.transform?.opacity!==0
+    && (item.sourceAssetId ? item.sourceAssetId===a.source.asset_id : item.src===sourceAsset?.src));
+  for(const r of accepted) {
+    const spans: Array<[number,number]> = [];
+    for(const item of items) {
+      const start=Math.max(item.startFrame,r.output[0]), end=Math.min(item.startFrame+item.durationInFrames,r.output[1]);
+      if(end<=start)continue;
+      spans.push([start,end]);
+      if(item.sourceContentHash && item.sourceContentHash!==a.source.sourceContentHash) issue('item_source_hash_mismatch',item.id);
+      if ((item.playbackRate??1)!==1 || !Number.isFinite(item.srcInFrame??0) || (item.srcInFrame??0)<0
+        || item.deletedWordIdx?.length || item.transcriptPlayOrder?.length || item.silenceFrames!==undefined || item.gapCapsMs) {issue('nonlinear_source_not_inspected',item.id);continue;}
+      const source=sourceWindowForTimelineRange(item,start-item.startFrame,end-start);
+      const expectedStart=r.source[0]*tl.fps+start-r.output[0];
+      if(Math.abs(source.startFrame-expectedStart)>1 || Math.abs(source.endFrame-(expectedStart+end-start))>1) issue('timeline_plan_source_position_mismatch',`${String(r.row.row_id)}:${item.id}`);
+      bindings.push({unit_id:u.unit_id,phase:String(r.row.kind),item_id:item.id,
+        source_range_seconds:[source.startFrame/tl.fps,source.endFrame/tl.fps],
+        segment_ids:b.segments.filter(s=>(r.row.kind==='original'?u.original_segment_ids:u.explanation_segment_ids).includes(s.segment_id)
+          &&s.source_range_seconds[0]<source.endFrame/tl.fps&&s.source_range_seconds[1]>source.startFrame/tl.fps).map(s=>s.segment_id)});
+    }
+    if(!rangesCover(spans,r.output,0))issue('timeline_plan_picture_missing',String(r.row.row_id));
+  }
+  const bounds:[number,number]=[sorted[0].output[0],sorted.at(-1)!.output[1]];
+  for(const item of tl.items) {
+    if(item.startFrame>=bounds[1]||item.startFrame+item.durationInFrames<=bounds[0]||tl.tracks?.[item.track]?.hidden||item.transform?.opacity===0)continue;
+    if(item.kind==='sequence')issue('nested_source_not_inspected',item.id);
+  }
+}
+
 export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
   const issues: Array<{ code: string; id: string }> = [];
   const bindings: Array<{ unit_id: string; phase: string; item_id: string; source_range_seconds: [number, number]; segment_ids: string[] }> = [];
@@ -301,6 +396,12 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
       for (const c of u.coverage) if (['explain', 'merged'].includes(c.treatment) && !linePoints.has(c.point_id)) issue('selected_point_missing_from_copy', c.point_id);
     }
     if (!checkTimeline) continue;
+    const activePlan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
+    const executable = executableRows(activePlan);
+    if (executable !== undefined) {
+      checkPlannedRows(doc,b,u,candidate,activePlan,executable,issue,bindings);
+      continue;
+    }
     const placement = u.placement;
     const tl = doc.timelines.find((t) => t.id === placement?.timeline_id);
     if (!placement || !tl) { issue('unit_placement_missing', u.unit_id); continue; }

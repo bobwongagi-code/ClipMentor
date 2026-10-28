@@ -1,3 +1,4 @@
+import { flushSync } from 'react-dom';
 import type { ProjectDoc } from '../editor/types';
 import { replayActions, type DraftEngine } from '../editor/store';
 import { saveProject } from '../persist/projectStore';
@@ -82,8 +83,12 @@ async function restoreUncommittedSave(
   expectedDoc: ProjectDoc,
   persist: typeof saveProject,
 ): Promise<boolean> {
-  const latestDoc = turn.state.ctxRef.current.getDoc();
-  if (!turn.abortController.signal.aborted && latestDoc === expectedDoc) return false;
+  const ctx = turn.state.ctxRef.current;
+  // A navigation may replace ctxRef while this save is in flight. Never
+  // restore another open project's document into this turn's project key.
+  const sameProject = !ctx.getProjectId || ctx.getProjectId() === turn.projectId;
+  const latestDoc = sameProject ? ctx.getDoc() : expectedDoc;
+  if (!turn.abortController.signal.aborted && sameProject && latestDoc === expectedDoc) return false;
   const restored = await persist(turn.projectId, latestDoc).catch(() => null);
   if (!restored?.saved) {
     showRunError(turn, 'Agent 已停止，但无法恢复工程存储。请重新打开工程并检查内容。');
@@ -120,7 +125,21 @@ export async function commitPersistentOperations(
   }
   if (await restoreUncommittedSave(turn, currentDoc, persist)) return false;
   if (turn.abortController.signal.aborted) return false;
-  turn.state.ctxRef.current.commands.applyDoc(afterDoc);
+  // Publish any already queued user updates before the final compare/apply.
+  // restoreUncommittedSave is async: its earlier check cannot guard this gap.
+  flushSync(() => undefined);
+  let applied = false;
+  flushSync(() => {
+    const ctx = turn.state.ctxRef.current;
+    if (turn.abortController.signal.aborted || ctx.getDoc() !== currentDoc
+      || (ctx.getProjectId && ctx.getProjectId() !== turn.projectId)) return;
+    ctx.commands.applyDoc(afterDoc);
+    applied = true;
+  });
+  if (!applied) {
+    await restoreUncommittedSave(turn, currentDoc, persist);
+    return false;
+  }
   const session = createAgentChangeSession(
     turn.assistantText, turn.persistentOps, turn.persistentBeforeDoc, afterDoc, true,
   );

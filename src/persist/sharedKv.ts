@@ -342,6 +342,19 @@ const freshCache = new Map<string, { value: unknown; at: number }>();
 const KV_REMOTE_VERIFY_TTL_MS = 5_000;
 const remoteVerifiedAt = new Map<string, number>();
 
+/** Authority reads never use a TTL or silently fall back after a remote failure. */
+export async function kvGetAuthoritative<T>(key: string): Promise<T | undefined> {
+  if (injectedBackend) return injectedBackend.get<T>(key);
+  if (projectStoreRemoteAvailable()) {
+    const response = await requestProjectStore({ operation: 'entry', key });
+    if (!('found' in response)) throw new Error('authoritative project-store read unavailable');
+    return response.found ? response.value as T : undefined;
+  }
+  // Standalone/file mode has no remote authority; preserve its local-first store.
+  // A remote request failure above still never falls back to stale local data.
+  return localGet<T>(key);
+}
+
 export async function kvGetFresh<T>(key: string): Promise<T | undefined> {
   await ready();
   // Session generation is the cross-port cutover fence. It must observe an

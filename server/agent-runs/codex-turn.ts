@@ -20,7 +20,7 @@ import {
 } from './store';
 import { executeBrowserTool, flushTextEvents, flushThinkingEvents, serverRunTextMetadata, type ActivationState } from './executor';
 
-const CODEX_TURN_TIMEOUT_MS = 600_000;
+const CODEX_IDLE_TIMEOUT_MS = 600_000;
 
 export interface ServerCodexTurnInput {
   readonly run: ServerRun;
@@ -148,6 +148,7 @@ export async function executeServerCodexTurn(
   followupText: string | null;
   hitMaxTokens: boolean;
 }> {
+  input.signal.throwIfAborted();
   const schemas = input.activation.current.allSchemas();
   const prepared = await prepareCodexContext({ ...input, schemas });
   const requestId = `run-${input.run.id}-${input.requestIndex}`;
@@ -158,12 +159,39 @@ export async function executeServerCodexTurn(
   let done = false;
   let errorMessage: string | null = null;
   const toolHistory: ModelMessage[] = [];
+  // Codex owns many model/tool steps inside one turn. Bound inactivity, not
+  // total productive editing time; executeRun still owns the task deadline.
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let watchdogReject: (error: unknown) => void = () => undefined;
+  const watchdog = new Promise<never>((_resolve, reject) => { watchdogReject = reject; });
+  void watchdog.catch(() => undefined); // cancellation may arrive during dispatch persistence
+  const activeTools = new Set<string>();
+  let closed = false;
+  const fail = (error: unknown) => {
+    if (closed) return;
+    controller.abort(error);
+    watchdogReject(error);
+  };
+  const arm = () => {
+    if (timer) clearTimeout(timer);
+    if (closed || activeTools.size) return;
+    timer = setTimeout(() => fail(Object.assign(
+      new Error(`Codex inactive turn timed out after ${CODEX_IDLE_TIMEOUT_MS / 1000}s.`),
+      { code: 'codex_idle_timeout', timeoutMs: CODEX_IDLE_TIMEOUT_MS },
+    )), CODEX_IDLE_TIMEOUT_MS);
+  };
+  const onAbort = () => fail(input.signal.reason ?? new Error('Codex turn cancelled.'));
+  input.signal.addEventListener('abort', onAbort, {once:true});
 
   const settle = (
     callId: string,
     success: boolean,
     result: unknown,
   ): void => {
+    if (closed) return;
+    activeTools.delete(callId);
+    arm();
     void codexTurnManager.settleToolResult({
       requestId,
       callId,
@@ -173,6 +201,8 @@ export async function executeServerCodexTurn(
   };
 
   const bridgeToolCall = (event: Extract<CodexTurnStreamEvent, { type: 'tool-start' }>): void => {
+    activeTools.add(event.callId);
+    arm();
     void (async () => {
       try {
         const schema = schemas.find((candidate) => candidate.name === event.name);
@@ -212,6 +242,8 @@ export async function executeServerCodexTurn(
   };
 
   const emit = (event: CodexTurnStreamEvent): void => {
+    if (closed || controller.signal.aborted) return;
+    arm();
     switch (event.type) {
       case 'text-delta':
         text += event.delta;
@@ -245,7 +277,10 @@ export async function executeServerCodexTurn(
   let turnError: unknown = null;
   const runTurn = deps.runTurn ?? runServerCodexTurn;
   try {
-    await withTimeout(runTurn(
+    input.signal.throwIfAborted();
+    arm();
+    if (input.signal.aborted) onAbort();
+    await Promise.race([watchdog, runTurn(
       {
         requestId,
         system: input.instructions,
@@ -256,10 +291,14 @@ export async function executeServerCodexTurn(
         tools: codexToolSpecs(schemas),
       },
       emit,
-      input.signal,
-    ), CODEX_TURN_TIMEOUT_MS);
+      controller.signal,
+    )]);
   } catch (error) {
     turnError = error;
+  } finally {
+    closed = true;
+    if (timer) clearTimeout(timer);
+    input.signal.removeEventListener('abort', onAbort);
   }
   flushTextEvents(input.run, pending, true);
   flushThinkingEvents(input.run, pendingThinking, true);
@@ -283,16 +322,4 @@ export async function executeServerCodexTurn(
     followupText: input.activation.followupText,
     hitMaxTokens: false,
   };
-}
-
-function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`Codex turn timed out after ${Math.round(timeoutMs / 1000)}s.`));
-    }, timeoutMs);
-    promise.then(
-      () => { clearTimeout(timer); resolve(); },
-      (error) => { clearTimeout(timer); reject(error); },
-    );
-  });
 }

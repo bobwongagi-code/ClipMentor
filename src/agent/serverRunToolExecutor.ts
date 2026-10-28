@@ -445,7 +445,14 @@ export class ServerRunToolExecutor {
         try {
           await this.callbacks.onToolAction(outcome);
         } catch (retryError) {
-          return this.reportFailure(session, toolCallId, request, retryError, false, draftDocBeforeTool);
+          // The host may have committed the atomic edit but failed its authority
+          // readback. Do not rewind to a pre-commit draft or claim success.
+          const rollbackDoc = retryError instanceof Error
+            && 'code' in retryError && retryError.code === 'editing_checkpoint_readback_failed'
+            ? this.callbacks.ctx().getDoc()
+            : retryError instanceof Error && 'code' in retryError && retryError.code === 'editing_checkpoint_commit_failed'
+              ? this.draft.getDoc() : draftDocBeforeTool;
+          return this.reportFailure(session, toolCallId, request, retryError, false, rollbackDoc);
         }
       }
       return this.finishExecution(session, toolCallId, request, update.execution.result);

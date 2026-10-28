@@ -409,12 +409,17 @@ export async function executeRun(
   input: ServerRunInput,
 ): Promise<void> {
   const abort = new AbortController();
-  const timer=input.host?setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,input.host.deadlineAt-Date.now())):undefined;
+  // Bound the complete native run even without a separate task host.
+  // Existing task/host deadlines may shorten this ceiling, never extend it.
+  const deadlines=[input.host?.deadlineAt,input.backend==='codex'?run.createdAt+30*60_000:undefined].filter((v):v is number=>v!==undefined);
+  const deadlineAt=deadlines.length?Math.min(...deadlines):undefined;
+  const timer=deadlineAt!==undefined?setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadlineAt-Date.now())):undefined;
   const externalAbort=()=>abort.abort(input.host?.signal?.reason);
   input.host?.signal?.addEventListener('abort',externalAbort,{once:true});
   if(input.host?.signal?.aborted)externalAbort();
   run.abort = abort;
   try {
+    if(deadlineAt!==undefined && Date.now()>=deadlineAt) throw new Error('Production deadline exceeded');
     if(input.host&&input.backend!=='api')throw new Error('Server production requires API backend; desktop fallback is forbidden');
     await setRunStatus(run, 'running');
     await executeRunTurns(run, input, abort.signal);
