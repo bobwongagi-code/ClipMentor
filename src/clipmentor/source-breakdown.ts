@@ -155,6 +155,34 @@ export function originalPlaybackRanges(b: SourceBreakdown, unit: SourceBreakdown
   });
 }
 
+/** Derive grouped playback relations once for both project checks and review projection.
+ * Legacy picture phases without playback modes keep their existing ledger semantics. */
+export function groupedPlaybackRelations(phases: unknown, lineIds: string[], unitId: string) {
+  if (!Array.isArray(phases) || !phases.some(p => row(p) && (p.mode === 'original' || p.mode === 'explanation'))) return null;
+  const originals: Array<[number, number]> = [];
+  const revisits: Array<{ from_source_range: [number, number]; to_source_range: [number, number] }> = [];
+  const explanationLines: string[] = [];
+  let current: [number, number] | undefined, explained = false;
+  for (const [i, phase] of phases.entries()) {
+    if (!row(phase) || (phase.mode !== 'original' && phase.mode !== 'explanation')) throw new Error(`picture_plan_phase_mode_invalid:${unitId}:${i}`);
+    const value = phase.source_range_seconds ?? phase.source_seconds;
+    if (!range(value)) throw new Error(`picture_plan_phase_range_invalid:${unitId}:${i}`);
+    const source = value as [number, number];
+    if (phase.mode === 'original') {
+      if (current && !explained) throw new Error(`picture_plan_group_explanation_missing:${unitId}:${i}`);
+      current = source; explained = false; originals.push(source);
+    } else {
+      if (!current) throw new Error(`picture_plan_phase_original_missing:${unitId}:${i}`);
+      if (!text(phase.line_id) || !lineIds.includes(phase.line_id)) throw new Error(`picture_plan_phase_line_invalid:${unitId}:${i}`);
+      explanationLines.push(phase.line_id); explained = true;
+      const revisit = { from_source_range: current, to_source_range: source };
+      if (!revisits.some(r => JSON.stringify(r) === JSON.stringify(revisit))) revisits.push(revisit);
+    }
+  }
+  if (!explained || !lineIds.every(id => explanationLines.includes(id))) throw new Error(`picture_plan_group_explanation_missing:${unitId}`);
+  return { originals, revisits, explanationLines };
+}
+
 function rangesCover(ranges: Array<[number, number]>, target: [number, number], tolerance: number) {
   let end = target[0];
   for (const r of [...ranges].sort((x, y) => x[0] - y[0])) {
@@ -267,7 +295,54 @@ function checkPlannedRows(
   if (originalPlaybackRanges(b,u).some(r=>!rangesCover(originalSources,r,1/tl.fps+1e-6))) issue('timeline_plan_original_incomplete',u.unit_id);
   const sorted=[...accepted].sort((x,y)=>x.output[0]-y.output[0]);
   for(let i=1;i<sorted.length;i++) if(sorted[i].output[0]!==sorted[i-1].output[1]) issue('timeline_plan_output_not_contiguous',String(sorted[i].row.row_id));
-  if (originals.some(o=>explanations.some(e=>o.output[1]>e.output[0]))) issue('unit_output_order_invalid',u.unit_id);
+  // The saved phases own order; source segment lists only index material.
+  // Validate each original/explanation group rather than requiring all source
+  // playback before the first explanation. Legacy ungrouped plans keep that rule.
+  let orderValid = true;
+  try {
+    const phases = row(plan) && Array.isArray(plan.phases) ? plan.phases : [];
+    const grouped = groupedPlaybackRelations(phases, lines.map(l=>String(l.id)), u.unit_id);
+    if (grouped) {
+      const expected: Array<{source:[number,number];lines:string[]}> = [];
+      for (const phase of phases as Row[]) {
+        if (phase.mode === 'original') expected.push({source:(phase.source_range_seconds??phase.source_seconds) as [number,number],lines:[]});
+        else expected.at(-1)!.lines.push(String(phase.line_id));
+      }
+      const actual: Array<{originals:typeof accepted;explanations:typeof accepted}> = [];
+      for (const r of sorted) {
+        if (r.row.kind === 'original') {
+          if (!actual.length || actual.at(-1)!.explanations.length) actual.push({originals:[],explanations:[]});
+          actual.at(-1)!.originals.push(r);
+        } else if (!actual.length) orderValid = false;
+        else actual.at(-1)!.explanations.push(r);
+      }
+      orderValid &&= actual.length === expected.length;
+      const tolerance = 1/tl.fps + 1e-6;
+      for (const [index, group] of actual.entries()) {
+        const target = expected[index];
+        if (!target || !group.originals.length || !group.explanations.length) { orderValid=false; continue; }
+        const sources = group.originals.map(r=>r.source);
+        if (Math.abs(sources[0][0]-target.source[0])>tolerance
+          || Math.abs(sources.at(-1)![1]-target.source[1])>tolerance
+          || sources.some((s,i)=>i>0 && Math.abs(s[0]-sources[i-1][1])>tolerance)) orderValid=false;
+        const positions = new Map<string,{first:number;last:number}>();
+        for (const [position,r] of group.explanations.entries()) for (const id of r.row.line_ids as string[]) {
+          const previous = positions.get(id);
+          if (previous && position !== previous.last+1) orderValid=false;
+          positions.set(id,{first:previous?.first??position,last:position});
+        }
+        // Shared clips may reference adjacent lines in either ID-list order.
+        // Both ends of each line's continuous span must follow phase order;
+        // checking first appearance alone misses an earlier line ending later.
+        if (positions.size!==target.lines.length) orderValid=false;
+        for (const [lineIndex,id] of target.lines.entries()) {
+          const span=positions.get(id), previous=lineIndex ? positions.get(target.lines[lineIndex-1]) : undefined;
+          if (!span || (previous && (span.first<previous.first || span.last<previous.last))) orderValid=false;
+        }
+      }
+    } else orderValid = !originals.some(o=>explanations.some(e=>o.output[1]>e.output[0]));
+  } catch { orderValid = false; }
+  if (!orderValid) issue('unit_output_order_invalid',u.unit_id);
   if(u.placement && (u.placement.timeline_id!==tl.id
     || u.placement.original_frames[0]!==Math.min(...originals.map(r=>r.output[0]))
     || u.placement.original_frames[1]!==Math.max(...originals.map(r=>r.output[1]))
@@ -369,16 +444,29 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
       if (c.treatment === 'merged' && !u.coverage.some((target) => target.point_id === c.merged_into_point_id && target.point_id !== c.point_id && target.treatment === 'explain')) issue('merge_target_not_explained', c.point_id);
       if (!['omit'].includes(c.treatment) && !p.segment_ids.some((id) => [...u.original_segment_ids, ...u.explanation_segment_ids].includes(id))) issue('point_picture_not_planned', c.point_id);
     }
-    // A revisit is a declared relationship, not a threshold on seconds or a mandatory phrase.
-    const order = [...u.original_segment_ids, ...u.explanation_segment_ids].filter((id) => segments.has(id));
-    for (let i = 1; i < order.length; i++) {
-      const from = segments.get(order[i - 1])!, to = segments.get(order[i])!;
-      if (to.source_range_seconds[0] < from.source_range_seconds[1] - 1 / a.source.fps
-        && !u.revisits.some((r) => r.from_segment_id === from.segment_id && r.to_segment_id === to.segment_id)) issue('revisit_not_registered', u.unit_id);
-    }
-    for (const r of u.revisits) if (!order.includes(r.from_segment_id) || !order.includes(r.to_segment_id)) issue('revisit_segment_missing', u.unit_id);
     const internal = (blueprint as unknown as Row | undefined)?.internal_review;
     const candidate = row(internal) && typeof internal.current_script_candidate === 'string' ? internal[internal.current_script_candidate] : null;
+    const boundPlan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
+    // A grouped plan owns playback order. The two segment lists index available
+    // material; concatenating them would invent a full-original-first sequence.
+    const order = [...u.original_segment_ids, ...u.explanation_segment_ids].filter((id) => segments.has(id));
+    let grouped: ReturnType<typeof groupedPlaybackRelations> = null;
+    try {
+      grouped = groupedPlaybackRelations(row(boundPlan) ? boundPlan.phases : undefined,
+        row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row).map(l => String(l.id)) : [], u.unit_id);
+      if (grouped) {
+        if (JSON.stringify(grouped.originals) !== JSON.stringify(originalRanges)) issue('picture_plan_original_order_mismatch', u.unit_id);
+        const declared = u.revisits.map(r => ({ from_source_range: segments.get(r.from_segment_id)?.source_range_seconds,
+          to_source_range: segments.get(r.to_segment_id)?.source_range_seconds }));
+        if (JSON.stringify(grouped.revisits) !== JSON.stringify(declared)) issue('picture_plan_revisits_mismatch', u.unit_id);
+      }
+    } catch (error) { issue(error instanceof Error ? error.message.split(':')[0] : 'picture_plan_phase_invalid', u.unit_id); }
+    if (!grouped) for (let i = 1; i < order.length; i++) {
+        const from = segments.get(order[i - 1])!, to = segments.get(order[i])!;
+        if (to.source_range_seconds[0] < from.source_range_seconds[1] - 1 / a.source.fps
+          && !u.revisits.some((r) => r.from_segment_id === from.segment_id && r.to_segment_id === to.segment_id)) issue('revisit_not_registered', u.unit_id);
+    }
+    for (const r of u.revisits) if (!order.includes(r.from_segment_id) || !order.includes(r.to_segment_id)) issue('revisit_segment_missing', u.unit_id);
     if (row(internal) && internal.current_script_candidate !== undefined && (!text(internal.current_script_candidate)
       || !row(candidate) || !Array.isArray(candidate.lines))) issue('copy_candidate_pointer_invalid', u.unit_id);
     if (row(internal) && internal.current_picture_plan !== undefined) {

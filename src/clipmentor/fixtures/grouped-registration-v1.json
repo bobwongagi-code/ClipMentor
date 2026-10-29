@@ -1,0 +1,2313 @@
+{
+  "version": 3,
+  "assets": [
+    {
+      "id": "d24aef47-f694-4a50-a639-42d80e25d75a",
+      "name": "爆款视频.mp4",
+      "kind": "video",
+      "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+      "durationInFrames": 1118,
+      "width": 576,
+      "height": 1024,
+      "sourceFilename": "爆款视频.mp4",
+      "sourceSize": 9564636,
+      "sourceModifiedAt": 1792973558218,
+      "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+      "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+    }
+  ],
+  "mediaFolders": [],
+  "timelines": [
+    {
+      "fps": 30,
+      "width": 576,
+      "height": 1024,
+      "items": [],
+      "selectedId": null,
+      "trackOrder": [
+        "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+        "track_4732c1aa-b4b1-4778-969d-8d37af227faf",
+        "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+        "track_v1",
+        "track_c4681d0a-8b6b-4303-a7be-629272766090"
+      ],
+      "tracks": {
+        "track_v1": {
+          "kind": "video"
+        },
+        "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519": {
+          "kind": "video"
+        },
+        "track_4732c1aa-b4b1-4778-969d-8d37af227faf": {
+          "kind": "video"
+        },
+        "track_c4681d0a-8b6b-4303-a7be-629272766090": {
+          "kind": "audio"
+        },
+        "track_95766a88-c7c6-4c2b-a284-af13b16def66": {
+          "kind": "video"
+        }
+      },
+      "id": "tl_c48160f2-f931-4a57-ab64-087a98c7e2f8",
+      "name": "序列 1",
+      "order": 0,
+      "selectedIds": [
+        "item_9e017e8c-5dfd-4129-80e7-f73d505bfe9e"
+      ],
+      "transitions": []
+    }
+  ],
+  "activeTimelineId": "tl_c48160f2-f931-4a57-ab64-087a98c7e2f8",
+  "clipMentorAnalysis": {
+    "schema_version": 1,
+    "analysis_id": "barely-there-C1-planner-blueprint-v1",
+    "revision": 6,
+    "source": {
+      "asset_id": "d24aef47-f694-4a50-a639-42d80e25d75a",
+      "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+      "duration_seconds": 37.266667,
+      "fps": 30
+    },
+    "product": {
+      "name": "Barely There（店铺名，品牌未核）女士内裤",
+      "category": "women_underwear"
+    },
+    "import_origin": "external_codex_supplied_C1_candidate_not_project_registered",
+    "evidence": [
+      {
+        "evidence_id": "BT-E001",
+        "kind": "source_frame",
+        "text": "撑开的深色面料前，仍可辨认后方的眼鼻轮廓；人穿着日常外衣，商品拿在手中。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "time_seconds": 1.5,
+        "source_frame": 45,
+        "observation_method": "local_ffmpeg_exact_frame_extraction_main_planner_visual_read",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E002",
+        "kind": "visible_action",
+        "text": "0—3秒的6fps序列：举起、撑开布料至脸前，再放低；不是穿在身上的示范。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [
+          "BT-E001"
+        ],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "source_range_seconds": [
+          0,
+          3
+        ],
+        "observation_method": "local_6fps_short_sequence_visual_read_not_continuous_audio_video",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E003",
+        "kind": "source_frame",
+        "text": "双手将商品面料向相反方向展开，画面可见面料拉开后的形状。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "time_seconds": 11.333333333333334,
+        "source_frame": 340,
+        "observation_method": "local_ffmpeg_exact_frame_extraction_main_planner_visual_read",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E004",
+        "kind": "source_frame",
+        "text": "展开之后，面料被收拢到手中。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "time_seconds": 13.5,
+        "source_frame": 405,
+        "observation_method": "local_ffmpeg_exact_frame_extraction_main_planner_visual_read",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E005",
+        "kind": "visible_action",
+        "text": "10.5—14.5秒6fps序列呈现展开到收拢的动作；不等于回弹率、舒适度或适用尺码测试。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [
+          "BT-E003",
+          "BT-E004"
+        ],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "source_range_seconds": [
+          10.5,
+          14.5
+        ],
+        "observation_method": "local_6fps_short_sequence_visual_read_not_continuous_audio_video",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E006",
+        "kind": "source_frame",
+        "text": "商品被拿近镜头，腰边、蝴蝶结和侧边蕾丝/缝接细节可见。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "time_seconds": 17.5,
+        "source_frame": 525,
+        "observation_method": "local_ffmpeg_exact_frame_extraction_main_planner_visual_read",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E007",
+        "kind": "visible_action",
+        "text": "16—19秒6fps序列呈现拿近与退回的变化，近景确实让边缘细节占画面更大。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [
+          "BT-E006"
+        ],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "source_range_seconds": [
+          16,
+          19
+        ],
+        "observation_method": "local_6fps_short_sequence_visual_read_not_continuous_audio_video",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E008",
+        "kind": "source_frame",
+        "text": "讲到多件建议的时段，手中仍只展示一件商品；不能把此帧称为七件同框。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "time_seconds": 24,
+        "source_frame": 720,
+        "observation_method": "local_ffmpeg_exact_frame_extraction_main_planner_visual_read",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E009",
+        "kind": "original_claim",
+        "text": "既有Fun-ASR在19.31—27.79秒多次识别买七件、划算/省及每天穿/替换的说法；仅作为原作者建议的转写候选，未独立听审。",
+        "status": "existing_asr_candidate_not_listening_verified",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "source_range_seconds": [
+          19.31,
+          27.8
+        ]
+      },
+      {
+        "evidence_id": "BT-E010",
+        "kind": "source_frame",
+        "text": "翻开商品后，手持白色内侧衬片清楚可见；未见其材质认证或性能测试。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "time_seconds": 30.5,
+        "source_frame": 915,
+        "observation_method": "local_ffmpeg_exact_frame_extraction_main_planner_visual_read",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E011",
+        "kind": "visible_action",
+        "text": "27.5—32.5秒6fps序列：转动、翻开内侧、展开白色衬片、随后收回；不把翻转中的遮挡帧选作细节证据。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [
+          "BT-E010"
+        ],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "source_range_seconds": [
+          27.5,
+          32.5
+        ],
+        "observation_method": "local_6fps_short_sequence_visual_read_not_continuous_audio_video",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E012",
+        "kind": "original_claim",
+        "text": "既有Fun-ASR在28.15—29.63秒识别“里面有pelapik”附近表述；后段出现购买入口和换新提醒候选；suara/seluar等词存在识别疑义。",
+        "status": "existing_asr_candidate_not_listening_verified",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1",
+        "source_range_seconds": [
+          28.15,
+          37.266667
+        ]
+      },
+      {
+        "evidence_id": "BT-E013",
+        "kind": "operator_supplied",
+        "text": "用户要求考虑马来西亚市场/消费习惯下女士内裤展示与使用的限制；不是禁止销售，也未提供具体平台/法律禁令。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1"
+      },
+      {
+        "evidence_id": "BT-E014",
+        "kind": "expression_analysis_not_verified_causal_effect",
+        "text": "用可见参照呈现薄，用手上操作表达触感，用近镜和翻内侧补齐买前想看的细节；这是表达作用分析，不能归因为确定销量提升。",
+        "status": "observed_by_external_planner",
+        "supporting_evidence_ids": [
+          "BT-E001",
+          "BT-E005",
+          "BT-E007",
+          "BT-E009",
+          "BT-E011"
+        ],
+        "source_ids": [],
+        "provenance": "external_codex_C1_candidate_v1"
+      },
+      {
+        "evidence_id": "BT-E015",
+        "kind": "original_claim",
+        "text": "原3.8连续视听听辨beli 7 terus、lagi berbaloi、Takkan nak pakai sehari je kan、Beli terus 7 helai，并听到pakai tukar-tukar；与旧ASR相关片段一致。仅归因原作者，不核实当前套餐或价格。",
+        "status": "model_continuous_source_observed_not_human_certified",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "gemini_source_observation:22aeef27-6d63-4c1e-9cbb-b351932d6dba",
+        "source_range_seconds": [
+          19,
+          27.84
+        ],
+        "observation_method": "existing_gemini_source_continuous_av",
+        "call_status": "succeeded"
+      },
+      {
+        "evidence_id": "BT-E016",
+        "kind": "original_claim",
+        "text": "原3.8连续视听听辨dah lama tak tukar、usha dekat beg kuning、grab yang ni；未给出换新对象的完整清楚宾语。支持换新提醒衔接购买入口的有限观察，原词不补全。",
+        "status": "model_continuous_source_observed_not_human_certified",
+        "supporting_evidence_ids": [],
+        "source_ids": [],
+        "provenance": "gemini_source_observation:22aeef27-6d63-4c1e-9cbb-b351932d6dba",
+        "source_range_seconds": [
+          29.5,
+          37.266666666666666
+        ],
+        "observation_method": "existing_gemini_source_continuous_av",
+        "call_status": "succeeded"
+      }
+    ],
+    "points": [
+      {
+        "point_id": "BT-P01",
+        "unit_id": "BT-U01",
+        "source_range_seconds": [
+          0,
+          10.5
+        ],
+        "buying_reason_or_function": "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。",
+        "filming_conditions": [
+          "布料在脸前撑开，脸的轮廓仍能看到",
+          "保留举起与放低的上下文，不只截一块灰布"
+        ],
+        "evidence_ids": [
+          "BT-E001",
+          "BT-E002"
+        ],
+        "uncertainties": [
+          "透光不等于透气、凉爽或无痕。"
+        ],
+        "required": true,
+        "explanation_priority": "core",
+        "status": "candidate",
+        "review_status": "not_reviewed",
+        "provenance": "external_codex_supplied_C1_v1"
+      },
+      {
+        "point_id": "BT-P02",
+        "unit_id": "BT-U01",
+        "source_range_seconds": [
+          10.5,
+          16.333333333333332
+        ],
+        "buying_reason_or_function": "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。",
+        "filming_conditions": [
+          "同一件商品，先展开再收拢",
+          "手与面料接触清楚；正常速度保留动作"
+        ],
+        "evidence_ids": [
+          "BT-E003",
+          "BT-E004",
+          "BT-E005"
+        ],
+        "uncertainties": [
+          "没有实际穿着或量化弹性/回弹测试。"
+        ],
+        "required": true,
+        "explanation_priority": "core",
+        "status": "candidate",
+        "review_status": "not_reviewed",
+        "provenance": "external_codex_supplied_C1_v1"
+      },
+      {
+        "point_id": "BT-P03",
+        "unit_id": "BT-U01",
+        "source_range_seconds": [
+          16.333333333333332,
+          19.333333333333332
+        ],
+        "buying_reason_or_function": "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。",
+        "filming_conditions": [
+          "确实拿近到能看见边缘细节",
+          "不把手挡住的位置标为缝接证据"
+        ],
+        "evidence_ids": [
+          "BT-E006",
+          "BT-E007"
+        ],
+        "uncertainties": [
+          "画面不能替代成分、耐用或无缝工艺认证。"
+        ],
+        "required": true,
+        "explanation_priority": "supporting",
+        "status": "candidate",
+        "review_status": "not_reviewed",
+        "provenance": "external_codex_supplied_C1_v1"
+      },
+      {
+        "point_id": "BT-P04",
+        "unit_id": "BT-U01",
+        "source_range_seconds": [
+          19.333333333333332,
+          37.266666666666666
+        ],
+        "buying_reason_or_function": "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。",
+        "filming_conditions": [
+          "七件只作为原作者建议",
+          "明确区分消费者购买邀请与创作者学习邀请"
+        ],
+        "evidence_ids": [
+          "BT-E008",
+          "BT-E009",
+          "BT-E012",
+          "BT-E015",
+          "BT-E016"
+        ],
+        "uncertainties": [
+          "七件是原作者建议，不是当前已核七件SKU或优惠。",
+          "3.8听到dah lama tak tukar，但准确宾语仍未核准；文案只概括换新提醒。",
+          "细时间点及尾句完整性存在模型内部不一致，不据此裁切。"
+        ],
+        "required": true,
+        "explanation_priority": "supporting",
+        "status": "candidate",
+        "review_status": "affected_group_pending_re_review",
+        "provenance": "external_codex_supplied_C1_v1"
+      },
+      {
+        "point_id": "BT-P05",
+        "unit_id": "BT-U01",
+        "source_range_seconds": [
+          27.833333333333332,
+          32.333333333333336
+        ],
+        "buying_reason_or_function": "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。",
+        "filming_conditions": [
+          "真正翻开到白色内侧衬片展开",
+          "内侧与外侧对象分清；不拿翻转遮挡段当清楚展示"
+        ],
+        "evidence_ids": [
+          "BT-E010",
+          "BT-E011",
+          "BT-E012"
+        ],
+        "uncertainties": [
+          "白色衬片的具体材质及功能未核实，不称抗菌、吸水或更卫生。"
+        ],
+        "required": true,
+        "explanation_priority": "core",
+        "status": "candidate",
+        "review_status": "not_reviewed",
+        "provenance": "external_codex_supplied_C1_v1"
+      }
+    ],
+    "blueprint": [
+      {
+        "unit_id": "BT-U01",
+        "point_ids": [
+          "BT-P01",
+          "BT-P02",
+          "BT-P03",
+          "BT-P04",
+          "BT-P05"
+        ],
+        "intent_zh": "整组教学：不依赖身体试穿，以参照、手上演示、近镜和内侧细节讲清购买关注；解释多件替换理由，再讲原作者如何用换新提醒接到购买入口；最后单独邀请达人尝试拍法。",
+        "line_guidance": "四组分别播放原声并立即接对应讲解；第④组L04后接L06，不先播完整原片。",
+        "internal_review": {
+          "current_script_candidate": "script_candidate_C1_four_groups",
+          "current_picture_plan": "picture_plan_C1_four_groups",
+          "script_candidate_C1_four_groups": {
+            "status": "candidate",
+            "review_status": "pending",
+            "production_allowed": false,
+            "lines": [
+              {
+                "id": "BT-L01",
+                "point_ids": [
+                  "BT-P01"
+                ],
+                "narration_ms": "Tengok semula pembukaannya. Wajah masih nampak di sebalik kain, jadi penonton nampak betapa nipisnya kain itu tanpa perlu dipakai pada badan.",
+                "caption_lines": [
+                  "Tengok semula pembukaannya.",
+                  "Wajah masih nampak",
+                  "di sebalik kain,",
+                  "jadi penonton nampak",
+                  "betapa nipisnya kain itu",
+                  "tanpa perlu dipakai",
+                  "pada badan."
+                ],
+                "zh": "回看开头。隔着布料还能看到她的脸，不用穿上身，观众也能直观看出面料有多薄。",
+                "labels": [
+                  "Kain nipis"
+                ],
+                "source_seconds": [
+                  0,
+                  10.2
+                ]
+              },
+              {
+                "id": "BT-L02",
+                "point_ids": [
+                  "BT-P02",
+                  "BT-P03"
+                ],
+                "narration_ms": "Bila sebut lembut dan anjal, dia ramas dan tarik kain. Bila sebut kemasan, dia dekatkan pada kamera supaya pembeli nampak jelas.",
+                "caption_lines": [
+                  "Bila sebut lembut dan anjal,",
+                  "dia ramas dan tarik kain.",
+                  "Bila sebut kemasan,",
+                  "dia dekatkan pada kamera",
+                  "supaya pembeli nampak jelas."
+                ],
+                "zh": "说到柔软和弹性，她就揉拢、拉开面料；说到做工，就拿近镜头，让买家看清楚。",
+                "labels": [
+                  "Lembut & anjal",
+                  "Kemasan dari dekat"
+                ],
+                "source_seconds": [
+                  10.5,
+                  19
+                ]
+              },
+              {
+                "id": "BT-L03",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia tunjuk bentuknya dulu, kemudian cadangkan tujuh helai untuk tukar pakai harian. Pembeli tahu apa yang dibeli dan kenapa beli lebih.",
+                "caption_lines": [
+                  "Dia tunjuk bentuknya dulu,",
+                  "kemudian cadangkan tujuh helai",
+                  "untuk tukar pakai harian.",
+                  "Pembeli tahu apa yang dibeli",
+                  "dan kenapa beli lebih."
+                ],
+                "zh": "她先展示版型，再建议买七件用于日常替换。买家既知道买的是什么，也明白为什么多买几件。",
+                "labels": [
+                  "Tukar pakai harian"
+                ],
+                "source_seconds": [
+                  19,
+                  27.833333333333332
+                ]
+              },
+              {
+                "id": "BT-L04",
+                "point_ids": [
+                  "BT-P05"
+                ],
+                "narration_ms": "Dia buka bahagian dalam supaya pembeli boleh lihat pelapiknya, bukan meneka daripada gambar luar sahaja.",
+                "caption_lines": [
+                  "Dia buka bahagian dalam",
+                  "supaya pembeli boleh lihat",
+                  "pelapiknya,",
+                  "bukan meneka daripada",
+                  "gambar luar sahaja."
+                ],
+                "zh": "她翻开里面，让买家直接看清内侧衬片，不用只凭外观去猜。",
+                "labels": [
+                  "Pelapik bahagian dalam"
+                ],
+                "source_seconds": [
+                  27.8,
+                  35.53333333333333
+                ]
+              },
+              {
+                "id": "BT-L06",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia ingatkan penonton yang dah lama tak tukar, kemudian ajak mereka ke beg kuning. Peringatan tadi jadi sebab untuk membeli.",
+                "caption_lines": [
+                  "Dia ingatkan penonton",
+                  "yang dah lama tak tukar,",
+                  "kemudian ajak mereka",
+                  "ke beg kuning.",
+                  "Peringatan tadi jadi sebab",
+                  "untuk membeli."
+                ],
+                "zh": "她先提醒很久没换新的观众，再邀请他们去黄色购物袋。前面的换新提醒，给后面的购买邀请提供了理由。",
+                "labels": [
+                  "Ingatkan tukar, ajak beli"
+                ],
+                "source_seconds": [
+                  23,
+                  37.266666666666666
+                ]
+              }
+            ]
+          },
+          "picture_plan_C1_four_groups": {
+            "original_playback": {
+              "ranges": [
+                [
+                  0,
+                  10.733333333333333
+                ],
+                [
+                  10.733333333333333,
+                  19
+                ],
+                [
+                  19,
+                  27.833333333333332
+                ],
+                [
+                  27.833333333333332,
+                  37.266666666666666
+                ]
+              ],
+              "purpose": "四组分别播放，示范后立即接本组讲解；不先播放完整原片"
+            },
+            "phases": [
+              {
+                "mode": "original",
+                "source_range_seconds": [
+                  0,
+                  10.733333333333333
+                ],
+                "picture": "G1 原速完整原声示范；Video asal；不叠讲解。"
+              },
+              {
+                "mode": "explanation",
+                "line_id": "BT-L01",
+                "source_range_seconds": [
+                  0,
+                  10.2
+                ],
+                "picture": "原速回看开头，源帧45的真实透脸参照并列；Kain nipis短标，现有L01完整音频复用。"
+              },
+              {
+                "mode": "original",
+                "source_range_seconds": [
+                  10.733333333333333,
+                  19
+                ],
+                "picture": "G2 原速完整原声示范；Video asal；不叠讲解。"
+              },
+              {
+                "mode": "explanation",
+                "line_id": "BT-L02",
+                "source_range_seconds": [
+                  10.5,
+                  19
+                ],
+                "picture": "先拉揉，进入第二个Bila sebut kemasan前切16.33至19秒近拍；Lembut & anjal、Kemasan dari dekat分别对应。新音频未配，意群切点不套旧4.3秒。"
+              },
+              {
+                "mode": "original",
+                "source_range_seconds": [
+                  19,
+                  27.833333333333332
+                ],
+                "picture": "G3 原速完整原声示范；Video asal；不叠讲解。"
+              },
+              {
+                "mode": "explanation",
+                "line_id": "BT-L03",
+                "source_range_seconds": [
+                  19,
+                  27.833333333333332
+                ],
+                "picture": "先19至21.33秒手持正面，再21.33至27.83秒数量及替换建议；Tukar pakai harian短标。新音频未配，不能声称时长已经验证。"
+              },
+              {
+                "mode": "original",
+                "source_range_seconds": [
+                  27.833333333333332,
+                  37.266666666666666
+                ],
+                "picture": "G4 原速完整原声示范；Video asal；不叠讲解。"
+              },
+              {
+                "mode": "explanation",
+                "line_id": "BT-L04",
+                "source_range_seconds": [
+                  27.8,
+                  35.53333333333333
+                ],
+                "picture": "先27.8至31.5秒内侧，在现有音频3.7秒切33.2至35.53秒外观。Pelapik bahagian dalam短标。"
+              },
+              {
+                "mode": "explanation",
+                "line_id": "BT-L06",
+                "source_range_seconds": [
+                  23,
+                  37.266666666666666
+                ],
+                "picture": "先23至26.4秒推荐背景，现有音频3.4秒切29.23至37.27秒推荐上下文。Ingatkan tukar, ajak beli短标；此处回看较早数量画面，不能误称当前仍在示范内侧。"
+              }
+            ],
+            "viewer_stage_cues": {
+              "scope": "四组原声与讲解逐组交替；第④组L04接L06",
+              "original": {
+                "text": "Video asal",
+                "zh": "原片示范",
+                "enter": "每组原声第一帧",
+                "exit": "该组讲解第一帧前退出"
+              },
+              "revisit": [
+                {
+                  "line_ids": [
+                    "BT-L01"
+                  ],
+                  "text": "Ulasan semula · Kain",
+                  "zh": "回看讲解",
+                  "enter": "G1原声结束后，BT-L01开始前显示",
+                  "exit": "G2原声开始前退出",
+                  "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                },
+                {
+                  "line_ids": [
+                    "BT-L02"
+                  ],
+                  "text": "Ulasan semula · Kain",
+                  "zh": "回看讲解",
+                  "enter": "G2原声结束后，BT-L02开始前显示",
+                  "exit": "G3原声开始前退出",
+                  "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                },
+                {
+                  "line_ids": [
+                    "BT-L03"
+                  ],
+                  "text": "Ulasan semula · Tukar pakai",
+                  "zh": "回看讲解",
+                  "enter": "G3原声结束后，BT-L03开始前显示",
+                  "exit": "G4原声开始前退出",
+                  "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                },
+                {
+                  "line_ids": [
+                    "BT-L04"
+                  ],
+                  "text": "Ulasan semula · Pelapik",
+                  "zh": "回看讲解",
+                  "enter": "G4原声结束后，BT-L04开始前显示",
+                  "exit": "BT-L06开始前退出",
+                  "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                },
+                {
+                  "line_ids": [
+                    "BT-L06"
+                  ],
+                  "text": "Ulasan semula · Ajakan membeli",
+                  "zh": "回看讲解",
+                  "enter": "BT-L04结束、BT-L06开始前切换主题",
+                  "exit": "中段结束时退出",
+                  "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                }
+              ],
+              "layout": {
+                "original": "原片区加Video asal标识",
+                "revisit": "黄色阶段栏；独立不透明黑色底区，白色字幕无阴影",
+                "safe_area": "字幕不叠人物动作"
+              },
+              "handoff": "严格按phases数组顺序；原声→本组讲解→下一组原声。G4讲解从内侧转促单时切换主题栏。"
+            },
+            "constraints": [
+              "L01、L04、L06完整原音频复用；L02/L03尚未配音，声长与实际字幕同步未验收。",
+              "原声示范保留原声，讲解回看静音源声；禁止慢放、循环、长定格补时。",
+              "成绩开场及两阶段达人结尾不属本轮中段审核，不删除旧结尾。"
+            ],
+            "composition": {
+              "canvas": [
+                576,
+                1024
+              ],
+              "detail": "四组穿插；L01真实透脸参照并列；其余单幅视频区；各组回看保留原短标、黄色阶段栏和独立黑底白字字幕区。"
+            },
+            "script_candidate_id": "script_candidate_C1_four_groups",
+            "selected_narration": [
+              {
+                "id": "BT-L01",
+                "point_ids": [
+                  "BT-P01"
+                ],
+                "narration_ms": "Tengok semula pembukaannya. Wajah masih nampak di sebalik kain, jadi penonton nampak betapa nipisnya kain itu tanpa perlu dipakai pada badan.",
+                "caption_lines": [
+                  "Tengok semula pembukaannya.",
+                  "Wajah masih nampak",
+                  "di sebalik kain,",
+                  "jadi penonton nampak",
+                  "betapa nipisnya kain itu",
+                  "tanpa perlu dipakai",
+                  "pada badan."
+                ],
+                "zh": "回看开头。隔着布料还能看到她的脸，不用穿上身，观众也能直观看出面料有多薄。",
+                "labels": [
+                  "Kain nipis"
+                ],
+                "source_seconds": [
+                  0,
+                  10.2
+                ]
+              },
+              {
+                "id": "BT-L02",
+                "point_ids": [
+                  "BT-P02",
+                  "BT-P03"
+                ],
+                "narration_ms": "Bila sebut lembut dan anjal, dia ramas dan tarik kain. Bila sebut kemasan, dia dekatkan pada kamera supaya pembeli nampak jelas.",
+                "caption_lines": [
+                  "Bila sebut lembut dan anjal,",
+                  "dia ramas dan tarik kain.",
+                  "Bila sebut kemasan,",
+                  "dia dekatkan pada kamera",
+                  "supaya pembeli nampak jelas."
+                ],
+                "zh": "说到柔软和弹性，她就揉拢、拉开面料；说到做工，就拿近镜头，让买家看清楚。",
+                "labels": [
+                  "Lembut & anjal",
+                  "Kemasan dari dekat"
+                ],
+                "source_seconds": [
+                  10.5,
+                  19
+                ]
+              },
+              {
+                "id": "BT-L03",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia tunjuk bentuknya dulu, kemudian cadangkan tujuh helai untuk tukar pakai harian. Pembeli tahu apa yang dibeli dan kenapa beli lebih.",
+                "caption_lines": [
+                  "Dia tunjuk bentuknya dulu,",
+                  "kemudian cadangkan tujuh helai",
+                  "untuk tukar pakai harian.",
+                  "Pembeli tahu apa yang dibeli",
+                  "dan kenapa beli lebih."
+                ],
+                "zh": "她先展示版型，再建议买七件用于日常替换。买家既知道买的是什么，也明白为什么多买几件。",
+                "labels": [
+                  "Tukar pakai harian"
+                ],
+                "source_seconds": [
+                  19,
+                  27.833333333333332
+                ]
+              },
+              {
+                "id": "BT-L04",
+                "point_ids": [
+                  "BT-P05"
+                ],
+                "narration_ms": "Dia buka bahagian dalam supaya pembeli boleh lihat pelapiknya, bukan meneka daripada gambar luar sahaja.",
+                "caption_lines": [
+                  "Dia buka bahagian dalam",
+                  "supaya pembeli boleh lihat",
+                  "pelapiknya,",
+                  "bukan meneka daripada",
+                  "gambar luar sahaja."
+                ],
+                "zh": "她翻开里面，让买家直接看清内侧衬片，不用只凭外观去猜。",
+                "labels": [
+                  "Pelapik bahagian dalam"
+                ],
+                "source_seconds": [
+                  27.8,
+                  35.53333333333333
+                ]
+              },
+              {
+                "id": "BT-L06",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia ingatkan penonton yang dah lama tak tukar, kemudian ajak mereka ke beg kuning. Peringatan tadi jadi sebab untuk membeli.",
+                "caption_lines": [
+                  "Dia ingatkan penonton",
+                  "yang dah lama tak tukar,",
+                  "kemudian ajak mereka",
+                  "ke beg kuning.",
+                  "Peringatan tadi jadi sebab",
+                  "untuk membeli."
+                ],
+                "zh": "她先提醒很久没换新的观众，再邀请他们去黄色购物袋。前面的换新提醒，给后面的购买邀请提供了理由。",
+                "labels": [
+                  "Ingatkan tukar, ajak beli"
+                ],
+                "source_seconds": [
+                  23,
+                  37.266666666666666
+                ]
+              }
+            ],
+            "status": "candidate",
+            "review_status": "pending",
+            "production_allowed": false
+          }
+        }
+      }
+    ],
+    "source_breakdown": {
+      "version": 1,
+      "segments": [
+        {
+          "segment_id": "BT-S00",
+          "source_range_seconds": [
+            0,
+            37.266666666666666
+          ],
+          "visible_evidence_ids": [
+            "BT-E001",
+            "BT-E003",
+            "BT-E004",
+            "BT-E006",
+            "BT-E008",
+            "BT-E010"
+          ],
+          "claim_evidence_ids": [
+            "BT-E009",
+            "BT-E012",
+            "BT-E015",
+            "BT-E016"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "本次模型观察有同步原声；不等于人工或母语签字。细时间点与尾态描述矛盾保留，不据此定原声切点。"
+          ]
+        },
+        {
+          "segment_id": "BT-S01",
+          "source_range_seconds": [
+            0,
+            10.5
+          ],
+          "visible_evidence_ids": [
+            "BT-E001",
+            "BT-E002"
+          ],
+          "claim_evidence_ids": [],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "不从透光推断透气/无痕。"
+          ]
+        },
+        {
+          "segment_id": "BT-S02",
+          "source_range_seconds": [
+            10.5,
+            16.333333333333332
+          ],
+          "visible_evidence_ids": [
+            "BT-E003",
+            "BT-E004",
+            "BT-E005"
+          ],
+          "claim_evidence_ids": [],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "手感与实际穿着未知。"
+          ]
+        },
+        {
+          "segment_id": "BT-S03",
+          "source_range_seconds": [
+            16.333333333333332,
+            19.333333333333332
+          ],
+          "visible_evidence_ids": [
+            "BT-E006",
+            "BT-E007"
+          ],
+          "claim_evidence_ids": [],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "材质与工艺名称不由近镜证明。"
+          ]
+        },
+        {
+          "segment_id": "BT-S04",
+          "source_range_seconds": [
+            19.333333333333332,
+            27.833333333333332
+          ],
+          "visible_evidence_ids": [
+            "BT-E008"
+          ],
+          "claim_evidence_ids": [
+            "BT-E009",
+            "BT-E015"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "七件及轮换用途已有独立源片视听支持；不保证现售SKU件数或优惠，具体词句非母语认证。"
+          ]
+        },
+        {
+          "segment_id": "BT-S05",
+          "source_range_seconds": [
+            27.833333333333332,
+            32.333333333333336
+          ],
+          "visible_evidence_ids": [
+            "BT-E010",
+            "BT-E011"
+          ],
+          "claim_evidence_ids": [
+            "BT-E012",
+            "BT-E016"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "衬片材质/功效未知。"
+          ]
+        },
+        {
+          "segment_id": "BT-S06",
+          "source_range_seconds": [
+            32.333333333333336,
+            37.266666666666666
+          ],
+          "visible_evidence_ids": [],
+          "claim_evidence_ids": [
+            "BT-E012",
+            "BT-E016"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": [
+            "换新提醒的完整宾语、末句逐字及源片是否完整说完仍未知；当前不补全原话、不裁原片。"
+          ]
+        },
+        {
+          "segment_id": "BT-G1-original",
+          "source_range_seconds": [
+            0,
+            10.733333333333333
+          ],
+          "visible_evidence_ids": [
+            "BT-E001",
+            "BT-E002",
+            "BT-E005"
+          ],
+          "claim_evidence_ids": [],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-G2-original",
+          "source_range_seconds": [
+            10.733333333333333,
+            19
+          ],
+          "visible_evidence_ids": [
+            "BT-E003",
+            "BT-E004",
+            "BT-E005",
+            "BT-E006",
+            "BT-E007"
+          ],
+          "claim_evidence_ids": [
+            "BT-E015"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-G3-original",
+          "source_range_seconds": [
+            19,
+            27.833333333333332
+          ],
+          "visible_evidence_ids": [
+            "BT-E007",
+            "BT-E008",
+            "BT-E011"
+          ],
+          "claim_evidence_ids": [
+            "BT-E009",
+            "BT-E015"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-G4-original",
+          "source_range_seconds": [
+            27.833333333333332,
+            37.266666666666666
+          ],
+          "visible_evidence_ids": [
+            "BT-E010",
+            "BT-E011"
+          ],
+          "claim_evidence_ids": [
+            "BT-E012",
+            "BT-E015",
+            "BT-E016"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-explanation-BT-L01",
+          "source_range_seconds": [
+            0,
+            10.2
+          ],
+          "visible_evidence_ids": [
+            "BT-E001",
+            "BT-E002"
+          ],
+          "claim_evidence_ids": [],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-explanation-BT-L02",
+          "source_range_seconds": [
+            10.5,
+            19
+          ],
+          "visible_evidence_ids": [
+            "BT-E003",
+            "BT-E004",
+            "BT-E005",
+            "BT-E006",
+            "BT-E007"
+          ],
+          "claim_evidence_ids": [],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-explanation-BT-L03",
+          "source_range_seconds": [
+            19,
+            27.833333333333332
+          ],
+          "visible_evidence_ids": [
+            "BT-E008",
+            "BT-E011"
+          ],
+          "claim_evidence_ids": [
+            "BT-E009",
+            "BT-E015"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-explanation-BT-L04",
+          "source_range_seconds": [
+            27.8,
+            35.53333333333333
+          ],
+          "visible_evidence_ids": [
+            "BT-E010",
+            "BT-E011"
+          ],
+          "claim_evidence_ids": [
+            "BT-E012",
+            "BT-E016"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        },
+        {
+          "segment_id": "BT-explanation-BT-L06",
+          "source_range_seconds": [
+            23,
+            37.266666666666666
+          ],
+          "visible_evidence_ids": [
+            "BT-E008",
+            "BT-E010",
+            "BT-E011"
+          ],
+          "claim_evidence_ids": [
+            "BT-E009",
+            "BT-E012",
+            "BT-E015",
+            "BT-E016"
+          ],
+          "interpretation_evidence_ids": [],
+          "unknowns": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "BT-P01",
+          "segment_ids": [
+            "BT-S01",
+            "BT-explanation-BT-L01"
+          ],
+          "buying_concern": "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。",
+          "teaching_question": "不用试穿，怎样让人直接看见面料有多薄？",
+          "filming_conditions": [
+            "布料在脸前撑开，脸的轮廓仍能看到",
+            "保留举起与放低的上下文，不只截一块灰布"
+          ],
+          "role": "primary",
+          "importance": "must_explain"
+        },
+        {
+          "point_id": "BT-P02",
+          "segment_ids": [
+            "BT-S02",
+            "BT-explanation-BT-L02"
+          ],
+          "buying_concern": "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。",
+          "teaching_question": "看不到真实穿着时，怎样让柔软和弹性的说法有可观察的参照？",
+          "filming_conditions": [
+            "同一件商品，先展开再收拢",
+            "手与面料接触清楚；正常速度保留动作"
+          ],
+          "role": "primary",
+          "importance": "must_explain"
+        },
+        {
+          "point_id": "BT-P03",
+          "segment_ids": [
+            "BT-S03",
+            "BT-explanation-BT-L02"
+          ],
+          "buying_concern": "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。",
+          "teaching_question": "远景已经看见款式，为什么还需要拿近看做工？",
+          "filming_conditions": [
+            "确实拿近到能看见边缘细节",
+            "不把手挡住的位置标为缝接证据"
+          ],
+          "role": "supporting",
+          "importance": "should_explain",
+          "supports_point_id": "BT-P02"
+        },
+        {
+          "point_id": "BT-P04",
+          "segment_ids": [
+            "BT-S04",
+            "BT-S05",
+            "BT-S06",
+            "BT-explanation-BT-L03",
+            "BT-explanation-BT-L06"
+          ],
+          "buying_concern": "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。",
+          "teaching_question": "原作者怎样用替换需要解释多件建议，并把换新提醒接到购买入口？",
+          "filming_conditions": [
+            "七件只作为原作者建议",
+            "明确区分消费者购买邀请与创作者学习邀请"
+          ],
+          "role": "supporting",
+          "importance": "should_explain",
+          "supports_point_id": "BT-P01",
+          "change_reason": "原已登记消费者促单但旧教学问题只问数量；本次补回同一重点的完整关系。源片换新/入口在翻内侧阶段已开始，故补绑定BT-S05实际声画证据，不新增或删除重点。"
+        },
+        {
+          "point_id": "BT-P05",
+          "segment_ids": [
+            "BT-S05",
+            "BT-explanation-BT-L04"
+          ],
+          "buying_concern": "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。",
+          "teaching_question": "外观之外，怎样展示买家关心的内侧衬片？",
+          "filming_conditions": [
+            "真正翻开到白色内侧衬片展开",
+            "内侧与外侧对象分清；不拿翻转遮挡段当清楚展示"
+          ],
+          "role": "primary",
+          "importance": "must_explain"
+        }
+      ],
+      "units": [
+        {
+          "unit_id": "BT-U01",
+          "original_segment_ids": [
+            "BT-G1-original",
+            "BT-G2-original",
+            "BT-G3-original",
+            "BT-G4-original"
+          ],
+          "original_source_ranges": [
+            [
+              0,
+              10.733333333333333
+            ],
+            [
+              10.733333333333333,
+              19
+            ],
+            [
+              19,
+              27.833333333333332
+            ],
+            [
+              27.833333333333332,
+              37.266666666666666
+            ]
+          ],
+          "explanation_segment_ids": [
+            "BT-explanation-BT-L01",
+            "BT-explanation-BT-L02",
+            "BT-explanation-BT-L03",
+            "BT-explanation-BT-L04",
+            "BT-explanation-BT-L06"
+          ],
+          "coverage": [
+            {
+              "point_id": "BT-P01",
+              "treatment": "explain"
+            },
+            {
+              "point_id": "BT-P02",
+              "treatment": "explain"
+            },
+            {
+              "point_id": "BT-P03",
+              "treatment": "explain"
+            },
+            {
+              "point_id": "BT-P04",
+              "treatment": "explain"
+            },
+            {
+              "point_id": "BT-P05",
+              "treatment": "explain"
+            }
+          ],
+          "revisits": [
+            {
+              "from_segment_id": "BT-G1-original",
+              "to_segment_id": "BT-explanation-BT-L01",
+              "reason": "按冻结四组计划：本组原声后立即进入对应讲解，使用该组主题栏及既有回看提示。"
+            },
+            {
+              "from_segment_id": "BT-G2-original",
+              "to_segment_id": "BT-explanation-BT-L02",
+              "reason": "按冻结四组计划：本组原声后立即进入对应讲解，使用该组主题栏及既有回看提示。"
+            },
+            {
+              "from_segment_id": "BT-G3-original",
+              "to_segment_id": "BT-explanation-BT-L03",
+              "reason": "按冻结四组计划：本组原声后立即进入对应讲解，使用该组主题栏及既有回看提示。"
+            },
+            {
+              "from_segment_id": "BT-G4-original",
+              "to_segment_id": "BT-explanation-BT-L04",
+              "reason": "按冻结四组计划：本组原声后立即进入对应讲解，使用该组主题栏及既有回看提示。"
+            },
+            {
+              "from_segment_id": "BT-G4-original",
+              "to_segment_id": "BT-explanation-BT-L06",
+              "reason": "按冻结四组计划：本组原声后立即进入对应讲解，使用该组主题栏及既有回看提示。"
+            }
+          ]
+        }
+      ],
+      "review_scope": {
+        "kind": "full_source",
+        "instruction": "完整37.27秒原片与现行整组讲解；本次局部修订仅补促单，未变部分复用历史原判，受影响整组待复审。"
+      }
+    },
+    "transcripts": [
+      {
+        "source_id": "8a61b19b-3e7a-4c15-a541-1c5ed791e8b2",
+        "provider": "fun-asr",
+        "origin": "existing_F1_saved_receipt_reused_no_new_call",
+        "status": "asr_candidate_not_independently_listened",
+        "words": [
+          {
+            "text": "G",
+            "start_seconds": 0.12,
+            "end_seconds": 0.279
+          },
+          {
+            "text": "ila",
+            "start_seconds": 0.279,
+            "end_seconds": 0.519
+          },
+          {
+            "text": "jar",
+            "start_seconds": 0.519,
+            "end_seconds": 0.679
+          },
+          {
+            "text": "ang",
+            "start_seconds": 0.679,
+            "end_seconds": 0.879
+          },
+          {
+            "text": "spender",
+            "start_seconds": 0.879,
+            "end_seconds": 1.319
+          },
+          {
+            "text": "ni",
+            "start_seconds": 1.319,
+            "end_seconds": 1.439
+          },
+          {
+            "text": "kau",
+            "start_seconds": 1.539,
+            "end_seconds": 1.639
+          },
+          {
+            "text": "orang",
+            "start_seconds": 1.639,
+            "end_seconds": 2.079
+          },
+          {
+            "text": "jar",
+            "start_seconds": 2.079,
+            "end_seconds": 2.239
+          },
+          {
+            "text": "ang",
+            "start_seconds": 2.239,
+            "end_seconds": 2.439
+          },
+          {
+            "text": "gila",
+            "start_seconds": 2.639,
+            "end_seconds": 2.918
+          },
+          {
+            "text": "tau",
+            "start_seconds": 2.918,
+            "end_seconds": 3.478
+          },
+          {
+            "text": "yang",
+            "start_seconds": 3.478,
+            "end_seconds": 3.598
+          },
+          {
+            "text": "mana",
+            "start_seconds": 3.598,
+            "end_seconds": 3.758
+          },
+          {
+            "text": "kau",
+            "start_seconds": 3.798,
+            "end_seconds": 3.838
+          },
+          {
+            "text": "orang",
+            "start_seconds": 3.838,
+            "end_seconds": 3.958
+          },
+          {
+            "text": "teng",
+            "start_seconds": 3.958,
+            "end_seconds": 3.998
+          },
+          {
+            "text": "ah",
+            "start_seconds": 3.998,
+            "end_seconds": 4.198
+          },
+          {
+            "text": "car",
+            "start_seconds": 4.198,
+            "end_seconds": 4.238
+          },
+          {
+            "text": "i",
+            "start_seconds": 4.238,
+            "end_seconds": 4.478
+          },
+          {
+            "text": "spender",
+            "start_seconds": 4.478,
+            "end_seconds": 4.798
+          },
+          {
+            "text": "yang",
+            "start_seconds": 4.798,
+            "end_seconds": 4.918
+          },
+          {
+            "text": "se",
+            "start_seconds": 4.918,
+            "end_seconds": 5.128
+          },
+          {
+            "text": "les",
+            "start_seconds": 5.128,
+            "end_seconds": 5.623
+          },
+          {
+            "text": "a",
+            "start_seconds": 5.623,
+            "end_seconds": 5.837
+          },
+          {
+            "text": "jar",
+            "start_seconds": 5.837,
+            "end_seconds": 5.997
+          },
+          {
+            "text": "ang",
+            "start_seconds": 5.997,
+            "end_seconds": 6.157
+          },
+          {
+            "text": "jar",
+            "start_seconds": 6.157,
+            "end_seconds": 6.277
+          },
+          {
+            "text": "ang",
+            "start_seconds": 6.277,
+            "end_seconds": 6.477
+          },
+          {
+            "text": "nip",
+            "start_seconds": 6.477,
+            "end_seconds": 6.557
+          },
+          {
+            "text": "is",
+            "start_seconds": 6.557,
+            "end_seconds": 6.717
+          },
+          {
+            "text": "nip",
+            "start_seconds": 6.717,
+            "end_seconds": 6.877
+          },
+          {
+            "text": "is",
+            "start_seconds": 6.877,
+            "end_seconds": 7.237
+          },
+          {
+            "text": "je",
+            "start_seconds": 7.237,
+            "end_seconds": 7.677
+          },
+          {
+            "text": "pak",
+            "start_seconds": 7.677,
+            "end_seconds": 7.809
+          },
+          {
+            "text": "ai",
+            "start_seconds": 7.809,
+            "end_seconds": 7.877
+          },
+          {
+            "text": "r",
+            "start_seconds": 7.877,
+            "end_seconds": 7.989
+          },
+          {
+            "text": "asa",
+            "start_seconds": 7.989,
+            "end_seconds": 8.156
+          },
+          {
+            "text": "macam",
+            "start_seconds": 8.26,
+            "end_seconds": 8.316
+          },
+          {
+            "text": "tak",
+            "start_seconds": 8.316,
+            "end_seconds": 8.476
+          },
+          {
+            "text": "pak",
+            "start_seconds": 8.476,
+            "end_seconds": 8.556
+          },
+          {
+            "text": "ai",
+            "start_seconds": 8.556,
+            "end_seconds": 8.596
+          },
+          {
+            "text": "su",
+            "start_seconds": 8.596,
+            "end_seconds": 8.676
+          },
+          {
+            "text": "ara",
+            "start_seconds": 8.676,
+            "end_seconds": 8.876
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 8.876,
+            "end_seconds": 9.276
+          },
+          {
+            "text": "kau",
+            "start_seconds": 9.336,
+            "end_seconds": 9.396
+          },
+          {
+            "text": "orang",
+            "start_seconds": 9.396,
+            "end_seconds": 9.516
+          },
+          {
+            "text": "bel",
+            "start_seconds": 9.516,
+            "end_seconds": 9.596
+          },
+          {
+            "text": "i",
+            "start_seconds": 9.596,
+            "end_seconds": 9.796
+          },
+          {
+            "text": "je",
+            "start_seconds": 9.796,
+            "end_seconds": 9.916
+          },
+          {
+            "text": "su",
+            "start_seconds": 9.916,
+            "end_seconds": 10.076
+          },
+          {
+            "text": "ara",
+            "start_seconds": 10.076,
+            "end_seconds": 10.276
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 10.276,
+            "end_seconds": 10.476
+          },
+          {
+            "text": "ni",
+            "start_seconds": 10.476,
+            "end_seconds": 10.795
+          },
+          {
+            "text": "su",
+            "start_seconds": 10.795,
+            "end_seconds": 10.955
+          },
+          {
+            "text": "ara",
+            "start_seconds": 10.955,
+            "end_seconds": 11.115
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 11.115,
+            "end_seconds": 11.275
+          },
+          {
+            "text": "wan",
+            "start_seconds": 11.275,
+            "end_seconds": 11.555
+          },
+          {
+            "text": "ita",
+            "start_seconds": 11.555,
+            "end_seconds": 11.875
+          },
+          {
+            "text": "yang",
+            "start_seconds": 11.875,
+            "end_seconds": 12.075
+          },
+          {
+            "text": "le",
+            "start_seconds": 12.075,
+            "end_seconds": 12.165
+          },
+          {
+            "text": "mb",
+            "start_seconds": 12.165,
+            "end_seconds": 12.328
+          },
+          {
+            "text": "ut",
+            "start_seconds": 12.328,
+            "end_seconds": 12.595
+          },
+          {
+            "text": "mem",
+            "start_seconds": 12.595,
+            "end_seconds": 12.808
+          },
+          {
+            "text": "er",
+            "start_seconds": 12.808,
+            "end_seconds": 12.915
+          },
+          {
+            "text": "ik",
+            "start_seconds": 12.915,
+            "end_seconds": 13.355
+          },
+          {
+            "text": "re",
+            "start_seconds": 13.355,
+            "end_seconds": 13.594
+          },
+          {
+            "text": "kan",
+            "start_seconds": 13.594,
+            "end_seconds": 13.794
+          },
+          {
+            "text": "do",
+            "start_seconds": 13.794,
+            "end_seconds": 13.994
+          },
+          {
+            "text": "a",
+            "start_seconds": 13.994,
+            "end_seconds": 14.274
+          },
+          {
+            "text": "bila",
+            "start_seconds": 14.554,
+            "end_seconds": 14.834
+          },
+          {
+            "text": "pak",
+            "start_seconds": 14.834,
+            "end_seconds": 14.966
+          },
+          {
+            "text": "ai",
+            "start_seconds": 14.966,
+            "end_seconds": 15.034
+          },
+          {
+            "text": "r",
+            "start_seconds": 15.034,
+            "end_seconds": 15.162
+          },
+          {
+            "text": "asa",
+            "start_seconds": 15.162,
+            "end_seconds": 15.354
+          },
+          {
+            "text": "macam",
+            "start_seconds": 15.434,
+            "end_seconds": 15.474
+          },
+          {
+            "text": "tak",
+            "start_seconds": 15.474,
+            "end_seconds": 15.674
+          },
+          {
+            "text": "pak",
+            "start_seconds": 15.674,
+            "end_seconds": 15.778
+          },
+          {
+            "text": "ai",
+            "start_seconds": 15.778,
+            "end_seconds": 15.834
+          },
+          {
+            "text": "su",
+            "start_seconds": 15.834,
+            "end_seconds": 15.954
+          },
+          {
+            "text": "ara",
+            "start_seconds": 15.954,
+            "end_seconds": 16.113
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 16.113,
+            "end_seconds": 16.793
+          },
+          {
+            "text": "material",
+            "start_seconds": 16.793,
+            "end_seconds": 17.113
+          },
+          {
+            "text": "dia",
+            "start_seconds": 17.113,
+            "end_seconds": 17.193
+          },
+          {
+            "text": "pun",
+            "start_seconds": 17.193,
+            "end_seconds": 17.433
+          },
+          {
+            "text": "cant",
+            "start_seconds": 17.433,
+            "end_seconds": 17.713
+          },
+          {
+            "text": "ik",
+            "start_seconds": 17.713,
+            "end_seconds": 18.033
+          },
+          {
+            "text": "kemas",
+            "start_seconds": 18.139,
+            "end_seconds": 18.553
+          },
+          {
+            "text": "je",
+            "start_seconds": 18.553,
+            "end_seconds": 18.712
+          },
+          {
+            "text": "kan",
+            "start_seconds": 18.712,
+            "end_seconds": 19.312
+          },
+          {
+            "text": "bel",
+            "start_seconds": 19.312,
+            "end_seconds": 19.472
+          },
+          {
+            "text": "i",
+            "start_seconds": 19.472,
+            "end_seconds": 19.752
+          },
+          {
+            "text": "yang",
+            "start_seconds": 19.752,
+            "end_seconds": 19.912
+          },
+          {
+            "text": "kom",
+            "start_seconds": 19.912,
+            "end_seconds": 20.072
+          },
+          {
+            "text": "bo",
+            "start_seconds": 20.072,
+            "end_seconds": 20.432
+          },
+          {
+            "text": "bel",
+            "start_seconds": 20.432,
+            "end_seconds": 20.512
+          },
+          {
+            "text": "i",
+            "start_seconds": 20.512,
+            "end_seconds": 20.672
+          },
+          {
+            "text": "tu",
+            "start_seconds": 20.672,
+            "end_seconds": 20.792
+          },
+          {
+            "text": "ju",
+            "start_seconds": 20.792,
+            "end_seconds": 21.032
+          },
+          {
+            "text": "h",
+            "start_seconds": 21.032,
+            "end_seconds": 21.152
+          },
+          {
+            "text": "ter",
+            "start_seconds": 21.152,
+            "end_seconds": 21.391
+          },
+          {
+            "text": "us",
+            "start_seconds": 21.391,
+            "end_seconds": 21.511
+          },
+          {
+            "text": "lagi",
+            "start_seconds": 21.511,
+            "end_seconds": 21.751
+          },
+          {
+            "text": "ber",
+            "start_seconds": 21.751,
+            "end_seconds": 21.911
+          },
+          {
+            "text": "bal",
+            "start_seconds": 21.911,
+            "end_seconds": 22.151
+          },
+          {
+            "text": "oi",
+            "start_seconds": 22.151,
+            "end_seconds": 22.271
+          },
+          {
+            "text": "lagi",
+            "start_seconds": 22.271,
+            "end_seconds": 22.511
+          },
+          {
+            "text": "jimat",
+            "start_seconds": 22.671,
+            "end_seconds": 23.271
+          },
+          {
+            "text": "jangan",
+            "start_seconds": 23.339,
+            "end_seconds": 23.511
+          },
+          {
+            "text": "lah",
+            "start_seconds": 23.511,
+            "end_seconds": 23.591
+          },
+          {
+            "text": "bel",
+            "start_seconds": 23.591,
+            "end_seconds": 23.631
+          },
+          {
+            "text": "i",
+            "start_seconds": 23.631,
+            "end_seconds": 23.791
+          },
+          {
+            "text": "se",
+            "start_seconds": 23.791,
+            "end_seconds": 24.07
+          },
+          {
+            "text": "lain",
+            "start_seconds": 24.07,
+            "end_seconds": 24.39
+          },
+          {
+            "text": "tak",
+            "start_seconds": 24.39,
+            "end_seconds": 24.51
+          },
+          {
+            "text": "kan",
+            "start_seconds": 24.51,
+            "end_seconds": 24.67
+          },
+          {
+            "text": "nak",
+            "start_seconds": 24.67,
+            "end_seconds": 24.87
+          },
+          {
+            "text": "pak",
+            "start_seconds": 24.87,
+            "end_seconds": 25.11
+          },
+          {
+            "text": "ai",
+            "start_seconds": 25.11,
+            "end_seconds": 25.23
+          },
+          {
+            "text": "se",
+            "start_seconds": 25.23,
+            "end_seconds": 25.39
+          },
+          {
+            "text": "hari",
+            "start_seconds": 25.39,
+            "end_seconds": 25.79
+          },
+          {
+            "text": "je",
+            "start_seconds": 25.79,
+            "end_seconds": 26.03
+          },
+          {
+            "text": "kan",
+            "start_seconds": 26.03,
+            "end_seconds": 26.55
+          },
+          {
+            "text": "bel",
+            "start_seconds": 26.55,
+            "end_seconds": 26.63
+          },
+          {
+            "text": "i",
+            "start_seconds": 26.63,
+            "end_seconds": 26.829
+          },
+          {
+            "text": "ter",
+            "start_seconds": 26.829,
+            "end_seconds": 26.961
+          },
+          {
+            "text": "us",
+            "start_seconds": 26.961,
+            "end_seconds": 27.029
+          },
+          {
+            "text": "tu",
+            "start_seconds": 27.029,
+            "end_seconds": 27.109
+          },
+          {
+            "text": "ju",
+            "start_seconds": 27.109,
+            "end_seconds": 27.269
+          },
+          {
+            "text": "h",
+            "start_seconds": 27.269,
+            "end_seconds": 27.349
+          },
+          {
+            "text": "lain",
+            "start_seconds": 27.349,
+            "end_seconds": 27.789
+          },
+          {
+            "text": "okey",
+            "start_seconds": 27.869,
+            "end_seconds": 28.149
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 28.149,
+            "end_seconds": 28.349
+          },
+          {
+            "text": "dia",
+            "start_seconds": 28.349,
+            "end_seconds": 28.469
+          },
+          {
+            "text": "ada",
+            "start_seconds": 28.469,
+            "end_seconds": 28.589
+          },
+          {
+            "text": "pel",
+            "start_seconds": 28.589,
+            "end_seconds": 28.709
+          },
+          {
+            "text": "ap",
+            "start_seconds": 28.709,
+            "end_seconds": 28.909
+          },
+          {
+            "text": "ik",
+            "start_seconds": 28.909,
+            "end_seconds": 29.149
+          },
+          {
+            "text": "macam",
+            "start_seconds": 29.308,
+            "end_seconds": 29.388
+          },
+          {
+            "text": "ni",
+            "start_seconds": 29.388,
+            "end_seconds": 29.628
+          },
+          {
+            "text": "so",
+            "start_seconds": 29.628,
+            "end_seconds": 29.788
+          },
+          {
+            "text": "kal",
+            "start_seconds": 29.788,
+            "end_seconds": 29.92
+          },
+          {
+            "text": "au",
+            "start_seconds": 29.92,
+            "end_seconds": 29.988
+          },
+          {
+            "text": "kak",
+            "start_seconds": 29.988,
+            "end_seconds": 30.108
+          },
+          {
+            "text": "ak",
+            "start_seconds": 30.108,
+            "end_seconds": 30.268
+          },
+          {
+            "text": "dah",
+            "start_seconds": 30.268,
+            "end_seconds": 30.388
+          },
+          {
+            "text": "lama",
+            "start_seconds": 30.484,
+            "end_seconds": 30.628
+          },
+          {
+            "text": "tak",
+            "start_seconds": 30.628,
+            "end_seconds": 30.748
+          },
+          {
+            "text": "tuk",
+            "start_seconds": 30.828,
+            "end_seconds": 30.868
+          },
+          {
+            "text": "ar",
+            "start_seconds": 30.868,
+            "end_seconds": 30.948
+          },
+          {
+            "text": "su",
+            "start_seconds": 30.948,
+            "end_seconds": 31.068
+          },
+          {
+            "text": "ara",
+            "start_seconds": 31.068,
+            "end_seconds": 31.228
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 31.228,
+            "end_seconds": 31.428
+          },
+          {
+            "text": "tu",
+            "start_seconds": 31.428,
+            "end_seconds": 31.548
+          },
+          {
+            "text": "kan",
+            "start_seconds": 31.548,
+            "end_seconds": 31.748
+          },
+          {
+            "text": "us",
+            "start_seconds": 31.748,
+            "end_seconds": 31.868
+          },
+          {
+            "text": "ia",
+            "start_seconds": 31.868,
+            "end_seconds": 32.027
+          },
+          {
+            "text": "de",
+            "start_seconds": 32.027,
+            "end_seconds": 32.067
+          },
+          {
+            "text": "kat",
+            "start_seconds": 32.067,
+            "end_seconds": 32.227
+          },
+          {
+            "text": "beg",
+            "start_seconds": 32.227,
+            "end_seconds": 32.387
+          },
+          {
+            "text": "kun",
+            "start_seconds": 32.387,
+            "end_seconds": 32.507
+          },
+          {
+            "text": "ing",
+            "start_seconds": 32.507,
+            "end_seconds": 32.867
+          },
+          {
+            "text": "grab",
+            "start_seconds": 32.867,
+            "end_seconds": 33.107
+          },
+          {
+            "text": "yang",
+            "start_seconds": 33.107,
+            "end_seconds": 33.267
+          },
+          {
+            "text": "ni",
+            "start_seconds": 33.267,
+            "end_seconds": 33.627
+          },
+          {
+            "text": "okey",
+            "start_seconds": 33.707,
+            "end_seconds": 33.947
+          },
+          {
+            "text": "bo",
+            "start_seconds": 33.947,
+            "end_seconds": 34.106
+          },
+          {
+            "text": "leh",
+            "start_seconds": 34.106,
+            "end_seconds": 34.267
+          },
+          {
+            "text": "pak",
+            "start_seconds": 34.267,
+            "end_seconds": 34.427
+          },
+          {
+            "text": "ai",
+            "start_seconds": 34.427,
+            "end_seconds": 34.507
+          },
+          {
+            "text": "se",
+            "start_seconds": 34.507,
+            "end_seconds": 34.686
+          },
+          {
+            "text": "les",
+            "start_seconds": 34.686,
+            "end_seconds": 34.878
+          },
+          {
+            "text": "a",
+            "start_seconds": 34.878,
+            "end_seconds": 34.946
+          },
+          {
+            "text": "do",
+            "start_seconds": 34.946,
+            "end_seconds": 35.106
+          },
+          {
+            "text": "a",
+            "start_seconds": 35.106,
+            "end_seconds": 35.266
+          },
+          {
+            "text": "ni",
+            "start_seconds": 35.266,
+            "end_seconds": 35.466
+          },
+          {
+            "text": "pak",
+            "start_seconds": 35.466,
+            "end_seconds": 35.57
+          },
+          {
+            "text": "ai",
+            "start_seconds": 35.57,
+            "end_seconds": 35.626
+          },
+          {
+            "text": "t",
+            "start_seconds": 35.626,
+            "end_seconds": 35.706
+          },
+          {
+            "text": "uk",
+            "start_seconds": 35.706,
+            "end_seconds": 35.746
+          },
+          {
+            "text": "ar",
+            "start_seconds": 35.746,
+            "end_seconds": 35.879
+          },
+          {
+            "text": "tuk",
+            "start_seconds": 35.946,
+            "end_seconds": 35.986
+          },
+          {
+            "text": "ar",
+            "start_seconds": 35.986,
+            "end_seconds": 36.106
+          },
+          {
+            "text": "dah",
+            "start_seconds": 36.106,
+            "end_seconds": 36.226
+          },
+          {
+            "text": "lama",
+            "start_seconds": 36.29,
+            "end_seconds": 36.386
+          },
+          {
+            "text": "tak",
+            "start_seconds": 36.386,
+            "end_seconds": 36.506
+          },
+          {
+            "text": "tuk",
+            "start_seconds": 36.546,
+            "end_seconds": 36.586
+          },
+          {
+            "text": "ar",
+            "start_seconds": 36.586,
+            "end_seconds": 36.666
+          },
+          {
+            "text": "su",
+            "start_seconds": 36.666,
+            "end_seconds": 36.746
+          },
+          {
+            "text": "ara",
+            "start_seconds": 36.746,
+            "end_seconds": 36.866
+          },
+          {
+            "text": "dalam",
+            "start_seconds": 36.866,
+            "end_seconds": 37.066
+          },
+          {
+            "text": "baru",
+            "start_seconds": 37.066,
+            "end_seconds": 37.266
+          }
+        ]
+      }
+    ],
+    "reviews": [],
+    "audit": []
+  }
+}
