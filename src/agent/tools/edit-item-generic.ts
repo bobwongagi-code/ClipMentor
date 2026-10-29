@@ -369,9 +369,7 @@ export function validateAuthoredAdd(
       color,
       ...(name ? { name } : {}),
       ...(startFrame !== undefined ? { startFrame: Math.max(0, Math.round(startFrame)) } : {}),
-      ...(durationInFrames !== undefined && durationInFrames > 0
-        ? { durationInFrames: Math.round(durationInFrames) }
-        : {}),
+      durationInFrames: durationInFrames !== undefined && durationInFrames > 0 ? Math.round(durationInFrames) : 150,
     };
   }
   const text = typeof entry.text === 'string' && entry.text.trim() ? entry.text.trim() : '文字';
@@ -393,9 +391,7 @@ export function validateAuthoredAdd(
     ...(fontSize !== undefined && fontSize > 0 ? { fontSize } : {}),
     ...(fontWeight !== undefined && fontWeight > 0 ? { fontWeight } : {}),
     ...(startFrame !== undefined ? { startFrame: Math.max(0, Math.round(startFrame)) } : {}),
-    ...(durationInFrames !== undefined && durationInFrames > 0
-      ? { durationInFrames: Math.round(durationInFrames) }
-      : {}),
+    durationInFrames: durationInFrames !== undefined && durationInFrames > 0 ? Math.round(durationInFrames) : 90,
   };
 }
 

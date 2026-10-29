@@ -11,8 +11,12 @@ export interface EditItemOperation {
 
 interface AtomicBatchCallbacks<Draft> {
   createDraft: () => Draft;
+  /** Stage only conflicting clip removals early; reported results keep request order. */
+  orderOperations?: (draft: Draft, operations: EditItemOperation[]) => EditItemOperation[];
   validate: (draft: Draft, operation: EditItemOperation) => OpResult;
   apply: (draft: Draft, plan: OpResult) => OpResult;
+  /** The final constraints are identical for dry runs and published edits. */
+  validateDraft?: (draft: Draft) => void;
   /** One state replacement after every draft operation succeeds. */
   publish: (draft: Draft) => void;
 }
@@ -86,9 +90,13 @@ export function executeAtomicEditBatch<Draft>(
   }
 
   const draft = callbacks.createDraft();
+  let staged: EditItemOperation[];
+  try { staged = callbacks.orderOperations?.(draft, operations) ?? operations; }
+  catch (error) { return failedBatch([], validateOnly, `staging failed: ${error instanceof Error ? error.message : String(error)}`); }
   const plans: OpResult[] = [];
   const results: OpResult[] = [];
-  for (const operation of operations) {
+  const byOperation = new Map<EditItemOperation, { plan: OpResult; result: OpResult }>();
+  for (const operation of staged) {
     let plan: OpResult;
     try {
       plan = callbacks.validate(draft, operation);
@@ -117,7 +125,11 @@ export function executeAtomicEditBatch<Draft>(
       return failedBatch([...results, { ...result, error }], validateOnly, error);
     }
     results.push(result);
+    byOperation.set(operation, { plan, result });
   }
+
+  try { callbacks.validateDraft?.(draft); }
+  catch (error) { return failedBatch(results, validateOnly, `draft validation failed: ${error instanceof Error ? error.message : String(error)}`); }
 
   if (validateOnly) {
     return {
@@ -125,7 +137,10 @@ export function executeAtomicEditBatch<Draft>(
       atomic: true,
       validateOnly: true,
       wouldApply: plans.length,
-      results: plans.map((plan) => ({ ok: true, kind: plan.kind, plan: plan.plan, preview: plan })),
+      results: operations.map(operation => {
+        const plan = byOperation.get(operation)!.plan;
+        return { ok: true, kind: plan.kind, plan: plan.plan, preview: plan };
+      }),
     };
   }
 
@@ -140,6 +155,6 @@ export function executeAtomicEditBatch<Draft>(
     atomic: true,
     validateOnly: false,
     ripple: args.ripple === true,
-    results,
+    results: operations.map(operation => byOperation.get(operation)!.result),
   };
 }

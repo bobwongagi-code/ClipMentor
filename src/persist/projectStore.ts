@@ -32,6 +32,7 @@ import {
   type ProjectIndexMutation,
   type ProjectMeta,
   type ProjectSaveResult,
+  type ProjectSaveContext,
 } from './projectStoreCoordinators';
 
 // Server-backed multi-project store with an IndexedDB cache. The server store is
@@ -43,9 +44,11 @@ const projectKey = (id: string) => `project:${id}`;
 async function persistProjectSnapshot(
   id: string,
   doc: ProjectDoc,
+  context?: ProjectSaveContext,
 ): Promise<{ saved: boolean; indexUpdated: boolean }> {
   try {
-    await idbSet(projectKey(id), doc);
+    if (context?.signal?.aborted) return { saved: false, indexUpdated: false };
+    await idbSet(projectKey(id), doc, context);
   } catch {
     return { saved: false, indexUpdated: false };
   }
@@ -339,8 +342,8 @@ export async function loadProjectForEditing(
 }
 
 /** Capture and enqueue a project's document; writes for the same project never overlap. */
-export function saveProject(id: string, doc: ProjectDoc): Promise<ProjectSaveResult> {
-  return projectSaveCoordinator.enqueue(id, doc);
+export function saveProject(id: string, doc: ProjectDoc, context?: ProjectSaveContext): Promise<ProjectSaveResult> {
+  return projectSaveCoordinator.enqueue(id, doc, context);
 }
 
 export function flushProjectSaves(projectId: string | 'all' = 'all'): Promise<ProjectFlushResult> {

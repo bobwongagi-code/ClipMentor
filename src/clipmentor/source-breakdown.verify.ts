@@ -647,7 +647,14 @@ async function verifyCopyCandidateCheckpoint(): Promise<void> {
   const { makeDraft } = await import('../editor/store');
   const { executeTool } = await import('../agent/tools');
   const { saveProject, loadProject, migrateProjectDoc, projectSaveCoordinator } = await import('../persist/projectStore');
-  const { startAgentRun } = await import('../agent/runtime-ledger');
+  const { startAgentRun: recordAgentRun } = await import('../agent/runtime-ledger');
+  const { installCheckpointStoreFixture } = await import('../persist/checkpointStore.verify-helper');
+  const checkpointStore = installCheckpointStoreFixture();
+  const startAgentRun: typeof recordAgentRun = async input => {
+    const recorder = await recordAgentRun(input);
+    checkpointStore.activate(recorder.runId, input.projectId);
+    return recorder;
+  };
   const { storeAgentArtifact, loadAgentRuntimeSidecar, deleteAgentArtifacts } = await import('../persist/agentRuntimeStore');
   const { checkCopyProduction } = await import('./production-gate');
   const { listVersions } = await import('../persist/versionStore');
@@ -716,6 +723,7 @@ async function verifyCopyCandidateCheckpoint(): Promise<void> {
       args: { action: 'set_copy_candidate', expectedRevision: 1 }, result, actions: candidate.takeActions(), baseDoc: base };
     await callbacks.onToolAction(action);
     const saved = await loadProject(projectId);
+    assert(checkpointStore.writes.some(r=>r.agentRunId===input.runId),'preparation checkpoint must carry its run identity');
     assert.equal(saved?.clipMentorAnalysis?.revision, 2, 'candidate must be durable BEFORE the next review or run terminal');
     assert.deepEqual(saved?.timelines, base.timelines, 'checkpoint cannot commit timeline edits');
     assert.equal((current.clipMentorAnalysis!.blueprint[0] as any).internal_review.current_script_candidate, 'script_candidate_new');
@@ -887,7 +895,7 @@ async function verifyCopyCandidateCheckpoint(): Promise<void> {
     assert.equal(JSON.stringify(await loadProject(projectId)), committedBytes, 'uncommitted edits remain atomic; do not partially commit as an export workaround');
     assert.equal(JSON.stringify(current), committedBytes);
     assert.equal(realReviewCalls, 0, 'only local stub endpoints, no real model/review/TTS/render');
-  } finally { globalThis.fetch = previousFetch; }
+  } finally { globalThis.fetch = previousFetch; checkpointStore.restore(); }
 }
 const danglingPointer = structuredClone(base);
 (danglingPointer.clipMentorAnalysis!.blueprint[0] as any).internal_review.current_script_candidate = 'missing';

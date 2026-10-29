@@ -42,9 +42,16 @@ interface ProjectSaveState {
   blocked?: unknown;
 }
 
+/** Host-owned identity of one queued Agent checkpoint, never model arguments. */
+export interface ProjectSaveContext {
+  agentRunId?: string;
+  signal?: AbortSignal;
+}
+
 type PersistProjectSnapshot = (
   projectId: string,
   snapshot: ProjectDoc,
+  context?: ProjectSaveContext,
 ) => Promise<{ saved: boolean; indexUpdated: boolean }>;
 
 function immutableProjectSnapshot(doc: ProjectDoc): ProjectDoc {
@@ -85,12 +92,13 @@ export class SaveCoordinator {
     snapshot: ProjectDoc,
     revision: number,
     epoch: number,
+    context?: ProjectSaveContext,
   ): Promise<ProjectSaveResult> {
-    if (state.epoch !== epoch) {
+    if (state.epoch !== epoch || context?.signal?.aborted) {
       return { projectId, revision, epoch, status: 'superseded', saved: false, indexUpdated: false };
     }
     try {
-      const persisted = await this.persist(projectId, snapshot);
+      const persisted = await this.persist(projectId, snapshot, context);
       if (!persisted.saved) {
         return {
           projectId, revision, epoch, status: 'failed', saved: false,
@@ -108,7 +116,7 @@ export class SaveCoordinator {
     }
   }
 
-  enqueue(projectId: string, doc: ProjectDoc): Promise<ProjectSaveResult> {
+  enqueue(projectId: string, doc: ProjectDoc, context?: ProjectSaveContext): Promise<ProjectSaveResult> {
     const state = this.stateFor(projectId);
     if (state.blocked !== undefined) {
       return Promise.resolve({
@@ -117,11 +125,12 @@ export class SaveCoordinator {
       });
     }
     const snapshot = this.snapshot(doc);
+    const writeContext = context ? { ...context } : undefined;
     const revision = ++state.nextRevision;
     const epoch = state.epoch;
     state.pending += 1;
     const result = state.tail.then(() =>
-      this.persistRevision(state, projectId, snapshot, revision, epoch));
+      this.persistRevision(state, projectId, snapshot, revision, epoch, writeContext));
     state.tail = result.then((value) => {
       state.lastResult = value;
       state.pending -= 1;

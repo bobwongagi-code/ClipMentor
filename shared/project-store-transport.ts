@@ -54,6 +54,7 @@ export type ProjectStoreRequest =
     operation: 'project-document-write';
     key: string;
     expectedRevision: null;
+    agentRunId?: string;
     value: unknown;
   }
   | {
@@ -62,6 +63,7 @@ export type ProjectStoreRequest =
     expectedRevision: string;
     ownerId: string;
     ownershipEpoch: number;
+    agentRunId?: string;
     value: unknown;
   }
   | {

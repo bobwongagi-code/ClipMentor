@@ -387,6 +387,10 @@ function sequence(events: readonly CodexTurnStreamEvent[]): ServerCodexTurnDeps 
     if(String(url)==='/export/job'){exportPosts++;return Response.json({error:'injected export failure'},{status:500});}
     throw new Error(`Unexpected fixture network: ${String(url)}`);
   };
+  // The checkpoint now requires an authoritative host, not offline memory.
+  // Model transport stays mocked; document and runtime writes use real handlers.
+  const {installCheckpointStoreFixture} = await import('../../src/persist/checkpointStore.verify-helper');
+  const checkpointStore = installCheckpointStoreFixture();
   try {
     for(const mode of ['auto','manual'] as const) {
       const projectId=`checkpoint-fixture-${mode}`;
@@ -399,6 +403,7 @@ function sequence(events: readonly CodexTurnStreamEvent[]): ServerCodexTurnDeps 
       assert((await saveProject(projectId,doc)).saved);
       const recorder=await startAgentRun({projectId,userInput:'fixture',askOnly:false});
       const input={runId:recorder.runId,text:'authorized edit',content:'authorized edit',askOnly:false,references:[],baseDoc:doc,resumed:false};
+      checkpointStore.activate(input.runId,projectId);
       await startServerRun(state,ctx,projectId,input,ref);
       const scratch=makeDraft(doc); scratch.commands.addTextClip({text:'saved title',durationInFrames:30});
       const action={runId:input.runId,toolCallId:'add-title',argsDigest:'fixture-digest',name:'edit_item',args:{},result:{ok:true},actions:scratch.takeActions(),baseDoc:doc};
@@ -407,9 +412,14 @@ function sequence(events: readonly CodexTurnStreamEvent[]): ServerCodexTurnDeps 
       const cold=await loadProject(projectId);
       if(mode==='auto') {
         const pending=ref.current.turn!;
+        assert(checkpointStore.writes.some(r=>r.agentRunId===input.runId),'automatic checkpoints must send the host-owned run identity to the real save handler');
         const second=makeDraft(pending.draft.getDoc());second.commands.addTextClip({text:'second checkpoint'});
         pending.draft=second;
         pending.ops.push({tool:'edit_item',args:{},actions:second.takeActions(),action:'add',target:'fixture',impact:'add'});
+        checkpointStore.finish(input.runId); // Server timeout, before any browser done/abort event.
+        await assert.rejects(checkpointAutoAppliedTurn(pending),/not committed/);
+        assert.deepEqual(await loadProject(projectId),cold,'a stale browser cannot write after the authoritative server run ends');
+        checkpointStore.activate(input.runId,projectId); // Only reset this isolated fixture for remaining independent controls.
         await assert.rejects(checkpointAutoAppliedTurn(pending,async()=>{throw new Error('injected save failure');}),/not committed/);
         assert.deepEqual(await loadProject(projectId),cold,'a refused save cannot change the last committed project');
         await assert.rejects(checkpointAutoAppliedTurn(pending,saveProject,async()=>null),/cold readback/);
@@ -453,7 +463,10 @@ function sequence(events: readonly CodexTurnStreamEvent[]): ServerCodexTurnDeps 
       assert.equal(clears,count,'navigation or stale transport must not erase edited draft journals');
       assert.equal((await loadProject(projectId))!.timelines[0].items.length,mode==='auto'?1:0);
     }
-  } finally {globalThis.fetch=previousFetch;}
+  } finally {
+    globalThis.fetch=previousFetch;
+    checkpointStore.restore();
+  }
 
   // React dispatch may publish the committed document only on the next render.
   // The stored baseline must be the submitted snapshot rather than that old ref.

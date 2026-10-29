@@ -276,6 +276,20 @@ try {
     'the persisted pending value reaches the shared store');
   assert.equal(local.has(PENDING_KEYS_KEY), false,
     'a successful merge clears the persisted pending marker');
+  // Offline fallback is correct for manual edits, but must never enqueue an
+  // automatic run checkpoint that could merge after the run has terminated.
+  installGlobal('window',{openChatCutDesktop:{projectStore:async()=>{throw new Error('offline fixture');}}});
+  local.clear();resetSharedKvMemory();
+  await kvGet('projects');
+  await assert.rejects(kvSet('project:expired-checkpoint',{name:'late'}, {agentRunId:'expired'}),/requires_authoritative_store/);
+  assert.equal(local.has('project:expired-checkpoint'),false);
+  assert.equal((local.get(PENDING_KEYS_KEY) as string[]|undefined)?.includes('project:expired-checkpoint')??false,false);
+  await kvSet('project:manual-checkpoint',{name:'manual'});
+  assert.deepEqual(local.get('project:manual-checkpoint'),{name:'manual'});
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(kvSet('project:cancelled-checkpoint',{name:'late'}, {signal:controller.signal}),/cancelled/);
+  assert.equal(local.has('project:cancelled-checkpoint'),false);
+
 } finally {
   resetSharedKvMemory();
   restoreGlobals();

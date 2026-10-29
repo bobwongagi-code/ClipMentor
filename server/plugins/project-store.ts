@@ -389,10 +389,14 @@ const { createLockedProjectStore, readEntryFile } = createProjectStoreEntryAdapt
 
 export async function getStoredEntry(key: string): Promise<StoredEntryValue> {
   if (!isProjectStoreKey(key)) throw new Error('invalid project store entry key');
-  await ensureStoreReady();
-  const projectId = projectIdFromProjectStoreKey(key);
-  if (projectId && Object.hasOwn(await readDeletedProjects(), projectId)) return { found: false };
-  return readEntryFile(key);
+  // A project write can still roll back after its filesystem awaits. Readers
+  // must share its boundary rather than expose an uncommitted intermediate file.
+  return serializeProjectStore(async () => {
+    await ensureStoreReady();
+    const projectId = projectIdFromProjectStoreKey(key);
+    if (projectId && Object.hasOwn(await readDeletedProjects(), projectId)) return { found: false };
+    return readEntryFile(key);
+  });
 }
 
 

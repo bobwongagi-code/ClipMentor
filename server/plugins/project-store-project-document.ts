@@ -14,6 +14,8 @@ import {
 import type { LockedProjectStore, StoredEntryValue } from './project-store.ts';
 import { HANDOFF_PREFIX } from '../../shared/clipmentor-handoff';
 import { assertHandoffProjectWrite } from '../../shared/clipmentor-handoff-write';
+import { getRun } from '../agent-runs/store';
+import { assertDeliveryPicturePreservation } from '../../src/clipmentor/delivery-bindings';
 
 type ProjectDocumentWriteRequest = Extract<
   ProjectStoreRequest,
@@ -26,6 +28,17 @@ type ProjectDocumentUpdateRequest = Extract<
 type WithStoreLock = <T>(
   work: (store: LockedProjectStore) => Promise<T>,
 ) => Promise<T>;
+type ReadAgentRun = (runId: string) => { projectId: string; status: string; abort?: AbortController } | undefined;
+
+function activeAgentWrite(request: ProjectDocumentWriteRequest, projectId: string, readRun: ReadAgentRun): boolean {
+  if (!request.agentRunId) return true;
+  const run = readRun(request.agentRunId);
+  return run?.projectId === projectId && run.status === 'running' && !run.abort?.signal.aborted;
+}
+
+const endedRun = (current: StoredEntryValue): ProjectDocumentMutationResponse => ({
+  ...mutationResponse(current, false), error: { code: 'agent_run_not_active' },
+});
 
 const normalizedProject = (value: unknown): ProjectDoc | null =>
   runProjectMigrations(value)?.doc ?? null;
@@ -58,11 +71,19 @@ async function createProjectDocument(
   store: LockedProjectStore,
   request: ProjectDocumentWriteRequest,
   project: ProjectDoc,
+  readRun: ReadAgentRun,
 ): Promise<ProjectDocumentMutationResponse> {
   const projectId = request.key.slice('project:'.length);
   const ownership = await store.readEntry(projectEditOwnershipKey(projectId));
   if (ownership.found) return mutationResponse({ found: false }, false);
-  await store.writeEntryExact(request.key, project);
+  if (!activeAgentWrite(request, projectId, readRun)) return endedRun({ found: false });
+  try {
+    await store.writeEntryExact(request.key, project);
+    if (!activeAgentWrite(request, projectId, readRun)) {
+      await store.removeEntry(request.key);
+      return endedRun({ found: false });
+    }
+  } catch (error) { await store.removeEntry(request.key); throw error; }
   return mutationResponse({ found: true, value: project }, true, revisionOf(project));
 }
 
@@ -72,6 +93,7 @@ async function updateProjectDocument(
   current: StoredEntryValue,
   project: ProjectDoc,
   projectId: string,
+  readRun: ReadAgentRun,
 ): Promise<ProjectDocumentMutationResponse> {
   const ownershipKey = projectEditOwnershipKey(projectId);
   const ownership = await store.readEntry(ownershipKey);
@@ -86,12 +108,20 @@ async function updateProjectDocument(
     return mutationResponse(current, false, request.expectedRevision);
   }
   const nextRevision = revisionOf(project);
+  if (!activeAgentWrite(request, projectId, readRun)) return endedRun(current);
   try {
     await store.writeEntryExact(request.key, project);
     await store.writeEntryExact(
       ownershipKey,
       renewedProjectEditOwnership(claim, nextRevision),
     );
+    // Keep readers behind the same store lock until a cancellation racing the
+    // filesystem writes has either committed or restored BOTH original entries.
+    if (!activeAgentWrite(request, projectId, readRun)) {
+      await restoreEntry(store, request.key, current);
+      await restoreEntry(store, ownershipKey, ownership);
+      return endedRun(current);
+    }
   } catch (error) {
     await restoreEntry(store, request.key, current);
     await restoreEntry(store, ownershipKey, ownership);
@@ -105,7 +135,7 @@ async function updateProjectDocument(
   );
 }
 
-export function createProjectDocumentStoreOperation(withStoreLock: WithStoreLock) {
+export function createProjectDocumentStoreOperation(withStoreLock: WithStoreLock, readRun: ReadAgentRun = getRun) {
   return async (request: ProjectDocumentWriteRequest): Promise<ProjectDocumentMutationResponse> => (
     withStoreLock(async (store) => {
       const current = await store.readEntry(request.key);
@@ -120,11 +150,13 @@ export function createProjectDocumentStoreOperation(withStoreLock: WithStoreLock
       const project = normalizedProject(request.value);
       if (!project) throw new Error('project document CAS value is invalid or unsupported');
       const projectId = request.key.slice('project:'.length);
+      if (!activeAgentWrite(request, projectId, readRun)) return endedRun(current);
+      if (request.agentRunId && currentDoc) assertDeliveryPicturePreservation(currentDoc, project);
       const policy = await store.readEntry(`${HANDOFF_PREFIX}${projectId}`);
       await assertHandoffProjectWrite(policy.found ? policy.value : undefined, currentDoc, project);
       return current.found
-        ? updateProjectDocument(store, request as ProjectDocumentUpdateRequest, current, project, projectId)
-        : createProjectDocument(store, request, project);
+        ? updateProjectDocument(store, request as ProjectDocumentUpdateRequest, current, project, projectId, readRun)
+        : createProjectDocument(store, request, project, readRun);
     })
   );
 }

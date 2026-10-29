@@ -260,11 +260,14 @@ function isAgentRuntimeWriteRequest(value: Record<string, unknown>): boolean {
 }
 
 function isProjectDocumentWriteRequest(value: Record<string, unknown>): boolean {
+  const guarded = Object.hasOwn(value, 'agentRunId');
+  if (guarded && (typeof value.agentRunId !== 'string'
+    || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.agentRunId))) return false;
   if (typeof value.key !== 'string'
     || !PROJECT_DOCUMENT_CAS_KEY.test(value.key)
     || !Object.hasOwn(value, 'value')) return false;
-  if (value.expectedRevision === null) return Object.keys(value).length === 4;
-  return Object.keys(value).length === 6
+  if (value.expectedRevision === null) return Object.keys(value).length === 4 + Number(guarded);
+  return Object.keys(value).length === 6 + Number(guarded)
     && typeof value.expectedRevision === 'string'
     && value.expectedRevision.length > 0
     && value.expectedRevision.length <= 200

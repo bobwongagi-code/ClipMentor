@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { makeDraft, replayActions } from '../editor/store';
 import type { ProjectDoc } from '../editor/types';
+import { assertDeliveryPicturePreservation } from '../clipmentor/delivery-bindings';
 import { migrateProjectDoc, saveProject } from '../persist/projectStore';
 import { kvGetAuthoritative } from '../persist/sharedKv';
 import { saveAutomaticVersion } from '../persist/versionStore';
@@ -161,6 +162,13 @@ async function confirmEditingCheckpoint(turn: AgentTurn, read: typeof readCommit
   }
 }
 
+/** Bind automatic writes to this run, never to the next run or an offline replay. */
+function activeTurnPersist(turn: AgentTurn, persist = saveProject): typeof saveProject {
+ return (id, doc) => persist(id, doc, {
+  ...(turn.runId ? { agentRunId: turn.runId } : {}), signal: turn.abortController.signal,
+ });
+}
+
 /** Only the host's existing auto-apply mode can commit editing checkpoints.
  * One successful tool is atomic; export, failure and manual mode cannot commit it.
  */
@@ -178,13 +186,14 @@ export async function checkpointAutoAppliedTurn(
   if (turn.draftInvalidated || serverRunDraftBaseChanged(turn.baseDoc, live)) {
     throw new Error('Project changed before editing checkpoint; draft retained, nothing overwritten.');
   }
+  assertDeliveryPicturePreservation(live, after);
   const durable: AgentTurn = { ...turn, persistentBeforeDoc: live,
     persistentOps: [buildOperation('editing_checkpoint', {}, [{type:'tl.setDoc',doc:after}])],
     persistentSaveError: undefined,
     persistentSnapshot: saveAutomaticVersion(turn.projectId, 'Agent 编辑检查点前', live).then(
       () => undefined, error => { durable.persistentSaveError = error; }),
   };
-  if (!await commitPersistentOperations(durable, persist)) throw Object.assign(
+  if (!await commitPersistentOperations(durable, activeTurnPersist(turn, persist))) throw Object.assign(
     new Error('Editing checkpoint was not committed; draft retained.'), {code:'editing_checkpoint_commit_failed'});
   // Rebase immediately after the confirmed save. A readback failure must not
   // replay this already committed batch or roll it back on a later export.
@@ -234,7 +243,7 @@ async function checkpointCopyCandidate(turn: AgentTurn, input: ServerRunToolActi
       persistentSaveError: undefined,
       persistentSnapshot: saveAutomaticVersion(turn.projectId, '分析准备登记前', live).then(() => undefined, (error) => { durable.persistentSaveError = error; }),
     };
-    if (!await commitPersistentOperations(durable, saveProject)) throw new Error('Preparation checkpoint could not be saved; no production approval was granted.');
+    if (!await commitPersistentOperations(durable, activeTurnPersist(turn))) throw new Error('Preparation checkpoint could not be saved; no production approval was granted.');
     durableDoc = next;
   }
   // Rebase the run after its independently saved preparation step. No proposed action remains.

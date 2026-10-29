@@ -13,6 +13,7 @@ import type {
   ProjectStoreRequest,
 } from '../../shared/project-store-transport';
 import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation';
+import type { ProjectSaveContext } from './projectStoreCoordinators';
 type AgentRuntimeWriteRequest = Extract<ProjectStoreRequest, { operation: 'agent-runtime-write' }>;
 type AgentRunLeaseRequest = Extract<ProjectStoreRequest, { operation: 'agent-run-lease' }>;
 type ProjectDocumentWriteRequest = Extract<ProjectStoreRequest, { operation: 'project-document-write' }>;
@@ -438,7 +439,12 @@ export async function kvGet<T>(key: string): Promise<T | undefined> {
   return localGet<T>(key);
 }
 
-async function setProjectDocument(key: string, value: unknown): Promise<void> {
+async function setProjectDocument(key: string, value: unknown, context?: ProjectSaveContext): Promise<void> {
+  if (context?.signal?.aborted) throw new Error('agent_checkpoint_cancelled');
+  // Never queue an Agent checkpoint for a later offline merge after its run ends.
+  if (context?.agentRunId && (injectedBackend || !canSync() || !remoteCache)) {
+    throw new Error('agent_checkpoint_requires_authoritative_store');
+  }
   if (injectedBackend || !canSync()) {
     await localSet(key, value);
     if (!injectedBackend) await markPendingKey(key);
@@ -470,6 +476,8 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
       value,
     }
     : { operation: 'project-document-write', key, expectedRevision: null, value };
+  if (context?.signal?.aborted) throw new Error('agent_checkpoint_cancelled');
+  if (context?.agentRunId) request.agentRunId = context.agentRunId;
   let result: ProjectDocumentMutationResponse;
   try {
     result = await requestProjectDocumentMutation(request);
@@ -479,6 +487,7 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
   }
   if (!result.accepted) {
     await cacheMutation(key, result);
+    if (result.error?.code === 'agent_run_not_active') throw new Error('Agent 运行已结束，待提交修改未保存');
     throw new Error('工程已被其他编辑器更新，请手动刷新页面后重试');
   }
   if (!result.found || typeof result.currentRevision !== 'string') {
@@ -493,10 +502,10 @@ async function setProjectDocument(key: string, value: unknown): Promise<void> {
   await cacheMutation(key, result);
 }
 
-export async function kvSet(key: string, value: unknown): Promise<void> {
+export async function kvSet(key: string, value: unknown, context?: ProjectSaveContext): Promise<void> {
   await ready();
   if (isProjectDocumentKey(key)) {
-    await setProjectDocument(key, value);
+    await setProjectDocument(key, value, context);
     return;
   }
   if (!remoteCache) {
