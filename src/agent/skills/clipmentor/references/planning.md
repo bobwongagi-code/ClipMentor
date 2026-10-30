@@ -217,3 +217,5 @@ For a local copy repair, use the existing handoff/review record to state **chang
 At handoff bind the current project/sequence, blueprint revision, media and editable item IDs, point checklist, changed dispositions and unit states. Read current state before applying; never overwrite manual edits from an old snapshot. Record checks/uncertainties without invented quality scores. Inherited decisions carry reasons/evidence/premises; changed premises reopen them. Copy approval proves neither coverage nor authorized removal. Report missing baseline or pending substantive changes before locking production.
 
 For existing approved work, resolve the requested change against these actual item IDs, read back the new properties and compare unaffected items. Run only checks relevant to the changed portion and its dependencies, retaining the full project's known unresolved checks.
+
+After saving a candidate and before independent review, use the on-demand [blueprint author self-check](blueprint-self-check.md): local advisory lint, then one authorized fresh-context author pass; keep its record outside independent review input.

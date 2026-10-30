@@ -74,6 +74,7 @@ try {
   // ClipMentor's workflow must remain usable outside the local production workspace.
   for (const file of [
     'references/planning.md',
+    'references/blueprint-self-check.md',
     'references/approved-reproduction.md',
     'references/delivery-checklist.md',
     'references/reproduction-lessons.md',
@@ -84,10 +85,23 @@ try {
     const loaded = loader.execPluginSkillTool('load_skill', { name: 'clipmentor', file, offset: 0 });
     assert(loaded && typeof loaded === 'object' && 'contents' in loaded, `cannot load ${file}`);
     const result = loaded as { contents: Record<string, string>; nextOffset: number | null };
+    // Read the actual tool's continuation pages; a new linked reference can push planning past one page.
+    let offset = result.nextOffset;
+    let previousOffset = 0;
+    while (offset !== null) {
+      assert(offset > previousOffset, `${file} pagination must advance`);
+      const next = loader.execPluginSkillTool('load_skill', { name: 'clipmentor', file, offset }) as {
+        contents: Record<string, string>; nextOffset: number | null;
+      };
+      assert.equal(typeof next.contents?.[file], 'string');
+      result.contents[file] += next.contents[file];
+      previousOffset = offset;
+      offset = next.nextOffset;
+    }
     const expected = await readFile(new URL(`./clipmentor/${file}`, import.meta.url), 'utf8');
     assert(expected.trim().length > 0, `${file} must not be empty`);
     assert.equal(result.contents[file], expected, `${file} must load completely`);
-    assert.equal(result.nextOffset, null);
+    assert.equal(offset, null);
     if (file === 'references/planning.md') {
       for (const requirement of ['Production review checkpoints', '1. Blueprint review', '2. Audio-visual capacity review',
         '3. Continuous viewing review', 'group_checks.L1', 'omission_loss']) assert(result.contents[file].includes(requirement));
