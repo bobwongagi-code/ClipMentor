@@ -1,18 +1,34 @@
 import { externalToolSchemas } from './external-tool-schemas';
 import type { ExternalEditSessionTerminalStatus } from './external-edit-session';
 import type { BrowserProjectOwnership } from '../persist/projectStoreTransport';
+import { redactTextForAgentRuntime } from './runtime-artifact';
 
 const EDITOR_REGISTRATION_CAPABILITY_HEADER = 'X-OpenChatCut-Editor-Registration';
 
 export class EditorBridgeRequestError extends Error {
   readonly operation: string;
   readonly status: number;
+  readonly detail?: string;
 
-  constructor(operation: string, status: number) {
-    super(`${operation} failed: HTTP ${status}`);
+  constructor(operation: string, status: number, detail?: string) {
+    super(`${operation} failed: HTTP ${status}${detail ? ` (${detail})` : ''}`);
     this.name = 'EditorBridgeRequestError';
     this.operation = operation;
     this.status = status;
+    this.detail = detail;
+  }
+
+  static async fromResponse(operation: string, response: Response): Promise<EditorBridgeRequestError> {
+    let detail: string | undefined;
+    if (response.headers.get('content-type')?.includes('application/json')) {
+      try {
+        const body: unknown = await response.json();
+        if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
+          detail = redactTextForAgentRuntime(body.error).slice(0, 600);
+        }
+      } catch { /* The HTTP status remains useful when the error body is malformed. */ }
+    }
+    return new EditorBridgeRequestError(operation, response.status, detail);
   }
 }
 
@@ -43,7 +59,7 @@ export async function sendEditorBridgeResult(
     signal,
   });
   if (!response.ok && response.status !== 404) {
-    throw new EditorBridgeRequestError('result', response.status);
+    throw await EditorBridgeRequestError.fromResponse('result', response);
   }
 }
 
@@ -79,7 +95,7 @@ export async function registerEditorBridge(
     }),
     signal,
   });
-  if (!response.ok) throw new EditorBridgeRequestError('registration', response.status);
+  if (!response.ok) throw await EditorBridgeRequestError.fromResponse('registration', response);
   const value: unknown = await response.json();
   if (!value || typeof value !== 'object') throw new Error('invalid editor registration response');
   const registration = value as Partial<{

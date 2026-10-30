@@ -18,6 +18,7 @@ import { ServerRunToolRequestQueue } from './serverRunEvents';
 import { toolExecutionMode } from './tools/execution-modes';
 import { environmentFailureHint } from './serverRunToolEnvironment';
 import { isFailedToolResult, toolFailureReason, structuredToolFailure } from './toolFailure';
+import { EditorBridgeRequestError } from './external-bridge-registration';
 import {
   beginStoredToolAttempt,
   captureStoredToolResult,
@@ -146,6 +147,13 @@ export class ServerRunToolExecutor {
     return this.session === session && !session.abort.signal.aborted;
   }
 
+  private failSession(session: RunSession, message: string): void {
+    if (!this.current(session)) return;
+    const error = permanentServerRunRecoveryError(message);
+    session.abort.abort(error);
+    this.callbacks.abandonRecovery(session.runId, error);
+  }
+
   private async claim(
     session: RunSession,
     toolCallId: string,
@@ -166,19 +174,26 @@ export class ServerRunToolExecutor {
       }),
       signal: session.abort.signal,
     }).catch(() => null);
-    if (response && (response.status === 403
-      || response.status === 404
-      || response.status === 410)) {
-      this.callbacks.abandonRecovery(
-        session.runId,
-        permanentServerRunRecoveryError(
-          `Server tool claim is permanently unavailable: HTTP ${response.status}`,
-        ),
-      );
-      return { claimed: false, outcome: 'run-stale' };
+    if (response && response.status !== 409 && permanentToolHttpStatus(response.status)) {
+      const detail = await EditorBridgeRequestError.fromResponse('tool claim', response);
+      if (!this.current(session)) return null;
+      this.failSession(session,
+        `Server tool claim is permanently unavailable: HTTP ${response.status}${detail.detail ? ` (${detail.detail})` : ''}`);
+      return null;
     }
     if (!response || (response.status !== 200 && response.status !== 409)) return null;
-    return response.json().catch(() => null) as Promise<ToolClaimResponse | null>;
+    const claim = await response.json().catch(() => null) as ToolClaimResponse | null;
+    if (!this.current(session)) return null;
+    // A settled call is normal during event replay or cloned-tab recovery.
+    // Unknown calls, mismatched bindings and malformed replies cannot be retried
+    // as though another host merely owns the tool.
+    if (claim && ((response.status === 200 && claim.claimed === true
+      && (claim.outcome === 'claimed' || claim.outcome === 'duplicate'))
+      || (response.status === 409 && claim.claimed === false
+        && (claim.outcome === 'already-claimed' || claim.outcome === 'run-settled')))) return claim;
+    this.failSession(session,
+      `Server tool claim rejected or invalid: HTTP ${response.status}${claim?.outcome === 'mismatch' || claim?.outcome === 'unknown-call' ? ` (${claim.outcome})` : ''}. Saved tool attempts are retained.`);
+    return null;
   }
 
   private async postResult(
@@ -186,7 +201,7 @@ export class ServerRunToolExecutor {
     toolCallId: string,
     outcome: RecoveredServerTool,
   ): Promise<boolean> {
-    if (!session.claimId) return false;
+    if (!session.claimId || !this.current(session)) return false;
     const body = outcome.error === undefined
       ? {
         projectId: this.projectId,
@@ -211,14 +226,12 @@ export class ServerRunToolExecutor {
       body: JSON.stringify(body),
       signal: session.abort.signal,
     }).catch(() => null);
+    if (!this.current(session)) return false;
     if (response && permanentToolHttpStatus(response.status)) {
-      this.callbacks.abandonRecovery(
-        session.runId,
-        permanentServerRunRecoveryError(
-          `Server tool result is permanently unavailable: HTTP ${response.status}`,
-        ),
-      );
-      return true;
+      const detail = await EditorBridgeRequestError.fromResponse('tool result', response);
+      this.failSession(session,
+        `Server tool result is permanently unavailable: HTTP ${response.status}${detail.detail ? ` (${detail.detail})` : ''}. Saved tool attempts are retained.`);
+      return false;
     }
     return response?.ok === true;
   }
@@ -232,6 +245,7 @@ export class ServerRunToolExecutor {
     toolCallId: string,
     outcome: RecoveredServerTool,
   ): void {
+    if (!this.current(session)) return;
     scheduleServerRunToolResultRetry(
       () => this.postResult(session, toolCallId, outcome),
       () => clearStoredToolAttempt(this.projectId, toolCallId),
@@ -284,6 +298,7 @@ export class ServerRunToolExecutor {
       attempts,
       lockManager: this.lockManager,
       active: () => this.current(session),
+      failed: (message) => this.failSession(session, message),
       claim: (attempt) => this.claim(session, attempt.toolCallId, attempt.argsDigest),
       recovered: (toolCallId) => this.recovered.get(toolCallId),
       post: (toolCallId, outcome) => this.postResult(session, toolCallId, outcome),
@@ -524,6 +539,12 @@ export class ServerRunToolExecutor {
       toolCallId,
       () => this.processLocked(session, toolCallId, request),
     );
+    if (!locked.acquired && this.current(session)) {
+      this.active.delete(toolCallId);
+      this.failSession(session,
+        `Server tool dispatch could not complete under its lock: ${name}. Saved tool attempts are retained.`,
+      );
+    }
     return locked.acquired ? locked.value : false;
   }
 

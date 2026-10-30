@@ -262,7 +262,7 @@ async function submitServerRun(active: ActiveServerRun): Promise<void> {
   active.admission = 'accepted';
 }
 
-async function admitServerRun(
+export async function admitServerRun(
   environment: ServerRunSendEnvironment,
   active: ActiveServerRun,
 ): Promise<void> {
@@ -277,12 +277,6 @@ async function admitServerRun(
     baseDoc: active.baseDoc,
   });
   throwIfAborted(abort.signal);
-  await requestServerRunStart(environment.projectId, payload.runId, payload.capability);
-  throwIfAborted(abort.signal);
-  if (!patchStoredServerRun(environment.projectId, {
-    admissionPending: false,
-  })) throw new Error('Browser durable storage is unavailable.');
-  throwIfAborted(abort.signal);
   const recovery = await options.onRunStart?.({
     runId: payload.runId,
     text: active.trimmed,
@@ -294,6 +288,13 @@ async function admitServerRun(
   });
   throwIfAborted(abort.signal);
   activateServerRunTools(environment, active, recovery);
+  // The server may emit its first tool immediately after /start. Prepare the
+  // durable host and its event consumer before allowing a model to run.
+  await requestServerRunStart(environment.projectId, payload.runId, payload.capability);
+  throwIfAborted(abort.signal);
+  if (!patchStoredServerRun(environment.projectId, {
+    admissionPending: false,
+  })) throw new Error('Browser durable storage is unavailable.');
 }
 
 function activateServerRunTools(

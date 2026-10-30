@@ -173,7 +173,7 @@ async function pollEditor(
       signal,
     });
     if (response.status === 204) continue;
-    if (!response.ok) throw new EditorBridgeRequestError('poll', response.status);
+    if (!response.ok) throw await EditorBridgeRequestError.fromResponse('poll', response);
     await executeExternalCall(
       parseExternalCall(await response.json()),
       runtime,
@@ -206,7 +206,7 @@ async function pollCancellations(
       signal,
     });
     if (response.status === 204) continue;
-    if (!response.ok) throw new EditorBridgeRequestError('cancellation poll', response.status);
+    if (!response.ok) throw await EditorBridgeRequestError.fromResponse('cancellation poll', response);
     const cancellation = parseCancellation(await response.json());
     if (cancellation.ownerGone?.length) {
       await runtime.discardOwnerSessions?.(cancellation.ownerGone);

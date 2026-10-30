@@ -72,12 +72,11 @@ function releaseInactiveRecovery(context: RecoveryContext): void {
   context.state.eventSession.resetRecovery();
 }
 
-async function admitPendingRun(
+async function preparePendingRun(
   context: RecoveryContext,
-  capability: string,
   baseDoc: ProjectDoc,
 ): Promise<void> {
-  const { stored, projectId, state } = context;
+  const { stored, state } = context;
   if (!stored.admissionPending) return;
   await state.refs.options.current.onRunPrepare?.({
     runId: stored.runId,
@@ -87,19 +86,18 @@ async function admitPendingRun(
     references: stored.references ?? [],
     baseDoc,
   });
-  await requestServerRunStart(projectId, stored.runId, capability);
-  if (!patchStoredServerRun(projectId, { admissionPending: false })) {
-    throw new Error('Browser durable storage could not complete run admission.');
-  }
 }
 
-async function startRecoveredBrowserRun(
+export async function startRecoveredBrowserRun(
   context: RecoveryContext,
   prepared: ActiveRecovery,
 ): Promise<void> {
   const { state, stored } = context;
   const baseDoc = state.refs.context.current.getDoc();
-  await admitPendingRun(context, prepared.capability, baseDoc);
+  const abort = new AbortController();
+  state.refs.abort.current = abort;
+  await preparePendingRun(context, baseDoc);
+  abort.signal.throwIfAborted();
   const recovery = stored.text && stored.content
     ? await state.refs.options.current.onRunStart?.({
       runId: stored.runId,
@@ -111,16 +109,23 @@ async function startRecoveredBrowserRun(
       resumed: true,
     })
     : undefined;
-  state.refs.abort.current = new AbortController();
+  abort.signal.throwIfAborted();
   state.toolExecutor.start({
     capability: prepared.capability,
     baseDoc: recovery?.baseDoc ?? baseDoc,
     draftDoc: recovery?.draftDoc,
     activation: prepared.activation,
     runId: stored.runId,
-    abort: state.refs.abort.current,
+    abort,
     recovered: recoveredToolMap(recovery?.tools ?? []),
   });
+  if (stored.admissionPending) {
+    await requestServerRunStart(context.projectId, stored.runId, prepared.capability);
+    abort.signal.throwIfAborted();
+    if (!patchStoredServerRun(context.projectId, { admissionPending: false })) {
+      throw new Error('Browser durable storage could not complete run admission.');
+    }
+  }
   await state.toolExecutor.reconcileStoredAttempts(
     stored.runId,
     stored.attempts ?? [],

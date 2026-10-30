@@ -10,6 +10,7 @@ import {
   registerEditor,
   settleEditorCall,
   unregisterEditor,
+  ExternalEditorCallError,
 } from '../external-agent/broker.ts';
 import { handleMcpRequest, mcpTools } from '../external-agent/mcp.ts';
 import { exportJianyingDraft } from '../external-agent/jianying-export.ts';
@@ -127,13 +128,15 @@ export async function handleExternalAgentBridge(
   await routeExternalAgentBridge(req, res, url, operations);
 }
 
-export function externalAgentPlugin(): Plugin {
+export function externalAgentPlugin(operations: BridgeOperations = bridgeOperations): Plugin {
   return {
     name: 'openchatcut-external-agent',
     configureServer(server) {
       server.middlewares.use('/api/external-agent', (req, res) => {
-        void handleExternalAgentBridge(req, res).catch((error) => {
-          if (!res.headersSent) sendBridgeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        void handleExternalAgentBridge(req, res, operations).catch((error) => {
+          if (!res.headersSent) sendBridgeJson(res,
+            error instanceof ExternalEditorCallError && error.outcome === 'stale' ? 409 : 400,
+            { error: error instanceof Error ? error.message : String(error) });
         });
       });
       server.middlewares.use('/api/external-mcp/mcp', (req, res) => {
