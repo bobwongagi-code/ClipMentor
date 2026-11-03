@@ -1,0 +1,747 @@
+{
+  "source": "production/Green-Makes协作验证-20261030/v3边界核查-20261102/Green-Makes-C2-完整剪辑蓝图-v4边界候选.json",
+  "source_sha256": "c50ef94d817fb8a0ee59e68719e04d17dd6e3fa7ac520f05c1dd334dc2b0072d",
+  "projection": "source, blueprint unit_id/current pointers/current copy and picture objects, estimated_picture_timeline; no expectations added to source",
+  "input": {
+    "clipMentorAnalysis": {
+      "source": {
+        "asset_id": "local-green-makes-original-ccf1da90a9a9",
+        "sourceContentHash": "ccf1da90a9a9fa898a84b6ebb77486d6f26e262699fa53ce475cd4aa2bcac9d9",
+        "duration_seconds": 69.2,
+        "fps": 30
+      },
+      "blueprint": [
+        {
+          "unit_id": "GM-G1",
+          "internal_review": {
+            "current_script_candidate": "script_candidate_GM_G1_v4_boundary_candidate",
+            "current_picture_plan": "picture_plan_GM_G1_v4_boundary_candidate",
+            "script_candidate_GM_G1_v4_boundary_candidate": {
+              "lines": [
+                {
+                  "id": "GM-L01",
+                  "point_ids": [
+                    "GM-P01"
+                  ],
+                  "narration_ms": "Dia dahulukan dua soalan pembeli sebelum menyebut jenama: bagaimana warna pada bibir, dan adakah ia mudah melekat?",
+                  "caption_lines": [
+                    "Dia dahulukan dua soalan pembeli sebelum menyebut jenama: bagaimana warna pada bibir, dan adakah ia mudah melekat?"
+                  ],
+                  "zh": "在介绍品牌之前，她先回应买家的两个问题：上嘴颜色怎样，容不容易沾染？",
+                  "source_seconds": [
+                    0,
+                    7.433333333333334
+                  ],
+                  "labels": [
+                    "Warna pada bibir?",
+                    "Mudah berpindah?"
+                  ]
+                }
+              ],
+              "status": "candidate",
+              "production_allowed": false
+            },
+            "picture_plan_GM_G1_v4_boundary_candidate": {
+              "script_candidate_id": "script_candidate_GM_G1_v4_boundary_candidate",
+              "original_playback": {
+                "ranges": [
+                  [
+                    0,
+                    10.5
+                  ]
+                ],
+                "purpose": "本组原声完整表达后立即讲本组，不先整片播完。"
+              },
+              "phases": [
+                {
+                  "mode": "original",
+                  "source_range_seconds": [
+                    0,
+                    10.5
+                  ],
+                  "picture": "原速原声示范；Video asal。"
+                },
+                {
+                  "mode": "explanation",
+                  "line_id": "GM-L01",
+                  "point_ids": [
+                    "GM-P01"
+                  ],
+                  "source_range_seconds": [
+                    0,
+                    7.433333333333334
+                  ],
+                  "picture": "原声0–10.5秒开头混剪保持一次。GM-L01讲解改用正常速度动态回看帧区间[0,223)，约0–7.43秒：先看上嘴及唇色指认（至f164），再看f165起手背贴唇、f193/195/222展示手背；到f223转回人物前退出，不再回放后面的揉擦与说话。Warna pada bibir?只随唇部画面出现，Mudah berpindah?只随手背接触/展示出现；不把两个时刻拼成前后效果对比，不定格f21或f195，不慢放、不循环。口播逐字保持；动态源窗不是已通过的声长容量，也不预填逐词输出切点，实际正常声音承载不足时退回策划，不加无信息停留。"
+                }
+              ],
+              "viewer_stage_cues": {
+                "scope": "本单元原声→本单元回看→下一单元原声/达人结尾",
+                "original": {
+                  "text": "Video asal",
+                  "zh": "原片",
+                  "enter": "GM-G1原声第一帧",
+                  "exit": "GM-G1讲解第一帧前"
+                },
+                "revisit": [
+                  {
+                    "line_ids": [
+                      "GM-L01"
+                    ],
+                    "text": "Ulasan semula",
+                    "zh": "回看讲解",
+                    "enter": "GM-L01开讲前已显示",
+                    "exit": "下一组原声/结尾开始前",
+                    "meaning": "正在回看刚才的示范，不是新的实时原声"
+                  }
+                ],
+                "layout": {
+                  "original": "本工具新增的Video asal阶段条：#0D5EA6不透明蓝底、#FFFFFF白字；不改变原片自带烧录文字。这里有意沿用Barely There后期蓝/黄区隔，NIUMO仅参照片头/片尾构图。",
+                  "revisit": "黄色不透明栏#FFD83D、黑字#111111；下方黑色实底字幕区、白字，无阴影",
+                  "safe_area": "文字与画面分区；唇部/杯口/手背比较不可被字幕或箭头遮挡"
+                },
+                "handoff": "按上述phases顺序；原声不与讲解声音叠播。"
+              },
+              "composition": {
+                "canvas": [
+                  576,
+                  1024
+                ],
+                "detail": "原声0–10.5秒开头混剪保持一次。GM-L01讲解改用正常速度动态回看帧区间[0,223)，约0–7.43秒：先看上嘴及唇色指认（至f164），再看f165起手背贴唇、f193/195/222展示手背；到f223转回人物前退出，不再回放后面的揉擦与说话。Warna pada bibir?只随唇部画面出现，Mudah berpindah?只随手背接触/展示出现；不把两个时刻拼成前后效果对比，不定格f21或f195，不慢放、不循环。口播逐字保持；动态源窗不是已通过的声长容量，也不预填逐词输出切点，实际正常声音承载不足时退回策划，不加无信息停留。"
+              },
+              "constraints": [
+                "所列为可核对的教学安排，不是已经实测的输出时码。",
+                "正常语速；不以慢放、循环或无信息长定格装旁白。",
+                "素材/意群冲突退策划，不由执行者改重点或补稿。",
+                "原声素材范围保留完整意群；解释性回看仅取对应意思所需部分，不要求再把本组源段完整播放一遍。",
+                "G1完整开头混剪只播放一次；不以每组必须整段重播为模板。",
+                "词数和2.2词/秒仅作粗算，不能签发声画容量通过；不得为赶目标片长删必要含义或加速。",
+                "本轮只按本地帧证据修正画面对象/范围；未重审、未听音，不继承旧批准，不以抽帧通过替代声画容量或原声句界。"
+              ],
+              "status": "candidate",
+              "review_status": "not_reviewed",
+              "production_allowed": false,
+              "base_analysis_revision": 4
+            }
+          }
+        },
+        {
+          "unit_id": "GM-G2",
+          "internal_review": {
+            "current_script_candidate": "script_candidate_GM_G2_v2_v3_candidate",
+            "current_picture_plan": "picture_plan_GM_G2_v2_v3_candidate",
+            "script_candidate_GM_G2_v2_v3_candidate": {
+              "lines": [
+                {
+                  "id": "GM-L02",
+                  "point_ids": [
+                    "GM-P02"
+                  ],
+                  "narration_ms": "Dia bercerita tentang wanita yang bibirnya nampak cantik, kemudian tunjuk produk yang dipakai. Jadi, produk masuk melalui contoh hasil yang dia suka.",
+                  "caption_lines": [
+                    "Dia bercerita tentang wanita yang bibirnya nampak cantik, kemudian tunjuk produk yang dipakai.",
+                    "Jadi, produk masuk melalui contoh hasil yang dia suka."
+                  ],
+                  "zh": "她先讲一个嘴唇看起来很好看的女生，再拿出对方用的产品。商品是顺着她喜欢的效果被带出来的。",
+                  "source_seconds": [
+                    11.5,
+                    23.5
+                  ],
+                  "labels": [
+                    "Cerita → Produk → Tawaran"
+                  ]
+                }
+              ],
+              "status": "candidate",
+              "production_allowed": false
+            },
+            "picture_plan_GM_G2_v2_v3_candidate": {
+              "script_candidate_id": "script_candidate_GM_G2_v2_v3_candidate",
+              "original_playback": {
+                "ranges": [
+                  [
+                    11.5,
+                    23.5
+                  ]
+                ],
+                "purpose": "本组原声完整表达后立即讲本组，不先整片播完。"
+              },
+              "phases": [
+                {
+                  "mode": "original",
+                  "source_range_seconds": [
+                    11.5,
+                    23.5
+                  ],
+                  "picture": "原速原声示范；Video asal。"
+                },
+                {
+                  "mode": "explanation",
+                  "line_id": "GM-L02",
+                  "point_ids": [
+                    "GM-P02"
+                  ],
+                  "source_range_seconds": [
+                    11.5,
+                    23.5
+                  ],
+                  "picture": "原声保留人物故事、拿出Owen James及三支商品；讲解回看11.5–23.5秒的人物到手持商品。品牌出现时保留包装可辨，故事的作用由口播说清。 讲解口播保持v2逐字不变；回看出现首次三支商品及原片优惠时，短标才展开为Cerita → Produk → Tawaran，帮助记住优惠第一次进入的位置。不得在商品/优惠尚未出现时提前显示完整链条，也不显示未核现价或个人投放金额。"
+                }
+              ],
+              "viewer_stage_cues": {
+                "scope": "本单元原声→本单元回看→下一单元原声/达人结尾",
+                "original": {
+                  "text": "Video asal",
+                  "zh": "原片",
+                  "enter": "GM-G2原声第一帧",
+                  "exit": "GM-G2讲解第一帧前"
+                },
+                "revisit": [
+                  {
+                    "line_ids": [
+                      "GM-L02"
+                    ],
+                    "text": "Ulasan semula",
+                    "zh": "回看讲解",
+                    "enter": "GM-L02开讲前已显示",
+                    "exit": "下一组原声/结尾开始前",
+                    "meaning": "正在回看刚才的示范，不是新的实时原声"
+                  }
+                ],
+                "layout": {
+                  "original": "本工具新增的Video asal阶段条：#0D5EA6不透明蓝底、#FFFFFF白字；不改变原片自带烧录文字。这里有意沿用Barely There后期蓝/黄区隔，NIUMO仅参照片头/片尾构图。",
+                  "revisit": "黄色不透明栏#FFD83D、黑字#111111；下方黑色实底字幕区、白字，无阴影",
+                  "safe_area": "文字与画面分区；唇部/杯口/手背比较不可被字幕或箭头遮挡"
+                },
+                "handoff": "按上述phases顺序；原声不与讲解声音叠播。"
+              },
+              "composition": {
+                "canvas": [
+                  576,
+                  1024
+                ],
+                "detail": "原声保留人物故事、拿出Owen James及三支商品；讲解回看11.5–23.5秒的人物到手持商品。品牌出现时保留包装可辨，故事的作用由口播说清。 讲解口播保持v2逐字不变；回看出现首次三支商品及原片优惠时，短标才展开为Cerita → Produk → Tawaran，帮助记住优惠第一次进入的位置。不得在商品/优惠尚未出现时提前显示完整链条，也不显示未核现价或个人投放金额。"
+              },
+              "constraints": [
+                "所列为可核对的教学安排，不是已经实测的输出时码。",
+                "正常语速；不以慢放、循环或无信息长定格装旁白。",
+                "素材/意群冲突退策划，不由执行者改重点或补稿。",
+                "原声素材范围保留完整意群；解释性回看仅取对应意思所需部分，不要求再把本组源段完整播放一遍。",
+                "G1完整开头混剪只播放一次；不以每组必须整段重播为模板。",
+                "词数和2.2词/秒仅作粗算，不能签发声画容量通过；不得为赶目标片长删必要含义或加速。"
+              ],
+              "status": "candidate",
+              "review_status": "not_reviewed",
+              "production_allowed": false,
+              "base_analysis_revision": 3
+            }
+          }
+        },
+        {
+          "unit_id": "GM-G3",
+          "internal_review": {
+            "current_script_candidate": "script_candidate_GM_G3_v2_v3_candidate",
+            "current_picture_plan": "picture_plan_GM_G3_v2_v3_candidate",
+            "script_candidate_GM_G3_v2_v3_candidate": {
+              "lines": [
+                {
+                  "id": "GM-L03",
+                  "point_ids": [
+                    "GM-P03"
+                  ],
+                  "narration_ms": "Dia terangkan satu warna dahulu, sambil menunjuk perbezaan sapuan nipis dan dua lapis pada bibir. Pembeli boleh memilih kepekatan warna sebelum melihat warna lain.",
+                  "caption_lines": [
+                    "Dia terangkan satu warna dahulu, sambil menunjuk perbezaan sapuan nipis dan dua lapis pada bibir.",
+                    "Pembeli boleh memilih kepekatan warna sebelum melihat warna lain."
+                  ],
+                  "zh": "她先讲一个色号，并指着嘴唇区分薄涂和两层，让买家先选择喜欢的颜色浓淡，再看其他可选色。",
+                  "source_seconds": [
+                    23.5,
+                    41
+                  ],
+                  "labels": [
+                    "Nipis / Dua lapis"
+                  ]
+                }
+              ],
+              "status": "candidate",
+              "production_allowed": false
+            },
+            "picture_plan_GM_G3_v2_v3_candidate": {
+              "script_candidate_id": "script_candidate_GM_G3_v2_v3_candidate",
+              "original_playback": {
+                "ranges": [
+                  [
+                    23.5,
+                    41
+                  ]
+                ],
+                "purpose": "本组原声完整表达后立即讲本组，不先整片播完。"
+              },
+              "phases": [
+                {
+                  "mode": "original",
+                  "source_range_seconds": [
+                    23.5,
+                    41
+                  ],
+                  "picture": "原速原声示范；Video asal。"
+                },
+                {
+                  "mode": "explanation",
+                  "line_id": "GM-L03",
+                  "point_ids": [
+                    "GM-P03"
+                  ],
+                  "source_range_seconds": [
+                    23.5,
+                    41
+                  ],
+                  "picture": "原声保留上嘴、晕染、薄涂/叠涂说明与05色号收束；讲解用同段连续唇部画面，指认时才出现短标。不得拿手背三色代替本组涂层区别。 L03说一个色号时保持原片05号的真实嘴唇画面，薄涂/两层必须伴随指认；此处不提前切手背多色。后面G5再接其他可选色，G4持色测试仍按原片顺序保留。"
+                }
+              ],
+              "viewer_stage_cues": {
+                "scope": "本单元原声→本单元回看→下一单元原声/达人结尾",
+                "original": {
+                  "text": "Video asal",
+                  "zh": "原片",
+                  "enter": "GM-G3原声第一帧",
+                  "exit": "GM-G3讲解第一帧前"
+                },
+                "revisit": [
+                  {
+                    "line_ids": [
+                      "GM-L03"
+                    ],
+                    "text": "Ulasan semula",
+                    "zh": "回看讲解",
+                    "enter": "GM-L03开讲前已显示",
+                    "exit": "下一组原声/结尾开始前",
+                    "meaning": "正在回看刚才的示范，不是新的实时原声"
+                  }
+                ],
+                "layout": {
+                  "original": "本工具新增的Video asal阶段条：#0D5EA6不透明蓝底、#FFFFFF白字；不改变原片自带烧录文字。这里有意沿用Barely There后期蓝/黄区隔，NIUMO仅参照片头/片尾构图。",
+                  "revisit": "黄色不透明栏#FFD83D、黑字#111111；下方黑色实底字幕区、白字，无阴影",
+                  "safe_area": "文字与画面分区；唇部/杯口/手背比较不可被字幕或箭头遮挡"
+                },
+                "handoff": "按上述phases顺序；原声不与讲解声音叠播。"
+              },
+              "composition": {
+                "canvas": [
+                  576,
+                  1024
+                ],
+                "detail": "原声保留上嘴、晕染、薄涂/叠涂说明与05色号收束；讲解用同段连续唇部画面，指认时才出现短标。不得拿手背三色代替本组涂层区别。 L03说一个色号时保持原片05号的真实嘴唇画面，薄涂/两层必须伴随指认；此处不提前切手背多色。后面G5再接其他可选色，G4持色测试仍按原片顺序保留。"
+              },
+              "constraints": [
+                "所列为可核对的教学安排，不是已经实测的输出时码。",
+                "正常语速；不以慢放、循环或无信息长定格装旁白。",
+                "素材/意群冲突退策划，不由执行者改重点或补稿。",
+                "原声素材范围保留完整意群；解释性回看仅取对应意思所需部分，不要求再把本组源段完整播放一遍。",
+                "G1完整开头混剪只播放一次；不以每组必须整段重播为模板。",
+                "词数和2.2词/秒仅作粗算，不能签发声画容量通过；不得为赶目标片长删必要含义或加速。"
+              ],
+              "status": "candidate",
+              "review_status": "not_reviewed",
+              "production_allowed": false,
+              "base_analysis_revision": 3
+            }
+          }
+        },
+        {
+          "unit_id": "GM-G4",
+          "internal_review": {
+            "current_script_candidate": "script_candidate_GM_G4_v4_boundary_candidate",
+            "current_picture_plan": "picture_plan_GM_G4_v4_boundary_candidate",
+            "script_candidate_GM_G4_v4_boundary_candidate": {
+              "lines": [
+                {
+                  "id": "GM-L04",
+                  "point_ids": [
+                    "GM-P04"
+                  ],
+                  "narration_ms": "Dia uji sentuhan tangan dan minum, dua situasi harian. Gelas jernih membolehkan penonton melihat sama ada warna melekat pada tepinya.",
+                  "caption_lines": [
+                    "Dia uji sentuhan tangan dan minum, dua situasi harian.",
+                    "Gelas jernih membolehkan penonton melihat sama ada warna melekat pada tepinya."
+                  ],
+                  "zh": "她用手部接触和喝水这两个日常场景做测试。透明杯让观众能看到杯边有没有沾色。",
+                  "source_seconds": [
+                    41,
+                    51.833333333333336
+                  ],
+                  "labels": [
+                    "Sentuhan harian",
+                    "Periksa tepi gelas"
+                  ]
+                }
+              ],
+              "status": "candidate",
+              "production_allowed": false
+            },
+            "picture_plan_GM_G4_v4_boundary_candidate": {
+              "script_candidate_id": "script_candidate_GM_G4_v4_boundary_candidate",
+              "original_playback": {
+                "ranges": [
+                  [
+                    41,
+                    51.833333333333336
+                  ]
+                ],
+                "purpose": "本组原声完整表达后立即讲本组，不先整片播完。"
+              },
+              "phases": [
+                {
+                  "mode": "original",
+                  "source_range_seconds": [
+                    41,
+                    51.833333333333336
+                  ],
+                  "picture": "原速原声，保留至杯子镜头最后一帧f1554；下一帧f1555进入三色。视觉范围已核，不冒充原声词界确认。"
+                },
+                {
+                  "mode": "explanation",
+                  "line_id": "GM-L04",
+                  "point_ids": [
+                    "GM-P04"
+                  ],
+                  "source_range_seconds": [
+                    41,
+                    51.833333333333336
+                  ],
+                  "picture": "本组原声候选范围为帧区间[1230,1555)，约41–51.83秒；按原片视觉硬切完整保留手部测试、举杯接触、拿开和指看杯缘，f1554仍为杯子，f1555才进入手背三色。GM-L04静音动态回看同一范围：手部接触在先，杯缘接触及拿开在后，约49.8秒起杯缘可见，f1545/f1554均可见杯缘。Periksa tepi gelas只在杯缘实际可见时显示；不据此认证零残留或全天效果。此次没有听音，不把视觉边界写成已核准原声句界；正常声音与意群对位仍须后续核清。"
+                }
+              ],
+              "viewer_stage_cues": {
+                "scope": "本单元原声→本单元回看→下一单元原声/达人结尾",
+                "original": {
+                  "text": "Video asal",
+                  "zh": "原片",
+                  "enter": "GM-G4原声第一帧",
+                  "exit": "GM-G4讲解第一帧前"
+                },
+                "revisit": [
+                  {
+                    "line_ids": [
+                      "GM-L04"
+                    ],
+                    "text": "Ulasan semula",
+                    "zh": "回看讲解",
+                    "enter": "GM-L04开讲前已显示",
+                    "exit": "下一组原声/结尾开始前",
+                    "meaning": "正在回看刚才的示范，不是新的实时原声"
+                  }
+                ],
+                "layout": {
+                  "original": "本工具新增的Video asal阶段条：#0D5EA6不透明蓝底、#FFFFFF白字；不改变原片自带烧录文字。这里有意沿用Barely There后期蓝/黄区隔，NIUMO仅参照片头/片尾构图。",
+                  "revisit": "黄色不透明栏#FFD83D、黑字#111111；下方黑色实底字幕区、白字，无阴影",
+                  "safe_area": "文字与画面分区；唇部/杯口/手背比较不可被字幕或箭头遮挡"
+                },
+                "handoff": "按上述phases顺序；原声不与讲解声音叠播。"
+              },
+              "composition": {
+                "canvas": [
+                  576,
+                  1024
+                ],
+                "detail": "本组原声候选范围为帧区间[1230,1555)，约41–51.83秒；按原片视觉硬切完整保留手部测试、举杯接触、拿开和指看杯缘，f1554仍为杯子，f1555才进入手背三色。GM-L04静音动态回看同一范围：手部接触在先，杯缘接触及拿开在后，约49.8秒起杯缘可见，f1545/f1554均可见杯缘。Periksa tepi gelas只在杯缘实际可见时显示；不据此认证零残留或全天效果。此次没有听音，不把视觉边界写成已核准原声句界；正常声音与意群对位仍须后续核清。"
+              },
+              "constraints": [
+                "所列为可核对的教学安排，不是已经实测的输出时码。",
+                "正常语速；不以慢放、循环或无信息长定格装旁白。",
+                "素材/意群冲突退策划，不由执行者改重点或补稿。",
+                "原声素材范围保留完整意群；解释性回看仅取对应意思所需部分，不要求再把本组源段完整播放一遍。",
+                "G1完整开头混剪只播放一次；不以每组必须整段重播为模板。",
+                "词数和2.2词/秒仅作粗算，不能签发声画容量通过；不得为赶目标片长删必要含义或加速。",
+                "本轮只按本地帧证据修正画面对象/范围；未重审、未听音，不继承旧批准，不以抽帧通过替代声画容量或原声句界。"
+              ],
+              "status": "candidate",
+              "review_status": "not_reviewed",
+              "production_allowed": false,
+              "base_analysis_revision": 4
+            }
+          }
+        },
+        {
+          "unit_id": "GM-G5",
+          "internal_review": {
+            "current_script_candidate": "script_candidate_GM_G5_v4_boundary_candidate",
+            "current_picture_plan": "picture_plan_GM_G5_v4_boundary_candidate",
+            "script_candidate_GM_G5_v4_boundary_candidate": {
+              "lines": [
+                {
+                  "id": "GM-L05",
+                  "point_ids": [
+                    "GM-P05"
+                  ],
+                  "narration_ms": "Dia banding tiga warna pada tangan yang sama, berpandukan tona kulitnya.",
+                  "caption_lines": [
+                    "Dia banding tiga warna pada tangan yang sama, berpandukan tona kulitnya."
+                  ],
+                  "zh": "她在同一只手上比较三种颜色，以这只手的肤色作为参照。",
+                  "source_seconds": [
+                    51.833333333333336,
+                    55.9
+                  ],
+                  "labels": [
+                    "Pilihan warna lain · Rujukan tona kulit"
+                  ]
+                },
+                {
+                  "id": "GM-L06",
+                  "point_ids": [
+                    "GM-P06"
+                  ],
+                  "narration_ms": "Selepas banding warna, dia mengulang tawaran awal, 'beli satu percuma dua', sambil memegang tiga produk. Dia jelaskan jumlah dan harga dalam video, kemudian tunjuk beg kuning.",
+                  "caption_lines": [
+                    "Selepas banding warna, dia mengulang tawaran awal, 'beli satu percuma dua', sambil memegang tiga produk.",
+                    "Dia jelaskan jumlah dan harga dalam video, kemudian tunjuk beg kuning."
+                  ],
+                  "zh": "比较过颜色后，她手持三支产品，再次提起前面的“买一送二”。她交代片中的到手数量和价格，再指向黄色购物袋。",
+                  "source_seconds": [
+                    55.9,
+                    69.2
+                  ],
+                  "labels": [
+                    "Jumlah + harga",
+                    "Beg kuning"
+                  ]
+                }
+              ],
+              "status": "candidate",
+              "production_allowed": false
+            },
+            "picture_plan_GM_G5_v4_boundary_candidate": {
+              "script_candidate_id": "script_candidate_GM_G5_v4_boundary_candidate",
+              "original_playback": {
+                "ranges": [
+                  [
+                    51.833333333333336,
+                    69.2
+                  ]
+                ],
+                "purpose": "本组原声完整表达后立即讲本组，不先整片播完。"
+              },
+              "phases": [
+                {
+                  "mode": "original",
+                  "source_range_seconds": [
+                    51.833333333333336,
+                    69.2
+                  ],
+                  "picture": "原速原声，从f1555真实同手三色开始，f1677进入持三支产品和促单；没有杯子画面。视觉范围已核，不冒充原声词界确认。"
+                },
+                {
+                  "mode": "explanation",
+                  "line_id": "GM-L05",
+                  "point_ids": [
+                    "GM-P05"
+                  ],
+                  "source_range_seconds": [
+                    51.833333333333336,
+                    55.9
+                  ],
+                  "picture": "GM-L05仅用帧区间[1555,1677)，约51.83–55.90秒的动态同手三色与手指指认。第一帧f1555、中段f1616、末帧f1676都是真实同手三色；不含杯子，不提前切持货。短标Pilihan warna lain · Rujukan tona kulit只在三色实际同框时显示，以这只手的肤色作参照，不编造控制实验。口播/字幕/中文逐字保留，不定格、慢放或循环；约4.07秒有效动态不能自动认定能承载整句，实际声音不够就退回策划。"
+                },
+                {
+                  "mode": "explanation",
+                  "line_id": "GM-L06",
+                  "point_ids": [
+                    "GM-P06"
+                  ],
+                  "source_range_seconds": [
+                    55.9,
+                    69.2
+                  ],
+                  "picture": "GM-L06仅用帧区间[1677,2076)，约55.90–69.20秒的真实人物持三支、片中优惠/数量/价格说明及末尾指向；开头不含前一句的三色手背。说到回扣买一送二时保留三支实物，数量/片中价格及购买入口继续用原片同段动态与对应短标，不新增黄色购物袋UI，不把旧优惠改成现价承诺，不推断赠品必为另外两色。口播/字幕/中文逐字保留，面向达人结尾仍另段；本轮未重新听音，不签发末尾词界或逐词锚点。"
+                }
+              ],
+              "viewer_stage_cues": {
+                "scope": "本单元原声→本单元回看→下一单元原声/达人结尾",
+                "original": {
+                  "text": "Video asal",
+                  "zh": "原片",
+                  "enter": "GM-G5原声第一帧",
+                  "exit": "GM-G5讲解第一帧前"
+                },
+                "revisit": [
+                  {
+                    "line_ids": [
+                      "GM-L05"
+                    ],
+                    "text": "Ulasan semula",
+                    "zh": "回看讲解",
+                    "enter": "GM-L05开讲前已显示",
+                    "exit": "下一意群接上；短标从三色切换优惠/入口",
+                    "meaning": "正在回看刚才的示范，不是新的实时原声"
+                  },
+                  {
+                    "line_ids": [
+                      "GM-L06"
+                    ],
+                    "text": "Ulasan semula",
+                    "zh": "回看讲解",
+                    "enter": "GM-L06开讲前已显示",
+                    "exit": "下一组原声/结尾开始前",
+                    "meaning": "正在回看刚才的示范，不是新的实时原声"
+                  }
+                ],
+                "layout": {
+                  "original": "本工具新增的Video asal阶段条：#0D5EA6不透明蓝底、#FFFFFF白字；不改变原片自带烧录文字。这里有意沿用Barely There后期蓝/黄区隔，NIUMO仅参照片头/片尾构图。",
+                  "revisit": "黄色不透明栏#FFD83D、黑字#111111；下方黑色实底字幕区、白字，无阴影",
+                  "safe_area": "文字与画面分区；唇部/杯口/手背比较不可被字幕或箭头遮挡"
+                },
+                "handoff": "按上述phases顺序；原声不与讲解声音叠播。"
+              },
+              "composition": {
+                "canvas": [
+                  576,
+                  1024
+                ],
+                "detail": "本组原声候选范围为帧区间[1555,2076)，约51.83–69.2秒；从同手三色开始，不带上一组杯子。GM-L05只回看[1555,1677)三色，GM-L06只回看[1677,2076)持三支及促单；f1676仍是三色，f1677才是持货。两句画面任务分开，正常速，不定格、慢放或循环。消费者促单与面向达人的结尾仍分开；原声逐字进出点和配音容量尚未验证。"
+              },
+              "constraints": [
+                "所列为可核对的教学安排，不是已经实测的输出时码。",
+                "正常语速；不以慢放、循环或无信息长定格装旁白。",
+                "素材/意群冲突退策划，不由执行者改重点或补稿。",
+                "原声素材范围保留完整意群；解释性回看仅取对应意思所需部分，不要求再把本组源段完整播放一遍。",
+                "G1完整开头混剪只播放一次；不以每组必须整段重播为模板。",
+                "词数和2.2词/秒仅作粗算，不能签发声画容量通过；不得为赶目标片长删必要含义或加速。",
+                "本轮只按本地帧证据修正画面对象/范围；未重审、未听音，不继承旧批准，不以抽帧通过替代声画容量或原声句界。"
+              ],
+              "status": "candidate",
+              "review_status": "not_reviewed",
+              "production_allowed": false,
+              "base_analysis_revision": 4
+            }
+          }
+        }
+      ]
+    },
+    "estimated_picture_timeline": {
+      "fps": 30,
+      "total_frames_reference": null,
+      "total_seconds_reference": null,
+      "rows": [
+        {
+          "unit_id": "GM-G1",
+          "mode_order": [
+            "original",
+            "explanation"
+          ],
+          "original_source_seconds": [
+            0,
+            10.5
+          ],
+          "original_source_frames": [
+            0,
+            315
+          ],
+          "line_ids": [
+            "GM-L01"
+          ],
+          "picture": "原声0–10.5秒开头混剪保持一次。GM-L01讲解改用正常速度动态回看帧区间[0,223)，约0–7.43秒：先看上嘴及唇色指认（至f164），再看f165起手背贴唇、f193/195/222展示手背；到f223转回人物前退出，不再回放后面的揉擦与说话。Warna pada bibir?只随唇部画面出现，Mudah berpindah?只随手背接触/展示出现；不把两个时刻拼成前后效果对比，不定格f21或f195，不慢放、不循环。口播逐字保持；动态源窗不是已通过的声长容量，也不预填逐词输出切点，实际正常声音承载不足时退回策划，不加无信息停留。",
+          "output_start_seconds": null,
+          "output_end_seconds": null
+        },
+        {
+          "unit_id": "GM-G2",
+          "mode_order": [
+            "original",
+            "explanation"
+          ],
+          "original_source_seconds": [
+            11.5,
+            23.5
+          ],
+          "original_source_frames": [
+            345,
+            705
+          ],
+          "line_ids": [
+            "GM-L02"
+          ],
+          "picture": "原声保留人物故事、拿出Owen James及三支商品；讲解回看11.5–23.5秒的人物到手持商品。品牌出现时保留包装可辨，故事的作用由口播说清。 讲解口播保持v2逐字不变；回看出现首次三支商品及原片优惠时，短标才展开为Cerita → Produk → Tawaran，帮助记住优惠第一次进入的位置。不得在商品/优惠尚未出现时提前显示完整链条，也不显示未核现价或个人投放金额。",
+          "output_start_seconds": null,
+          "output_end_seconds": null
+        },
+        {
+          "unit_id": "GM-G3",
+          "mode_order": [
+            "original",
+            "explanation"
+          ],
+          "original_source_seconds": [
+            23.5,
+            41
+          ],
+          "original_source_frames": [
+            705,
+            1230
+          ],
+          "line_ids": [
+            "GM-L03"
+          ],
+          "picture": "原声保留上嘴、晕染、薄涂/叠涂说明与05色号收束；讲解用同段连续唇部画面，指认时才出现短标。不得拿手背三色代替本组涂层区别。 L03说一个色号时保持原片05号的真实嘴唇画面，薄涂/两层必须伴随指认；此处不提前切手背多色。后面G5再接其他可选色，G4持色测试仍按原片顺序保留。",
+          "output_start_seconds": null,
+          "output_end_seconds": null
+        },
+        {
+          "unit_id": "GM-G4",
+          "mode_order": [
+            "original",
+            "explanation"
+          ],
+          "original_source_seconds": [
+            41,
+            51.833333333333336
+          ],
+          "original_source_frames": [
+            1230,
+            1555
+          ],
+          "line_ids": [
+            "GM-L04"
+          ],
+          "picture": "本组原声候选范围为帧区间[1230,1555)，约41–51.83秒；按原片视觉硬切完整保留手部测试、举杯接触、拿开和指看杯缘，f1554仍为杯子，f1555才进入手背三色。GM-L04静音动态回看同一范围：手部接触在先，杯缘接触及拿开在后，约49.8秒起杯缘可见，f1545/f1554均可见杯缘。Periksa tepi gelas只在杯缘实际可见时显示；不据此认证零残留或全天效果。此次没有听音，不把视觉边界写成已核准原声句界；正常声音与意群对位仍须后续核清。",
+          "output_start_seconds": null,
+          "output_end_seconds": null
+        },
+        {
+          "unit_id": "GM-G5",
+          "mode_order": [
+            "original",
+            "explanation"
+          ],
+          "original_source_seconds": [
+            51.833333333333336,
+            69.2
+          ],
+          "original_source_frames": [
+            1555,
+            2076
+          ],
+          "line_ids": [
+            "GM-L05",
+            "GM-L06"
+          ],
+          "picture": "本组原声候选范围为帧区间[1555,2076)，约51.83–69.2秒；从同手三色开始，不带上一组杯子。GM-L05只回看[1555,1677)三色，GM-L06只回看[1677,2076)持三支及促单；f1676仍是三色，f1677才是持货。两句画面任务分开，正常速，不定格、慢放或循环。消费者促单与面向达人的结尾仍分开；原声逐字进出点和配音容量尚未验证。",
+          "output_start_seconds": null,
+          "output_end_seconds": null
+        }
+      ],
+      "frozen_cut_points": false,
+      "measured_audio_seconds": null,
+      "note": "本轮只核画面对象边界；G4/G5按真实视觉硬切衔接。原声词界、正常语速配音与输出切点仍未确认，不预签可剪辑。",
+      "editorial_decision": {
+        "original_playback_seconds": 68.2,
+        "body_spoken_words": 120,
+        "rough_length_reference": {},
+        "basis": "配音未实测；本候选只引用同目录零调用自检报告的校准估算，不把总秒数当承载通过。",
+        "decision": "接受完整讲解约两分20秒的内容量，不为追平37秒原片的Barely There把这支69秒原片硬压成85秒。优先消除G1整段重复回看，G2–G5按对应意思精选回看；保留完整原声意群。",
+        "g1_replay_policy": "完整0–10.5秒混剪仅原声播一次；讲解正常速回看0–f223前的唇色→手背，不回放后续揉擦，不用定格、慢放或循环填声长。实际容量未实测。",
+        "capacity_status": "全部未配音实测。L05约4.07秒为实际同手三色动态；未保证能承载整句，不能拿全组总长放行；不足退策划。"
+      }
+    }
+  }
+}

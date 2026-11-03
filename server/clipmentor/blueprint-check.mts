@@ -1,5 +1,6 @@
 /** Local read-only command; advisory output never grants production permission. */
 import { readFile, realpath, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { lintBlueprint } from '../../src/clipmentor/blueprint-lint.ts';
@@ -7,8 +8,9 @@ import { lintBlueprint } from '../../src/clipmentor/blueprint-lint.ts';
 export async function checkBlueprintFiles(args: string[]) {
   try {
     if (!(args.length === 1 || args.length === 3 && args[1] === '--md')) throw new Error('Usage: check:clipmentor-blueprint -- candidate.json [--md view.md]');
-    const jsonPath = resolve(args[0]), input = JSON.parse(await readFile(jsonPath, 'utf8'));
-    if (args.length === 1) return lintBlueprint(input);
+    const jsonPath = resolve(args[0]), bytes = await readFile(jsonPath), input = JSON.parse(bytes.toString('utf8'));
+    const input_sha256 = createHash('sha256').update(bytes).digest('hex');
+    if (args.length === 1) return { ...lintBlueprint(input), input_sha256 };
     const mdPath = resolve(args[2]), text = await readFile(mdPath, 'utf8');
     // Only explicit local Markdown links or backtick file references. Never fetch URLs.
     const references: Array<{ reference: string; is_source: boolean }> = [];
@@ -27,7 +29,7 @@ export async function checkBlueprintFiles(args: string[]) {
       try { return { reference, exists: (await stat(path)).isFile(), is_source, matches_input: await realpath(path) === inputReal }; }
       catch { return { reference, exists: false, is_source, matches_input: false }; }
     }));
-    return lintBlueprint(input, { markdown: { text, references: checks } });
+    return { ...lintBlueprint(input, { markdown: { text, references: checks } }), input_sha256, markdown_sha256: createHash('sha256').update(text).digest('hex') };
   } catch (error) {
     return { advisory_only: true, scope: 'input_unreadable_no_check_claim', findings: [{ rule_id: 'INPUT', level: 'notice', location: '$', excerpt: '', message: error instanceof Error ? error.message : 'Unable to read input' }] };
   }

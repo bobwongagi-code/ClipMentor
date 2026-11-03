@@ -126,7 +126,7 @@ for (const c of negativeCases) {
 // A6 exercises both existing projection boundaries; no production changes.
 const baseline = await copyTeachingPacketFromDoc(structuredClone(fixture.isolation_project.doc) as unknown as ProjectDoc);
 const annotated: any = structuredClone(fixture.isolation_project.doc), marker = 'SELF_CHECK_PRIVATE_ORACLE_MUST_NOT_LEAK';
-annotated.delivery_record = { author_self_check: marker };
+annotated.delivery_record = { author_self_check: marker, mechanical_lint: { input_sha256: marker, findings: report.findings }, remaining_gaps: [{ source: marker }] };
 annotated.clipMentorAnalysis.delivery_record = { '作者自检': marker };
 for (const u of annotated.clipMentorAnalysis.blueprint) { u.author_self_check = marker; u.internal_review.author_self_check = marker; }
 const packet: any = await copyTeachingPacketFromDoc(annotated);
@@ -172,3 +172,60 @@ console.log(JSON.stringify({ checks, real_model_calls: 0, network_calls: network
   A2: { matched: ['B02', 'B03', 'B04'], not_reproduced: ['B01: absent', 'B05: uncertainty overlaps', 'B07: montage identity unavailable', 'B09: source exists; compare real view separately'] },
   B08: { enabled: false, unique_accepted_lines: uniqueLines.size, known_true_positive_pairs: truePositives.length, false_positive_candidates: falsePositives.length, false_positives: falsePositives },
   calibration: report.calibration }, null, 2));
+
+// Saved v3/v4 regressions: questions locate real prose, never certify pixels.
+const boardCases = (await import('./fixtures/blueprint-picture-inputs-20261103.json')).default.cases;
+const v4Fixture = (await import('./fixtures/blueprint-picture-v4-20261103.json')).default;
+const portableCases = (await import('./fixtures/blueprint-picture-inputs-20261103.json')).default;
+const assertSavedSubset = (projection: unknown, source: unknown): void => {
+  if (projection !== null && typeof projection === 'object') {
+    assert(source !== null && typeof source === 'object');
+    if (Array.isArray(projection)) { assert(Array.isArray(source)); assert.equal(projection.length, source.length); }
+    for (const [key, value] of Object.entries(projection)) { assert(Object.hasOwn(source, key)); assertSavedSubset(value, (source as Record<string, unknown>)[key]); }
+  } else assert.equal(projection, source);
+};
+for (const [key, provenance] of Object.entries(portableCases.provenance)) {
+  const sourcePath = resolve('..', provenance.source);
+  if (fs.existsSync(sourcePath)) {
+    const bytes = fs.readFileSync(sourcePath); assert.equal(hash(bytes), provenance.sha256);
+    assertSavedSubset(portableCases.cases[key as keyof typeof portableCases.cases], JSON.parse(bytes.toString('utf8')));
+  }
+}
+
+const pictureFindings = (input: unknown) => lintBlueprint(input).findings.filter(f => f.rule_id === 'B10' || f.rule_id === 'B11');
+const v3Pictures = pictureFindings(boardCases.green);
+assert(v3Pictures.some(f => f.rule_id === 'B10' && f.excerpt.includes('源帧21') && f.location.includes('.phases[1].picture')));
+assert(v3Pictures.some(f => f.rule_id === 'B11' && f.excerpt.includes('三色')));
+assert(v3Pictures.every(f => f.level === 'notice'));
+assert.equal(pictureFindings(v4Fixture.input).length, 0, 'valid different original/revisit windows and distinct roles are not conflicts');
+const v4Source = resolve('..', v4Fixture.source);
+if (fs.existsSync(v4Source)) {
+  assert.equal(hash(fs.readFileSync(v4Source)), v4Fixture.source_sha256);
+  const original = JSON.parse(fs.readFileSync(v4Source, 'utf8'));
+  for (const u of v4Fixture.input.clipMentorAnalysis.blueprint) {
+    const source = original.clipMentorAnalysis.blueprint.find((s: any) => s.unit_id === u.unit_id);
+    for (const [key, value] of Object.entries(u.internal_review)) assert.deepEqual(value, source.internal_review[key]);
+  }
+}
+const { blueprintPictureNotices } = await import('./blueprint-picture-notices');
+const pictureRow = { key: 'a', unit_id: 'u', stage: 'explanation', line_ids: ['L1'], range: [0, 3] as [number, number], picture: '只用源帧21', location: '$.a' };
+assert.equal(blueprintPictureNotices([pictureRow]).length, 1);
+assert.equal(blueprintPictureNotices([{ ...pictureRow, range: [0.7, 0.7] }]).length, 0, 'declared still does not pretend to be a broad range');
+assert.equal(blueprintPictureNotices([{ ...pictureRow, stage: 'original' }]).length, 0, 'original context is not a revisit task');
+const dynamic = { ...pictureRow, picture: '正常速度动态展示' };
+assert.equal(blueprintPictureNotices([dynamic, { ...dynamic, key: 'b', stage: 'original', line_ids: [] }]).length, 0);
+assert.equal(blueprintPictureNotices([dynamic, { ...dynamic, key: 'b', line_ids: ['L2'] }]).filter(f => f.rule_id === 'B11').length, 1);
+assert.equal(blueprintPictureNotices([dynamic, { ...dynamic, key: 'b' }]).length, 0, 'same line continued across phases is not two copied line tasks');
+assert.equal(blueprintPictureNotices([{ ...dynamic, picture: '' }, { ...dynamic, key: 'b', line_ids: ['L2'], picture: '' }]).length, 0);
+const hashDir = await mkdtemp(join(tmpdir(), 'blueprint-input-identity-'));
+try {
+  const input = join(hashDir, 'blueprint.json'), bytes = JSON.stringify(v4Fixture.input, null, 2);
+  await writeFile(input, bytes);
+  const checked = await checkBlueprintFiles([input]);
+  assert.equal('input_sha256' in checked ? checked.input_sha256 : null, hash(bytes));
+  await writeFile(input, bytes + '\n');
+  const changed = await checkBlueprintFiles([input]);
+  assert.equal('input_sha256' in changed ? changed.input_sha256 : null, hash(bytes + '\n'));
+  assert.notEqual('input_sha256' in changed ? changed.input_sha256 : null, 'input_sha256' in checked ? checked.input_sha256 : null);
+} finally { await rm(hashDir, { recursive: true, force: true }); }
+console.log('PASS shared picture notices: saved v3 risks / v4 controls / role boundaries / input hash');

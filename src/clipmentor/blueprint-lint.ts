@@ -1,10 +1,11 @@
 /** Advisory, deterministic author checks. No IO, provider, gate or approval dependency. */
 import corpus from './fixtures/blueprint-self-check-cases.json';
+import { blueprintPictureNotices, pictureNoticeRows, verifyPictureNoticeSources, currentPicturePhases } from './blueprint-picture-notices';
 
 type Row = Record<string, unknown>;
 type Range = [number, number];
 export interface BlueprintFinding {
-  rule_id: string; level: 'warn' | 'notice'; location: string; excerpt: string; message: string;
+  rule_id: string; level: 'warn' | 'notice'; location: string; excerpt: string; message: string; locations?: string[];
 }
 export interface SpeechSample {
   id: string; text: string; seconds: number; product: string; group_id: string;
@@ -52,12 +53,13 @@ export function calibrateSpeech(samples: SpeechSample[]) {
 interface Line { id: string; text: string; zh: string; raw: Row; path: string }
 interface Group { id: string; line_ids: string[]; capacity: number | null; path: string }
 interface Use { asset: string; range: Range; location: string; mode: string }
-function readBlueprint(value: unknown) {
+export function readBlueprint(value: unknown) {
   const root = obj(value), analysis = obj(root.clipMentorAnalysis), source = obj(analysis.source);
   const lines: Line[] = [], groups: Group[] = [], uses: Use[] = [];
   const issues: Array<{ path: string; message: string }> = [];
   const priorities = new Map<string, number>(), phasePictures = new Map<string, Row[]>();
   const deliveryIds = new Set<string>();
+  const selectedPlans: Array<{unit: Row; candidate_id: string; plan_id: string; plan: Row; path: string; resolved?: ReturnType<typeof currentPicturePhases>}> = [];
   const addLine = (v: unknown, path: string, priority = 1) => {
     const row = obj(v), id = str(row.id) || str(row.line_id) || path;
     if (!str(row.narration_ms)) return;
@@ -87,6 +89,25 @@ function readBlueprint(value: unknown) {
     // Unknown identity must not merge unrelated assets merely because coordinates match.
     if (selected) uses.push({ asset: str(asset) || str(source.asset_id) || `unknown:${path}`, range: selected, location: path, mode });
   };
+  const addTimelineRow = (r: Row, path: string) => {
+    const ids = arr(r.line_ids).map(str);
+    const seconds = range(r.source_range_seconds) ?? range(r.original_source_seconds)
+      ?? (range(r.source_frames) && fps && fps > 0 ? range(r.source_frames)!.map(n => n / fps) as Range : null);
+    const modes = arr(r.mode_order).map(str);
+    if (modes.length) {
+      for (const mode of modes) addUse(seconds, path, mode, r.source_asset_id);
+      groups.push({ id: str(r.unit_id) || str(r.row_id) || path, line_ids: ids, capacity: seconds ? seconds[1] - seconds[0] : null, path });
+    } else {
+      const mode = str(r.kind); addUse(seconds, path, mode, r.source_asset_id);
+      if (ids.length && mode !== 'original') {
+        const id = str(r.group_id) || str(r.unit_id) || path, current = groups.find(g => g.id === id);
+        const duration = num(r.duration_seconds_reference) ?? (seconds ? seconds[1] - seconds[0] : null);
+        if (current) { current.line_ids.push(...ids.filter(x => !current.line_ids.includes(x))); current.capacity = current.capacity !== null && duration !== null ? current.capacity + duration : null; }
+        else groups.push({ id, line_ids: ids, capacity: duration, path });
+      }
+    }
+  };
+  const missingPictureUnits = new Set<string>(), missingPictureLines = new Set<string>();
   const phasedUnits = new Set<string>(), registeredSections: Array<{ row: Row; path: string }> = [];
   arr(analysis.blueprint).forEach((v, i) => {
     const u = obj(v), internal = obj(u.internal_review);
@@ -94,13 +115,27 @@ function readBlueprint(value: unknown) {
     const candidate = obj(internal[candidateId]), plan = obj(internal[planId]);
     if (candidateId && !Array.isArray(candidate.lines)) issues.push({ path: `$.clipMentorAnalysis.blueprint[${i}]`, message: 'Current candidate pointer unreadable; estimates are incomplete.' });
     arr(candidate.lines).forEach((l, j) => addLine(l, `$.clipMentorAnalysis.blueprint[${i}].current_candidate.lines[${j}]`, 2));
+    const base = `$.clipMentorAnalysis.blueprint[${i}]`, declaresPlan = Object.hasOwn(internal, 'current_picture_plan');
+    const badPointer = declaresPlan && (!planId || !Object.hasOwn(internal, planId)
+      || internal[planId] === null || typeof internal[planId] !== 'object' || Array.isArray(internal[planId]));
+    const resolved = declaresPlan && !badPointer ? currentPicturePhases(plan, root.estimated_picture_timeline, u.unit_id, fps ?? NaN, num(source.duration_seconds) ?? undefined) : undefined;
+    if (badPointer || resolved?.issues.length) {
+      const id = str(u.unit_id), problem = resolved?.issues[0];
+      missingPictureUnits.add(id);
+      for (const l of arr(candidate.lines)) { const row = obj(l), lineId = str(row.id) || str(row.line_id); if (lineId) missingPictureLines.add(lineId); }
+      issues.push({ path: badPointer ? `${base}.internal_review.current_picture_plan` : problem!.path.startsWith('$') ? problem!.path : `${base}.internal_review[${JSON.stringify(planId)}]${problem!.path}`,
+        message: `Unit ${id || i}: current picture plan ${JSON.stringify(internal.current_picture_plan)} is unreadable${problem ? ': ' + problem.message : ''}; this unit is excluded from picture, duration and reuse calculations. Historical rows are not a replacement.` });
+      return;
+    }
+    selectedPlans.push({unit: u, candidate_id: candidateId, plan_id: planId, plan, path: base, resolved});
     arr(plan.delivery_sections).forEach((section, j) => registeredSections.push({ row: obj(section), path: `$.clipMentorAnalysis.blueprint[${i}].current_picture_plan.delivery_sections[${j}]` }));
     let current: Group | undefined;
     const operational = Array.isArray(plan.phases) ? plan : obj(obj(plan.execution_plan).content);
-    arr(operational.phases).forEach((p, j) => {
-      const phase = obj(p), path = `$.clipMentorAnalysis.blueprint[${i}].current_picture_plan.phases[${j}]`, mode = str(phase.mode);
+    (resolved?.phases ?? arr(operational.phases)).forEach((p, j) => {
+      const phase = obj(p), origin = resolved?.locations[j], path = origin ? origin.startsWith('$') ? origin : `${base}.internal_review[${JSON.stringify(planId)}]${origin}` : `${base}.current_picture_plan.phases[${j}]`, mode = str(phase.mode) || (phase.mode === undefined && str(phase.line_id) ? 'explanation' : '');
       if (mode !== 'original' && mode !== 'explanation') return;
       phasedUnits.add(str(u.unit_id));
+      if (resolved?.legacy) { addTimelineRow({ ...phase, kind: mode }, path); return; }
       if (mode === 'original') {
         if (!current || current.line_ids.length) {
           current = { id: `${str(u.unit_id) || i}/group-${groups.length + 1}`, line_ids: [], capacity: 0, path }; groups.push(current);
@@ -110,13 +145,13 @@ function readBlueprint(value: unknown) {
         const ids = [...new Set([str(phase.line_id), ...arr(phase.line_ids).map(str)].filter(Boolean))];
         current.line_ids.push(...ids.filter(id => !current!.line_ids.includes(id)));
         for (const id of ids) phasePictures.set(id, [...phasePictures.get(id) ?? [], phase]);
-        const r = range(phase.source_range_seconds);
+        const r = range(phase.source_range_seconds ?? phase.source_seconds);
         const declared = num(phase.output_duration_seconds) ?? num(phase.duration_seconds)
           ?? (num(phase.duration_frames) !== null && fps && fps > 0 ? num(phase.duration_frames)! / fps : null);
         const duration = declared !== null ? (declared >= 0 ? declared : null) : (r ? r[1] - r[0] : null);
         if (current.capacity !== null) current.capacity = duration === null ? null : current.capacity + duration;
       }
-      addUse(phase.source_range_seconds, path, mode, phase.source_asset_id);
+      addUse(phase.source_range_seconds ?? phase.source_seconds, path, mode, phase.source_asset_id);
     });
   });
   arr(root.delivery_sections ?? analysis.delivery_sections).forEach((v, i) => registeredSections.push({ row: obj(v), path: `$.delivery_sections[${i}]` }));
@@ -135,25 +170,10 @@ function readBlueprint(value: unknown) {
   }
   const rows = arr(obj(root.estimated_picture_timeline).rows);
   rows.forEach((v, i) => {
-    const r = obj(v); if (phasedUnits.has(str(r.unit_id))) return;
-    const path = `$.estimated_picture_timeline.rows[${i}]`, ids = arr(r.line_ids).map(str);
-    const seconds = range(r.source_range_seconds) ?? range(r.original_source_seconds)
-      ?? (range(r.source_frames) && fps && fps > 0 ? range(r.source_frames)!.map(n => n / fps) as Range : null);
-    const modes = arr(r.mode_order).map(str);
-    if (modes.length) {
-      for (const mode of modes) addUse(seconds, path, mode, r.source_asset_id);
-      groups.push({ id: str(r.unit_id) || str(r.row_id) || path, line_ids: ids, capacity: seconds ? seconds[1] - seconds[0] : null, path });
-    } else {
-      const mode = str(r.kind); addUse(seconds, path, mode, r.source_asset_id);
-      if (ids.length && mode !== 'original') {
-        const id = str(r.group_id) || str(r.unit_id) || path, current = groups.find(g => g.id === id);
-        const duration = num(r.duration_seconds_reference) ?? (seconds ? seconds[1] - seconds[0] : null);
-        if (current) { current.line_ids.push(...ids.filter(x => !current.line_ids.includes(x))); current.capacity = current.capacity !== null && duration !== null ? current.capacity + duration : null; }
-        else groups.push({ id, line_ids: ids, capacity: duration, path });
-      }
-    }
+    const r = obj(v); if (phasedUnits.has(str(r.unit_id)) || missingPictureUnits.has(str(r.unit_id)) || arr(r.line_ids).some(id => missingPictureLines.has(str(id)))) return;
+    addTimelineRow(r, `$.estimated_picture_timeline.rows[${i}]`);
   });
-  return { root, analysis, lines, groups, uses, phasePictures, ends, opening, deliveryIds, issues };
+  return { root, analysis, lines, groups, uses, phasePictures, ends, opening, deliveryIds, issues, selectedPlans, missingPictureUnits, missingPictureLines };
 }
 
 const malayNumbers: Record<string, number> = { kosong: 0, satu: 1, dua: 2, tiga: 3, empat: 4, lima: 5, enam: 6, tujuh: 7, lapan: 8, sembilan: 9, sepuluh: 10, sebelas: 11, seratus: 100, seribu: 1000 };
@@ -286,7 +306,7 @@ export function lintBlueprint(input: unknown, options: { markdown?: MarkdownChec
   }
   const calibration = calibrateSpeech(options.samples ?? corpus.calibration);
   const estimate = (text: string) => calibration.words_per_second ? wordCount(text) / calibration.words_per_second : null;
-  const lineEstimates = data.lines.map(l => ({ line_id: l.id, words: wordCount(l.text), estimated_seconds: estimate(l.text) }));
+  const lineEstimates = data.lines.filter(l => !data.missingPictureLines.has(l.id)).map(l => ({ line_id: l.id, words: wordCount(l.text), estimated_seconds: estimate(l.text) }));
   const groups = data.groups.map(g => {
     const selected = g.line_ids.map(id => data.lines.find(l => l.id === id));
     const complete = selected.length > 0 && selected.every(Boolean);
@@ -301,11 +321,11 @@ export function lintBlueprint(input: unknown, options: { markdown?: MarkdownChec
   for (const l of lineEstimates) add('B05', 'notice', l.line_id, data.lines.find(x => x.id === l.line_id)!.text, `Reference only: ${l.words} words, ${l.estimated_seconds === null ? 'uncalibrated' : round(l.estimated_seconds) + 's estimated'}. Never reject a single line by this value.`);
   const original = data.uses.filter(u => u.mode === 'original').reduce((n, u) => n + u.range[1] - u.range[0], 0);
   const boundLineIds = new Set(data.groups.flatMap(g => g.line_ids));
-  const bodyLines = data.lines.filter(l => !data.deliveryIds.has(l.id) && (!data.groups.length || boundLineIds.has(l.id)));
+  const bodyLines = data.lines.filter(l => !data.missingPictureLines.has(l.id) && !data.deliveryIds.has(l.id) && (!data.groups.length || boundLineIds.has(l.id)));
   const body = bodyLines.reduce((n, l) => n + (estimate(l.text) ?? 0), 0), opening = estimate(str(data.opening.narration_ms)) ?? 0;
   const variants = Object.keys(data.ends).length ? Object.entries(data.ends).map(([variant, v]) => ({ variant, ending: estimate(str(obj(v).narration_ms)) })) : [{ variant: 'current', ending: 0 }];
   const durations = variants.map(v => ({ variant: v.variant, original_seconds: original, explanation_seconds: body, opening_seconds: opening, ending_seconds: v.ending,
-    estimated_total_seconds: calibration.words_per_second && data.groups.length && data.uses.some(u => u.mode === 'original') && groups.every(g => g.complete) ? round(original + body + opening + (v.ending ?? 0)) : null }));
+    estimated_total_seconds: !data.missingPictureUnits.size && calibration.words_per_second && data.groups.length && data.uses.some(u => u.mode === 'original') && groups.every(g => g.complete) ? round(original + body + opening + (v.ending ?? 0)) : null }));
   for (const d of durations) add('B06', 'notice', d.variant, JSON.stringify(d), 'Estimated full length, not a length limit or measured preview. No automatic trimming.');
   const reuse: Array<{ asset: string; range: Range; count: number; locations: string[] }> = [];
   for (const asset of new Set(data.uses.map(u => u.asset))) {
@@ -328,8 +348,11 @@ export function lintBlueprint(input: unknown, options: { markdown?: MarkdownChec
       else if (ref.is_source && ref.matches_input === false) add('B09', 'warn', 'markdown.reference', ref.reference, 'Markdown machine source is not the checked JSON input.');
     }
   }
+  const pictures = verifyPictureNoticeSources(input, blueprintPictureNotices(pictureNoticeRows(data)));
+  for (const issue of pictures.issues) add('INPUT', 'notice', issue.path, '', issue.message);
+  findings.push(...pictures.notices.map(({ row_keys: _rows, ...finding }) => finding));
   return { advisory_only: true, scope: 'saved_blueprint_author_preparation_not_approval', findings,
     calibration, name_inventory: { declared: names, visible_text: visibleTextInventory, note: 'Declared names and visible text only; no semantic brand recognition or automatic alias correction.' }, line_estimates: lineEstimates, groups, durations, reuse,
     disabled_rules: [{ rule_id: 'B08', reason: 'Pilot on frozen accepted copy has more false-positive candidates than known hits; see regression statistics. No root-based lint is shipped.' }],
-    limitations: ['Source-coordinate overlap cannot identify the same action in disjoint montage shots.', 'Written claims and word counts do not prove audible wording, visual clarity or teaching value.', 'No markdown comparison when --md is omitted.', 'Picture descriptions and unstructured image pixels are not decoded for text or duration.'] };
+    limitations: ['Source-coordinate overlap cannot identify the same action in disjoint montage shots.', 'Written claims and word counts do not prove audible wording, visual clarity or teaching value.', 'No markdown comparison when --md is omitted.', 'Picture descriptions and unstructured image pixels are not decoded for text or duration.', 'B10/B11 are text-risk questions, not semantic conflicts or edit coordinates. Three sampled images cannot establish action absence or audible boundaries.'] };
 }
