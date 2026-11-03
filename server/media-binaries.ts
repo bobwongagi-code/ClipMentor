@@ -37,10 +37,13 @@ export function whisperCliBin(): string {
   const platformKey = `${process.platform}-${process.arch}`;
   const suffix = process.platform === 'win32' ? '.exe' : '';
   const relative = join('whisper-cli', platformKey, `whisper-cli${suffix}`);
+  // Electron supplies this optional field. Plain Node also imports this module;
+  // narrow the real runtime value instead of requiring Electron ambient types.
+  const resourcesPath = 'resourcesPath' in process && typeof process.resourcesPath === 'string' ? process.resourcesPath : '';
   const candidates = [
     join(import.meta.dirname, '..', 'public', relative),
-    join(process.resourcesPath ?? '', 'dist', relative),
-    join(process.resourcesPath ?? '', relative),
+    join(resourcesPath, 'dist', relative),
+    join(resourcesPath, relative),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;

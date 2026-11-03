@@ -1,3 +1,5 @@
+import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
+import {deliveryReview} from '../../src/clipmentor/delivery-sections';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,7 +11,7 @@ import { atomicWriteFile } from '../plugins/project-store-durable';
 import { isSafeUploadName, resolveUploadFile } from '../media-dir';
 import { sha256File } from '../../shared/node-content-hash';
 import { runtimeProfile } from '../runtime-profile';
-import { extractOneFrame } from '../plugins/extract-frames';
+import { extractOneFrame, type FrameCrop } from '../plugins/extract-frames';
 import { CodexAppServerClient } from '../codex/app-server';
 import { CodexTurnManager } from '../codex/turn-manager';
 import { inspectCodexInstallation } from '../codex/installation';
@@ -19,14 +21,22 @@ type Row = Record<string, unknown>;
 const object = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const sha = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
-const digest = (v: string) => createHash('sha256').update(v).digest('hex');
-export interface ReviewFrame { unit_id: string; phase: 'context' | 'original' | 'explanation'; source_seconds: number; base64: string }
+const digest = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
+export interface ReviewFrame { unit_id: string; phase: 'context' | 'original' | 'explanation' | 'delivery'; source_seconds: number; asset_id?:string; delivery_view?:'supplied_full'|'planned_crop'; crop?:FrameCrop; base64: string }
+export function reviewFrameLabel(frame: ReviewFrame): string {
+  return frame.asset_id ? `${frame.unit_id}/delivery asset ${frame.asset_id}; ${frame.delivery_view ?? 'supplied_full'}; supplied static image, not a source-video frame${frame.crop ? `; planned crop margins ${JSON.stringify(frame.crop)}; actual cropped pixels, not the full poster` : ''}`
+    : `${frame.unit_id}/${frame.phase}; source ${frame.source_seconds}s`;
+}
+function frameInspection(frames: ReviewFrame[]): CopyReviewResult['inspection'] {
+  return {scope:'copy_and_planned_picture_only',sampled_frames:frames.length,continuous_viewing:false,listening:false,input_policy:COPY_REVIEW_INPUT_POLICY,
+    ...(frames.some(f=>f.phase==='delivery')?{delivery_images:frames.filter(f=>f.phase==='delivery').map(f=>({section_id:f.unit_id,asset_id:f.asset_id!,view:f.delivery_view!,sha256:digest(Buffer.from(f.base64,'base64')),...(f.crop?{crop:f.crop}:{})}))}:{})};
+}
 export interface CopyReviewDependencies {
   runtime?: {method:string;model:string;inlineFrames:boolean;provider?:string;apiMode?:string};
   directory: string;
   resolve(name: string): string | null;
   hash(file: string): Promise<string>;
-  frame(file: string, seconds: number, output: string): Promise<string>;
+  frame(file: string, seconds: number, output: string, crop?: FrameCrop): Promise<string>;
   run(prompt: string, frames: ReviewFrame[], runId: string, projectId: string, signal: AbortSignal): Promise<unknown>;
 }
 
@@ -147,12 +157,13 @@ function receiptFromRaw(raw: unknown, request: CopyReviewRequest): CopyProductio
       ...(result.group_checks !== undefined ? { group_checks: result.group_checks } : {}),
       ...(Array.isArray(result.narration_checks) ? { narration_checks: result.narration_checks } : {}) };
   });
-  const verdict = units.some((u) => u.verdict === 'needs_revision') ? 'needs_revision'
-    : units.some((u) => u.verdict !== 'pass' || u.findings.some((f) => object(f) && f.severity !== 'suggestion')) ? 'insufficient_evidence' : 'pass';
+  const delivery=deliveryReview(request.packet.delivery_sections??[],raw.delivery_checks);
+  const verdict = delivery.verdict==='needs_revision'||units.some((u) => u.verdict === 'needs_revision') ? 'needs_revision'
+    : delivery.verdict!=='pass'||units.some((u) => u.verdict !== 'pass' || u.findings.some((f) => object(f) && f.severity !== 'suggestion')) ? 'insufficient_evidence' : 'pass';
   const receipt = { scope: 'copy_and_planned_picture_only', protocol: COPY_REVIEW_PROTOCOL,
     analysis_revision: request.subject.revision, content_digest: request.subject.digest,
     author_run_id: request.authorRunId, reviewer_run_id: `clipmentor-review:${request.operationId}`,
-    reviewed_at: Date.now(), verdict, units, teaching_review: { packet: request.packet, review } };
+    reviewed_at: Date.now(), verdict, units, ...(Array.isArray(raw.delivery_checks)?{delivery_checks:raw.delivery_checks}:{}), teaching_review: { packet: request.packet, review } };
   if (!isCopyProductionReview(receipt)) throw failure('response_receipt_invalid', 1);
   return receipt;
 }
@@ -208,20 +219,45 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   let rawReceived = false;
   let stage: CopyReviewFailure['code'] = 'review_storage_failed';
   let signal = outerSignal;
+  let inspection: CopyReviewResult['inspection'] | undefined;
+  let frameFailure:CopyReviewFailure['frameFailure'];
+  const capture=async(meta:Omit<NonNullable<CopyReviewFailure['frameFailure']>,'reason'>,input:string,output:string,crop?:FrameCrop)=>{
+    let base64:string;
+    try{base64=await deps.frame(input,meta.source_seconds,output,crop);}
+    catch(error){frameFailure={...meta,reason:'extraction_failed'};throw error;}
+    if(!base64||base64.length>3_000_000||!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)){
+      frameFailure={...meta,reason:'image_payload_invalid'};throw new Error('Frame unavailable');
+    }
+    return base64;
+  };
   try {
     temporary = await mkdtemp(join(deps.directory, 'frames-'));
     stage = 'frames_unavailable';
     const frames: ReviewFrame[] = [];
+    if(positions.length+(request.packet.delivery_sections??[]).reduce((n,s)=>n+(s.picture.crop?2:1),0)>48)throw new Error('Review image limit exceeded');
     for (const [i, p] of positions.entries()) {
       outerSignal?.throwIfAborted();
-      frames.push({ ...p, base64: await deps.frame(file!, p.source_seconds, join(temporary, `${i}.jpg`)) });
-      if (!frames[i].base64 || frames[i].base64.length > 3_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(frames[i].base64)) throw new Error('Frame unavailable');
+      frames.push({ ...p, base64: await capture(p,file!,join(temporary, `${i}.jpg`)) });
+    }
+    for(const section of request.packet.delivery_sections??[]){
+      const picture=section.picture;let assetFile:string|null=null;
+      const meta={unit_id:section.section_id,phase:'delivery' as const,source_seconds:0,asset_id:picture.asset_id};
+      try{assetFile=deps.resolve(decodeURIComponent(picture.src.slice('/media/uploads/'.length)));if(!assetFile||await deps.hash(assetFile)!==picture.sha256)throw new Error('Delivery asset unavailable or changed');}
+      catch(error){frameFailure={...meta,reason:'asset_unavailable_or_changed'};throw error;}
+      if(section.voice.existing_audio){const audio=section.voice.existing_audio;try{const audioFile=deps.resolve(decodeURIComponent(audio.src.slice('/media/uploads/'.length)));if(!audioFile||await deps.hash(audioFile)!==audio.sha256)throw new Error('Delivery audio unavailable or changed');}catch(error){frameFailure={...meta,asset_id:audio.assetId,reason:'audio_unavailable_or_changed'};throw error;}}
+      for (const view of picture.crop ? ['supplied_full','planned_crop'] as const : ['supplied_full'] as const) {
+        const crop=view==='planned_crop'?picture.crop:undefined;
+        const base64=await capture({...meta,delivery_view:view},assetFile!,join(temporary,`delivery-${frames.length}.jpg`),crop);
+        frames.push({unit_id:section.section_id,phase:'delivery',source_seconds:0,asset_id:picture.asset_id,delivery_view:view,...(crop?{crop:structuredClone(crop)}:{}),base64});
+      }
+      try{if(await deps.hash(assetFile!)!==picture.sha256)throw new Error('Delivery asset changed');}catch(error){frameFailure={...meta,reason:'asset_unavailable_or_changed'};throw error;}
     }
     stage = 'source_unavailable_or_changed';
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed');
     stage = 'review_storage_failed';
+    inspection = frameInspection(frames);
     attempts = 1;
-    await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'reserved', requests_attempted: attempts }));
+    await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'reserved', requests_attempted: attempts, image_inspection:inspection }));
     const timeout = AbortSignal.timeout(600_000);
     signal = outerSignal ? AbortSignal.any([timeout, outerSignal]) : timeout;
     signal.throwIfAborted();
@@ -233,8 +269,7 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed during review');
     stage = 'response_schema_invalid';
     const result: CopyReviewResult = { operationId: request.operationId, requestsAttempted: attempts,
-      receipt: receiptFromRaw(raw, request), inspection: { scope: 'copy_and_planned_picture_only', sampled_frames: frames.length,
-        continuous_viewing: false, listening: false, input_policy: COPY_REVIEW_INPUT_POLICY } };
+      receipt: receiptFromRaw(raw, request), inspection };
     stage = 'review_storage_failed';
     await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'completed', requests_attempted: attempts,
       method: deps.runtime?.method ?? METHOD, ...(deps.runtime?{provider:deps.runtime.provider,apiMode:deps.runtime.apiMode}:{}), input_policy: COPY_REVIEW_INPUT_POLICY, model: deps.runtime?.model ?? null, model_note: deps.runtime ? 'Host-configured isolated API reviewer; no desktop fallback' : 'Codex configured default; exact upstream model not exposed by this transport',
@@ -242,10 +277,12 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     return result;
   } catch (error) {
     const original = error instanceof CopyReviewError ? error : failure(signal?.aborted ? 'review_cancelled_or_timed_out' : stage, attempts, request.operationId);
-    const diagnostic = { ...original.diagnostic, operationId: request.operationId, requestsAttempted: attempts };
+    const diagnostic = { ...original.diagnostic, operationId: request.operationId, requestsAttempted: attempts,
+      ...(original.diagnostic.code==='frames_unavailable'&&frameFailure?{frameFailure}:{}) };
     try {
       await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'failed', requests_attempted: attempts,
         error: diagnostic.code, diagnostic, source_hash: request.source.hash, prompt_sha256: digest(prompt),
+        ...(inspection?{image_inspection:inspection}:{}),
         ...(rawReceived ? { raw_review: raw } : {}), ...(original.rawOutput !== undefined ? { raw_output: original.rawOutput } : {}) }));
     } catch { throw failure('review_storage_failed', attempts, request.operationId); }
     throw new CopyReviewError(diagnostic);
@@ -279,7 +316,7 @@ export async function runIsolatedCodexReview(prompt: string, frames: ReviewFrame
         const batch = typeof index === 'number' && Number.isSafeInteger(index) ? batches[index] : undefined;
         if (!batch || !object(args) || Object.keys(args).length !== 1) { invalidBatchCalls++; manager.settleToolResult({ requestId: runId, callId: event.callId, success: false, result: { error: 'Invalid batch' } }); return; }
         const settled = manager.settleToolResult({ requestId: runId, callId: event.callId, success: true,
-          result: { note: batch.map((f, i) => `Image ${i + 1}: ${f.unit_id}/${f.phase}, source ${f.source_seconds}s`).join('; '),
+          result: { note: batch.map((f, i) => `Image ${i+1}: ${reviewFrameLabel(f)}`).join('; '),
             __images: batch.map((f, i) => ({ frame: i, base64: f.base64 })) } });
         if (settled === 'ok') seen.add(index as number);
       }
@@ -295,6 +332,8 @@ export async function runIsolatedCodexReview(prompt: string, frames: ReviewFrame
 
 export function copyReviewDependencies(): CopyReviewDependencies {
   return { directory: join(runtimeProfile().rootDir, 'clipmentor-copy-review'), resolve: resolveUploadFile, hash: sha256File,
-    async frame(file, seconds, output) { await extractOneFrame(file, Math.round(seconds * 1000), output, true); return (await readFile(output)).toString('base64'); },
+    // Source samples are snapped to frame starts. Rounding milliseconds upward can select
+    // the next frame, or EOF for the last frame; seek no later than the requested instant.
+    async frame(file, seconds, output, crop) { await extractOneFrame(file, sourceFrameSeekMs(seconds * 1000), output, true, crop); return (await readFile(output)).toString('base64'); },
     run: runIsolatedCodexReview };
 }

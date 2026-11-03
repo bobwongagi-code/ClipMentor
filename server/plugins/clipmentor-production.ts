@@ -1,3 +1,4 @@
+import {createBlueprintReviewBoardHandler} from '../clipmentor/blueprint-review-board-api';
 import type {Plugin} from 'vite';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {editorCredentialAuthorized} from '../editor-auth';
@@ -9,6 +10,7 @@ import {loadOfflineStoredProject} from '../external-agent/offline-project-store'
 async function json(req:IncomingMessage){const parts:Buffer[]=[];let size=0;for await(const part of req){size+=part.length;if(size>128000)throw new Error('Production request exceeds 128KB');parts.push(Buffer.from(part));}return JSON.parse(Buffer.concat(parts).toString('utf8'));}
 /** Local service entry. Formal multi-user hosting remains a separate deployment task. */
 export function clipMentorProductionPlugin(worker:StageWorker=productionStageWorker):Plugin{
+ const reviewBoard=createBlueprintReviewBoardHandler();
  const active=new Map<string,Promise<unknown>>();
  const controls=new Set<string>();
  const launch=(task:Awaited<ReturnType<typeof createProductionTask>>)=>{
@@ -17,6 +19,8 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
  };
  return {name:'clipmentor-production-task',configureServer(server){
   server.middlewares.use('/api/clipmentor/production-task',async(req:IncomingMessage,res:ServerResponse)=>{
+   const query=(req.url??'').split('?').slice(1).join('?');
+   if(req.method==='GET'&&new URLSearchParams(query).get('view')==='review_board'){await reviewBoard(req,res);return;}
    const send=(status:number,body:unknown)=>{res.statusCode=status;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify(body));};
    if(!editorCredentialAuthorized(req,true)){send(403,{error:'Editor origin required'});return;}
    let controlId:string|undefined;

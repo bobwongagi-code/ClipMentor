@@ -1,3 +1,4 @@
+import {deliverySectionsFromDoc,deliveryAudio} from '../../src/clipmentor/delivery-sections';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
 import {copyTeachingPacketFromDoc,copyReviewSubject,buildCopyTeachingReviewRequest,checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
@@ -7,7 +8,7 @@ import {digestValue} from '../agent-runs/store-values';
 /** Structural binding only. Neither this nor a successful render certifies teaching quality. */
 export async function verifyProductionNarration(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){
  const packet=await copyTeachingPacketFromDoc(doc);
- return matchMeasuredNarration(packet.units.flatMap(u=>u.lines),doc.assets,voice,registeredAudioBindings(doc));
+ return [...matchMeasuredNarration(packet.units.flatMap(u=>u.lines),doc.assets,voice,registeredAudioBindings(doc)),...deliverySectionsFromDoc(doc).map(s=>{const a=deliveryAudio(doc,s);return{lineId:s.line.line_id,assetId:a.asset.id,durationSeconds:a.frames/doc.timelines.find(t=>t.id===doc.activeTimelineId)!.fps};})];
 }
 function registeredAudioBindings(doc:ProjectDoc):Record<string,unknown>[] {
  const bindings:Record<string,unknown>[]=[];
@@ -79,6 +80,7 @@ export async function productionBlueprintReadiness(doc:ProjectDoc|null|undefined
   }catch{/* No reusable measured audio at all. */}
   (uncertain?voiceUnknown:missing).push(line.line_id);
  }
+ for(const section of prepared.packet.delivery_sections??[])try{deliveryAudio(doc,section);}catch{missing.push(section.line.line_id);}
  if(missing.length||voiceUnknown.length)return {...base,next:'audio' as const,code:missing.length?'measured_audio_missing':'audio_voice_provenance_missing',ready:false,subject:prepared.subject,missing_line_ids:missing,unverified_voice_line_ids:voiceUnknown};
  return {...base,next:'edit' as const,code:'reviewed_plan_and_measured_audio_available',ready:true,subject:prepared.subject};
 }
@@ -118,7 +120,8 @@ export async function productionExecutionReport(before:ProjectDoc,saved:ProjectD
  for(const id of protectedIds)if(digestValue(identity(before.assets.find(a=>a.id===id)))!==digestValue(identity(saved.assets.find(a=>a.id===id))))throw new Error(`execution_media_changed:${id}`);
  const verification=await verifyProductionEditing(saved,voice);
  const diff=await diffDeliveryCheck(before,saved);
- const expectedCaptions=expected.packet.units.flatMap(u=>u.lines.flatMap(l=>l.caption_lines)).join(' ');
+ const delivery=expected.packet.delivery_sections??[];
+ const expectedCaptions=[...delivery.filter(s=>s.kind==='performance_opening').flatMap(s=>s.line.caption_lines),...expected.packet.units.flatMap(u=>u.lines.flatMap(l=>l.caption_lines)),...delivery.filter(s=>s.kind==='creator_invitation').flatMap(s=>s.line.caption_lines)].join(' ');
  const captions=executionCaptionCheck(saved,expectedCaptions);
  if(captions.status==='mismatch')throw new Error('execution_caption_text_mismatch');
  return {blueprint:expected.subject,narration:verification.narration,actual_source_bindings:verification.binding.bindings,

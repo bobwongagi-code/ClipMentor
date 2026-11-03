@@ -105,7 +105,9 @@ export async function submitVoice(args: SubmitVoiceArgs, state: TimelineState): 
   const durationInFrames = result.durationSeconds && Number.isFinite(result.durationSeconds)
     ? Math.max(1, Math.round(result.durationSeconds * state.fps))
     : await probeAudio(result.path, state.fps);
-  const props = result.subtitlePath ? { minimaxSubtitlePath: result.subtitlePath, minimaxSubtitleType: args.subtitleType ?? 'sentence' } : undefined;
+  const props = { ...(result.subtitlePath ? { minimaxSubtitlePath: result.subtitlePath, minimaxSubtitleType: args.subtitleType ?? 'sentence' } : {}),
+    generation: { provider:args.provider,voiceId,text,speed:args.speed??1,
+      ...(typeof result.durationSeconds==='number'&&Number.isFinite(result.durationSeconds)&&result.durationSeconds>0?{durationSeconds:result.durationSeconds}:{}) } };
   return {
     id: newId(),
     name: args.name?.trim() || `Voice · ${voiceId}`,

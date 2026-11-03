@@ -1,0 +1,1082 @@
+{
+  "source": "Frozen before comparison-opening criteria change; existing grouped-registration fixture and original fake-service positive. Synthetic, never production approval.",
+  "delivery_subject_digest": "36987deb9aae0bef8faf14f5c8a80501820f480452d15f7129f10989256dccfa",
+  "body_subject_digest": "62b017d553ccd65da6056972f6edf396511b641b94a6793f503c92c325a333e7",
+  "receipt": {
+    "scope": "copy_and_planned_picture_only",
+    "protocol": "creator-copy-v2",
+    "analysis_revision": 6,
+    "content_digest": "36987deb9aae0bef8faf14f5c8a80501820f480452d15f7129f10989256dccfa",
+    "author_run_id": "test-author",
+    "reviewer_run_id": "clipmentor-review:aff1a85f-3d4c-4440-96d3-13b251a378cc",
+    "reviewed_at": 1793693184217,
+    "verdict": "pass",
+    "units": [
+      {
+        "unit_id": "BT-U01",
+        "candidate_id": "script_candidate_C1_four_groups",
+        "verdict": "pass",
+        "findings": [],
+        "group_checks": {
+          "scope": "planned_group_teaching_only",
+          "source_relations": [
+            {
+              "relation": "Synthetic complete teaching relation",
+              "evidence_ids": [
+                "BT-E001"
+              ],
+              "point_ids": [
+                "BT-P01",
+                "BT-P02",
+                "BT-P03",
+                "BT-P04",
+                "BT-P05"
+              ],
+              "line_ids": [
+                "BT-L01",
+                "BT-L02",
+                "BT-L03",
+                "BT-L04",
+                "BT-L06"
+              ],
+              "assessment": "covered",
+              "reason": "Synthetic test only"
+            }
+          ],
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "Synthetic relation",
+            "reason": "Synthetic contract positive"
+          },
+          "L2": {
+            "verdict": "pass",
+            "viewer_chain": "Synthetic source then explanation",
+            "stage_cues": "Synthetic cues",
+            "reason": "Synthetic contract positive"
+          }
+        },
+        "narration_checks": [
+          {
+            "line_id": "BT-L01",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic contract loss",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          },
+          {
+            "line_id": "BT-L02",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic contract loss",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          },
+          {
+            "line_id": "BT-L03",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic contract loss",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          },
+          {
+            "line_id": "BT-L04",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic contract loss",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          },
+          {
+            "line_id": "BT-L06",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic contract loss",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          }
+        ]
+      }
+    ],
+    "delivery_checks": [
+      {
+        "section_id": "section-0",
+        "verdict": "pass",
+        "claims_supported": "supported",
+        "purpose_clear": true,
+        "evidence_ids": [
+          "delivery-evidence-0"
+        ],
+        "reason": "Synthetic contract positive",
+        "narration_checks": [
+          {
+            "line_id": "delivery-line-0",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic missing performance context or action",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          }
+        ]
+      },
+      {
+        "section_id": "section-1",
+        "verdict": "pass",
+        "claims_supported": "supported",
+        "purpose_clear": true,
+        "evidence_ids": [
+          "delivery-evidence-1"
+        ],
+        "reason": "Synthetic contract positive",
+        "narration_checks": [
+          {
+            "line_id": "delivery-line-1",
+            "necessity": "necessary",
+            "omission_loss": "Synthetic missing performance context or action",
+            "naturalness": "natural",
+            "reason": "Synthetic contract positive"
+          }
+        ]
+      }
+    ],
+    "teaching_review": {
+      "packet": {
+        "delivery_sections": [
+          {
+            "section_id": "section-0",
+            "kind": "performance_opening",
+            "line": {
+              "line_id": "delivery-line-0",
+              "narration_ms": "Video ini mendapat tontonan.",
+              "caption_lines": [
+                "Video ini mendapat tontonan."
+              ],
+              "meaning_zh": "Synthetic delivery copy",
+              "labels": []
+            },
+            "evidence_ids": [
+              "delivery-evidence-0"
+            ],
+            "picture": {
+              "asset_id": "still-0",
+              "src": "/media/uploads/still-0.jpg",
+              "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "description": "Synthetic provided material"
+            },
+            "voice": {
+              "provider": "minimax",
+              "voiceId": "test-voice",
+              "speed": 1
+            },
+            "evidence": [
+              {
+                "evidence_id": "delivery-evidence-0",
+                "text": "Synthetic user-supplied performance or audience fact"
+              }
+            ]
+          },
+          {
+            "section_id": "section-1",
+            "kind": "creator_invitation",
+            "line": {
+              "line_id": "delivery-line-1",
+              "narration_ms": "Mesej kami.",
+              "caption_lines": [
+                "Mesej kami."
+              ],
+              "meaning_zh": "Synthetic delivery copy",
+              "labels": []
+            },
+            "evidence_ids": [
+              "delivery-evidence-1"
+            ],
+            "picture": {
+              "asset_id": "still-1",
+              "src": "/media/uploads/still-1.jpg",
+              "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "description": "Synthetic provided material"
+            },
+            "voice": {
+              "provider": "minimax",
+              "voiceId": "test-voice",
+              "speed": 1
+            },
+            "evidence": [
+              {
+                "evidence_id": "delivery-evidence-1",
+                "text": "Synthetic user-supplied performance or audience fact"
+              }
+            ]
+          }
+        ],
+        "audience": "给马来西亚创作者学习拍法与商品购买关注的关系；不是消费者广告或功效认证",
+        "product": {
+          "name": "Barely There（店铺名，品牌未核）女士内裤",
+          "purchase_concerns": [
+            "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。",
+            "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。",
+            "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。",
+            "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。",
+            "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。"
+          ],
+          "unknowns": [
+            "本次模型观察有同步原声；不等于人工或母语签字。细时间点与尾态描述矛盾保留，不据此定原声切点。",
+            "不从透光推断透气/无痕。",
+            "手感与实际穿着未知。",
+            "材质与工艺名称不由近镜证明。",
+            "七件及轮换用途已有独立源片视听支持；不保证现售SKU件数或优惠，具体词句非母语认证。",
+            "衬片材质/功效未知。",
+            "换新提醒的完整宾语、末句逐字及源片是否完整说完仍未知；当前不补全原话、不裁原片。"
+          ]
+        },
+        "source_evidence": [
+          {
+            "evidence_id": "BT-E001",
+            "observation": "[source_frame; observed_by_external_planner] 撑开的深色面料前，仍可辨认后方的眼鼻轮廓；人穿着日常外衣，商品拿在手中。",
+            "time_seconds": [
+              1.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E002",
+            "observation": "[visible_action; observed_by_external_planner] 0—3秒的6fps序列：举起、撑开布料至脸前，再放低；不是穿在身上的示范。",
+            "time_seconds": [
+              0,
+              3
+            ]
+          },
+          {
+            "evidence_id": "BT-E003",
+            "observation": "[source_frame; observed_by_external_planner] 双手将商品面料向相反方向展开，画面可见面料拉开后的形状。",
+            "time_seconds": [
+              11.333333333333334
+            ]
+          },
+          {
+            "evidence_id": "BT-E004",
+            "observation": "[source_frame; observed_by_external_planner] 展开之后，面料被收拢到手中。",
+            "time_seconds": [
+              13.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E005",
+            "observation": "[visible_action; observed_by_external_planner] 10.5—14.5秒6fps序列呈现展开到收拢的动作；不等于回弹率、舒适度或适用尺码测试。",
+            "time_seconds": [
+              10.5,
+              14.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E006",
+            "observation": "[source_frame; observed_by_external_planner] 商品被拿近镜头，腰边、蝴蝶结和侧边蕾丝/缝接细节可见。",
+            "time_seconds": [
+              17.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E007",
+            "observation": "[visible_action; observed_by_external_planner] 16—19秒6fps序列呈现拿近与退回的变化，近景确实让边缘细节占画面更大。",
+            "time_seconds": [
+              16,
+              19
+            ]
+          },
+          {
+            "evidence_id": "BT-E008",
+            "observation": "[source_frame; observed_by_external_planner] 讲到多件建议的时段，手中仍只展示一件商品；不能把此帧称为七件同框。",
+            "time_seconds": [
+              24
+            ]
+          },
+          {
+            "evidence_id": "BT-E009",
+            "observation": "[original_claim; existing_asr_candidate_not_listening_verified] 既有Fun-ASR在19.31—27.79秒多次识别买七件、划算/省及每天穿/替换的说法；仅作为原作者建议的转写候选，未独立听审。",
+            "time_seconds": [
+              19.31,
+              27.8
+            ]
+          },
+          {
+            "evidence_id": "BT-E010",
+            "observation": "[source_frame; observed_by_external_planner] 翻开商品后，手持白色内侧衬片清楚可见；未见其材质认证或性能测试。",
+            "time_seconds": [
+              30.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E011",
+            "observation": "[visible_action; observed_by_external_planner] 27.5—32.5秒6fps序列：转动、翻开内侧、展开白色衬片、随后收回；不把翻转中的遮挡帧选作细节证据。",
+            "time_seconds": [
+              27.5,
+              32.5
+            ]
+          },
+          {
+            "evidence_id": "BT-E012",
+            "observation": "[original_claim; existing_asr_candidate_not_listening_verified] 既有Fun-ASR在28.15—29.63秒识别“里面有pelapik”附近表述；后段出现购买入口和换新提醒候选；suara/seluar等词存在识别疑义。",
+            "time_seconds": [
+              28.15,
+              37.266667
+            ]
+          },
+          {
+            "evidence_id": "BT-E015",
+            "observation": "[original_claim; model_continuous_source_observed_not_human_certified] 原3.8连续视听听辨beli 7 terus、lagi berbaloi、Takkan nak pakai sehari je kan、Beli terus 7 helai，并听到pakai tukar-tukar；与旧ASR相关片段一致。仅归因原作者，不核实当前套餐或价格。",
+            "time_seconds": [
+              19,
+              27.84
+            ]
+          },
+          {
+            "evidence_id": "BT-E016",
+            "observation": "[original_claim; model_continuous_source_observed_not_human_certified] 原3.8连续视听听辨dah lama tak tukar、usha dekat beg kuning、grab yang ni；未给出换新对象的完整清楚宾语。支持换新提醒衔接购买入口的有限观察，原词不补全。",
+            "time_seconds": [
+              29.5,
+              37.266666666666666
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:0.12:6.877",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] G ila jar ang spender ni kau orang jar ang gila tau yang mana kau orang teng ah car i spender yang se les a jar ang jar ang nip is nip",
+            "time_seconds": [
+              0.12,
+              6.877
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:6.877:12.808",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] is je pak ai r asa macam tak pak ai su ara dalam kau orang bel i je su ara dalam ni su ara dalam wan ita yang le mb ut mem",
+            "time_seconds": [
+              6.877,
+              12.808
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:12.808:20.512",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] er ik re kan do a bila pak ai r asa macam tak pak ai su ara dalam material dia pun cant ik kemas je kan bel i yang kom bo bel",
+            "time_seconds": [
+              12.808,
+              20.512
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:20.512:27.109",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] i tu ju h ter us lagi ber bal oi lagi jimat jangan lah bel i se lain tak kan nak pak ai se hari je kan bel i ter us tu",
+            "time_seconds": [
+              20.512,
+              27.109
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:27.109:32.387",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] ju h lain okey dalam dia ada pel ap ik macam ni so kal au kak ak dah lama tak tuk ar su ara dalam tu kan us ia de kat beg",
+            "time_seconds": [
+              27.109,
+              32.387
+            ]
+          },
+          {
+            "evidence_id": "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:32.387:37.266",
+            "observation": "[original_asr; fun-asr; asr_candidate_not_independently_listened; not listening verified] kun ing grab yang ni okey bo leh pak ai se les a do a ni pak ai t uk ar tuk ar dah lama tak tuk ar su ara dalam baru",
+            "time_seconds": [
+              32.387,
+              37.266
+            ]
+          }
+        ],
+        "units": [
+          {
+            "unit_id": "BT-U01",
+            "lines": [
+              {
+                "line_id": "BT-L01",
+                "point_ids": [
+                  "BT-P01"
+                ],
+                "narration_ms": "Tengok semula pembukaannya. Wajah masih nampak di sebalik kain, jadi penonton nampak betapa nipisnya kain itu tanpa perlu dipakai pada badan.",
+                "caption_lines": [
+                  "Tengok semula pembukaannya.",
+                  "Wajah masih nampak",
+                  "di sebalik kain,",
+                  "jadi penonton nampak",
+                  "betapa nipisnya kain itu",
+                  "tanpa perlu dipakai",
+                  "pada badan."
+                ],
+                "meaning_zh": "回看开头。隔着布料还能看到她的脸，不用穿上身，观众也能直观看出面料有多薄。",
+                "labels": [
+                  "Kain nipis"
+                ]
+              },
+              {
+                "line_id": "BT-L02",
+                "point_ids": [
+                  "BT-P02",
+                  "BT-P03"
+                ],
+                "narration_ms": "Bila sebut lembut dan anjal, dia ramas dan tarik kain. Bila sebut kemasan, dia dekatkan pada kamera supaya pembeli nampak jelas.",
+                "caption_lines": [
+                  "Bila sebut lembut dan anjal,",
+                  "dia ramas dan tarik kain.",
+                  "Bila sebut kemasan,",
+                  "dia dekatkan pada kamera",
+                  "supaya pembeli nampak jelas."
+                ],
+                "meaning_zh": "说到柔软和弹性，她就揉拢、拉开面料；说到做工，就拿近镜头，让买家看清楚。",
+                "labels": [
+                  "Lembut & anjal",
+                  "Kemasan dari dekat"
+                ]
+              },
+              {
+                "line_id": "BT-L03",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia tunjuk bentuknya dulu, kemudian cadangkan tujuh helai untuk tukar pakai harian. Pembeli tahu apa yang dibeli dan kenapa beli lebih.",
+                "caption_lines": [
+                  "Dia tunjuk bentuknya dulu,",
+                  "kemudian cadangkan tujuh helai",
+                  "untuk tukar pakai harian.",
+                  "Pembeli tahu apa yang dibeli",
+                  "dan kenapa beli lebih."
+                ],
+                "meaning_zh": "她先展示版型，再建议买七件用于日常替换。买家既知道买的是什么，也明白为什么多买几件。",
+                "labels": [
+                  "Tukar pakai harian"
+                ]
+              },
+              {
+                "line_id": "BT-L04",
+                "point_ids": [
+                  "BT-P05"
+                ],
+                "narration_ms": "Dia buka bahagian dalam supaya pembeli boleh lihat pelapiknya, bukan meneka daripada gambar luar sahaja.",
+                "caption_lines": [
+                  "Dia buka bahagian dalam",
+                  "supaya pembeli boleh lihat",
+                  "pelapiknya,",
+                  "bukan meneka daripada",
+                  "gambar luar sahaja."
+                ],
+                "meaning_zh": "她翻开里面，让买家直接看清内侧衬片，不用只凭外观去猜。",
+                "labels": [
+                  "Pelapik bahagian dalam"
+                ]
+              },
+              {
+                "line_id": "BT-L06",
+                "point_ids": [
+                  "BT-P04"
+                ],
+                "narration_ms": "Dia ingatkan penonton yang dah lama tak tukar, kemudian ajak mereka ke beg kuning. Peringatan tadi jadi sebab untuk membeli.",
+                "caption_lines": [
+                  "Dia ingatkan penonton",
+                  "yang dah lama tak tukar,",
+                  "kemudian ajak mereka",
+                  "ke beg kuning.",
+                  "Peringatan tadi jadi sebab",
+                  "untuk membeli."
+                ],
+                "meaning_zh": "她先提醒很久没换新的观众，再邀请他们去黄色购物袋。前面的换新提醒，给后面的购买邀请提供了理由。",
+                "labels": [
+                  "Ingatkan tukar, ajak beli"
+                ]
+              }
+            ],
+            "source_context": {
+              "scope": "frozen_task_scope",
+              "source_ranges": [
+                [
+                  0,
+                  37.266667
+                ]
+              ],
+              "evidence_ids": [
+                "BT-E001",
+                "BT-E002",
+                "BT-E003",
+                "BT-E004",
+                "BT-E005",
+                "BT-E006",
+                "BT-E007",
+                "BT-E008",
+                "BT-E009",
+                "BT-E010",
+                "BT-E011",
+                "BT-E012",
+                "BT-E015",
+                "BT-E016",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:0.12:6.877",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:6.877:12.808",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:12.808:20.512",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:20.512:27.109",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:27.109:32.387",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:32.387:37.266"
+              ],
+              "speech": "asr_available_not_listening_verified"
+            },
+            "picture_plan": {
+              "original_source_ranges": [
+                [
+                  0,
+                  10.733333333333333
+                ],
+                [
+                  10.733333333333333,
+                  19
+                ],
+                [
+                  19,
+                  27.833333333333332
+                ],
+                [
+                  27.833333333333332,
+                  37.266666666666666
+                ]
+              ],
+              "explanation_source_ranges": [
+                [
+                  0,
+                  10.2
+                ],
+                [
+                  10.5,
+                  19
+                ],
+                [
+                  19,
+                  27.833333333333332
+                ],
+                [
+                  27.8,
+                  35.53333333333333
+                ],
+                [
+                  23,
+                  37.266666666666666
+                ]
+              ],
+              "line_source_ranges": [
+                {
+                  "line_id": "BT-L01",
+                  "source_range_seconds": [
+                    0,
+                    10.2
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-explanation-BT-L01",
+                      "source_range_seconds": [
+                        0,
+                        10.2
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L02",
+                  "source_range_seconds": [
+                    10.5,
+                    19
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-explanation-BT-L02",
+                      "source_range_seconds": [
+                        10.5,
+                        19
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L03",
+                  "source_range_seconds": [
+                    19,
+                    27.833333333333332
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-explanation-BT-L03",
+                      "source_range_seconds": [
+                        19,
+                        27.833333333333332
+                      ]
+                    },
+                    {
+                      "segment_id": "BT-explanation-BT-L06",
+                      "source_range_seconds": [
+                        23,
+                        27.833333333333332
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L04",
+                  "source_range_seconds": [
+                    27.8,
+                    35.53333333333333
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-explanation-BT-L04",
+                      "source_range_seconds": [
+                        27.8,
+                        35.53333333333333
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                },
+                {
+                  "line_id": "BT-L06",
+                  "source_range_seconds": [
+                    23,
+                    37.266666666666666
+                  ],
+                  "evidence_source_ranges": [
+                    {
+                      "segment_id": "BT-explanation-BT-L03",
+                      "source_range_seconds": [
+                        23,
+                        27.833333333333332
+                      ]
+                    },
+                    {
+                      "segment_id": "BT-explanation-BT-L06",
+                      "source_range_seconds": [
+                        23,
+                        37.266666666666666
+                      ]
+                    }
+                  ],
+                  "context_source_ranges": []
+                }
+              ],
+              "registered_revisits": [
+                {
+                  "from_source_range": [
+                    0,
+                    10.733333333333333
+                  ],
+                  "to_source_range": [
+                    0,
+                    10.2
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    10.733333333333333,
+                    19
+                  ],
+                  "to_source_range": [
+                    10.5,
+                    19
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    19,
+                    27.833333333333332
+                  ],
+                  "to_source_range": [
+                    19,
+                    27.833333333333332
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    27.833333333333332,
+                    37.266666666666666
+                  ],
+                  "to_source_range": [
+                    27.8,
+                    35.53333333333333
+                  ]
+                },
+                {
+                  "from_source_range": [
+                    27.833333333333332,
+                    37.266666666666666
+                  ],
+                  "to_source_range": [
+                    23,
+                    37.266666666666666
+                  ]
+                }
+              ],
+              "execution_plan": {
+                "plan_id": "picture_plan_C1_four_groups",
+                "script_candidate_id": "script_candidate_C1_four_groups",
+                "content": {
+                  "original_playback": {
+                    "ranges": [
+                      [
+                        0,
+                        10.733333333333333
+                      ],
+                      [
+                        10.733333333333333,
+                        19
+                      ],
+                      [
+                        19,
+                        27.833333333333332
+                      ],
+                      [
+                        27.833333333333332,
+                        37.266666666666666
+                      ]
+                    ],
+                    "purpose": "四组分别播放，示范后立即接本组讲解；不先播放完整原片"
+                  },
+                  "phases": [
+                    {
+                      "mode": "original",
+                      "source_range_seconds": [
+                        0,
+                        10.733333333333333
+                      ],
+                      "picture": "G1 原速完整原声示范；Video asal；不叠讲解。"
+                    },
+                    {
+                      "mode": "explanation",
+                      "line_id": "BT-L01",
+                      "source_range_seconds": [
+                        0,
+                        10.2
+                      ],
+                      "picture": "原速回看开头，源帧45的真实透脸参照并列；Kain nipis短标，现有L01完整音频复用。"
+                    },
+                    {
+                      "mode": "original",
+                      "source_range_seconds": [
+                        10.733333333333333,
+                        19
+                      ],
+                      "picture": "G2 原速完整原声示范；Video asal；不叠讲解。"
+                    },
+                    {
+                      "mode": "explanation",
+                      "line_id": "BT-L02",
+                      "source_range_seconds": [
+                        10.5,
+                        19
+                      ],
+                      "picture": "先拉揉，进入第二个Bila sebut kemasan前切16.33至19秒近拍；Lembut & anjal、Kemasan dari dekat分别对应。新音频未配，意群切点不套旧4.3秒。"
+                    },
+                    {
+                      "mode": "original",
+                      "source_range_seconds": [
+                        19,
+                        27.833333333333332
+                      ],
+                      "picture": "G3 原速完整原声示范；Video asal；不叠讲解。"
+                    },
+                    {
+                      "mode": "explanation",
+                      "line_id": "BT-L03",
+                      "source_range_seconds": [
+                        19,
+                        27.833333333333332
+                      ],
+                      "picture": "先19至21.33秒手持正面，再21.33至27.83秒数量及替换建议；Tukar pakai harian短标。新音频未配，不能声称时长已经验证。"
+                    },
+                    {
+                      "mode": "original",
+                      "source_range_seconds": [
+                        27.833333333333332,
+                        37.266666666666666
+                      ],
+                      "picture": "G4 原速完整原声示范；Video asal；不叠讲解。"
+                    },
+                    {
+                      "mode": "explanation",
+                      "line_id": "BT-L04",
+                      "source_range_seconds": [
+                        27.8,
+                        35.53333333333333
+                      ],
+                      "picture": "先27.8至31.5秒内侧，在现有音频3.7秒切33.2至35.53秒外观。Pelapik bahagian dalam短标。"
+                    },
+                    {
+                      "mode": "explanation",
+                      "line_id": "BT-L06",
+                      "source_range_seconds": [
+                        23,
+                        37.266666666666666
+                      ],
+                      "picture": "先23至26.4秒推荐背景，现有音频3.4秒切29.23至37.27秒推荐上下文。Ingatkan tukar, ajak beli短标；此处回看较早数量画面，不能误称当前仍在示范内侧。"
+                    }
+                  ],
+                  "viewer_stage_cues": {
+                    "scope": "四组原声与讲解逐组交替；第④组L04接L06",
+                    "original": {
+                      "text": "Video asal",
+                      "zh": "原片示范",
+                      "enter": "每组原声第一帧",
+                      "exit": "该组讲解第一帧前退出"
+                    },
+                    "revisit": [
+                      {
+                        "line_ids": [
+                          "BT-L01"
+                        ],
+                        "text": "Ulasan semula · Kain",
+                        "zh": "回看讲解",
+                        "enter": "G1原声结束后，BT-L01开始前显示",
+                        "exit": "G2原声开始前退出",
+                        "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                      },
+                      {
+                        "line_ids": [
+                          "BT-L02"
+                        ],
+                        "text": "Ulasan semula · Kain",
+                        "zh": "回看讲解",
+                        "enter": "G2原声结束后，BT-L02开始前显示",
+                        "exit": "G3原声开始前退出",
+                        "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                      },
+                      {
+                        "line_ids": [
+                          "BT-L03"
+                        ],
+                        "text": "Ulasan semula · Tukar pakai",
+                        "zh": "回看讲解",
+                        "enter": "G3原声结束后，BT-L03开始前显示",
+                        "exit": "G4原声开始前退出",
+                        "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                      },
+                      {
+                        "line_ids": [
+                          "BT-L04"
+                        ],
+                        "text": "Ulasan semula · Pelapik",
+                        "zh": "回看讲解",
+                        "enter": "G4原声结束后，BT-L04开始前显示",
+                        "exit": "BT-L06开始前退出",
+                        "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                      },
+                      {
+                        "line_ids": [
+                          "BT-L06"
+                        ],
+                        "text": "Ulasan semula · Ajakan membeli",
+                        "zh": "回看讲解",
+                        "enter": "BT-L04结束、BT-L06开始前切换主题",
+                        "exit": "中段结束时退出",
+                        "meaning": "回看刚才展示的做法；较早上下文按picture说明。"
+                      }
+                    ],
+                    "layout": {
+                      "original": "原片区加Video asal标识",
+                      "revisit": "黄色阶段栏；独立不透明黑色底区，白色字幕无阴影",
+                      "safe_area": "字幕不叠人物动作"
+                    },
+                    "handoff": "严格按phases数组顺序；原声→本组讲解→下一组原声。G4讲解从内侧转促单时切换主题栏。"
+                  },
+                  "constraints": [
+                    "L01、L04、L06完整原音频复用；L02/L03尚未配音，声长与实际字幕同步未验收。",
+                    "原声示范保留原声，讲解回看静音源声；禁止慢放、循环、长定格补时。",
+                    "成绩开场及两阶段达人结尾不属本轮中段审核，不删除旧结尾。"
+                  ],
+                  "composition": {
+                    "canvas": [
+                      576,
+                      1024
+                    ],
+                    "detail": "{\"production_rows\":[{\"row_id\":\"row-0\",\"unit_id\":\"BT-U01\",\"kind\":\"original\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[0,322],\"output_frames_reference\":[0,322],\"line_ids\":[]},{\"row_id\":\"row-1\",\"unit_id\":\"BT-U01\",\"kind\":\"explanation\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[0,306],\"output_frames_reference\":[322,628],\"line_ids\":[\"BT-L01\"]},{\"row_id\":\"row-2\",\"unit_id\":\"BT-U01\",\"kind\":\"original\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[322,570],\"output_frames_reference\":[628,876],\"line_ids\":[]},{\"row_id\":\"row-3\",\"unit_id\":\"BT-U01\",\"kind\":\"explanation\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[315,570],\"output_frames_reference\":[876,1131],\"line_ids\":[\"BT-L02\"]},{\"row_id\":\"row-4\",\"unit_id\":\"BT-U01\",\"kind\":\"original\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[570,835],\"output_frames_reference\":[1131,1396],\"line_ids\":[]},{\"row_id\":\"row-5\",\"unit_id\":\"BT-U01\",\"kind\":\"explanation\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[570,835],\"output_frames_reference\":[1396,1661],\"line_ids\":[\"BT-L03\"]},{\"row_id\":\"row-6\",\"unit_id\":\"BT-U01\",\"kind\":\"original\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[835,1118],\"output_frames_reference\":[1661,1944],\"line_ids\":[]},{\"row_id\":\"row-7\",\"unit_id\":\"BT-U01\",\"kind\":\"explanation\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[834,1066],\"output_frames_reference\":[1944,2176],\"line_ids\":[\"BT-L04\"]},{\"row_id\":\"row-8\",\"unit_id\":\"BT-U01\",\"kind\":\"explanation\",\"source_asset_id\":\"d24aef47-f694-4a50-a639-42d80e25d75a\",\"source_frames\":[690,1118],\"output_frames_reference\":[2176,2604],\"line_ids\":[\"BT-L06\"]}]}"
+                  },
+                  "script_candidate_id": "script_candidate_C1_four_groups"
+                }
+              }
+            },
+            "points": [
+              {
+                "point_id": "BT-P01",
+                "role": "primary",
+                "question": "不用试穿，怎样让人直接看见面料有多薄？",
+                "evidence_ids": [
+                  "BT-E001",
+                  "BT-E002"
+                ],
+                "buying_concern": "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。",
+                "filming_conditions": [
+                  "布料在脸前撑开，脸的轮廓仍能看到",
+                  "保留举起与放低的上下文，不只截一块灰布"
+                ],
+                "treatment": "explain"
+              },
+              {
+                "point_id": "BT-P02",
+                "role": "primary",
+                "question": "看不到真实穿着时，怎样让柔软和弹性的说法有可观察的参照？",
+                "evidence_ids": [
+                  "BT-E003",
+                  "BT-E004",
+                  "BT-E005",
+                  "BT-E006",
+                  "BT-E007"
+                ],
+                "buying_concern": "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。",
+                "filming_conditions": [
+                  "同一件商品，先展开再收拢",
+                  "手与面料接触清楚；正常速度保留动作"
+                ],
+                "treatment": "explain"
+              },
+              {
+                "point_id": "BT-P03",
+                "role": "supporting",
+                "question": "远景已经看见款式，为什么还需要拿近看做工？",
+                "evidence_ids": [
+                  "BT-E006",
+                  "BT-E007",
+                  "BT-E003",
+                  "BT-E004",
+                  "BT-E005"
+                ],
+                "buying_concern": "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。",
+                "filming_conditions": [
+                  "确实拿近到能看见边缘细节",
+                  "不把手挡住的位置标为缝接证据"
+                ],
+                "treatment": "explain",
+                "supports_point_id": "BT-P02"
+              },
+              {
+                "point_id": "BT-P04",
+                "role": "supporting",
+                "question": "原作者怎样用替换需要解释多件建议，并把换新提醒接到购买入口？",
+                "evidence_ids": [
+                  "BT-E008",
+                  "BT-E009",
+                  "BT-E015",
+                  "BT-E010",
+                  "BT-E011",
+                  "BT-E012",
+                  "BT-E016"
+                ],
+                "buying_concern": "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。",
+                "filming_conditions": [
+                  "七件只作为原作者建议",
+                  "明确区分消费者购买邀请与创作者学习邀请"
+                ],
+                "treatment": "explain",
+                "supports_point_id": "BT-P01"
+              },
+              {
+                "point_id": "BT-P05",
+                "role": "primary",
+                "question": "外观之外，怎样展示买家关心的内侧衬片？",
+                "evidence_ids": [
+                  "BT-E010",
+                  "BT-E011",
+                  "BT-E012",
+                  "BT-E016"
+                ],
+                "buying_concern": "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。",
+                "filming_conditions": [
+                  "真正翻开到白色内侧衬片展开",
+                  "内侧与外侧对象分清；不拿翻转遮挡段当清楚展示"
+                ],
+                "treatment": "explain"
+              }
+            ]
+          }
+        ]
+      },
+      "review": {
+        "units": [
+          {
+            "unit_id": "BT-U01",
+            "points": [
+              {
+                "point_id": "BT-P01",
+                "learner_takeaway": "Synthetic protocol positive",
+                "connection": "purchase_connected",
+                "basis": "in_copy",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "reason": "Synthetic contract test",
+                "quotes": [
+                  {
+                    "line_id": "BT-L01",
+                    "channel": "narration",
+                    "text": "Tengok semula pembukaannya. Wajah masih nampak di sebalik kain, jadi penonton nampak betapa nipisnya kain itu tanpa perlu dipakai pada badan."
+                  }
+                ]
+              },
+              {
+                "point_id": "BT-P02",
+                "learner_takeaway": "Synthetic protocol positive",
+                "connection": "purchase_connected",
+                "basis": "in_copy",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "reason": "Synthetic contract test",
+                "quotes": [
+                  {
+                    "line_id": "BT-L02",
+                    "channel": "narration",
+                    "text": "Bila sebut lembut dan anjal, dia ramas dan tarik kain. Bila sebut kemasan, dia dekatkan pada kamera supaya pembeli nampak jelas."
+                  }
+                ]
+              },
+              {
+                "point_id": "BT-P03",
+                "learner_takeaway": "Synthetic protocol positive",
+                "connection": "purchase_connected",
+                "basis": "in_copy",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "reason": "Synthetic contract test",
+                "quotes": [
+                  {
+                    "line_id": "BT-L02",
+                    "channel": "narration",
+                    "text": "Bila sebut lembut dan anjal, dia ramas dan tarik kain. Bila sebut kemasan, dia dekatkan pada kamera supaya pembeli nampak jelas."
+                  }
+                ]
+              },
+              {
+                "point_id": "BT-P04",
+                "learner_takeaway": "Synthetic protocol positive",
+                "connection": "purchase_connected",
+                "basis": "in_copy",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "reason": "Synthetic contract test",
+                "quotes": [
+                  {
+                    "line_id": "BT-L03",
+                    "channel": "narration",
+                    "text": "Dia tunjuk bentuknya dulu, kemudian cadangkan tujuh helai untuk tukar pakai harian. Pembeli tahu apa yang dibeli dan kenapa beli lebih."
+                  }
+                ]
+              },
+              {
+                "point_id": "BT-P05",
+                "learner_takeaway": "Synthetic protocol positive",
+                "connection": "purchase_connected",
+                "basis": "in_copy",
+                "source_support": "supported",
+                "meaning_alignment": "aligned",
+                "reason": "Synthetic contract test",
+                "quotes": [
+                  {
+                    "line_id": "BT-L04",
+                    "channel": "narration",
+                    "text": "Dia buka bahagian dalam supaya pembeli boleh lihat pelapiknya, bukan meneka daripada gambar luar sahaja."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

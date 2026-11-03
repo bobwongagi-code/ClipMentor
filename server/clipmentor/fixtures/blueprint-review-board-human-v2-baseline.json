@@ -1,0 +1,5 @@
+{
+  "source": "Existing saved Green Makes v3 fixture, fixed input digest and clock; planner output before second human-only changes.",
+  "planner_sha256": "793251a4cb4e051e4d2df9a7649fbf72877e0235e39ad1798318c2943b650ad4",
+  "fixture_sha256": "8367bbc89d870e4ba3c0470a547b6080f7413e517ff26a7f9bb046c05021f8e0"
+}

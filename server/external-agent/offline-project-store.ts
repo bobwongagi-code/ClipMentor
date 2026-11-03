@@ -1,3 +1,4 @@
+import { assertDeliveryPicturePreservation } from '../../src/clipmentor/delivery-bindings';
 import { randomUUID } from 'node:crypto';
 import {
   getStoredEntry,
@@ -238,6 +239,7 @@ async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectC
       if (!before || revisionOf(before) !== input.expectedRevision) return { status: 'stale' };
       const policy = await store.readEntry(`${HANDOFF_PREFIX}${input.projectId}`);
       await assertHandoffProjectWrite(policy.found ? policy.value : undefined, before, input.normalizedDoc);
+      assertDeliveryPicturePreservation(before, input.normalizedDoc);
       const currentMetadata = {
         projects: await store.readEntry('projects'),
         versions: await store.readEntry(versionsKey),

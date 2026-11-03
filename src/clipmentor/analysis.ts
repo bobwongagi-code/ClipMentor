@@ -14,6 +14,8 @@ export interface AnalysisEvidence {
   evidence_id: string;
   kind: 'source_frame' | 'original_claim' | 'visible_action' | 'expression_analysis_not_verified_causal_effect' | 'operator_supplied';
   text: string;
+  /** Planner translation for internal human review, not the source claim. */
+  meaning_zh?: string;
   status: string;
   provenance?: string;
   source_range_seconds?: [number, number];
@@ -128,6 +130,7 @@ export function isClipMentorAnalysis(v: unknown): v is ClipMentorAnalysis {
     || !unique(v.observations as unknown[], 'observation_id'))) return false;
   if (!rows(v.evidence, (e) => nonempty(e.evidence_id) && nonempty(e.status) && str(e.text)
     && (typeof e.kind === 'string' && ['source_frame', 'original_claim', 'visible_action', 'expression_analysis_not_verified_causal_effect', 'operator_supplied'].includes(e.kind))
+    && (e.meaning_zh === undefined || nonempty(e.meaning_zh))
     && (e.provenance === undefined || nonempty(e.provenance))
     && strings(e.supporting_evidence_ids) && strings(e.source_ids)
     && (e.source_range_seconds === undefined || range(e.source_range_seconds, e.kind === 'visible_action'))

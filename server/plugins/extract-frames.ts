@@ -188,13 +188,23 @@ export function frameSeekArgs(timeMs: number): string[] {
   return seconds > 0 ? ['-ss', String(seconds)] : [];
 }
 
-export async function extractOneFrame(input: string, timeMs: number, outPath: string, individual = false): Promise<void> {
+export interface FrameCrop { left: number; top: number; right: number; bottom: number }
+export async function extractOneFrame(input: string, timeMs: number, outPath: string, individual = false, crop?: FrameCrop): Promise<void> {
+  if (crop && (Object.keys(crop).length !== 4 || !['left', 'top', 'right', 'bottom'].every(k =>
+    typeof crop[k as keyof FrameCrop] === 'number' && Number.isFinite(crop[k as keyof FrameCrop])
+    && crop[k as keyof FrameCrop] >= 0 && crop[k as keyof FrameCrop] < 1)
+    || crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1)) throw new Error('Invalid normalized frame crop');
+  const filters: string[] = [];
+  // Crop original pixels before the existing review-size cap. These are margins,
+  // not width/height; no model-authored arithmetic or edited source asset is used.
+  if (crop) filters.push(`crop=w=round(iw*(1-${crop.left}-${crop.right})):h=round(ih*(1-${crop.top}-${crop.bottom})):x=round(iw*${crop.left}):y=round(ih*${crop.top}):exact=1`);
+  if (individual) filters.push("scale=w='min(iw,1280)':h='min(ih,1280)':force_original_aspect_ratio=decrease:force_divisible_by=2");
   await run(ffmpegBin(), [
     '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
     ...(await resolveHwDecodeArgs(ffmpegBin(), undefined)),
     ...frameSeekArgs(timeMs),
     '-i', input,
-    ...(individual ? ['-vf', "scale=w='min(iw,1280)':h='min(ih,1280)':force_original_aspect_ratio=decrease:force_divisible_by=2"] : []),
+    ...(filters.length ? ['-vf', filters.join(',')] : []),
     '-frames:v', '1',
     '-q:v', '4',
     outPath,

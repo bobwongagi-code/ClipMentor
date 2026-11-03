@@ -54,7 +54,7 @@ export function parseHandoffPolicy(v:unknown):HandoffPolicy {
   ||!v.callIds.every(x=>typeof x==='string'&&x.length<=300))throw new Error('handoff_policy_corrupt');
  return v as unknown as HandoffPolicy;
 }
-const READ=new Set(['load_skill','ToolSearch','read_project','read_timeline','read_script','read_captions','read_transcript','find_transcript','read_clipmentor_analysis','read_clipmentor_source_video','read_agent_artifact','get_editor_url','track_progress','track_export','view_asset_frames','view_timeline_frames','inspect_color','report_user_friction','probe_media']);
+const READ=new Set(['load_skill','ToolSearch','read_project','read_timeline','read_script','read_captions','read_transcript','find_transcript','read_clipmentor_analysis','render_clipmentor_review_board','read_clipmentor_source_video','read_agent_artifact','get_editor_url','track_progress','track_export','view_asset_frames','view_timeline_frames','inspect_color','report_user_friction','probe_media']);
 const PLAN=new Set(['revise_clipmentor_analysis','observe_clipmentor_source','transcribe_clipmentor_source','observe_clipmentor_source_video','request_clipmentor_copy_review']);
 const EDIT=new Set(['update_item_props','move_item','set_item_timing','duplicate_item','delete_item','set_project_settings','edit_item','edit_track','edit_captions','create_motion_graphic_from_code','submit_voice','submit_render_job','export_timeline','submit_export','review_clipmentor_preview','request_clipmentor_copy_review','verify_export']);
 export function handoffToolAccess(brief:HandoffBrief,name:string,args:Row,boundRun:boolean):'read'|'write'|'paid' {

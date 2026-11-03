@@ -1,6 +1,7 @@
 /** Advisory, deterministic author checks. No IO, provider, gate or approval dependency. */
 import corpus from './fixtures/blueprint-self-check-cases.json';
 import { blueprintPictureNotices, pictureNoticeRows, verifyPictureNoticeSources, currentPicturePhases } from './blueprint-picture-notices';
+import {labelTranslationsConflict} from './author-translations';
 
 type Row = Record<string, unknown>;
 type Range = [number, number];
@@ -58,16 +59,20 @@ export function readBlueprint(value: unknown) {
   const lines: Line[] = [], groups: Group[] = [], uses: Use[] = [];
   const issues: Array<{ path: string; message: string }> = [];
   const priorities = new Map<string, number>(), phasePictures = new Map<string, Row[]>();
+  const suppliedTranslations = new Map<string, unknown>();
   const deliveryIds = new Set<string>();
   const selectedPlans: Array<{unit: Row; candidate_id: string; plan_id: string; plan: Row; path: string; resolved?: ReturnType<typeof currentPicturePhases>}> = [];
   const addLine = (v: unknown, path: string, priority = 1) => {
     const row = obj(v), id = str(row.id) || str(row.line_id) || path;
     if (!str(row.narration_ms)) return;
     const next = { id, text: str(row.narration_ms), zh: str(row.zh) || str(row.meaning_zh), raw: row, path };
+    const translationConflict = labelTranslationsConflict(suppliedTranslations.get(id), row.labels_zh);
+    if (row.labels_zh !== undefined && !suppliedTranslations.has(id)) suppliedTranslations.set(id, row.labels_zh);
     const index = lines.findIndex(l => l.id === id);
     if (index >= 0) {
       const old = lines[index];
-      if (old.text !== next.text || old.zh !== next.zh || JSON.stringify(old.raw.labels ?? []) !== JSON.stringify(next.raw.labels ?? [])) {
+      if (old.text !== next.text || old.zh !== next.zh || JSON.stringify(old.raw.labels ?? []) !== JSON.stringify(next.raw.labels ?? [])
+        || translationConflict) {
         issues.push({ path, message: `Line ${id} conflict between ${old.path} and ${path}; current registered candidate takes precedence, copies require reconciliation.` });
       }
       if (priority > (priorities.get(id) ?? 0)) { lines[index] = next; priorities.set(id, priority); }

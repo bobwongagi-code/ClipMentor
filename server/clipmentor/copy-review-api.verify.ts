@@ -16,6 +16,8 @@ const messages=captured.messages as Array<{content:unknown[]}>;assert.equal(mess
 assert.equal(runner.runtime?.method,'isolated-api-copy-and-picture-v1');assert.equal(runner.runtime?.model,'fixture-api');
 const failing=apiCopyReviewDependencies(config,(async()=>{requests++;throw Error('Injected gateway error');}) as unknown as typeof generateText,{} as never);
 await assert.rejects(failing.run('packet',[],'r','p',new AbortController().signal),/Injected gateway/);assert.equal(requests,2,'one failed API call, no retry or desktop fallback');
+await runner.run('delivery roles',[{unit_id:'opening',phase:'delivery',source_seconds:0,asset_id:'role-test-picture',delivery_view:'supplied_full',base64:'YQ=='},{unit_id:'opening',phase:'delivery',source_seconds:0,asset_id:'role-test-picture',delivery_view:'planned_crop',crop:{left:0,top:0,right:0,bottom:0.2},base64:'YQ=='}],'review','p',new AbortController().signal);
+const roleContent=(captured.messages as Array<{content:Array<{type:string;text?:string}>}>)[0].content.filter(p=>p.type==='text').map(p=>p.text!).slice(1);assert.equal(roleContent.length,2);assert(roleContent[0].includes('supplied_full'));assert(roleContent[1].includes('planned_crop'));assert(roleContent.every(t=>t.includes('role-test-picture')));assert(roleContent[1].includes('0.2'));assert.notEqual(roleContent[0],roleContent[1]);
 console.log('copy-review-api: isolated single request, inline fixed frames, model provenance, no tools/history/retry/desktop fallback passed; mocked provider only');
 
 const directory=await mkdtemp(join(tmpdir(),'api-copy-review-'));

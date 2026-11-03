@@ -1,3 +1,4 @@
+import {deliverySectionsFromDoc,deliverySectionsShape,deliveryReview,deliveryReviewCriteria,type DeliverySection} from './delivery-sections';
 import { buildSourceContext, sourceReviewRanges, isSourceContext, assessSourceAlignment, sourceRelationsShape, type SourceContext, type SourceRelation } from './source-alignment';
 import { clipMentorHandoffBlock } from './handoff-guard';
 /** Copy/plan release gate. It does not certify audio, rendered video or efficacy. */
@@ -76,6 +77,7 @@ export interface CopyProductionReview {
   verdict: Verdict;
   units: CopyUnitJudgment[];
   teaching_review?: TeachingEnvelope;
+  delivery_checks?: unknown[];
 }
 type Row = Record<string, unknown>;
 const row = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -112,6 +114,7 @@ export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
       && (u.narration_checks === undefined || narrationChecksShape(u.narration_checks))
       && (u.group_checks === undefined || groupReviewShape(u.group_checks)))
     && new Set(v.units.map((u) => u.unit_id)).size === v.units.length
+    && (v.delivery_checks === undefined || Array.isArray(v.delivery_checks))
     && (v.teaching_review === undefined || (row(v.teaching_review) && teachingPacket(v.teaching_review.packet) && teachingReviewShape(v.teaching_review.review)));
 }
 
@@ -180,16 +183,24 @@ export async function copyReviewSubject(doc: ProjectDoc) {
   // bound. Reverting a sentence through the revision tool increments revision again;
   // it cannot revive an old receipt. Timeline production edits do not change this hash.
   const { production_copy_review: _receipt, ...content } = a;
-  const bytes = new TextEncoder().encode(canonical({ protocol: COPY_REVIEW_PROTOCOL, input_policy: COPY_REVIEW_INPUT_POLICY, calibration: teachingRegression, narration_review_criteria: NARRATION_REVIEW_CRITERIA, visual_review_criteria: VISUAL_REVIEW_CRITERIA, group_review_criteria: GROUP_REVIEW_CRITERIA, analysis: content,
+  const delivery=deliverySectionsFromDoc(doc);
+  const projectedDelivery=delivery.length?reviewableDeliverySections(delivery):[];
+  // Preserve clean historical bindings, but a receipt that formerly exposed
+  // extra author metadata cannot silently certify the newly isolated input.
+  const changedDeliveryInput=canonical(delivery)!==canonical(projectedDelivery);
+  const bytes = new TextEncoder().encode(canonical({ ...(delivery.length?{delivery_review_criteria:deliveryReviewCriteria(delivery)}:{}),
+    ...(changedDeliveryInput?{reviewable_delivery_sections:projectedDelivery}:{}),
+    protocol: COPY_REVIEW_PROTOCOL, input_policy: COPY_REVIEW_INPUT_POLICY, calibration: teachingRegression, narration_review_criteria: NARRATION_REVIEW_CRITERIA, visual_review_criteria: VISUAL_REVIEW_CRITERIA, group_review_criteria: GROUP_REVIEW_CRITERIA, analysis: content,
     actual_source_hash: doc.assets.find((v) => v.id === a.source.asset_id)?.sourceContentHash ?? null }));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return { revision: a.revision, units, digest: [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join('') };
+  return { revision: a.revision, units, ...(delivery.length?{delivery_sections:delivery}:{}), digest: [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join('') };
 }
 
 export function isReviewedNarrationText(subject: Awaited<ReturnType<typeof copyReviewSubject>>, value: unknown) {
   const normalize = (v: string) => v.trim().replace(/\s+/g, ' ');
   const requested = typeof value === 'string' ? normalize(value) : '';
-  return !!requested && subject.units.some((u) => [...u.narration, u.narration.join(' ')].some((line) => normalize(line) === requested));
+  return !!requested && (subject.units.some((u) => [...u.narration, u.narration.join(' ')].some((line) => normalize(line) === requested))
+    || (subject.delivery_sections??[]).some(s=>normalize(s.line.narration_ms)===requested));
 }
 
 /** Host review handoff, deliberately not an Agent tool. Never infer a pass from self_review. */
@@ -253,6 +264,8 @@ export async function checkCopyProduction(
   }
   if (r.verdict !== 'pass' || r.units.some((u) => u.verdict !== 'pass' || u.findings.some((f) => f.severity !== 'suggestion'))) return result('copy_review_not_passed');
   if (calibration.protocol !== COPY_REVIEW_PROTOCOL || !calibration.qualified) return result('copy_review_method_unqualified');
+  const delivery=deliveryReview(registered.delivery_sections??[],r.delivery_checks);
+  if(delivery.verdict!=='pass')return {...result('copy_delivery_review_not_passed'),delivery_issues:delivery.issues};
   return result('copy_and_plan_ready', true);
 }
 
@@ -262,7 +275,7 @@ const PREPARATION = new Set([
   'observe_clipmentor_source_video',
   'request_clipmentor_copy_review',
   'read_timeline', 'read_project', 'read_script', 'read_captions', 'read_transcript', 'find_transcript',
-  'read_agent_artifact', 'read_clipmentor_analysis', 'view_timeline_frames', 'view_asset_frames',
+  'read_agent_artifact', 'read_clipmentor_analysis', 'render_clipmentor_review_board', 'view_timeline_frames', 'view_asset_frames',
   'ToolSearch', 'load_skill', 'list_templates', 'search_templates', 'list_audio', 'browse_library',
   'search_media', 'search_stock_media', 'search_fonts', 'track_progress', 'track_export', 'probe_media',
   'inspect_color', 'analyze_scene_quality', 'report_user_friction', 'get_editor_url',
@@ -337,6 +350,7 @@ export interface VisualEvidenceBinding {
   evidence_ids: string[];
 }
 export interface TeachingPacket {
+  delivery_sections?: DeliverySection[];
   audience: string;
   product: { name: string; purchase_concerns: string[]; unknowns: string[] };
   source_evidence: Array<{ evidence_id: string; observation: string; time_seconds?: number[]; operator_supplied_context?: string }>;
@@ -494,6 +508,7 @@ export async function copyTeachingPacketFromDoc(doc: ProjectDoc): Promise<Teachi
     observation: `[${e.kind}; ${e.status}] ${e.text}`,
     ...(e.source_range_seconds ? { time_seconds: e.source_range_seconds } : e.time_seconds === undefined ? {} : { time_seconds: [e.time_seconds] }) }));
   return {
+    ...(deliverySectionsFromDoc(doc).length?{delivery_sections:deliverySectionsFromDoc(doc)}:{}),
     audience: '给马来西亚创作者学习拍法与商品购买关注的关系；不是消费者广告或功效认证',
     product: { name: a.product.name, purchase_concerns: [...new Set(b.points.map((p) => p.buying_concern))], unknowns: [...new Set(b.segments.flatMap((s) => s.unknowns))] },
     source_evidence: sourceEvidence,
@@ -569,7 +584,7 @@ function picturePlanShape(v: unknown) {
     && (v.execution_plan === undefined || (row(v.execution_plan) && text(v.execution_plan.plan_id) && text(v.execution_plan.script_candidate_id) && row(v.execution_plan.content)));
 }
 function teachingPacket(v: unknown): v is TeachingPacket {
-  if (!row(v) || !text(v.audience) || !row(v.product) || !text(v.product.name)
+  if (!row(v) || (v.delivery_sections!==undefined&&!deliverySectionsShape(v.delivery_sections)) || !text(v.audience) || !row(v.product) || !text(v.product.name)
     || !stringList(v.product.purchase_concerns) || !v.product.purchase_concerns.length || !stringList(v.product.unknowns)
     || !Array.isArray(v.source_evidence) || !v.source_evidence.length || !v.source_evidence.every((e) => row(e) && text(e.evidence_id) && text(e.observation)
       && (e.time_seconds === undefined || (Array.isArray(e.time_seconds) && e.time_seconds.length > 0 && e.time_seconds.every((t) => typeof t === 'number' && Number.isFinite(t) && t >= 0)))
@@ -717,10 +732,33 @@ export function assessTeachingReview(packet: unknown, review: unknown) {
 }
 
 /** Strip host metadata/expected verdicts/author arguments from review handoff. */
+function reviewableDeliverySections(sections: DeliverySection[]): DeliverySection[] {
+  // Stored drafts may contain legacy nested metadata. Project known factual
+  // fields rather than cloning author notes or case answers into the reviewer.
+  return sections.map(s => ({
+    section_id: s.section_id, kind: s.kind,
+    line: { line_id: s.line.line_id, narration_ms: s.line.narration_ms,
+      caption_lines: [...s.line.caption_lines], meaning_zh: s.line.meaning_zh, labels: [...s.line.labels] },
+    evidence_ids: [...s.evidence_ids],
+    ...(s.evidence ? { evidence: s.evidence.map(e => ({ evidence_id: e.evidence_id, text: e.text })) } : {}),
+    picture: { asset_id: s.picture.asset_id, src: s.picture.src, sha256: s.picture.sha256, description: s.picture.description,
+      ...(s.picture.crop ? { crop: { left: s.picture.crop.left, top: s.picture.crop.top, right: s.picture.crop.right, bottom: s.picture.crop.bottom } } : {}),
+      ...(s.picture.display ? { display: { fps: s.picture.display.fps,
+        ranges: s.picture.display.ranges.map(r => [r[0], r[1]] as [number, number]) } } : {}) },
+    voice: { provider: s.voice.provider, voiceId: s.voice.voiceId, speed: s.voice.speed,
+      ...(s.voice.existing_audio ? { existing_audio: {
+        assetId: s.voice.existing_audio.assetId, src: s.voice.existing_audio.src, sha256: s.voice.existing_audio.sha256,
+        durationSeconds: s.voice.existing_audio.durationSeconds, text: s.voice.existing_audio.text,
+      } } : {}) },
+  }));
+}
+
+/** Only the current material and neutral criteria enter the independent request. */
 export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>) {
   if (!cases.length || !distinct(cases.map((c) => c.case_id)) || cases.some((c) => !text(c.case_id) || !teachingPacket(c.packet))) throw new Error('Invalid teaching review packet');
   for (const { packet } of cases) for (const unit of packet.units) checkGroupedReviewHandoff(unit);
-  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${teachingRegression.instructions}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${VISUAL_REVIEW_CRITERIA}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
+  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${teachingRegression.instructions}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${VISUAL_REVIEW_CRITERIA}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
+    ...(packet.delivery_sections?.length?{delivery_sections:reviewableDeliverySections(packet.delivery_sections)}:{}),
     audience: packet.audience,
     product: { name: packet.product.name, purchase_concerns: [...packet.product.purchase_concerns], unknowns: [...packet.product.unknowns] },
     source_evidence: packet.source_evidence.map((e) => ({ evidence_id: e.evidence_id, observation: e.observation,

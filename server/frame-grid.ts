@@ -26,6 +26,8 @@ export interface TileOptions {
   cellWidth?: number;
   /** Max columns. Default auto (ceil sqrt(n)). */
   cols?: number;
+  /** Optional explicit tile height for portrait plan boards; existing default stays 16:9. */
+  cellHeight?: number;
   /** JPEG quality 2-31 (ffmpeg -q:v, lower=better). Default 5. */
   quality?: number;
 }
@@ -268,7 +270,7 @@ export async function tileContactSheet(cells: GridCell[], opts: TileOptions = {}
   const n = cells.length;
   const cols = Math.max(1, Math.min(n, opts.cols ?? Math.ceil(Math.sqrt(n))));
   const rows = Math.ceil(n / cols);
-  const cellH = Math.max(2, Math.round(cellWidth * 9 / 16)) & ~1;
+  const cellH = Math.max(2, Math.min(4096, Math.round(opts.cellHeight ?? cellWidth * 9 / 16))) & ~1;
   const backend = detectLabelBackend();
 
   const dir = await mkdtemp(join(tmpdir(), 'cc-grid-'));

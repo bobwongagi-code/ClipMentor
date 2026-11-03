@@ -4,7 +4,7 @@ import { isClipMentorAnalysis, invalidateChangedReviews, type AnalysisActor } fr
 export const OBSERVATION_ID_MISMATCH = 'Visible action observation_id must exactly match a saved observation ID, including its observation: prefix; nothing changed';
 
 /** Add candidates, not approvals. Existing records can only be changed through the revision path. */
-export async function appendAnalysisFindings(current: ClipMentorAnalysis, input: unknown, actor: AnalysisActor, reason: string): Promise<ClipMentorAnalysis> {
+export async function appendAnalysisFindings(current: ClipMentorAnalysis, input: unknown, actor: AnalysisActor, reason: string, suppliedImageIds: readonly string[] = []): Promise<ClipMentorAnalysis> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Findings object required');
   const records = input as Record<string, unknown>;
   if (!Object.keys(records).length || Object.keys(records).some((k) => !['product', 'evidence', 'points', 'blueprint', 'transcripts'].includes(k))) throw new Error('Only candidate findings fields allowed');
@@ -44,7 +44,7 @@ export async function appendAnalysisFindings(current: ClipMentorAnalysis, input:
   for (const e of added) {
     if ((e.source_range_seconds && !inSource(e.source_range_seconds))
       || e.supporting_evidence_ids.some((id) => id === e.evidence_id || !evidence.has(id))
-      || e.source_ids.some((id) => !transcripts.has(id))) throw new Error('Invalid evidence reference or source time');
+      || e.source_ids.some((id) => !transcripts.has(id) && !(e.kind === 'operator_supplied' && suppliedImageIds.includes(id)))) throw new Error('Invalid evidence reference or source time');
   }
   for (const p of a.points.slice(current.points.length)) {
     if (!inSource(p.source_range_seconds) || p.evidence_ids.some((id) => !evidence.has(id))) throw new Error('Invalid point reference or source time');

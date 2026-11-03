@@ -32,6 +32,9 @@ export interface CopyReviewFailure {
   requestsAttempted: 0 | 1 | null;
   retryable: false;
   inspection?: { expectedBatches: number; deliveredBatches: number; invalidBatchCalls: number; outputChars: number };
+  frameFailure?: {unit_id:string;phase:'context'|'original'|'explanation'|'delivery';source_seconds:number;
+    asset_id?:string;delivery_view?:'supplied_full'|'planned_crop';
+    reason:'extraction_failed'|'image_payload_invalid'|'asset_unavailable_or_changed'|'audio_unavailable_or_changed'};
 }
 export function isCopyReviewFailure(v: unknown): v is CopyReviewFailure {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
@@ -41,7 +44,18 @@ export function isCopyReviewFailure(v: unknown): v is CopyReviewFailure {
     || ![0, 1, null].includes(d.requestsAttempted as 0 | 1 | null) || d.retryable !== false
     || (d.operationId !== undefined && (typeof d.operationId !== 'string'
       || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(d.operationId)))
-    || Object.keys(d).some(k => !['code', 'stage', 'operationId', 'requestsAttempted', 'retryable', 'inspection'].includes(k))) return false;
+    || Object.keys(d).some(k => !['code', 'stage', 'operationId', 'requestsAttempted', 'retryable', 'inspection', 'frameFailure'].includes(k))) return false;
+  if (d.frameFailure !== undefined) {
+    if(d.code!=='frames_unavailable'||!d.frameFailure||typeof d.frameFailure!=='object'||Array.isArray(d.frameFailure))return false;
+    const f=d.frameFailure as Record<string,unknown>,id=(v:unknown)=>typeof v==='string'&&!!v.trim();
+    if(!id(f.unit_id)||!['context','original','explanation','delivery'].includes(String(f.phase))
+      ||typeof f.source_seconds!=='number'||!Number.isFinite(f.source_seconds)||f.source_seconds<0
+      ||!['extraction_failed','image_payload_invalid','asset_unavailable_or_changed','audio_unavailable_or_changed'].includes(String(f.reason))
+      ||Object.keys(f).some(k=>!['unit_id','phase','source_seconds','asset_id','delivery_view','reason'].includes(k))
+      ||(f.asset_id!==undefined&&!id(f.asset_id))
+      ||(f.delivery_view!==undefined&&!['supplied_full','planned_crop'].includes(String(f.delivery_view)))
+      ||(f.phase==='delivery'?(f.source_seconds!==0||!id(f.asset_id)):(f.asset_id!==undefined||f.delivery_view!==undefined||['asset_unavailable_or_changed','audio_unavailable_or_changed'].includes(String(f.reason)))))return false;
+  }
   if (d.inspection !== undefined) {
     if (!d.inspection || typeof d.inspection !== 'object' || Array.isArray(d.inspection)) return false;
     const i = d.inspection as Record<string, unknown>;
@@ -68,5 +82,6 @@ export interface CopyReviewResult {
   cached?: true;
   receipt: CopyProductionReview;
   inspection: { scope: 'copy_and_planned_picture_only'; sampled_frames: number; continuous_viewing: false; listening: false;
+    delivery_images?:Array<{section_id:string;asset_id:string;view:'supplied_full'|'planned_crop';sha256:string;crop?:{left:number;top:number;right:number;bottom:number}}>;
     input_policy?: typeof COPY_REVIEW_INPUT_POLICY };
 }

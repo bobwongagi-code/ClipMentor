@@ -59,7 +59,7 @@
 
 **局部登记新稿不需要读整份历史蓝图。** 先用 `read_clipmentor_analysis {view:"current_copy",unitId:"实际单元ID",copyPart:"summary"}` 取当前指针/revision；再用同单元 `copyPart:"candidate"` 取口播、同文字幕、中文、重点及源范围。画面另用 `copyPart:"picture_plan"` 读取，避免和稿件一起堆大；默认all保留原行为。摘要不包含历史或画面大对象。不要把被限长的返回当完整记录来重建历史。
 
-要登记新的文字版本，用 `revise_clipmentor_analysis {action:"set_copy_candidate",id:"实际单元ID",expectedRevision,actor,reason,record:{source_candidate_id:"刚读到的当前稿ID",candidate_id:"script_candidate_新ID",lines:[{id,point_ids,narration_ms,caption_lines,zh,source_seconds,labels?}],plan_id:"picture_plan_新ID",plan:{本次紧凑画面方案},line_guidance:"与新稿和方案一致的交接"}}`。提交该单元完整的有序句子，不发送旧候选、旧画面方案或历史。未改句子逐字保留；若本次只授权同步已有作者稿，就不得借登记重写。每句只用这些字段，字幕与口播同文，源范围合法且引用本单元已登记重点，不能丢掉explain任务。代码核对的是格式、引用、范围与同文，不证明中文忠实或教学讲透。
+要登记新的文字版本，用 `revise_clipmentor_analysis {action:"set_copy_candidate",id:"实际单元ID",expectedRevision,actor,reason,record:{source_candidate_id:"刚读到的当前稿ID",candidate_id:"script_candidate_新ID",lines:[{id,point_ids,narration_ms,caption_lines,zh,source_seconds,labels?,labels_zh?}],plan_id:"picture_plan_新ID",plan:{本次紧凑画面方案},line_guidance:"与新稿和方案一致的交接"}}`。提交该单元完整的有序句子，不发送旧候选、旧画面方案或历史。未改句子逐字保留；若本次只授权同步已有作者稿，就不得借登记重写。每句只用这些字段，字幕与口播同文，源范围合法且引用本单元已登记重点，不能丢掉explain任务。代码核对的是格式、引用、范围与同文，不证明中文忠实或教学讲透。供内部人审的原话中文可放在证据的 `meaning_zh`，短标中文可放在句子和交付段落的 `labels_zh`，与 `labels` 逐项等长；均为可选策划译文，不作为已听审原话，不进入独立审核投影。
 
 该操作原子保存新候选、新画面方案与两个current指针，源绑定及 `selected_narration` 由宿主建立；若提交重复的selected_narration，必须与lines一致。旧记录原样保留，新稿/方案固定candidate、pending、production_allowed=false；保存使旧审核过期，不继承声音适配或制作批准。每次写入仍记录actor/reason、校验revision和当前稿ID，冲突/失败不覆盖也不自动重试。随后分开回读candidate和picture_plan，核对新revision、原文、方案和制作门禁。只选旧句仍用select_copy_lines，只改画面仍用set_picture_plan，不为小改动重传整条blueprint。
 

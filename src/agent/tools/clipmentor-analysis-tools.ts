@@ -1,9 +1,11 @@
+import {labelTranslationsShape} from '../../clipmentor/author-translations';
 export { CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS, CLIPMENTOR_ANALYSIS_TOOL_NAMES } from './schemas/clipmentor-analysis-tools';
 import type { AgentContext } from '../context';
 import type { ProjectDoc } from '../../editor/types';
 import { checkAnalysisHandoff, invalidateChangedReviews, isAnalysisActor, isClipMentorAnalysis, pointDigest } from '../../clipmentor/analysis';
 import teashellHistorical from '../../clipmentor/fixtures/teashell-historical.json';
 import { importTeashellAnalysis } from '../../clipmentor/import-teashell';
+import {importNativeBlueprint,BlueprintImportError} from '../../clipmentor/import-blueprint';
 import { transcribeClipMentorAsset } from '../../clipmentor/transcribe-source';
 import { observeClipMentorSource } from '../../clipmentor/observe-source';
 import { requestSourceVideo, readSourceVideo } from '../../clipmentor/request-source-video';
@@ -13,6 +15,9 @@ import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-revie
 import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmentor/append-findings';
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview } from '../../clipmentor/production-gate';
 import { checkSourceBreakdown, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
+import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
+import {missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
+import {renderClipMentorReviewBoard} from '../../clipmentor/render-review-board';
 
 type Args = Record<string, unknown>;
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -24,6 +29,7 @@ function copyPreparationReady(doc: ProjectDoc): boolean {
 }
 
 export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: AgentContext): Promise<unknown> {
+  if(name==='render_clipmentor_review_board')return renderClipMentorReviewBoard(ctx,args.view);
   if (name === 'edit_clipmentor_preview') return editClipMentorPreview(args, ctx);
   if (name === 'review_clipmentor_preview') return requestPreviewReview(args, ctx);
   if (name === 'read_clipmentor_source_video') return readSourceVideo(args, ctx);
@@ -136,8 +142,9 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         picture_plan_id: typeof pictureId === 'string' ? pictureId : null,
         picture_plan: typeof pictureId === 'string' ? internal?.[pictureId] ?? null : null };
     });
+    const pictureBindings=view==='current_copy'&&(copyPart==='all'||copyPart==='picture_plan')?deliveryPictureBindings(doc):[];
     if (view === 'current_copy' && copyPart !== 'all') return {
-      analysis: { current_copy: current }, revision: a?.revision ?? 0,
+      analysis: { ...(pictureBindings.length?{delivery_picture_bindings:pictureBindings}:{}), current_copy: current }, revision: a?.revision ?? 0,
       production_gate: await checkCopyProduction(doc, ctx.getCreativeMode()),
     };
     return {
@@ -146,7 +153,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         : view === 'evidence' ? { source: a?.source ?? null, evidence, linked_evidence: linked,
           missing_linked_evidence_ids: [...linkedIds].filter((id) => !linked.some((entry) => entry.evidence_id === id)),
           observations: a?.observations?.filter((entry) => observationIds.has(entry.observation_id)) ?? [] }
-        : { current_copy: current },
+        : { ...(pictureBindings.length?{delivery_picture_bindings:pictureBindings}:{}), current_copy: current },
       revision: a?.revision ?? 0,
       handoff: await checkAnalysisHandoff(doc),
       production_gate: await checkCopyProduction(doc, ctx.getCreativeMode()),
@@ -164,13 +171,13 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     if (name === 'revise_clipmentor_analysis' && args.action === 'append') {
       if (!a) return { error: 'Source analysis required before findings' };
       if (!a.source.sourceContentHash || doc.assets.find((v) => v.id === a!.source.asset_id)?.sourceContentHash !== a.source.sourceContentHash) return { error: 'Source hash missing or changed; findings not applied' };
-      a = await appendAnalysisFindings(a, args.records, args.actor, args.reason);
+      a = await appendAnalysisFindings(a, args.records, args.actor, args.reason, doc.assets.filter(asset => asset.kind === 'image').map(asset => asset.id));
     } else if (name === 'revise_clipmentor_analysis' && args.action === 'import') {
       if (a) return { error: 'Analysis already exists; use record revisions instead of overwriting it' };
       if (typeof args.assetId !== 'string') return { error: 'assetId required' };
       if (args.fixture !== undefined && (args.fixture !== 'teashell_historical_v1' || args.input !== undefined)) return { error: 'Use either the bundled Teashell fixture or JSON input, not both' };
-      a = importTeashellAnalysis(args.fixture === 'teashell_historical_v1' ? teashellHistorical : args.input, args.assetId, args.actor, now);
-      a.audit[0].reason = args.reason;
+      a = args.fixture===undefined?importNativeBlueprint(args.input,args.assetId,doc,args.actor,args.reason,now)??undefined:undefined;
+      if(!a){a=importTeashellAnalysis(args.fixture==='teashell_historical_v1'?teashellHistorical:args.input,args.assetId,args.actor,now);a.audit[0].reason=args.reason;}
       const asset = doc.assets.find((s) => s.id === args.assetId);
       if (!asset?.sourceContentHash || asset.sourceContentHash !== a.source.sourceContentHash) return { error: 'Import source hash missing or mismatched' };
     } else {
@@ -214,6 +221,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           || !Array.isArray(line.source_seconds) || line.source_seconds.length !== 2
           || !line.source_seconds.every((s) => typeof s === 'number' && Number.isFinite(s) && s >= 0)
           || line.source_seconds[0] >= line.source_seconds[1] || line.source_seconds[1] > a!.source.duration_seconds
+          || !labelTranslationsShape(line.labels_zh,line.labels)
           || (line.labels !== undefined && (!Array.isArray(line.labels) || !line.labels.every(text))))
           || new Set(lines.map((line) => line.id)).size !== lines.length) return { error: 'Copy lines require unique IDs, registered point_ids, in-range source_seconds, matching narration/captions and Chinese meaning' };
         const covered = new Set(lines.flatMap((line) => line.point_ids));
@@ -336,16 +344,19 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     const writingCopy = a.blueprint.some((u) => candidate(u) !== undefined
       && candidate(u) !== candidate(doc.clipMentorAnalysis?.blueprint.find((old) => old.unit_id === u.unit_id)));
     if (writingCopy && !a.source_breakdown) return { error: 'Register source_breakdown before writing or replacing a copy candidate; existing manuscripts remain readable', breakdown_check: checkSourceBreakdown({ ...doc, clipMentorAnalysis: a }) };
-    const pointerError = blueprintRevisionError(doc.clipMentorAnalysis?.blueprint ?? [], a.blueprint);
+    const pointerError = blueprintRevisionError(doc.clipMentorAnalysis?.blueprint ?? [], a.blueprint,args.action==='import'&&!doc.clipMentorAnalysis);
     if (pointerError) return { error: pointerError };
     // Recheck after asynchronous hashing; never overwrite concurrent project changes.
     if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; read again' };
     const next = { ...doc, clipMentorAnalysis: a };
+    const missingDelivery=missingDeliverySectionKinds(doc,next);
+    if(missingDelivery.length)return{error:'delivery_sections_would_be_lost',missing_delivery_kinds:missingDelivery};
     const handoff = await checkAnalysisHandoff(next);
     if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; read again' };
     ctx.commands.applyDoc(next);
     return { ok: true, revision: a.revision, handoff, breakdown_check: checkSourceBreakdown(next), identity: 'local_declared_not_authenticated' };
   } catch (error) {
+    if(error instanceof BlueprintImportError)return{error:error.code};
     // Only this static domain error is exposed; arbitrary input/errors remain redacted.
     if (error instanceof Error && error.message === OBSERVATION_ID_MISMATCH) return { error: OBSERVATION_ID_MISMATCH };
     return { error: 'Analysis input could not be validated; nothing changed' };

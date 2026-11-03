@@ -52,6 +52,7 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
       cached: result.cached === true, requestsSent: result.cached ? 0 : result.requestsAttempted,
       revision: analysis.revision, verdict: receipt.verdict, units: receipt.units, production_gate: gate,
       teaching: receipt.teaching_review?.review,
+      ...(receipt.delivery_checks?{delivery_checks:receipt.delivery_checks}:{}),
       inspection: result.inspection, complete_film_accepted: false };
   } catch (error) {
     if (!requestSent) {

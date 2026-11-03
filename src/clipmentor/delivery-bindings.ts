@@ -1,15 +1,25 @@
-import type { ProjectDoc, MediaAsset } from '../editor/types';
+import {labelTranslationsShape} from './author-translations';
+import type { ProjectDoc, MediaAsset, TimelineItem } from '../editor/types';
 type Row=Record<string,unknown>;
 const row=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown):v is string=>typeof v==='string'&&!!v.trim();
 const hash=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const strings=(v:unknown):v is string[]=>Array.isArray(v)&&v.length>0&&v.every(text)&&new Set(v).size===v.length;
 export const deliveryCropShape=(v:unknown):boolean=>row(v)&&Object.keys(v).length===4&&['left','top','right','bottom'].every(k=>typeof v[k]==='number'&&Number.isFinite(v[k])&&Number(v[k])>=0&&Number(v[k])<1)&&Number(v.left)+Number(v.right)<1&&Number(v.top)+Number(v.bottom)<1;
+type FrameRange = [number, number];
+interface PictureDisplay { fps: number; ranges: FrameRange[] }
+function displayShape(v: unknown): v is PictureDisplay {
+ return row(v) && Object.keys(v).length === 2 && typeof v.fps === 'number' && Number.isFinite(v.fps) && v.fps > 0
+  && Array.isArray(v.ranges) && v.ranges.length > 0 && v.ranges.every((r, n, all) => Array.isArray(r) && r.length === 2
+   && r.every(Number.isSafeInteger) && r[0] >= 0 && r[1] > r[0] && (n === 0 || all[n - 1][1] <= r[0]));
+}
 export interface DeliverySection {
  section_id:string; kind:'performance_opening'|'creator_invitation';
- line:{line_id:string;narration_ms:string;caption_lines:string[];meaning_zh:string;labels:string[]};
+ line:{line_id:string;narration_ms:string;caption_lines:string[];meaning_zh:string;labels:string[];labels_zh?:string[]};
  evidence_ids:string[]; evidence?:Array<{evidence_id:string;text:string}>;
- picture:{asset_id:string;src:string;sha256:string;description:string;crop?:{left:number;top:number;right:number;bottom:number}};
+ picture:{asset_id:string;src:string;sha256:string;description:string;crop?:{left:number;top:number;right:number;bottom:number};
+  /** Half-open native-picture intervals relative to this section's audio, at the declared fps. Omission requires the full section. */
+  display?:PictureDisplay};
  voice:{provider:string;voiceId:string;speed:1;existing_audio?:{assetId:string;src:string;sha256:string;durationSeconds:number;text:string}};
 }
 const normalize=(s:string)=>s.replace(/\s+/g,' ').trim();
@@ -18,9 +28,10 @@ export function deliverySectionsShape(v:unknown):v is DeliverySection[]{
  return v.every(s=>row(s)&&Object.keys(s).every(k=>['section_id','kind','line','evidence_ids','evidence','picture','voice'].includes(k))&&text(s.section_id)
   &&['performance_opening','creator_invitation'].includes(String(s.kind))&&strings(s.evidence_ids)
   &&row(s.line)&&text(s.line.line_id)&&text(s.line.narration_ms)&&text(s.line.meaning_zh)&&Array.isArray(s.line.caption_lines)&&s.line.caption_lines.length>0&&s.line.caption_lines.every(text)
-  &&normalize(s.line.narration_ms)===normalize(s.line.caption_lines.join(' '))&&Array.isArray(s.line.labels)&&s.line.labels.every(text)
+  &&normalize(s.line.narration_ms)===normalize(s.line.caption_lines.join(' '))&&Array.isArray(s.line.labels)&&s.line.labels.every(text)&&labelTranslationsShape(s.line.labels_zh,s.line.labels)
   &&row(s.picture)&&text(s.picture.asset_id)&&typeof s.picture.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.picture.src)&&hash(s.picture.sha256)&&text(s.picture.description)
   &&(s.picture.crop===undefined||deliveryCropShape(s.picture.crop))
+  &&(s.picture.display===undefined||displayShape(s.picture.display))
   &&row(s.voice)&&text(s.voice.provider)&&text(s.voice.voiceId)&&s.voice.speed===1
   &&(s.voice.existing_audio===undefined||(row(s.voice.existing_audio)&&text(s.voice.existing_audio.assetId)&&typeof s.voice.existing_audio.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.voice.existing_audio.src)&&hash(s.voice.existing_audio.sha256)&&s.voice.existing_audio.text===s.line.narration_ms&&typeof s.voice.existing_audio.durationSeconds==='number'&&Number.isFinite(s.voice.existing_audio.durationSeconds)&&s.voice.existing_audio.durationSeconds>0))
   &&(s.evidence===undefined||(Array.isArray(s.evidence)&&s.evidence.length===s.evidence_ids.length&&new Set(s.evidence.map(e=>row(e)?e.evidence_id:null)).size===s.evidence.length&&s.evidence.every(e=>row(e)&&text(e.evidence_id)&&(s.evidence_ids as string[]).includes(e.evidence_id)&&text(e.text)))))
@@ -46,6 +57,11 @@ export function deliverySectionsFromDoc(doc:ProjectDoc):DeliverySection[]{
   s.evidence=evidence.map(e=>({evidence_id:e!.evidence_id,text:e!.text}));
   const audio=s.voice.existing_audio;
   if(audio&&!doc.assets.some(a=>a.id===audio.assetId&&a.kind==='audio'&&a.src===audio.src))throw new Error('delivery_audio_binding_invalid');
+  if (s.picture.display) {
+   let frames: number | undefined;
+   try { frames = deliveryAudio(doc, s).frames; } catch { /* Preparatory plans can precede measured voice. */ }
+   deliveryPictureRanges(s, frames, doc.timelines.find(t => t.id === doc.activeTimelineId)?.fps ?? 0);
+  }
  }
  return all.sort((a,b)=>a.kind===b.kind?0:a.kind==='performance_opening'?-1:1);
 }
@@ -60,12 +76,72 @@ export function deliveryAudio(doc:ProjectDoc,s:DeliverySection):{asset:MediaAsse
  if(!asset||typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||asset.durationInFrames!==Math.round(seconds*fps))throw new Error('delivery_audio_missing:'+s.section_id);
  return{asset,frames:asset.durationInFrames};
 }
+/** One range contract for review/readback, save protection and export. Never infer it from prose or MG code. */
+export function deliveryPictureRanges(section: DeliverySection, frames: number | undefined, fps: number, anchor = 0): FrameRange[] {
+ const display = section.picture.display;
+ if (display !== undefined) {
+  if (!displayShape(display)) throw new Error('delivery_picture_display_invalid:' + section.section_id);
+  if (display.fps !== fps) throw new Error('delivery_picture_display_fps_mismatch:' + section.section_id);
+  if (frames !== undefined && display.ranges.some(r => r[1] > frames)) throw new Error('delivery_picture_display_outside_audio:' + section.section_id);
+  return display.ranges.map(([a, b]) => [anchor + a, anchor + b]);
+ }
+ if (frames === undefined) throw new Error('delivery_audio_missing:' + section.section_id);
+ return [[anchor, anchor + frames]];
+}
+export function deliveryRangesCovered(required: FrameRange[], actual: FrameRange[]): boolean {
+ const ordered = actual.filter(([a, b]) => Number.isSafeInteger(a) && Number.isSafeInteger(b) && a >= 0 && b > a).sort((a, b) => a[0] - b[0]);
+ return required.every(([start, end]) => {
+  let edge = start;
+  for (const [a, b] of ordered) {
+   if (a > edge) break;
+   edge = Math.max(edge, b);
+   if (edge >= end) return true;
+  }
+  return false;
+ });
+}
+export function nativeDeliveryPicture(doc: ProjectDoc, timeline: ProjectDoc['timelines'][number], i: TimelineItem, section: DeliverySection): boolean {
+ return i.kind === 'image' && i.sourceAssetId === section.picture.asset_id && i.src === section.picture.src
+  && (i.sourceContentHash === undefined || i.sourceContentHash === section.picture.sha256)
+  && doc.assets.some(a => a.id === section.picture.asset_id && a.kind === 'image' && a.src === section.picture.src && a.sourceContentHash === section.picture.sha256)
+  && !timeline.tracks?.[i.track]?.hidden && Number.isFinite(i.transform?.opacity ?? 1) && (i.transform?.opacity ?? 1) > 0;
+}
+/** A draft cannot reduce an existing obligation by declaring its own new ranges.
+ * This matches a saved review binding only; checkCopyProduction still authorizes production. */
+function reviewedPictureDisplay(doc: ProjectDoc, section: DeliverySection): boolean {
+ const review: unknown = doc.clipMentorAnalysis?.production_copy_review;
+ if (!row(review) || review.verdict !== 'pass' || review.scope !== 'copy_and_planned_picture_only'
+  || review.analysis_revision !== doc.clipMentorAnalysis?.revision || !hash(review.content_digest)
+  || !row(review.teaching_review) || !row(review.teaching_review.packet)
+  || !Array.isArray(review.teaching_review.packet.delivery_sections) || !Array.isArray(review.delivery_checks)
+  || !review.delivery_checks.some(c => row(c) && c.section_id === section.section_id && c.verdict === 'pass'
+   && c.claims_supported === 'supported' && c.purpose_clear === true)) return false;
+ const s = review.teaching_review.packet.delivery_sections.find(s => row(s) && s.section_id === section.section_id);
+ if (!row(s) || !row(s.picture) || !row(s.line) || !row(s.voice) || !displayShape(s.picture.display) || !section.picture.display) return false;
+ const picture = s.picture;
+ return s.kind === section.kind && s.line.line_id === section.line.line_id && s.line.narration_ms === section.line.narration_ms
+  && s.voice.provider === section.voice.provider && s.voice.voiceId === section.voice.voiceId && s.voice.speed === section.voice.speed
+  && ['asset_id','src','sha256','description'].every(k => picture[k] === section.picture[k as keyof DeliverySection['picture']])
+  && ['left','top','right','bottom'].every(k => (row(picture.crop) ? picture.crop[k] : undefined) === section.picture.crop?.[k as keyof NonNullable<DeliverySection['picture']['crop']>])
+  && s.picture.display.fps === section.picture.display.fps && JSON.stringify(s.picture.display.ranges) === JSON.stringify(section.picture.display.ranges);
+}
+/** Keep registered delivery purposes when a local plan is replaced; no obligation is invented for body-only tasks. */
+export function missingDeliverySectionKinds(before:ProjectDoc,after:ProjectDoc):DeliverySection['kind'][] {
+ // Compare scope only; existing checks decide evidence validity and repairability.
+ // The normal import/review paths still validate the full section and actual assets.
+ const kinds=(doc:ProjectDoc)=>new Set<DeliverySection['kind']>((doc.clipMentorAnalysis?.blueprint??[]).flatMap(u=>{
+  const i=(u as unknown as Row).internal_review;if(!row(i))return[];const p=i[String(i.current_picture_plan)];
+  return row(p)&&Array.isArray(p.delivery_sections)?p.delivery_sections.filter(row).map(s=>s.kind).filter((kind):kind is DeliverySection['kind']=>kind==='performance_opening'||kind==='creator_invitation'):[];
+ }));
+ const next=kinds(after);return [...kinds(before)].filter(kind=>!next.has(kind));
+}
 /** Preserve registered native pictures across a draft commit, including other edit tools.
  * Embedded MG images cannot replace a separately bound evidence asset. Crop/layout
  * edits and contiguous native replacements remain allowed; empty timelines can be built.
  */
 export function assertDeliveryPicturePreservation(before: ProjectDoc, after: ProjectDoc): void {
  const sections = deliverySectionsFromDoc(before);
+ if(after.clipMentorAnalysis&&missingDeliverySectionKinds(before,after).length)throw new Error('delivery_sections_would_be_lost');
  for (const previous of before.timelines) {
   for (const section of sections) {
    const matches = (i: typeof previous.items[number]) => i.kind === 'image'
@@ -74,8 +150,10 @@ export function assertDeliveryPicturePreservation(before: ProjectDoc, after: Pro
    if (!original.length) continue;
    const next = after.timelines.find(t => t.id === previous.id);
    if (!next) throw new Error(`delivery_native_picture_would_be_lost:${section.section_id}`);
-   const ranges = next.items.filter(matches).map(i => [i.startFrame, i.startFrame + i.durationInFrames])
-    .sort((a, b) => a[0] - b[0]);
+   const ranges: FrameRange[] = next.items.filter(i => nativeDeliveryPicture(after, next, i, section))
+    .map(i => [i.startFrame, i.startFrame + i.durationInFrames]);
+   const phased = section.picture.display && previous.id === before.activeTimelineId && reviewedPictureDisplay(before, section);
+   if (phased && next.fps !== previous.fps) throw new Error(`delivery_picture_display_fps_mismatch:${section.section_id}`);
    // Pictures can be prepared before voice synthesis. Missing audio does not
    // waive existing picture coverage or prevent otherwise valid image edits.
    let audio: ReturnType<typeof deliveryAudio> | undefined;
@@ -90,21 +168,20 @@ export function assertDeliveryPicturePreservation(before: ProjectDoc, after: Pro
     ?? (anchors.length === 1 && candidates.length === 1 && candidates[0].src === i.src
       && candidates[0].durationInFrames === i.durationInFrames && (candidates[0].srcInFrame ?? 0) === (i.srcInFrame ?? 0)
       && (candidates[0].playbackRate ?? 1) === (i.playbackRate ?? 1) ? candidates[0] : undefined));
-   const required = original.map(p => {
+   const required: FrameRange[] = original.flatMap(p => {
     const index = anchors.findIndex(i => p.startFrame < i.startFrame + i.durationInFrames
       && p.startFrame + p.durationInFrames > i.startFrame);
     const shift = index >= 0 && moved[index] ? moved[index]!.startFrame - anchors[index].startFrame : 0;
-    return [p.startFrame + shift, p.startFrame + p.durationInFrames + shift];
+    const start = p.startFrame + shift, end = start + p.durationInFrames;
+    // Only the BEFORE contract can narrow an existing obligation. Missing
+    // measured audio or an unrelated reuse retains its original full extent.
+    if (!phased || !audio || index < 0) return [[start, end] as FrameRange];
+    const anchor = anchors[index].startFrame + shift, audioEnd = anchor + audio.frames;
+    const display = deliveryPictureRanges(section, audio.frames, previous.fps, anchor);
+    return [...display, [start, Math.min(end, anchor)] as FrameRange, [Math.max(start, audioEnd), end] as FrameRange]
+     .map(([a, b]) => [Math.max(start, a), Math.min(end, b)] as FrameRange).filter(([a, b]) => b > a);
    });
-   for (const [start, end] of required) {
-    let edge = start;
-    for (const [a, b] of ranges) {
-     if (a > edge) break;
-     if (b > edge) edge = b;
-     if (edge >= end) break;
-    }
-    if (edge < end) throw new Error(`delivery_native_picture_would_be_lost:${section.section_id}`);
-   }
+   if (!deliveryRangesCovered(required, ranges)) throw new Error(`delivery_native_picture_would_be_lost:${section.section_id}`);
   }
  }
 }

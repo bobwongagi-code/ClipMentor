@@ -1,3 +1,4 @@
+import {deliverySectionsFromDoc,deliveryTimeline} from './delivery-sections';
 import { isSourceReviewScope, type SourceReviewScope } from './source-alignment';
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
@@ -107,7 +108,7 @@ export function selectedPointChanges(previous: SourceBreakdown | undefined, next
   });
 }
 
-export const copyLineKeys = ['id', 'point_ids', 'narration_ms', 'caption_lines', 'zh', 'source_seconds', 'labels'];
+export const copyLineKeys = ['id', 'point_ids', 'narration_ms', 'caption_lines', 'zh', 'source_seconds', 'labels', 'labels_zh'];
 
 /** Redundant copy in a picture plan is a mirror, never a second current manuscript. */
 export function picturePlanCopyError(plan: unknown, candidate: unknown): string | null {
@@ -122,7 +123,7 @@ export function picturePlanCopyError(plan: unknown, candidate: unknown): string 
 }
 
 /** New copy and its active pointer must be committed together; historical records remain readable. */
-export function blueprintRevisionError(previous: NonNullable<ProjectDoc['clipMentorAnalysis']>['blueprint'], next: NonNullable<ProjectDoc['clipMentorAnalysis']>['blueprint']) {
+export function blueprintRevisionError(previous: NonNullable<ProjectDoc['clipMentorAnalysis']>['blueprint'], next: NonNullable<ProjectDoc['clipMentorAnalysis']>['blueprint'], initialImport = false) {
   for (const unit of next) {
     const internal = (unit as unknown as Row).internal_review;
     const old = (previous.find(p => p.unit_id === unit.unit_id) as unknown as Row | undefined)?.internal_review;
@@ -136,7 +137,7 @@ export function blueprintRevisionError(previous: NonNullable<ProjectDoc['clipMen
     const copyError = picturePlanCopyError(text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined,
       text(internal.current_script_candidate) ? internal[internal.current_script_candidate] : undefined);
     if (copyError) return copyError;
-    if (Object.keys(internal).some(key => key !== internal.current_picture_plan && row(internal[key]) && Array.isArray(internal[key].lines)
+    if (!(initialImport && previous.length === 0) && Object.keys(internal).some(key => key !== internal.current_picture_plan && row(internal[key]) && Array.isArray(internal[key].lines)
       && JSON.stringify(internal[key]) !== JSON.stringify(row(old) ? old[key] : undefined) && internal.current_script_candidate !== key)) return 'Save new copy with its current pointer atomically; use set_copy_candidate';
   }
   return null;
@@ -251,6 +252,7 @@ function checkPlannedRows(
   candidate: unknown, plan: unknown, raw: unknown,
   issue: (code: string, id: string) => void,
   bindings: Array<{unit_id:string;phase:string;item_id:string;source_range_seconds:[number,number];segment_ids:string[]}>,
+  outputOffset=0,
 ): void {
   const a = doc.clipMentorAnalysis!;
   const tl = doc.timelines.find(t => t.id === doc.activeTimelineId);
@@ -284,7 +286,7 @@ function checkPlannedRows(
     });
     if (r.kind === 'explanation' && !r.line_ids.length) issue('timeline_plan_line_unbound',id);
     if (!rangesCover(ranges,source,1/tl.fps+1e-6)) issue('timeline_plan_source_unbound',id);
-    accepted.push({row:r,source,output:r.output_frames_reference});
+    accepted.push({row:r,source,output:[r.output_frames_reference[0]+outputOffset,r.output_frames_reference[1]+outputOffset]});
   }
   if (!accepted.length || accepted.length !== selected.length || !unique(selected.map(r=>String(r.row_id)))) {
     issue('timeline_plan_rows_invalid',u.unit_id); return;
@@ -379,6 +381,8 @@ function checkPlannedRows(
 
 export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
   const issues: Array<{ code: string; id: string }> = [];
+  let deliveryOffset=0;
+  try{const sections=deliverySectionsFromDoc(doc);if(checkTimeline){const delivery=deliveryTimeline(doc,sections);deliveryOffset=delivery.offset;for(const code of delivery.issues)issues.push({code,id:'delivery'});}}catch(e){issues.push({code:e instanceof Error?e.message:'delivery_sections_invalid',id:'delivery'});}
   const bindings: Array<{ unit_id: string; phase: string; item_id: string; source_range_seconds: [number, number]; segment_ids: string[] }> = [];
   const issue = (code: string, id: string) => issues.push({ code, id });
   const a = doc.clipMentorAnalysis;
@@ -491,7 +495,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
     const activePlan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
     const executable = executableRows(activePlan);
     if (executable !== undefined) {
-      checkPlannedRows(doc,b,u,candidate,activePlan,executable,issue,bindings);
+      checkPlannedRows(doc,b,u,candidate,activePlan,executable,issue,bindings,deliveryOffset);
       continue;
     }
     const placement = u.placement;
