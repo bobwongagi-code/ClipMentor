@@ -5,6 +5,7 @@ import { generateAiVoice, isAiVoiceProvider } from './voice-ai-sdk.ts';
 import { saveVoiceAudio, saveVoiceSubtitle } from './voice-media.ts';
 import { doubaoVoice, elevenLabsVoice, fishAudioVoice, inworldVoice, minimaxVoice, speechifyVoice } from './voice-providers.ts';
 import type { VoiceOptions, VoiceProvider, VoiceRequest } from './voice-types.ts';
+import {bindMinimaxWordSubtitle,optionalVoiceSubtitle} from './voice-word-timing.ts';
 import { validateVoiceRequest } from './voice-validation.ts';
 
 export { validateVoiceRequest };
@@ -63,8 +64,13 @@ export function voiceGenerationPlugin(options: VoiceOptions): Plugin {
           else bytes = await speechifyVoice(options, input);
           const audio = audioDescriptor(input.provider, input.outputFormat, input.audioFormat, input.sampleRate);
           const saved = await saveVoiceAudio(bytes, audio.codec, audio.sampleRate, input.provider === 'doubao' ? input.pitch ?? 0 : 0);
+          const timing=await optionalVoiceSubtitle(async()=>{
           const subtitlePath = subtitleUrl ? await saveVoiceSubtitle(subtitleUrl) : undefined;
-          sendJson(res, 200, { ...saved, subtitlePath });
+          const subtitleBinding=input.provider==='minimax'&&input.subtitleEnable===true&&input.subtitleType==='word'&&!input.stream&&subtitlePath
+            ?await bindMinimaxWordSubtitle(input.text,saved,subtitlePath):undefined;
+          return {subtitlePath,subtitleBinding};
+          });
+          sendJson(res, 200, { ...saved, ...timing });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           server.config.logger.error(`[generate:voice] ${message}`);

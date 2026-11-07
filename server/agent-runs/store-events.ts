@@ -6,9 +6,7 @@ import {
   type AgentRunStatus,
 } from '../../src/persist/agentRuntimeStore';
 import {
-  MAX_SERVER_EVENT_BYTES,
   MAX_SERVER_RUN_BYTES,
-  MAX_SERVER_TOOL_REQUEST_EVENT_BYTES,
   MAX_SERVER_RUN_EVENTS,
   MAX_SERVER_RUN_EVENTS_HARD,
   RunStoreLimitError,
@@ -16,7 +14,7 @@ import {
   type ServerRunStatus,
   type ServerToolRequest,
 } from './store-types';
-import { eventBytes, runtimeEvent } from './store-values';
+import { eventBytes, runtimeEvent, serverEventMaxBytes } from './store-values';
 import { rejectPendingTools } from './store-tools';
 import { archiveHandoffTerminal } from '../clipmentor/handoff-lifecycle';
 
@@ -97,9 +95,7 @@ function appendEvent(
 ): Promise<void> {
   const event = { id: run.eventCursor + 1, type, data, at: Date.now() };
   const bytes = eventBytes(event);
-  const maxBytes = type === 'tool-request'
-    ? MAX_SERVER_TOOL_REQUEST_EVENT_BYTES
-    : MAX_SERVER_EVENT_BYTES;
+  const maxBytes = serverEventMaxBytes(type);
   if (bytes > maxBytes) {
     throw new RunStoreLimitError(`Agent run event exceeds ${maxBytes} bytes.`);
   }

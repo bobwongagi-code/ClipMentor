@@ -1,3 +1,5 @@
+import {makeDraft} from '../../editor/store';
+import {assertFrozenParameterChanges,resolveFrozenEditParameters} from '../../clipmentor/execution-parameters';
 import type { AgentContext } from '../context';
 import {
   ASPECT_PRESETS,
@@ -134,6 +136,22 @@ export function execCoreDataTool(name: string, args: Args, ctx: AgentContext): u
     'duplicate_item',
     'remove_item',
     'split_item',
-  ].includes(name)) return mutateItem(name, args, ctx);
+  ].includes(name)) {
+    if(!ctx.getAgentRunId?.()||!ctx.getDoc().clipMentorAnalysis)return mutateItem(name,args,ctx);
+    const before=ctx.getDoc(),draft=makeDraft(before);
+    let input=args;
+    if(name==='update_item_props'){
+      const item=findItem({...ctx,...draft},args.itemId);
+      if(item?.kind==='text')try{
+        const resolved=resolveFrozenEditParameters(before,{updates:[{type:item.kind,itemId:item.id,props:args.props??{}}]});
+        input={...args,props:(resolved.updates as Args[])[0].props};
+      }catch(error){return{error:error instanceof Error?error.message:String(error),atomic:true,aborted:true};}
+    }
+    const result=mutateItem(name,input,{...ctx,...draft}) as Args;
+    if(result?.error)return result;
+    try{assertFrozenParameterChanges(before,draft.getDoc());}
+    catch(error){return{error:error instanceof Error?error.message:String(error),atomic:true,aborted:true};}
+    ctx.commands.applyDoc(draft.getDoc());return result;
+  }
   return undefined;
 }

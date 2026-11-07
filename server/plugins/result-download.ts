@@ -59,7 +59,7 @@ const ALLOWED_MIME: Readonly<Record<GeneratedResultKind, Readonly<Partial<Record
     'image/jpeg': true, 'image/png': true, 'image/webp': true,
   },
   subtitle: {
-    'application/json': true, 'text/json': true,
+    'application/json': true, 'text/json': true, 'application/octet-stream': true,
   },
 };
 
@@ -214,6 +214,12 @@ async function validateSuccessfulResponse(
       `generated ${label} download failed (content length exceeds ${maxBytes} byte limit)`,
       false,
     );
+  }
+  if(label==='subtitle'){
+    const bytes=await new Response(limitedBody(response,url,label,maxBytes,bodyIdleDeadlineMs)).arrayBuffer();
+    try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));if(value===null||typeof value!=='object')throw Error();}
+    catch{throw new ResultDownloadError(url,'generated subtitle download failed (invalid JSON)',false);}
+    return new Response(bytes,{status:response.status,headers:{'content-type':'application/json'}});
   }
   return new Response(limitedBody(response, url, label, maxBytes, bodyIdleDeadlineMs), {
     status: response.status,

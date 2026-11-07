@@ -15,6 +15,7 @@ import { executeTool } from '../../src/agent/tools';
 import { copyReviewSubject } from '../../src/clipmentor/production-gate';
 import type { ViteDevServer } from 'vite';
 import type { SourceVideoRequest, SourceVideoTask, SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video';
+import { observationTaskWithBoundaryContext } from '../../shared/clipmentor-source-video';
 import { sourceVideoInput, buildSourceVideoRequest, validateSourceObservation, inspectSourceObservation, inspectSourceVideoObservation, observeSourceVideo, recoverSourceVideoReceipt, readSourceVideoReceipt, type SourceVideoDependencies } from './source-video';
 import { clipMentorSourceVideoPlugin } from '../plugins/clipmentor-source-video';
 import { policyForTool } from '../../src/agent/execution-policy';
@@ -28,6 +29,17 @@ packet.units[0].picture_plan={original_source_ranges:[[0,2]],explanation_source_
 packet.source_evidence[0].observation='DO_NOT_SEND_HISTORICAL_ANSWER';
 const request:SourceVideoRequest={operationId:randomUUID(),maxRequests:1,projectId:'project',authorRunId:'author',source:{src:'/media/uploads/test.mp4',hash:digest,fps:30,duration:5},subject:{revision:145,digest:'a'.repeat(64),units:[{unit_id:packet.units[0].unit_id,candidate_id:'copy'}]},packet};
 const observationTask:SourceVideoTask={version:'source-boundaries-v1',contexts:[{context_id:'context',unit_id:packet.units[0].unit_id,source_range_seconds:[1,4.8],boundary_seconds:[1.5,3],goals:['speech_boundaries','material_continuity']}]};
+// The saved failure had the cut at the end of one context and start of the next.
+const edgeTask:SourceVideoTask={version:'source-boundaries-v1',contexts:[
+ {context_id:'left',unit_id:packet.units[0].unit_id,source_range_seconds:[0,2],boundary_seconds:[0,2],goals:['speech_boundaries']},
+ {context_id:'right',unit_id:packet.units[0].unit_id,source_range_seconds:[2,5],boundary_seconds:[2,5],goals:['speech_boundaries']},
+]};
+const padded=observationTaskWithBoundaryContext(edgeTask,5);
+assert.deepEqual(padded.contexts.map(c=>c.source_range_seconds),[[0,4],[0,5]]);
+assert.deepEqual(padded.contexts.map(c=>c.boundary_seconds),[[0,2],[2,5]]);
+assert.deepEqual(edgeTask.contexts.map(c=>c.source_range_seconds),[[0,2],[2,5]]);
+assert.deepEqual(observationTaskWithBoundaryContext(padded,5),padded);
+assert.deepEqual(observationTaskWithBoundaryContext(observationTask,5),observationTask);
 const taskRequest={...request,operationId:randomUUID(),observationTask};
 const taskInput=sourceVideoInput(taskRequest);
 assert.deepEqual(taskInput.observation_task,observationTask,'neutral observation context must survive without modifying production windows');
@@ -87,6 +99,32 @@ try {
    material_ranges:[{start_seconds:4,end_seconds:4.8,role:'uncertain',basis:'fixture only',limitations:['No valid material established']}],limitations:['Unknown source meaning']}],
  }});
  assert.equal(inspectSourceVideoObservation(taskGood(),taskInput).status,'valid','unknown speech is a valid result, never approval');
+ const aliasRequest={...taskRequest,operationId:randomUUID()};
+ const {task_observation,...mainObservation}=taskGood();
+ const alias={...mainObservation,observation_task:task_observation};
+ const aliasBody={candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(alias)}]}}]};
+ const aliasResult=await observeSourceVideo(aliasRequest,{...deps,post:async()=>({status:200,body:aliasBody})});
+ assert.deepEqual(aliasResult.raw_observation,taskGood());
+ const frozenAlias={...aliasRequest,operationId:randomUUID()};
+ const frozen=buildSourceVideoRequest(video,frozenAlias);
+ const failedAlias={status:'failed',requests_attempted:1,projectId:frozenAlias.projectId,subject:frozenAlias.subject,
+  source_hash:digest,phase:'validate_response',http_status:200,input:frozen.input,raw_response:aliasBody,
+  fingerprint:createHash('sha256').update('source-continuous-observation-v1'+JSON.stringify(frozenAlias)).digest('hex'),
+  request_sha256:createHash('sha256').update(frozen.body).digest('hex'),
+  validation:{status:'invalid',issues:[{code:'missing_task_observation',severity:'error'}]}};
+ const frozenPath=join(root,`${frozenAlias.operationId}.json`);
+ await writeFile(frozenPath,JSON.stringify(failedAlias));
+ const offline={...deps,post:async()=>{throw new Error('Must never resend an alias response');}};
+ await assert.rejects(recoverSourceVideoReceipt({...frozenAlias,projectId:'foreign'},undefined,offline));
+ const aliasRecovered=await recoverSourceVideoReceipt(frozenAlias,undefined,offline);
+ assert.equal(aliasRecovered.requestsSent,0);
+ assert.equal(aliasRecovered.status,'failed');
+ assert.deepEqual(aliasRecovered.result?.raw_observation,taskGood());
+ assert.equal(await readFile(frozenPath,'utf8'),JSON.stringify(failedAlias));
+ assert.equal((await readSourceVideoReceipt(frozenAlias.operationId,'project',offline)).validation?.status,'valid');
+ await assert.rejects(observeSourceVideo({...taskRequest,operationId:randomUUID()},{...deps,post:async()=>({
+  status:200,body:{candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({...alias,task_observation:null})}]}}]},
+ })}));
  const heard=taskGood();Object.assign(heard.task_observation.boundaries[0],{status:'inside_speech',before:{status:'heard',quote:'fixture quote'}});
  assert.equal(inspectSourceVideoObservation(heard,taskInput).status,'valid');
  for(const mutate of [
@@ -188,7 +226,7 @@ try {
  const cli=join(root,'transport-fixture.cjs');
  await writeFile(cli,String.raw`const fs=require('node:fs'),assert=require('node:assert/strict');
 const config=JSON.parse(process.env.SOURCE_TRANSPORT_FIXTURE);const args=process.argv.slice(2);
-const arg=n=>args[args.indexOf(n)+1];assert.equal(arg('--retry'),'0');assert.equal(arg('--max-time'),'600');assert.equal(arg('--connect-timeout'),'30');
+const arg=n=>args[args.indexOf(n)+1];assert.equal(arg('--retry'),'0');assert.equal(arg('--max-time'),'595');assert.equal(arg('--connect-timeout'),'30');
 assert.equal(arg('--proto'),'=https');assert.equal(arg('--max-redirs'),'0');assert.equal(arg('--noproxy'),'*');
 assert.equal(args.at(-1),'https://rootifyaiapi.rootifyglobal.com/v1beta/models/gemini-3.8-flash:generateContent');
 let auth='';process.stdin.on('data',b=>auth+=b);process.stdin.on('end',()=>{

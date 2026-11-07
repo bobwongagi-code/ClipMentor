@@ -1,3 +1,4 @@
+import {sourceFrameSeekMs} from '../../shared/source-frame-seek';
 import type { AgentContext } from '../agent/context';
 import { isAnalysisActor, isClipMentorAnalysis, type AnalysisObservation } from './analysis';
 
@@ -28,7 +29,7 @@ export async function observeClipMentorSource(args: Record<string, unknown>, ctx
   const frames = [...new Set(requested.map((t) => Math.floor(t * fps)))];
   if (args.sequence !== undefined && frames.length !== requested.length) return { error: 'Sequence samples must map to distinct source frames; widen the window or reduce count' };
   const times = frames.map((f) => f / fps);
-  const ms = times.map((t) => Math.round(t * 1000));
+  const ms = times.map((t) => sourceFrameSeekMs(t * 1000));
   let images: Array<{ frame: number; base64: string }> = [];
   try {
     const res = await (ctx.hostFetch ?? fetch)('/api/extract-frames', { method: 'POST', headers: { 'Content-Type': 'application/json' },

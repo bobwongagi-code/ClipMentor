@@ -10,7 +10,7 @@ export async function verifyProductionNarration(doc:ProjectDoc,voice?:{provider:
  const packet=await copyTeachingPacketFromDoc(doc);
  return [...matchMeasuredNarration(packet.units.flatMap(u=>u.lines),doc.assets,voice,registeredAudioBindings(doc)),...deliverySectionsFromDoc(doc).map(s=>{const a=deliveryAudio(doc,s);return{lineId:s.line.line_id,assetId:a.asset.id,durationSeconds:a.frames/doc.timelines.find(t=>t.id===doc.activeTimelineId)!.fps};})];
 }
-function registeredAudioBindings(doc:ProjectDoc):Record<string,unknown>[] {
+export function registeredAudioBindings(doc:ProjectDoc):Record<string,unknown>[] {
  const bindings:Record<string,unknown>[]=[];
  for(const unit of doc.clipMentorAnalysis?.blueprint??[]){
   const internal=(unit as unknown as Record<string,unknown>).internal_review as Record<string,unknown>|undefined;
@@ -23,21 +23,27 @@ function registeredAudioBindings(doc:ProjectDoc):Record<string,unknown>[] {
 }
 export function matchMeasuredNarration(lines:Array<{line_id:string;narration_ms:string}>,assets:MediaAsset[],voice?:{provider:string;voiceId:string},bindings:Record<string,unknown>[]=[]){
  return lines.map(line=>{
-  const asset=assets.find(a=>{
+  const generated=(a:MediaAsset)=>{
    const g=a.props?.generation as Record<string,unknown>|undefined;
    return a.kind==='audio'&&g?.text===line.narration_ms&&typeof g.durationSeconds==='number'&&Number.isFinite(g.durationSeconds)&&g.durationSeconds>0
     &&g.speed===1&&(!voice||(g.provider===voice.provider&&g.voiceId===voice.voiceId));
-  });
-  if(asset)return {lineId:line.line_id,assetId:asset.id,durationSeconds:(asset.props!.generation as {durationSeconds:number}).durationSeconds};
-  // Reuse the existing measured_audio_bindings in the frozen plan, not guessed
-  // duration from an audio asset or a historical filename.
-  const bound=bindings.find(b=>b.lineId===line.line_id&&b.text===line.narration_ms&&b.playback_rate===1&&b.full_file_untrimmed===true
-   &&typeof b.durationSeconds==='number'&&Number.isFinite(b.durationSeconds)&&b.durationSeconds>0
-   &&typeof b.audioSha256==='string'&&/^[a-f0-9]{64}$/.test(b.audioSha256)
-   &&(!voice||(b.provider===voice.provider&&b.voiceId===voice.voiceId))
-   &&assets.some(a=>a.kind==='audio'&&a.id===b.assetId&&a.src===b.src&&!a.props?.generation&&Number.isSafeInteger(a.durationInFrames)&&a.durationInFrames>0));
-  if(!bound)throw new Error(`Current line has no matching measured normal-speed audio: ${line.line_id}`);
-  return {lineId:line.line_id,assetId:String(bound.assetId),durationSeconds:Number(bound.durationSeconds)};
+  };
+  const selected=bindings.filter(b=>b.lineId===line.line_id&&b.text===line.narration_ms);
+  if(selected.length){
+   const valid=selected.filter(b=>b.playback_rate===1&&b.full_file_untrimmed===true
+    &&typeof b.durationSeconds==='number'&&Number.isFinite(b.durationSeconds)&&b.durationSeconds>0
+    &&typeof b.audioSha256==='string'&&/^[a-f0-9]{64}$/.test(b.audioSha256)
+    &&assets.some(a=>a.kind==='audio'&&a.id===b.assetId&&a.src===b.src&&Number.isSafeInteger(a.durationInFrames)&&a.durationInFrames>0
+     &&(!a.sourceContentHash||a.sourceContentHash===b.audioSha256)
+     &&(a.props?.generation?generated(a)&&Math.abs(Number((a.props.generation as Record<string,unknown>).durationSeconds)-Number(b.durationSeconds))<0.000001
+      :!voice||(b.provider===voice.provider&&b.voiceId===voice.voiceId))));
+   if(!valid.length)throw new Error(`Current line has no matching measured normal-speed audio: ${line.line_id}`);
+   if(new Set(valid.map(b=>b.assetId)).size>1)throw new Error(`Current line has ambiguous selected audio: ${line.line_id}`);
+   return {lineId:line.line_id,assetId:String(valid[0].assetId),durationSeconds:Number(valid[0].durationSeconds)};
+  }
+  const asset=assets.find(generated);
+  if(!asset)throw new Error(`Current line has no matching measured normal-speed audio: ${line.line_id}`);
+  return {lineId:line.line_id,assetId:asset.id,durationSeconds:(asset.props!.generation as {durationSeconds:number}).durationSeconds};
  });
 }
 export async function verifyProductionEditing(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){
@@ -53,26 +59,42 @@ export async function verifyProductionEditing(doc:ProjectDoc,voice?:{provider:st
  return {narration,binding};
 }
 
-/** One derived view over existing analysis/plan data; no parallel blueprint store. */
-export async function prepareProductionBlueprint(doc:ProjectDoc){
+/** Operation-local preparation, never retained by document identity or used as an approval.
+ * Keep the full executor packet separate from the independently filtered reviewer packet. */
+export async function createProductionPreparation(doc:ProjectDoc){
  const check=checkSourceBreakdown(doc);
  if(check.status!=='structurally_ready')throw new Error(`blueprint_stage_incomplete:${JSON.stringify(check.issues).slice(0,1600)}`);
  const subject=await copyReviewSubject(doc),packet=await copyTeachingPacketFromDoc(doc);
  if(packet.units.some(u=>!u.picture_plan?.execution_plan))throw new Error('blueprint_execution_plan_missing');
  // Validate the exact reviewer projection BEFORE any review/model effect is reserved.
  const request=buildCopyTeachingReviewRequest([{case_id:'current',packet}]);
- return {subject:{revision:subject.revision,digest:subject.digest},packet:request.input.cases[0].packet};
+ const reviewed={subject:{revision:subject.revision,digest:subject.digest},packet:request.input.cases[0].packet};
+ let bindings:ReturnType<typeof registeredAudioBindings>|undefined;
+ const audioBindings=()=>bindings??=registeredAudioBindings(doc);
+ return {rawPacket:packet,reviewed,audioBindings,
+  readiness:(voice?:{provider:string;voiceId:string})=>preparedBlueprintReadiness(doc,reviewed,voice,audioBindings)};
+}
+
+/** Existing public result remains the reviewer projection, not a production approval. */
+export async function prepareProductionBlueprint(doc:ProjectDoc){
+ return (await createProductionPreparation(doc)).reviewed;
 }
 
 /** Structural maturity is not teaching approval, audio capacity or final viewing. */
 export async function productionBlueprintReadiness(doc:ProjectDoc|null|undefined,voice?:{provider:string;voiceId:string}){
  const base={complete_film_accepted:false,actual_audio_visual_capacity_verified:false};
  if(!doc)return {...base,next:'blueprint' as const,code:'project_missing',ready:false};
- let prepared:Awaited<ReturnType<typeof prepareProductionBlueprint>>;
- try{prepared=await prepareProductionBlueprint(doc);}catch(error){return {...base,next:'blueprint' as const,code:error instanceof Error?error.message:'blueprint_invalid',ready:false};}
+ let prepared:Awaited<ReturnType<typeof createProductionPreparation>>;
+ try{prepared=await createProductionPreparation(doc);}catch(error){return {...base,next:'blueprint' as const,code:error instanceof Error?error.message:'blueprint_invalid',ready:false};}
+ return prepared.readiness(voice);
+}
+
+async function preparedBlueprintReadiness(doc:ProjectDoc,prepared:Awaited<ReturnType<typeof prepareProductionBlueprint>>,voice:{provider:string;voiceId:string}|undefined,audioBindings:()=>ReturnType<typeof registeredAudioBindings>){
+ const base={complete_film_accepted:false,actual_audio_visual_capacity_verified:false};
+ // Gate evaluation stays live: operation-local derived facts are not approval receipts.
  const gate=await checkCopyProduction(doc,'clipmentor');
  if(!gate.allowed)return {...base,next:'copy_review' as const,code:gate.code,ready:false,subject:prepared.subject};
- const lines=prepared.packet.units.flatMap(u=>u.lines),missing:string[]=[],voiceUnknown:string[]=[],bindings=registeredAudioBindings(doc);
+ const lines=prepared.packet.units.flatMap(u=>u.lines),missing:string[]=[],voiceUnknown:string[]=[],bindings=audioBindings();
  for(const line of lines)try{matchMeasuredNarration([line],doc.assets,voice,bindings);}catch{
   let uncertain=false;
   if(voice)try{const reusable=matchMeasuredNarration([line],doc.assets,undefined,bindings)[0];

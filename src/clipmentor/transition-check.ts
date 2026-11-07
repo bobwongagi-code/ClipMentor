@@ -1,14 +1,50 @@
 /** Pure structural self-check shared by Agent QA and the CLI; never edits or approves media. */
-type Scene = { start_frame: number; end_frame: number; kind: 'original' | 'video' | 'still' | 'relation'; content: number | number[]; label?: string };
+export interface PictureLayer {
+  item_id: string; track: string; kind: string;
+  origin: 'original_video' | 'source_frame' | 'media_asset' | 'authored';
+  asset_id?: string; source_hash?: string; source_revision?: string;
+  source_start_seconds?: number; playback_rate?: number;
+  item_start_frame: number; item_end_frame: number;
+  layout_digest: string; render_digest: string; render_state: Record<string, unknown>;
+}
+export type Scene = { start_frame: number; end_frame: number; label?: string } & (
+  { kind: 'original' | 'video' | 'still' | 'relation'; content: number | number[]; layers?: never }
+  | { kind: 'composition'; layers: PictureLayer[]; content?: never });
+/** Layers are native scheduled paint order (bottom to top), not proof of visible pixels. */
+export function validPictureLayers(value: unknown, start: number, end: number): value is PictureLayer[] {
+  if (!Array.isArray(value)) return false;
+  const ids = new Set<string>();
+  return value.every(l => {
+    if (!row(l) || typeof l.item_id !== 'string' || !l.item_id || ids.has(l.item_id)
+      || typeof l.track !== 'string' || !l.track || typeof l.kind !== 'string'
+      || !['video','image','gif','svg','text','solid','motion-graphic'].includes(l.kind)
+      || !['original_video','source_frame','media_asset','authored'].includes(String(l.origin))
+      || !frame(l.item_start_frame) || !frame(l.item_end_frame) || l.item_start_frame > start || l.item_end_frame < end
+      || typeof l.layout_digest !== 'string' || !/^[a-f0-9]{64}$/.test(l.layout_digest)
+      || typeof l.render_digest !== 'string' || !/^[a-f0-9]{64}$/.test(l.render_digest) || !row(l.render_state)
+      || (l.asset_id !== undefined && (typeof l.asset_id !== 'string' || !l.asset_id))
+      || (l.source_hash !== undefined && (typeof l.source_hash !== 'string' || !/^[a-f0-9]{64}$/.test(l.source_hash)))
+      || (l.source_revision !== undefined && typeof l.source_revision !== 'string')
+      || (l.source_start_seconds !== undefined && (!finite(l.source_start_seconds) || l.source_start_seconds < 0))
+      || (l.playback_rate !== undefined && (!finite(l.playback_rate) || l.playback_rate <= 0))) return false;
+    if ((l.origin === 'original_video' || l.origin === 'source_frame') && !finite(l.source_start_seconds)) return false;
+    if (l.origin === 'source_frame' && l.kind !== 'image') return false;
+    if (l.origin === 'original_video' && l.kind !== 'video') return false;
+    if ((l.origin === 'media_asset' || l.origin === 'authored') && l.source_start_seconds !== undefined) return false;
+    if (l.origin !== 'authored' && !l.asset_id) return false;
+    ids.add(l.item_id); return true;
+  });
+}
 type Candidate = { code: 'composition_change' | 'pause_inserts_picture' | 'audio_gap_with_picture_change'; start_seconds: number; end_seconds: number; detail: string };
 const row = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const frame = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0;
 const close = (a: number, b: number) => Math.abs(a - b) <= Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b)) * 4;
-const pictureClass = (s: Scene) => s.kind === 'relation' ? 'relation' : s.kind === 'original' ? 'original' : 'single_explanation';
+const pictureClass = (s: Scene) => s.kind === 'composition' ? `composition:${JSON.stringify(s.layers.map(l => [l.track,l.layout_digest]))}` : s.kind === 'relation' ? 'relation' : s.kind === 'original' ? 'original' : 'single_explanation';
 // At a cut, compare the departing last displayed frame with the arriving first frame.
 // content is an IN point for normal-speed video, but a fixed source position for stills.
 function boundaryPicture(scene: Scene, edge: 'start' | 'end', fps: number): number[] {
+  if (scene.kind === 'composition') return scene.layers.flatMap(l => l.source_start_seconds === undefined ? [] : [l.source_start_seconds + (edge === 'end' && l.kind === 'video' ? (scene.end_frame - scene.start_frame - 1) / fps * (l.playback_rate ?? 1) : 0)]);
   if (Array.isArray(scene.content)) return scene.content;
   const offset = edge === 'end' && (scene.kind === 'video' || scene.kind === 'original')
     ? (scene.end_frame - scene.start_frame - 1) / fps : 0;
@@ -16,6 +52,7 @@ function boundaryPicture(scene: Scene, edge: 'start' | 'end', fps: number): numb
 }
 function samePicture(a: Scene, aEdge: 'start' | 'end', b: Scene, bEdge: 'start' | 'end', fps: number) {
   if (pictureClass(a) !== pictureClass(b)) return false;
+  if (a.kind === 'composition' && b.kind === 'composition' && JSON.stringify(a.layers.map(l=>[l.item_id,l.asset_id,l.source_hash,l.render_digest])) !== JSON.stringify(b.layers.map(l=>[l.item_id,l.asset_id,l.source_hash,l.render_digest]))) return false;
   const left = boundaryPicture(a, aEdge, fps), right = boundaryPicture(b, bEdge, fps);
   // Compare at this manifest's output-frame resolution, not exact float equality or perceptual tolerance.
   return left.length === right.length && left.every((t, i) => Math.round(t * fps) === Math.round(right[i] * fps));
@@ -65,8 +102,12 @@ export function checkTransitionManifest(input: unknown) {
   const scenes = input.scenes.map((value): Scene => {
     if (!row(value) || !frame(value.start_frame) || !frame(value.end_frame) || value.end_frame <= value.start_frame
       || value.start_frame !== previousEnd || value.end_frame > Number(input.total_frames)
-      || !(typeof value.kind === 'string' && ['original', 'video', 'still', 'relation'].includes(value.kind))
+      || !(typeof value.kind === 'string' && ['original', 'video', 'still', 'relation', 'composition'].includes(value.kind))
       || (value.label !== undefined && typeof value.label !== 'string')) throw new Error('Invalid, unsorted, overlapping or discontinuous picture range');
+    if (value.kind === 'composition') {
+      if (value.content !== undefined || !validPictureLayers(value.layers,value.start_frame,value.end_frame)) throw new Error('Invalid composition layers or source provenance');
+      previousEnd = value.end_frame; return value as Scene;
+    }
     const relation = value.kind === 'relation';
     if (relation ? !Array.isArray(value.content) || value.content.length !== 2 || !value.content.every((t) => finite(t) && t >= 0)
       : !finite(value.content) || value.content < 0) throw new Error('Missing or invalid source position; no inferred evidence');
@@ -84,19 +125,24 @@ export function checkTransitionManifest(input: unknown) {
     }
     // The manifest records presentation kinds, not pixels, output geometry or perceived rhythm.
     // A relation/single change is review evidence at ANY duration, never a seconds-based failure.
-    if (previous && (current.kind === 'relation' || previous.kind === 'relation') && pictureClass(current) !== pictureClass(previous)) {
+    if (previous && (current.kind === 'relation' || previous.kind === 'relation' || current.kind === 'composition' || previous.kind === 'composition') && pictureClass(current) !== pictureClass(previous)) {
       candidates.push({ code: 'composition_change', start_seconds: current.start_frame / fps, end_seconds: current.end_frame / fps,
-        detail: '单幅／关系图切换；请连同前后观看确认尺度与注意转移，不能只凭时长判突兀。' });
+        detail: '画面层级或单幅／关系图切换；请连同前后观看确认尺度与注意转移，不能只凭时长判突兀。' });
     }
   }
   const cut_events = scenes.slice(1).map((scene, i) => ({
     at_seconds: scene.start_frame / fps, scene_index: i + 1,
     layout_before: pictureClass(scenes[i]), layout_after: pictureClass(scene),
     layout_changed: pictureClass(scenes[i]) !== pictureClass(scene),
-    medium_before: scenes[i].kind, medium_after: scene.kind, medium_changed: scenes[i].kind !== scene.kind,
+    medium_before: scenes[i].kind, medium_after: scene.kind,
+    ...(scene.kind==='composition'?{scheduled_media_after:scene.layers.map(l=>l.kind)}:{}),
+    ...(scenes[i].kind==='composition'?{scheduled_media_before:scenes[i].layers.map(l=>l.kind)}:{}),
+    medium_changed: scenes[i].kind !== scene.kind || (scenes[i].kind==='composition'&&scene.kind==='composition'&&JSON.stringify(scenes[i].layers.map(l=>l.kind))!==JSON.stringify(scene.layers.map(l=>l.kind))),
     duration_after_seconds: (scene.end_frame - scene.start_frame) / fps,
     // Labels identify execution segments, not proven semantic content types.
     from_label: scenes[i].label, to_label: scene.label,
+    ...(scene.kind === 'composition' ? {layers_after: scene.layers} : {}),
+    ...(scenes[i].kind === 'composition' ? {layers_before: scenes[i].layers} : {}),
     source_end_before_seconds: boundaryPicture(scenes[i], 'end', fps), source_start_after_seconds: boundaryPicture(scene, 'start', fps),
   }));
   const layouts = cut_events.filter((cut) => cut.layout_changed);
@@ -133,7 +179,7 @@ export function checkTransitionManifest(input: unknown) {
     review_groups, human_review_requested: false,
     next: 'Agent先按合并区间对照蓝图自检；只修本次授权内有依据的执行偏差，未知保留。不要逐项询问用户，不自动改稿/删镜头或追加模型。最终预览只附合并后仍待核区间。',
     candidates, cut_events, layout_change_pairs, ...audio, narration_spans: narrationSpans,
-    limits: ['仅支持frame-based scenes执行快照；未自动从ProjectDoc提取布局或听审句界。', 'kind只映射本执行格式的呈现类别，video/still属于同一单幅布局；实际像素、尺寸、动态与听感未检查。', '音轨间隔来自所有安排区间的并集，不是实际发声边界；缺少audios记未检查。',
+    limits: ['scenes来自frame-based执行快照；composition.layers保留实际绘制顺序和来源，不证明遮挡后实际可见。MG内部动态和听审句界未推断。', 'kind只映射本执行格式的呈现类别，video/still属于同一单幅布局；实际像素、尺寸、动态与听感未检查。', '音轨间隔来自所有安排区间的并集，不是实际发声边界；缺少audios记未检查。',
       '不按3/5秒或价值占比判文案优劣；没有疑点不等于教学、自然度或成片通过。'],
     semantic_review: 'not_performed', continuous_viewing: false, listening: false, full_film_accepted: false };
 }

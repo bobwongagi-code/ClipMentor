@@ -6,10 +6,17 @@ export const HANDOFF_HISTORY_PREFIX='clipmentor-handoff-history:';
 const ID=/^[A-Za-z0-9_-]{1,160}$/;const SHA=/^[a-f0-9]{64}$/;
 type Row=Record<string,unknown>;
 export const handoffRecord=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
+export interface VisualDoneCriterion {
+ id:string;quote:string;question:string;sectionId:string;pictureStage:string;
+ layout:'original_underlay'|'product_commission'|'recruitment_card'|'product_storyboard'|'unrepresented';
+ pictureSha256?:string;
+ reference:{assetId:string;fileName:string;seconds:number};
+}
+export const visualDoneCriteria=(criteria:HandoffBrief['doneCriteria'])=>criteria.filter((entry):entry is VisualDoneCriterion=>typeof entry!=='string');
 export interface HandoffBrief {
  version:1;briefId:string;revision:number;mode:'collaborative'|'autonomous';phase:'planning'|'execution';
  planner:'external_codex'|'builtin_agent';executor:'builtin_agent';projectId:string;timelineId:string;
- objective:string;doneCriteria:string[];blueprint:{revision:number;digest:string}|null;
+ objective:string;doneCriteria:Array<string|VisualDoneCriterion>;blueprint:{revision:number;digest:string}|null;
  budget:{maxModelTurns:number;maxToolCalls:number;maxElapsedMs:number;paidToolCalls:Record<string,number>};
 }
 export interface HandoffPolicy {
@@ -25,6 +32,18 @@ export function handoffProjectId(key:string):string|undefined {
 }
 const keys=(v:Row,allowed:string[])=>Object.keys(v).every(k=>allowed.includes(k))&&allowed.every(k=>Object.hasOwn(v,k));
 const integer=(v:unknown,min:number,max:number):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=min&&v<=max;
+const boundedText=(x:unknown,max:number):x is string=>typeof x==='string'&&!!x.trim()&&x.length<=max;
+function visualCriterion(v:unknown):v is VisualDoneCriterion{
+ return handoffRecord(v)&&keys(v,Object.hasOwn(v,'pictureSha256')?['id','quote','question','sectionId','layout','reference','pictureStage','pictureSha256']:['id','quote','question','sectionId','layout','reference','pictureStage'])
+  &&typeof v.id==='string'&&ID.test(v.id)&&typeof v.sectionId==='string'&&ID.test(v.sectionId)
+  &&boundedText(v.quote,1000)&&boundedText(v.question,300)&&boundedText(v.pictureStage,80)
+  &&typeof v.layout==='string'&&['original_underlay','product_commission','recruitment_card','product_storyboard','unrepresented'].includes(v.layout)
+  &&(v.layout==='recruitment_card'||v.layout==='product_storyboard'||v.pictureSha256!==undefined
+    ?typeof v.pictureSha256==='string'&&SHA.test(v.pictureSha256):true)
+  &&handoffRecord(v.reference)&&keys(v.reference,['assetId','fileName','seconds'])
+  &&boundedText(v.reference.assetId,160)&&boundedText(v.reference.fileName,240)&&!/[\/\\\r\n]/.test(v.reference.fileName)
+  &&typeof v.reference.seconds==='number'&&Number.isFinite(v.reference.seconds)&&v.reference.seconds>=0;
+}
 export function parseHandoffBrief(v:unknown):HandoffBrief {
  if(!handoffRecord(v)||!keys(v,['version','briefId','revision','mode','phase','planner','executor','projectId','timelineId','objective','doneCriteria','blueprint','budget'])
   ||v.version!==1||typeof v.briefId!=='string'||!ID.test(v.briefId)||!integer(v.revision,1,1_000_000)
@@ -33,7 +52,9 @@ export function parseHandoffBrief(v:unknown):HandoffBrief {
   ||typeof v.projectId!=='string'||!ID.test(v.projectId)||typeof v.timelineId!=='string'||!ID.test(v.timelineId)
   ||typeof v.objective!=='string'||!v.objective.trim()||v.objective.length>2000
   ||!Array.isArray(v.doneCriteria)||!v.doneCriteria.length||v.doneCriteria.length>20
-  ||!v.doneCriteria.every(x=>typeof x==='string'&&x.trim()&&x.length<=1000))throw new Error('handoff_brief_invalid');
+  ||!v.doneCriteria.every(x=>boundedText(x,1000)||visualCriterion(x)))throw new Error('handoff_brief_invalid');
+ const visuals=visualDoneCriteria(v.doneCriteria as HandoffBrief['doneCriteria']);
+ if(visuals.length>4||new Set(visuals.map(x=>x.id)).size!==visuals.length)throw Error('handoff_visual_criteria_invalid');
  if(v.blueprint!==null&&(!handoffRecord(v.blueprint)||!keys(v.blueprint,['revision','digest'])
   ||!integer(v.blueprint.revision,0,1_000_000)||typeof v.blueprint.digest!=='string'||!SHA.test(v.blueprint.digest)))throw new Error('handoff_blueprint_binding_invalid');
  if(v.phase==='execution'&&!v.blueprint)throw new Error('handoff_blueprint_required');

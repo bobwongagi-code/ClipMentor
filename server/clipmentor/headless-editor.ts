@@ -1,3 +1,8 @@
+import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
+import {voiceAssetProvenance} from '../../shared/voice-word-timing';
+import {assertFrozenParameterChanges} from '../../src/clipmentor/execution-parameters';
+import {assertLocalFeedbackPreservation} from './production-feedback';
+import {reusableVoiceForRequest} from './audio-reuse';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -9,6 +14,7 @@ import type {MediaAsset} from '../../src/editor/types';
 import {executeOfflineTool} from '../external-agent/offline-executor';
 import {DEFAULT_PERSISTENCE,type OfflineEditPersistence} from '../external-agent/offline-runtime-support';
 import {isProjectConnected} from '../external-agent/broker';
+import {assertDeliveryPicturePreservation} from '../../src/clipmentor/delivery-bindings';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {copyTeachingPacketFromDoc,clipMentorProductionBlock} from '../../src/clipmentor/production-gate';
 import {execClipMentorAnalysisTool} from '../../src/agent/tools/clipmentor-analysis-tools';
@@ -19,13 +25,16 @@ import {isExternalServerDirectCall} from '../../src/agent/external-tool-policy';
 import {resolveUploadFile,uploadDir} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
 import {extractOneFrame} from '../plugins/extract-frames';
-import {reviewClipMentorCopy} from './copy-review';
+import {copyReviewDependencies,reviewClipMentorCopy} from './copy-review';
 import {apiCopyReviewDependencies,type ReviewApiConfig} from './copy-review-api';
 
 export interface HeadlessOptions {
  projectId:string;runId:string;origin:string;review:ReviewApiConfig;
+ reviewBackend?:'codex';
+ retryGateway?:boolean;
  voice?:{provider:string;voiceId:string};signal?:AbortSignal;
- effect<T>(kind:'review'|'observation'|'tts'|'render',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
+ finalFeedback?:Record<string,unknown>;
+ effect<T>(kind:'review'|'observation'|'tts'|'render'|'preview_review',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
  persistence?:OfflineEditPersistence;browserConnected?:(id:string)=>boolean;fetch?:typeof fetch;
 }
 /** Server-owned editor. No MCP connection, DOM, user browser or Codex process. */
@@ -48,49 +57,81 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  const hostFetch:typeof fetch=async(input,init)=>{
   const path=String(input),body=JSON.parse(String(init?.body??'{}'));
   if(path==='/api/clipmentor/review-copy'){
+   const dependencies=options.reviewBackend==='codex'?copyReviewDependencies():apiCopyReviewDependencies(options.review);
    const result=await options.effect('review',body.operationId,async()=>{
-    try{return {body:await reviewClipMentorCopy(body,apiCopyReviewDependencies(options.review),init?.signal??undefined),status:200};}
+    try{return {body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined),status:200};}
     catch(e){const error=e as {status?:number;diagnostic?:unknown};return {body:{error:'Independent API review failed',diagnostic:error.diagnostic},status:error.status??500};}
-   },async()=>({body:await reviewClipMentorCopy(body,apiCopyReviewDependencies(options.review),init?.signal??undefined,true),status:200}));
+   },async()=>({body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined,true),status:200}));
    return Response.json(result.body,{status:result.status});
   }
   if(body.action==='read'||path==='/api/clipmentor/observe-video'&&body.action==='read_receipt')return local(path,init);
   if(path.includes('observe-video')||path.includes('transcribe-source')||path.includes('review-preview')){
-   const result=await options.effect(path.includes('review-preview')?'review':'observation',body.operationId,async()=>{
-    const response=await local(path,init);return {status:response.status,body:await response.json()};
-   },async()=>{const response=await local(path,{...init,body:JSON.stringify({action:path==='/api/clipmentor/observe-video'?'read_receipt':'read',operationId:body.operationId,projectId:body.projectId})});if(!response.ok)throw new Error('Original receipt unavailable; outcome unknown, no resubmission');
+   const readReceipt=async(operationId:string)=>{
+    const isSource=path==='/api/clipmentor/observe-video';
+    const receiptDeadline=AbortSignal.timeout(10_000);
+    const signal=options.signal?AbortSignal.any([options.signal,receiptDeadline]):receiptDeadline;
+    const response=await local(path,{...init,signal,body:JSON.stringify({action:isSource?'read_receipt':'read',operationId,projectId:body.projectId,
+     ...(path==='/api/clipmentor/review-preview'?{videoSha256:body.videoSha256}:{})})});
+    if(!response.ok)throw new Error('Original receipt unavailable; outcome unknown, no resubmission');
     const receipt=await response.json();
-    if(path==='/api/clipmentor/observe-video'){
-     if(receipt.operationId!==body.operationId||receipt.projectId!==body.projectId)throw new Error('Original receipt binding mismatch');
-     return receipt.status==='completed'&&receipt.result
-      ?{status:200,body:{...receipt.result,cached:true}}
-      :{status:409,body:{error:'Original observation is failed or unknown; no resubmission',receipt}};
+    if(receipt.operationId!==body.operationId||receipt.projectId!==body.projectId)throw new Error('Original receipt binding mismatch');
+    if(isSource)return receipt.status==='completed'&&receipt.result
+     ?{status:200,body:{...receipt.result,cached:true}}
+     :{status:409,body:{error:'Original observation is failed or unknown; no resubmission',receipt}};
+    return {status:response.status,body:receipt};
+   };
+   const result=await options.effect(path.includes('review-preview')?'preview_review':'observation',body.operationId,async(operationId)=>{
+    try{
+     const response=await local(path,init);
+     const data=await response.json();
+     if(options.retryGateway&&path==='/api/clipmentor/observe-video'&&response.status>=500&&!data?.receipt)
+      return readReceipt(operationId);
+     return {status:response.status,body:data};
+    }catch(error){
+     if(!options.retryGateway||path.includes('transcribe-source')||options.signal?.aborted)throw error;
+     return readReceipt(operationId);
     }
-    return {status:response.status,body:receipt};});return Response.json(result.body,{status:result.status});
+   },readReceipt);
+   return Response.json(result.body,{status:result.status});
   }
   return local(path,init);
  };
  const ctx:AgentContext={...engine,templates:[],audio:[],hostFetch,getCreativeMode:()=>engine.getDoc().clipMentorAnalysis?'clipmentor':null,
-  getProjectId:()=>options.projectId,getAgentRunId:()=>options.runId};
+  getProjectId:()=>options.projectId,getAgentRunId:()=>options.runId,...(options.signal?{getAgentRunSignal:()=>options.signal!}:{})};
+ let operationTail:Promise<unknown>=Promise.resolve();
+ function exclusive<T>(work:()=>Promise<T>):Promise<T>{const pending=operationTail.then(work,work);operationTail=pending.catch(()=>undefined);return pending;}
+ const active=()=>{options.signal?.throwIfAborted();if(closed)throw new Error('Editor closed');if((options.browserConnected??isProjectConnected)(options.projectId))throw new Error('project_busy_browser');};
+ const canCommit=()=>!closed&&!options.signal?.aborted&&!(options.browserConnected??isProjectConnected)(options.projectId);
+ const savedResult=(result:unknown)=>result&&typeof result==='object'&&!Array.isArray(result)
+  ?{...result,projectId:options.projectId,projectRevision:revision,saved:true}:result;
  let leaseError:unknown;
  let leaseTail:Promise<unknown>=Promise.resolve();
  function withLease<T>(work:()=>Promise<T>):Promise<T>{const pending=leaseTail.then(work,work);leaseTail=pending.catch(()=>undefined);return pending;}
  const heartbeat=setInterval(()=>{void validate().catch(error=>{if(!closed)leaseError=error;});},10000);heartbeat.unref?.();
  const sync=()=>{ctx.commands=engine.commands;ctx.getDoc=engine.getDoc;ctx.getState=engine.getState;};
  async function renew(){
-  if(closed)throw new Error('Editor closed');if(leaseError)throw leaseError;
-  const renewed=await persistence.renewOwnership(ownership,revision);if(renewed.status!=='renewed')throw new Error('Project ownership lost');ownership=renewed.claim;
+  active();if(leaseError)throw leaseError;
+  const renewed=await persistence.renewOwnership(ownership,revision);active();if(renewed.status!=='renewed')throw new Error('Project ownership lost');ownership=renewed.claim;
  }
  const validate=()=>withLease(renew);
- async function commit(){return withLease(async()=>{
+ async function commitDraft(){return withLease(async()=>{
   await renew();const doc=migrateProjectDoc(engine.getDoc());if(!doc)throw new Error('Invalid saved project');
-  if(revisionOf(doc)!==revision){const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit:()=>!closed});
+  if(revisionOf(doc)!==revision){assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
    if(result.status!=='applied'||!result.revision)throw new Error(`Project commit ${result.status}`);revision=result.revision;ownership=result.ownership??{...ownership,baseRevision:revision};
   }
-  committed=doc;engine=makeDraft(doc);sync();return {saved:true,revision};
+  committed=doc;engine=makeDraft(doc);sync();return {saved:true,revision,projectId:options.projectId};
  });}
- async function execute(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>{
-  await validate();const before=engine.getDoc();
+ const commit=()=>exclusive(async()=>{try{return await commitDraft();}catch(error){engine=makeDraft(committed);sync();throw error;}});
+ async function readExport(id:string){
+  options.signal?.throwIfAborted();
+  if(!/^[a-zA-Z0-9_-]+$/.test(id))throw new Error('Render ID required');
+  const response=await local(`/export/job/${id}`),result=await response.json();
+  options.signal?.throwIfAborted();if(!response.ok)throw new Error('Render read failed');if(result.id!==id)throw new Error('Render binding mismatch');return result;
+ }
+ const execute=(name:string,args:Record<string,unknown>,callId:string)=>exclusive(()=>executeOperation(name,args,callId));
+ async function executeOperation(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>{
+  await validate();const before=engine.getDoc(),beforeRevision=revision;
+  if(args.projectId!==undefined&&args.projectId!==options.projectId)throw new Error('Tool project binding mismatch');
   try{
    const blocked=await clipMentorProductionBlock(name,args,ctx);if(blocked)return {...blocked,issues:before.clipMentorAnalysis?checkSourceBreakdown(before,true).issues:[]};
    if(name==='save_clipmentor_source_frame'){
@@ -98,44 +139,57 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     if(!asset||asset.kind!=='video'||typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0||seconds>=asset.durationInFrames/engine.getState().fps)throw new Error('Invalid source frame');
     const file=resolveUploadFile(asset.src.replace(/^\/media\/uploads\//,''));if(!file||!asset.sourceContentHash||await sha256File(file)!==asset.sourceContentHash)throw new Error('Source changed');
     const name=`clipmentor-frame-${randomUUID()}.png`,target=join(uploadDir(),name);
-    await extractOneFrame(file,Math.round(seconds*1000),target,true);
+    await extractOneFrame(file,sourceFrameSeekMs(seconds*1000),target,true);
     const image:MediaAsset={id:randomUUID(),name,kind:'image',src:`/media/uploads/${name}`,durationInFrames:1,width:asset.width,height:asset.height,
      sourceContentHash:await sha256File(target),props:{sourceAssetId:asset.id,sourceSeconds:seconds,sourceHash:asset.sourceContentHash}};
-    ctx.commands.applyDoc({...before,assets:[...before.assets,image]});await commit();return {asset:image,saved:true};
+    ctx.commands.applyDoc({...before,assets:[...before.assets,image]});await commitDraft();return savedResult({asset:image});
    }
    if(name==='submit_voice'){
     const voice=options.voice;
     if(!voice||args.provider!==voice.provider||args.voiceId!==voice.voiceId||(args.speed??1)!==1||(args.speedRatio??1)!==1)throw new Error('Task-confirmed voice and normal speed required');
     const packet=await copyTeachingPacketFromDoc(before);
-    if(!packet.units.some(u=>u.lines.some(l=>l.narration_ms===args.text)))throw new Error('Voice text does not match current reviewed copy');
+    if(!packet.units.some(u=>u.lines.some(l=>l.narration_ms===args.text))&&!packet.delivery_sections?.some(s=>s.line.narration_ms===args.text))throw new Error('Voice text does not match current reviewed copy');
+    const reusable=reusableVoiceForRequest(before,args);if(reusable.status==='reusable')return savedResult(reusable);
+    if(reusable.status!=='missing')return{error:`voice_reuse_${reusable.status}:${reusable.reason}`,voice_reuse:reusable,production_approved:false};
     return options.effect('tts',callId,async()=>{
     const res=await local('/generate/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)}),data=await res.json();
     if(!res.ok||!data.path||!Number.isFinite(data.durationSeconds))throw new Error('Voice result missing measured duration');
-    const asset:MediaAsset={id:randomUUID(),name:String(args.name??'Reviewed voice'),kind:'audio',src:data.path,durationInFrames:Math.ceil(data.durationSeconds*ctx.getState().fps),
-     props:{generation:{provider:args.provider,voiceId:args.voiceId,text:args.text,speed:args.speedRatio??args.speed??1,operationId:callId,durationSeconds:data.durationSeconds}}};
-    ctx.commands.applyDoc({...ctx.getDoc(),assets:[...ctx.getDoc().assets,asset]});await commit();return {asset,saved:true};
+    const provenance=voiceAssetProvenance(data,typeof args.subtitleType==='string'?args.subtitleType:undefined);
+    const asset:MediaAsset={id:randomUUID(),name:String(args.name??'Reviewed voice'),kind:'audio',src:data.path,durationInFrames:Math.ceil(data.durationSeconds*ctx.getState().fps),...provenance,
+     props:{...provenance.props,
+      generation:{pitch:args.pitch??0,volume:args.volume??1,languageBoost:args.languageBoost??'auto',sampleRate:args.sampleRate??32000,channel:args.channel??1,audioFormat:args.audioFormat??'mp3',provider:args.provider,voiceId:args.voiceId,text:args.text,speed:args.speedRatio??args.speed??1,operationId:callId,durationSeconds:data.durationSeconds}}};
+    ctx.commands.applyDoc({...ctx.getDoc(),assets:[...ctx.getDoc().assets,asset]});await commitDraft();return savedResult({asset});
    });
    }
    if(name==='submit_render_job'){
     if(revisionOf(before)!==revision)throw new Error('export_requires_committed_project');
-    return options.effect('render',callId,async(operationId)=>{
+    const result=await options.effect('render',callId,async(operationId)=>{
      const response=await local('/export/job',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...args,operationId,format:'video',state:ctx.getState(),project:committed,timelineId:committed.activeTimelineId})});
-     const result=await response.json();if(!response.ok||!result.renderId)throw new Error(result.error??'Render submission failed');return result;
-    },async(operationId)=>{const response=await local(`/export/job/${operationId}`);if(!response.ok)throw new Error('Original render operation unavailable; do not resubmit');const job=await response.json();if(job.id!==operationId)throw new Error('Render binding mismatch');return {renderId:job.id};});
+     const result=await response.json();if(!response.ok||!result.renderId)throw new Error(result.error??'Render submission failed');
+     if(result.projectRevision!==revision||result.timelineId!==committed.activeTimelineId)throw new Error('Render snapshot binding mismatch; inspect original job, no resubmission');
+     return {...result,projectId:options.projectId};
+    },async(operationId)=>{const response=await local(`/export/job/${operationId}`);if(!response.ok)throw new Error('Original render operation unavailable; do not resubmit');const job=await response.json();if(job.id!==operationId||job.params?.projectRevision!==revision||job.params?.timelineId!==committed.activeTimelineId)throw new Error('Render snapshot binding missing or mismatch; no resubmission');return {renderId:job.id,projectRevision:job.params.projectRevision,timelineId:job.params.timelineId,projectId:options.projectId};});
+    if(result.projectRevision!==revision||result.timelineId!==committed.activeTimelineId)throw new Error('Cached render snapshot binding mismatch; no resubmission');
+    return result;
    }
    if(name==='track_export'){
-    const id=String(args.renderIds??'');if(!/^[a-zA-Z0-9_-]+$/.test(id))throw new Error('Render ID required');
-    const response=await local(`/export/job/${id}`),result=await response.json();if(!response.ok)throw new Error('Render read failed');return result;
+    return readExport(String(args.renderIds??''));
    }
    if(name==='view_asset_frames'){
     const timeline=args.timelineId?before.timelines.find(t=>t.id===args.timelineId):ctx.getState();
     if(!timeline)throw new Error('Timeline not found');
     const item=args.itemId?timeline.items.find(i=>i.id===args.itemId):undefined;
-    const asset=before.assets.find(a=>a.id===(item?.sourceAssetId??args.assetId));if(!asset||asset.kind!=='video')throw new Error('Exact video asset or item ID required');
+    if(args.itemId&&!item)return {error:'Exact timeline item ID required'};
+    const assetId=item?.sourceAssetId??args.assetId;
+    if(item&&args.assetId&&args.assetId!==assetId)return {error:'Asset ID does not match the timeline item'};
+    const asset=before.assets.find(a=>a.id===assetId);
+    if(!asset||!['video','image'].includes(asset.kind))return {error:'Exact video/image asset or item ID required'};
     const sampling=item?constrainSourceFrameArgs(args,sourceWindowForTimelineRange(item,0,item.durationInFrames),timeline.fps):args;
-    const times=pickFrames(sampling,asset.durationInFrames,timeline.fps,6).map(f=>f/timeline.fps*1000);
+    const times=asset.kind==='image'?[0]:pickFrames(sampling,asset.durationInFrames,timeline.fps,6).map(f=>f/timeline.fps*1000);
     const res=await local('/api/extract-frames',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({src:asset.src,output:'frames',sourceTimesMs:times})});
-    if(!res.ok)throw new Error('Source frame extraction failed');const data=await res.json();return {...data,__images:(data.frames??[]).map((f:{sourceTimeMs:number;base64:string})=>({frame:Math.round(f.sourceTimeMs*timeline.fps/1000),base64:f.base64}))};
+    if(!res.ok)throw new Error('Source frame extraction failed');const data=await res.json();
+    if(!Array.isArray(data.frames)||!data.frames.length)throw new Error('Source frame extraction returned no images');
+    return {...data,__images:data.frames.map((f:{sourceTimeMs:number;base64:string})=>({frame:Math.round(f.sourceTimeMs*timeline.fps/1000),base64:f.base64}))};
    }
    if(name==='view_timeline_frames'){
     const timeline=args.timelineId?before.timelines.find(t=>t.id===args.timelineId):ctx.getState();if(!timeline)throw new Error('Timeline not found');
@@ -151,7 +205,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
    else throw new Error(`Tool/action requires an unsupported browser host: ${name}`);
    if(result&&typeof result==='object'&&'error' in result){engine=makeDraft(before);sync();return result;}
    // Preparation and committed editing never rely on browser settlement.
-   await commit();return result;
+   await commitDraft();return revision!==beforeRevision?savedResult(result):result;
   }catch(error){engine=makeDraft(committed);sync();throw error;}
  }
  async function loadSkill(name:string,file='SKILL.md'){
@@ -173,5 +227,5 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   if(end===Number(offset)&&end<body.length)throw new Error('Page limit is too small for a Unicode character');
   return {skill:name,file,contents:{[file]:body.slice(Number(offset),end)},offset,nextOffset:end<body.length?end:null,totalChars:body.length};
  }
- return {context:ctx,execute,commit,getDoc:()=>engine.getDoc(),get revision(){return revision;},async close(){closed=true;clearInterval(heartbeat);await leaseTail;await persistence.releaseOwnership(ownership);},loadSkill,loadSkillTool};
+ return {context:ctx,execute,commit,readExport,getDoc:()=>engine.getDoc(),get revision(){return revision;},async close(){closed=true;clearInterval(heartbeat);await operationTail;await leaseTail;await persistence.releaseOwnership(ownership);},loadSkill,loadSkillTool};
 }

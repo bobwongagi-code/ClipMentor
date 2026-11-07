@@ -5,6 +5,7 @@ import { sourceFramesToTimelineFrames, timelineFramesToSourceFrames } from '../.
 import { copyTranscriptIdentity } from '../../transcript/identity';
 import { hasOperationalTranscript } from '../../transcript/types';
 import { rejectUnknownFields } from './edit-item-fields';
+import { findGenericItem as findItem } from './edit-item-generic-result';
 import type { OpResult } from './edit-item-generic-result';
 
 const REPLACEMENT_KEYS: Readonly<Record<string, true>> = {
@@ -22,13 +23,8 @@ const finiteNumber = (value: unknown): number | undefined => (
   typeof value === 'number' && Number.isFinite(value) ? value : undefined
 );
 
-function findItem(items: readonly TimelineItem[], value: unknown): TimelineItem | null {
-  const query = String(value ?? '').trim();
-  if (!query) return null;
-  return items.find((item) => item.id === query || item.id.startsWith(query)) ?? null;
-}
 
-function findAsset(assets: readonly MediaAsset[], value: unknown): MediaAsset | OpResult {
+export function findReplacementAsset(assets: readonly MediaAsset[], value: unknown): MediaAsset | OpResult {
   const query = String(value ?? '').trim();
   if (!query) return { error: 'pool asset replacement needs assetId' };
   const exact = assets.find((asset) => asset.id === query);
@@ -63,7 +59,7 @@ export function validatePoolAssetReplacement(
   const item = findItem(state.items, entry.itemId ?? entry.id);
   if (!item) return { error: `item not found: ${String(entry.itemId ?? entry.id ?? '')}` };
   if (!isFileMediaKind(item.kind)) return { error: `pool asset replacement requires a file-backed clip, got ${item.kind}` };
-  const resolved = findAsset(assets, entry.assetId);
+  const resolved = findReplacementAsset(assets, entry.assetId);
   if ('error' in resolved) return resolved;
   const asset = resolved;
   const assetKind = asset.kind;
@@ -162,6 +158,11 @@ export function replaceTimelineItemAsset(
           sourceContentHash: asset.sourceContentHash,
           sourceFilename: asset.sourceFilename,
           originalFilePath: asset.originalFilePath,
+          ...(asset.kind === 'motion-graphic' ? {
+            templateId: asset.id,
+            code: asset.code,
+            props: { ...asset.props },
+          } : {}),
           width: asset.width,
           height: asset.height,
           durationInFrames: timing.durationInFrames,

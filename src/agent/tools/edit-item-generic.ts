@@ -2,20 +2,20 @@
 // edit-item-tools.ts so unit checks avoid its GL .frag dependency.
 // Committers delegate to EditorCommands, preserving atomic-batch semantics.
 import type {
-  ItemKeyframes, Keyframe, KeyframeProp, MediaAsset, TimelineItem, TimelineState,
+  ItemKeyframes, Keyframe, KeyframeProp, MediaAsset, TimelineState,
 } from '../../editor/types';
 import { defaultTrackId, resolveTrackId, selectedIdsOf } from '../../editor/types';
 import { isValidEasing } from '../../editor/keyframes';
 import { validateBackgroundFillUpdate } from './edit-item-background-fill';
 import { getKeyframePropertyDefinition, KEYFRAME_PROPS, supportsKeyframeProperty } from '../../editor/keyframeRegistry';
 import { planSlip } from '../../editor/slip';
-import { rejectUnknownFields } from './edit-item-fields';
+import { rejectUnknownFields, resolveUpdateType, shouldCoerceEffectUpdateToClip, stripEffectLocators } from './edit-item-fields';
 import { flexCropMergePatch } from '../../editor/flexCrop';
 import { clampNum, parseFiltersArg, parseTransformArg } from './edit-item-visual';
 import { validateMediaSourceUpdate } from './edit-item-media-ops';
 import { validateSourceFrameUpdate, validateSourceWindow } from './edit-item-source-window';
-import { validatePoolAssetReplacement } from './edit-item-pool-replacement';
-import { slipFailureToOpResult, type OpResult } from './edit-item-generic-result';
+import { findReplacementAsset, validatePoolAssetReplacement } from './edit-item-pool-replacement';
+import { slipFailureToOpResult, findGenericItem as findItem, type OpResult } from './edit-item-generic-result';
 export { didYouMean, rejectUnknownFields } from './edit-item-fields';
 export { validateMediaSourceUpdate } from './edit-item-media-ops';
 export { applyGeneric, type GenericCommands } from './edit-item-generic-actions';
@@ -23,6 +23,24 @@ export { applyGeneric, type GenericCommands } from './edit-item-generic-actions'
 export const GENERIC_ITEM_KINDS: ReadonlySet<string> = new Set([
   'video', 'image', 'audio', 'gif', 'svg', 'motion-graphic', 'text', 'solid',
 ]);
+
+/** Host-independent normalization for ordinary clip updates. Actual effects
+ * retain their specialized validator and are not granted server capability. */
+export function resolveClipUpdateEntry(
+  state: TimelineState,
+  entry: Record<string, unknown>,
+): { type: string; entry: Record<string, unknown> } | { error: string } {
+  const ref = resolveUpdateItemId(state, { ...entry, itemId: entry.itemId ?? entry.id ?? entry.targetItemId }) ?? '';
+  const exact = ref ? state.items.find(item => item.id === ref) : undefined;
+  const matches = ref ? state.items.filter(item => item.id.startsWith(ref)) : [];
+  const item = exact ?? matches[0];
+  let type = resolveUpdateType(entry, item?.kind, GENERIC_ITEM_KINDS);
+  if (shouldCoerceEffectUpdateToClip(entry, type, item?.kind, GENERIC_ITEM_KINDS) && item) type = item.kind;
+  if (!GENERIC_ITEM_KINDS.has(type)) return { type, entry };
+  if (!exact && matches.length > 1) return { error: `ambiguous item ${ref}; use the exact item ID` };
+  if (ref && !item) return { error: `no item ${ref}` };
+  return { type, entry: item ? stripEffectLocators(entry, type, item.id) : entry };
+}
 
 /** Pool-asset kinds that edit_item.adds can place as a clip.
  *  motion-graphic: pool assets from submit_motion_graphic / create_motion_graphic_from_code
@@ -46,11 +64,6 @@ function normalizeEasing(easing: unknown): unknown {
   return typeof easing === 'string' ? CSS_EASING_ALIASES[easing] ?? easing : easing;
 }
 
-function findItem(items: TimelineItem[], id: unknown): TimelineItem | null {
-  const q = String(id ?? '');
-  if (!q) return null;
-  return items.find((it) => it.id === q || it.id.startsWith(q)) ?? null;
-}
 
 /** Reject unknown fields with actionable edit_item errors. */
 const GENERIC_UPDATE_KEYS: Record<string, true> = {
@@ -175,7 +188,31 @@ export function validateGenericUpdate(
   entry: Record<string, unknown>,
   assets: readonly MediaAsset[] = state.assets ?? [],
 ): OpResult {
-  if (entry.assetId !== undefined) return validatePoolAssetReplacement(state, assets, entry);
+  if (entry.assetId !== undefined) {
+    const item = findItem(state.items, resolveUpdateItemId(state, entry));
+    if (item?.kind !== 'motion-graphic') return validatePoolAssetReplacement(state, assets, entry);
+    if (entry.type !== undefined && entry.type !== 'motion-graphic') return { error: 'replacement type must match the motion-graphic clip' };
+    const asset = findReplacementAsset(assets, entry.assetId);
+    if ('error' in asset) return asset;
+    if (asset.kind !== 'motion-graphic' || typeof asset.code !== 'string' || !asset.code.trim()) {
+      return { error: 'motion-graphic replacement needs a code-backed motion-graphic pool asset' };
+    }
+    // MG has no source-frame window or playback speed. Reuse the generic
+    // validator for placement/visual changes, then commit both on one draft.
+    for (const field of ['srcInFrame', 'sourceStartFrame', 'sourceDurationInFrames', 'speed', 'playbackRate']) {
+      if (entry[field] !== undefined) return { error: `${field} is unsupported for motion-graphic replacement` };
+    }
+    for (const props of [asset.props, entry.props]) {
+      if (props !== undefined && (!props || typeof props !== 'object' || Array.isArray(props)
+        || !isJsonValue(props))) return { error: 'motion-graphic props must be a finite JSON object' };
+    }
+    const { assetId: _assetId, ...patch } = entry;
+    const update = validateGenericUpdate(state, { props: {}, ...patch }, assets);
+    if (!update.ok || update.error) return update;
+    return { ok: true, plan: 'replacePoolAsset', kind: asset.kind, itemId: item.id,
+      assetId: asset.id, durationInFrames: update.durationInFrames ?? item.durationInFrames,
+      genericUpdate: update };
+  }
   const unknown = rejectUnknownFields(entry, GENERIC_UPDATE_KEYS);
   if (unknown) return { error: unknown };
 
@@ -285,6 +322,17 @@ export function validateGenericUpdate(
     };
   }
   return plan;
+}
+
+function isJsonValue(value: unknown, seen = new Set<object>()): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || seen.has(value)) return false;
+  seen.add(value);
+  const valid = (Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype)
+    && Object.values(value).every(child => isJsonValue(child, seen));
+  seen.delete(value);
+  return valid;
 }
 
 export function validateSlipUpdate(state: TimelineState, entry: Record<string, unknown>): OpResult {

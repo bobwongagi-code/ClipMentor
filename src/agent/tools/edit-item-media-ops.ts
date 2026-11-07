@@ -1,4 +1,5 @@
-import type { TimelineItem, TimelineState } from '../../editor/types';
+import { findGenericItem as findItem } from './edit-item-generic-result';
+import type { TimelineState } from '../../editor/types';
 import { rejectUnknownFields } from './edit-item-fields';
 
 type OpResult = Record<string, unknown>;
@@ -19,11 +20,6 @@ const MEDIA_OP_UPDATE_KEYS: Record<string, true> = {
   sourceFilename: true,
 };
 
-function findItem(items: TimelineItem[], id: unknown): TimelineItem | null {
-  const q = String(id ?? '');
-  if (!q) return null;
-  return items.find((it) => it.id === q || it.id.startsWith(q)) ?? null;
-}
 
 /** Clip-level replace_media (bake shell) or relink_media (file-backed only). */
 export function validateMediaSourceUpdate(state: TimelineState, entry: Record<string, unknown>): OpResult {

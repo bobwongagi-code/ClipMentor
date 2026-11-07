@@ -9,7 +9,7 @@ import saved from '../agent/tools/fixtures/barely-there-bookend-replacement-2026
 import type { ProjectDoc } from '../editor/types';
 import {
   assertDeliveryPicturePreservation, deliverySectionsFromDoc, deliverySectionsShape,
-  deliveryTimeline, deliveryPictureBindings, type DeliverySection,
+  deliveryTimeline, deliveryPictureBinding, deliveryPictureBindings, type DeliverySection,
 } from './delivery-sections';
 import {
   copyReviewSubject, copyTeachingPacketFromDoc, checkCopyProduction,
@@ -48,6 +48,108 @@ async function check(name: string, work: () => void | Promise<void>) {
 const nativeFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error('Network forbidden in display-contract verification'); };
 try {
+  await check('layered-opening-requires-original-matte-and-exit', () => {
+    const d=phased(),t=timeline(d),s=opening(d),photo=picture(d),source=t.items.find(i=>i.kind==='video')!;
+    const a=d.assets.find(a=>a.id===source.sourceAssetId)!;
+    const [top,middle,lower]=t.trackOrder!;
+    s.picture.layout={kind:'original_underlay',source:{asset_id:a.id,src:a.src,sha256:a.sourceContentHash!},
+      range:[0,10],shade:0.63,show_sales:true,headline:['339k tontonan'],transition:['Jom tengok.']};
+    photo.track=top;photo.durationInFrames=157;
+    const video={...source,id:'opening-video',track:lower,startFrame:0,srcInFrame:0,durationInFrames:275};
+    const matte={id:'opening-matte',kind:'solid' as const,name:'Matte',track:middle,startFrame:0,durationInFrames:275,
+      props:{color:'#000000'},transform:{opacity:0.63}};
+    t.items.push(video,matte);
+    assert.deepEqual(ready(d),[]);
+    matte.track=lower;
+    assert(ready(d).includes('delivery_opening_original_underlay_or_matte_missing'));
+    matte.track=middle;photo.durationInFrames=275;
+    assert(ready(d).includes('delivery_opening_sales_layer_or_exit_missing'));
+  });
+  await check('layered-new-contact-needs-both-crops-visible-together', () => {
+    const d=structuredClone(base),t=timeline(d),section=plan(d).delivery_sections.find(s=>s.kind==='creator_invitation')!;
+    section.section_id='new_contact';
+    delete section.picture.crop;
+    const product={left:0,top:0,right:0,bottom:0.55},commission={left:0,top:0.65,right:0,bottom:0};
+    section.picture.layout={kind:'product_commission',product_crop:product,commission_crop:commission};
+    const first=t.items.find(i=>i.kind==='image'&&i.sourceAssetId===section.picture.asset_id)!;
+    const crop=(margins:typeof product)=>deliveryPictureBinding(d,{...section,picture:{...section.picture,crop:margins}}).transform_crop;
+    const binding=deliveryPictureBindings(d,[section])[0];
+    assert.equal(binding.status,'ready');
+    if(binding.status!=='ready')throw Error('Expected two execution crops');
+    assert.deepEqual(binding.roles?.product.transform_crop,crop(product));
+    assert.deepEqual(binding.roles?.commission.transform_crop,crop(commission));
+    first.transform={crop:crop(product)};
+    const second:typeof first={...first,id:'commission-layer',transform:{crop:crop(commission)}};
+    t.items.push(second);
+    const issues=()=>deliveryTimeline(d,[opening(d),section]).issues;
+    assert.deepEqual(issues(),[]);
+    second.startFrame++;
+    assert(issues().includes('delivery_new_contact_product_or_commission_missing'));
+    second.startFrame--;second.transform={...second.transform,opacity:0.01};
+    assert(issues().includes('delivery_new_contact_product_or_commission_missing'));
+  });
+  await check('frozen ending card must remain a full native image', () => {
+    const d=structuredClone(base),t=timeline(d),section=plan(d).delivery_sections.find(s=>s.kind==='creator_invitation')!;
+    const native=t.items.find(i=>i.kind==='image'&&i.sourceAssetId===section.picture.asset_id)!;
+    section.section_id='new_contact';
+    section.picture.layout={kind:'recruitment_card',poster:{asset_id:'fixture-poster',src:'/media/uploads/fixture.png',sha256:'a'.repeat(64)}};
+    delete section.picture.crop;
+    native.transform=undefined;
+    const issues=()=>deliveryTimeline(d,[opening(d),section]).issues;
+    assert(!issues().includes('delivery_ending_card_not_preserved:new_contact'));
+    for(const transform of [{scale:1.3},{x:1},{crop:{left:0.1,top:0,right:0,bottom:0}},{opacity:0.2}]){
+      native.transform=transform;
+      assert(issues().includes('delivery_ending_card_not_preserved:new_contact'));
+    }
+  });
+  await check('reference-only assets cannot be proposed as delivery or committed to a timeline',()=>{
+    const d=structuredClone(base),s=plan(d).delivery_sections[0]!;
+    d.assets.find(a=>a.id===s.picture.asset_id)!.props={clipmentorReferenceOnly:true};
+    assert.throws(()=>deliverySectionsFromDoc(d),/reference_only_asset_forbidden/);
+    assert.throws(()=>assertDeliveryPicturePreservation(base,d),/reference_only_asset_cannot_enter_timeline/);
+  });
+  await check('reference-only sources cannot hide inside an ending layout',()=>{
+    const d=structuredClone(base),s=plan(d).delivery_sections.find(s=>s.kind==='creator_invitation')!;
+    s.section_id='new_contact';delete s.picture.crop;
+    const a=d.assets.find(a=>a.id===s.picture.asset_id)!;
+    a.width=720;a.height=1280;
+    const ref={...structuredClone(a),id:'reference-poster',src:'/media/uploads/reference-only.png',sourceContentHash:'a'.repeat(64),props:{clipmentorReferenceOnly:true}};
+    d.assets.push(ref);
+    s.picture.layout={kind:'recruitment_card',poster:{asset_id:ref.id,src:ref.src,sha256:ref.sourceContentHash}};
+    assert.throws(()=>deliverySectionsFromDoc(d),/reference_only_asset_forbidden/);
+  });
+  await check('reference-only media is protected by URL and cannot be unmarked in the same edit',()=>{
+    const before=structuredClone(base),ref={...structuredClone(before.assets.find(a=>a.kind==='image')!),
+     id:'reference-picture',src:'/media/uploads/reference-picture.png',sourceContentHash:'d'.repeat(64),props:{clipmentorReferenceOnly:true}};
+    before.assets.push(ref);
+    for(const mode of ['path','embedded','unmarked'] as const){
+      const after=structuredClone(before),item={...structuredClone(picture(after)),id:'reference-insert'};
+      if(mode==='path'){delete item.sourceAssetId;item.src=ref.src;}
+      if(mode==='embedded'){item.sourceAssetId='not-a-reference';item.props={code:`<img src="${ref.src}" />`};}
+      if(mode==='unmarked'){item.sourceAssetId=ref.id;item.src=ref.src;after.assets.find(a=>a.id===ref.id)!.props={};}
+      timeline(after).items.push(item);
+      assert.throws(()=>assertDeliveryPicturePreservation(before,after),/reference_only_asset_(?:cannot_enter_timeline|role_cannot_change)/,mode);
+    }
+    assert.doesNotThrow(()=>assertDeliveryPicturePreservation(before,structuredClone(before)),'unused reference assets can remain for comparison');
+    const libraryAlias=structuredClone(before);
+    libraryAlias.assets.push({...ref,id:'library-alias',src:'/media/uploads/library-alias.png',props:{}});
+    assert.doesNotThrow(()=>assertDeliveryPicturePreservation(before,libraryAlias),'unused library aliases do not require destructive cleanup');
+    const usedAlias=structuredClone(libraryAlias);
+    timeline(usedAlias).items.push({...structuredClone(picture(usedAlias)),id:'alias-used',sourceAssetId:'library-alias',src:'/media/uploads/library-alias.png',sourceContentHash:ref.sourceContentHash});
+    assert.throws(()=>assertDeliveryPicturePreservation(libraryAlias,usedAlias),/reference_only_asset_cannot_enter_timeline/);
+    const unmarkedOnly=structuredClone(before);unmarkedOnly.assets.find(a=>a.id===ref.id)!.props={};
+    assert.throws(()=>assertDeliveryPicturePreservation(before,unmarkedOnly),/reference_only_asset_role_cannot_change/,
+     'unmarking in one save and inserting in a later save cannot bypass the role');
+    const similar=structuredClone(before),item={...structuredClone(picture(before)),id:'different-file',src:ref.src+'2'};
+    delete item.sourceAssetId;delete item.sourceContentHash;
+    timeline(similar).items.push(item);
+    assert.doesNotThrow(()=>assertDeliveryPicturePreservation(before,similar),'a filename prefix cannot ban another upload');
+  });
+  await check('already-saved reference media cannot be exported under an older review',async()=>{
+    const d=structuredClone(base),s=plan(d).delivery_sections[0]!;
+    d.assets.find(a=>a.id===s.picture.asset_id)!.props={clipmentorReferenceOnly:true};
+    assert.equal((await checkCopyProduction(d,'clipmentor')).code,'reference_only_asset_cannot_enter_timeline');
+  });
   await check('saved-failure-stays-blocked-without-structured-binding', () => {
     const d = structuredClone(base); picture(d).durationInFrames = 157;
     assert(ready(d).some(i => i.includes('BT-opening-performance')));

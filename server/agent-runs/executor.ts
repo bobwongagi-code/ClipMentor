@@ -74,6 +74,8 @@ function safeError(error: unknown): string {
 export interface ServerRunInput {
   /** Internal service host; deliberately not part of the HTTP create-run input. */
   readonly host?: ServerToolHost;
+  /** Explicit local service transport, never inferred as a fallback. */
+  readonly localProductionCodex?: true;
   readonly messages: ModelMessage[];
   readonly backend?: string;
   readonly provider: string;
@@ -430,7 +432,8 @@ export async function executeRun(
     const deadlineAt=limits.length?Math.min(...limits):undefined;
     if(deadlineAt!==undefined && Date.now()>=deadlineAt) throw new Error('Production deadline exceeded');
     if(deadlineAt!==undefined)timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadlineAt-Date.now()));
-    if(input.host&&input.backend!=='api')throw new Error('Server production requires API backend; desktop fallback is forbidden');
+    const localCodex=input.localProductionCodex===true&&input.backend==='codex'&&run.backend==='codex';
+    if(input.host&&input.backend!=='api'&&!localCodex)throw new Error('Server production requires API backend; desktop fallback is forbidden');
     await setRunStatus(run, 'running');
     await executeRunTurns(run, input, abort.signal);
   } catch (error) {

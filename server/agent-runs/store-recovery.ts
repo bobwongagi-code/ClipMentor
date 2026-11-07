@@ -62,12 +62,12 @@ const INTERRUPTED_TOOL_ERROR = 'The agent run was interrupted before this tool r
 function closeInterruptedToolRequests(events: ServerRunEvent[]): ServerRunEvent[] {
   const settled = new Set<string>();
   for (const event of events) {
-    if (event.type !== 'tool-result') continue;
+    if (event.type !== 'tool-result' && event.type !== 'server-tool-result') continue;
     const data = event.data as { toolCallId?: unknown } | null;
     if (typeof data?.toolCallId === 'string') settled.add(data.toolCallId);
   }
   const pending = events.filter((event) => {
-    if (event.type !== 'tool-request') return false;
+    if (event.type !== 'tool-request' && event.type !== 'server-tool-request') return false;
     const data = event.data as { toolCallId?: unknown } | null;
     return typeof data?.toolCallId === 'string' && !settled.has(data.toolCallId);
   });
@@ -78,9 +78,10 @@ function closeInterruptedToolRequests(events: ServerRunEvent[]): ServerRunEvent[
     const data = event.data as { toolCallId: string; name?: unknown; argsDigest?: unknown };
     return {
       id: nextId++,
-      type: 'tool-result',
+      type: event.type === 'server-tool-request' ? 'server-tool-result' : 'tool-result',
       data: {
         toolCallId: data.toolCallId,
+        ...(event.type === 'server-tool-request' ? {outcome:{kind:'outcome_unknown',operationId:data.toolCallId}} : {}),
         ...(typeof data.name === 'string' ? { toolName: data.name } : {}),
         ...(typeof data.argsDigest === 'string' ? { argsDigest: data.argsDigest } : {}),
         error: INTERRUPTED_TOOL_ERROR,

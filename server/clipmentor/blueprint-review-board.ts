@@ -17,6 +17,8 @@ import {tileContactSheet,formatFrameLabel} from '../frame-grid';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {blueprintReviewBoardPage} from './blueprint-review-board-page';
 import {humanReviewBoardPage} from './blueprint-review-board-human';
+import {deliveryLayoutStages,renderDeliveryLayoutFrames} from './delivery-layout-frames';
+import type {VisualReferenceFrame} from './visual-done-criteria';
 export type ReviewBoardView='human'|'planner';
 
 type Row=Record<string,unknown>;
@@ -35,6 +37,8 @@ export interface ReviewBoardRow {
  stage_text:string;colors:string[];notices:string[];lint:ReturnType<typeof lintBlueprint>['findings'];
  crop?:{left:number;top:number;right:number;bottom:number};tool_crop_px?:unknown;
  frames:Array<{key:string;frame:number;seconds:number;label:string;jpeg?:string}>;sheet?:string;reuse:string[];ending_variant?:string;
+ full_picture?:{key:string;jpeg?:string};
+ deliveryLayout?:DeliverySection['picture'];
 }
 export interface ReviewBoardPlan {
  candidate_id:string;candidate_sha256:string;hash_mode:'file'|'project';variant:string;
@@ -45,6 +49,7 @@ export interface ReviewBoardPlan {
 export interface BoardInput {
  value:unknown;sha256:string;hashMode:'file'|'project';assertUnchanged:()=>Promise<void>;
  bindings?:ProjectDoc[];bindingSha256?:string;mediaDir?:string;
+ visualReferences?:VisualReferenceFrame[];
 }
 export async function loadReviewBoardInput(input:string,options:{bindings?:string[];mediaDir?:string}={}):Promise<BoardInput>{
  let value:unknown,sha256:string,hashMode:'file'|'project',assertUnchanged:()=>Promise<void>;
@@ -117,7 +122,10 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
    ||labelTranslationsConflict(line.raw.labels_zh,section.line.labels_zh))fail('交付段绑定文稿不是本候选: '+lineId);
   if(section.picture.crop&&(!binding||binding.status!=='ready'||!('source_rect'in binding)))fail('交付图片裁切不可用: '+lineId);
   let crop:ReviewBoardRow['crop'];if(binding&&binding.status==='ready'&&'source_rect'in binding&&binding.source_rect&&binding.source_dimensions){const r=binding.source_rect,s=binding.source_dimensions;crop={left:r.x/s.width,top:r.y/s.height,right:(s.width-r.x-r.width)/s.width,bottom:(s.height-r.y-r.height)/s.height};}
-  return{key,unit_id:section.section_id,stage,line_ids:[lineId],lines:[lineView(line)],range:null,asset_id:section.picture.asset_id,asset_hash:section.picture.sha256,picture:section.picture.description,stage_text:stage==='opening'?'成绩开场':'达人结尾',colors:[],notices:[],lint:lint.findings.filter(f=>['B04','B05','B07'].includes(f.rule_id)&&f.location.includes(lineId)),crop,...(binding&&'tool_crop_px'in binding?{tool_crop_px:binding.tool_crop_px}:{}),frames:[{key:hash(JSON.stringify({asset:section.picture.sha256,crop})),frame:0,seconds:0,label:'提供图片'+(crop?' · 已绑定裁切':'')}],reuse:[]};
+  const layout=section.picture.layout?section.picture:undefined;
+  const frames=layout?deliveryLayoutStages(layout).map((label,frame)=>({key:hash(JSON.stringify([layout,frame])),frame,seconds:0,label}))
+   :[{key:hash(JSON.stringify({asset:section.picture.sha256,crop})),frame:0,seconds:0,label:'提供图片'+(crop?' · 已绑定裁切':'')}];
+  return{key,unit_id:section.section_id,stage,line_ids:[lineId],lines:[lineView(line)],range:null,asset_id:section.picture.asset_id,asset_hash:section.picture.sha256,picture:section.picture.description,stage_text:stage==='opening'?'成绩开场':'达人结尾',colors:[],notices:[],lint:lint.findings.filter(f=>['B04','B05','B07'].includes(f.rule_id)&&f.location.includes(lineId)),crop,...(layout?{deliveryLayout:layout}:{}),...(binding&&'tool_crop_px'in binding?{tool_crop_px:binding.tool_crop_px}:{}),frames,reuse:[]};
  };
  const pictureNotices=blueprintPictureNotices(pictureNoticeRows(data));
  const body:ReviewBoardRow[]=[];
@@ -160,7 +168,18 @@ export async function renderReviewBoards(input:BoardInput,outDir:string,variant?
  if(view!=='human'&&view!=='planner')fail('未知审片板视图');
  if(view==='human'&&variant&&variant!=='all')fail('人审版合并全部结尾，不单选variant');
  const start=performance.now(),prepared=planReviewBoards(input,variant),{assets,data,lint}=prepared;let plans=prepared.plans;
- if(view==='human'){const first=plans[0],common=first.rows.filter(r=>r.stage!=='closing');for(const p of plans)if(JSON.stringify(p.rows.filter(r=>r.stage!=='closing'))!==JSON.stringify(common))fail('不同版本主体不一致，不能合并');const rows=[...common,...plans.flatMap(p=>p.rows.filter(r=>r.stage==='closing').map(r=>({...r,key:r.key+'/'+p.variant,ending_variant:p.variant})))];const count=rows.reduce((n,r)=>n+r.frames.length,0);if(count>REVIEW_BOARD_FRAME_LIMIT)fail('合并人审版帧数超限');plans=[{...first,variant:'human',rows,frame_count:count,unique_frame_count:new Set(rows.flatMap(r=>r.frames.map(f=>f.key))).size}];}
+ if(view==='human'){
+  const first=plans[0],common=first.rows.filter(r=>r.stage!=='closing');
+  for(const p of plans)if(JSON.stringify(p.rows.filter(r=>r.stage!=='closing'))!==JSON.stringify(common))fail('不同版本主体不一致，不能合并');
+  const endings=plans.flatMap(p=>p.rows.filter(r=>r.stage==='closing').map((r):ReviewBoardRow=>({
+   ...r,key:r.key+'/'+p.variant,ending_variant:p.variant,
+   full_picture:r.crop&&Object.values(r.crop).some(edge=>edge>0)?{key:hash(JSON.stringify({asset:r.asset_hash}))}:undefined,
+  })));
+  const rows=[...common,...endings];
+  const frameKeys=rows.flatMap(r=>[...r.frames.map(f=>f.key),...(r.full_picture?[r.full_picture.key]:[])]);
+  if(frameKeys.length>REVIEW_BOARD_FRAME_LIMIT)fail('合并人审版帧数超限');
+  plans=[{...first,variant:'human',rows,frame_count:frameKeys.length,unique_frame_count:new Set(frameKeys).size}];
+ }
  const files=new Map<string,string>(),checked=new Map<string,string>();
  // Preflight every required file before extraction; never hydrate/fetch media.
  for(const row of plans.flatMap(p=>p.rows)){
@@ -170,13 +189,27 @@ export async function renderReviewBoards(input:BoardInput,outDir:string,variant?
   if(!file)fail('本地原片/图片不存在: '+row.asset_id);try{if(await sha256File(file)!==row.asset_hash)fail('素材哈希不一致: '+row.asset_id);}catch{fail('本地原片/图片缺失或哈希不一致: '+row.asset_id);}files.set(row.asset_id,file);checked.set(file,row.asset_hash);
  }
  const temp=await mkdtemp(join(tmpdir(),'blueprint-board-')),cache=new Map<string,Buffer>(),sheets=new Map<string,string>();
+ async function frameBytes(key:string,row:ReviewBoardRow,seconds:number,crop?:ReviewBoardRow['crop']){
+  const cached=cache.get(key);if(cached)return cached;
+  const path=join(temp,key+'.jpg');
+  await extractOneFrame(files.get(row.asset_id)!,sourceFrameSeekMs(seconds*1000),path,false,crop);
+  const bytes=await readFile(path);
+  cache.set(key,bytes);
+  return bytes;
+ }
  try{
   for(const plan of plans){const begun=performance.now();for(const row of plan.rows){
-   for(const sample of row.frames){if(!cache.has(sample.key)){const path=join(temp,sample.key+'.jpg');await extractOneFrame(files.get(row.asset_id)!,sourceFrameSeekMs(sample.seconds*1000),path,false,row.crop);cache.set(sample.key,await readFile(path));}sample.jpeg=cache.get(sample.key)!.toString('base64');}
+   if(row.deliveryLayout&&!cache.has(row.frames[0].key)){
+    const frames=await renderDeliveryLayoutFrames(row.deliveryLayout,{
+     resolve:name=>input.mediaDir?join(resolve(input.mediaDir),name):resolveUploadFile(name),hash:sha256File});
+    row.frames.forEach((sample,index)=>cache.set(sample.key,frames[index]));
+   }
+   for(const sample of row.frames)sample.jpeg=(await frameBytes(sample.key,row,sample.seconds,row.crop)).toString('base64');
+   if(row.full_picture)row.full_picture.jpeg=(await frameBytes(row.full_picture.key,row,0)).toString('base64');
    const signature=hash(row.frames.map(f=>f.key).join(','));if(!sheets.has(signature)){const asset=assets.get(row.asset_id)!;const ratio=(asset.height??1024)*(1-(row.crop?.top??0)-(row.crop?.bottom??0))/((asset.width??576)*(1-(row.crop?.left??0)-(row.crop?.right??0)));sheets.set(signature,(await tileContactSheet(row.frames.map(f=>({jpeg:cache.get(f.key)!,label:f.label})),{cellWidth:320,cols:3,cellHeight:Math.round(320*ratio)})).toString('base64'));}row.sheet=sheets.get(signature);
   }plan.elapsed_ms=performance.now()-begun;}
   await input.assertUnchanged();for(const [file,expected]of checked)if(await sha256File(file)!==expected)fail('生成中素材已变化');
-  const artifacts=plans.map(plan=>{const began=performance.now(),html=view==='human'?humanReviewBoardPage(plan,data,lint,input.bindings??[prepared.doc]):blueprintReviewBoardPage(plan);plan.elapsed_ms+=performance.now()-began;if(Buffer.byteLength(html)>32_000_000)fail('单文件HTML超限');const safe=(s:string)=>s.replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);return{plan,html,path:join(resolve(outDir),`审片板-${safe(plan.candidate_id)}-${safe(plan.variant)}.html`)};});
+  const artifacts=plans.map(plan=>{const began=performance.now(),html=view==='human'?humanReviewBoardPage(plan,data,lint,input.bindings??[prepared.doc],input.visualReferences):blueprintReviewBoardPage(plan);plan.elapsed_ms+=performance.now()-began;if(Buffer.byteLength(html)>32_000_000)fail('单文件HTML超限');const safe=(s:string)=>s.replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);return{plan,html,path:join(resolve(outDir),`审片板-${safe(plan.candidate_id)}-${safe(plan.variant)}.html`)};});
   if(new Set(artifacts.map(a=>a.path)).size!==artifacts.length)fail('输出文件名冲突');
   await mkdir(outDir,{recursive:true});const staged:string[]=[];try{for(const a of artifacts){const began=performance.now();const path=a.path+'.'+hash(String(Math.random())).slice(0,12)+'.tmp';staged.push(path);await writeFile(path,a.html,{flag:'wx'});a.plan.elapsed_ms+=performance.now()-began;}await input.assertUnchanged();for(const [i,a]of artifacts.entries())await rename(staged[i],a.path);}finally{for(const path of staged)await rm(path,{force:true});}
   return{artifacts:artifacts.map(({plan,path})=>({path,candidate_id:plan.candidate_id,variant:plan.variant,candidate_sha256:plan.candidate_sha256,frame_count:plan.frame_count,unique_frame_count:plan.unique_frame_count,elapsed_ms:Math.round(plan.elapsed_ms)})),total_elapsed_ms:Math.round(performance.now()-start),provider_calls:0,network_calls:0,internal_review_only:true};

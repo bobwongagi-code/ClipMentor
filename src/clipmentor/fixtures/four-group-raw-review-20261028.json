@@ -1,0 +1,387 @@
+{
+  "cases": [
+    {
+      "case_id": "current",
+      "units": [
+        {
+          "unit_id": "BT-U01",
+          "points": [
+            {
+              "point_id": "BT-P01",
+              "learner_takeaway": "把布料撑在脸前，以仍可见的脸部轮廓作为薄的参照，不必试穿。",
+              "connection": "purchase_connected",
+              "basis": "within_unit",
+              "source_support": "supported",
+              "meaning_alignment": "aligned",
+              "quotes": [
+                {
+                  "line_id": "BT-L01",
+                  "channel": "narration",
+                  "text": "Wajah masih nampak di sebalik kain, jadi penonton nampak betapa nipisnya kain itu tanpa perlu dipakai pada badan."
+                }
+              ],
+              "reason": "明确连接透脸参照、轻薄关注与不用上身的展示方式；计划保留开头上下文和真实参照，没有扩大到透气或穿着效果。"
+            },
+            {
+              "point_id": "BT-P02",
+              "learner_takeaway": "讲柔软和弹性时配合揉拢、拉开同一块面料，使口头描述有对应演示。",
+              "connection": "purchase_connected",
+              "basis": "within_unit",
+              "source_support": "supported",
+              "meaning_alignment": "aligned",
+              "quotes": [
+                {
+                  "line_id": "BT-L02",
+                  "channel": "narration",
+                  "text": "Bila sebut lembut dan anjal, dia ramas dan tarik kain."
+                },
+                {
+                  "line_id": "BT-L02",
+                  "channel": "label",
+                  "text": "Lembut & anjal"
+                }
+              ],
+              "reason": "口播把具体触感关注和手上演示直接配对，计划以同件商品的正常速度拉揉承担动作条件。这里的dan不是先后指令，不构成动作顺序颠倒；也未声称证明舒适度或回弹率。"
+            },
+            {
+              "point_id": "BT-P03",
+              "learner_takeaway": "说到做工时把商品拿近，让买家查看近景中的边缘细节。",
+              "connection": "supporting_context",
+              "basis": "within_unit",
+              "source_support": "supported",
+              "meaning_alignment": "aligned",
+              "quotes": [
+                {
+                  "line_id": "BT-L02",
+                  "channel": "narration",
+                  "text": "Bila sebut kemasan, dia dekatkan pada kamera supaya pembeli nampak jelas."
+                },
+                {
+                  "line_id": "BT-L02",
+                  "channel": "label",
+                  "text": "Kemasan dari dekat"
+                }
+              ],
+              "reason": "kemasan明确了看清的对象，计划近拍中腰边、侧边细节提供具体落点；作为支持点已足够，不必另加购买心理或工艺认证。"
+            },
+            {
+              "point_id": "BT-P04",
+              "learner_takeaway": "先让人认识商品外形，再以日常替换解释七件建议；另以换新提醒承接购物入口。",
+              "connection": "supporting_context",
+              "basis": "within_unit",
+              "source_support": "supported",
+              "meaning_alignment": "aligned",
+              "quotes": [
+                {
+                  "line_id": "BT-L03",
+                  "channel": "narration",
+                  "text": "Dia tunjuk bentuknya dulu, kemudian cadangkan tujuh helai untuk tukar pakai harian."
+                },
+                {
+                  "line_id": "BT-L06",
+                  "channel": "narration",
+                  "text": "Dia ingatkan penonton yang dah lama tak tukar, kemudian ajak mereka ke beg kuning. Peringatan tadi jadi sebab untuk membeli."
+                }
+              ],
+              "reason": "交代了数量建议与替换用途、提醒与消费者购买入口两条关系。七件归因于原作者建议，没有说七件同框或现售套餐；没有把消费者邀请替代为创作者邀请。"
+            },
+            {
+              "point_id": "BT-P05",
+              "learner_takeaway": "翻开内侧展示衬片，补足只看外观无法直接查看的对象。",
+              "connection": "purchase_connected",
+              "basis": "within_unit",
+              "source_support": "supported",
+              "meaning_alignment": "aligned",
+              "quotes": [
+                {
+                  "line_id": "BT-L04",
+                  "channel": "narration",
+                  "text": "Dia buka bahagian dalam supaya pembeli boleh lihat pelapiknya, bukan meneka daripada gambar luar sahaja."
+                }
+              ],
+              "reason": "具体说明翻开、查看衬片与外观信息不足的关系；计划包含展开的白色内侧，不以遮挡帧或材质功效猜测代替。"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "copy_units": [
+    {
+      "unit_id": "BT-U01",
+      "verdict": "pass",
+      "group_checks": [
+        {
+          "group_id": "G1",
+          "scope": "planned_group_teaching_only",
+          "source_relations": [
+            {
+              "relation": "原作者围绕薄、轻的说法，把手持布料举到脸前撑开，再放低，以脸部仍可辨认回应轻薄关注。",
+              "evidence_ids": [
+                "BT-E001",
+                "BT-E002",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:0.12:6.877",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:6.877:12.808"
+              ],
+              "point_ids": [
+                "BT-P01"
+              ],
+              "line_ids": [
+                "BT-L01"
+              ],
+              "assessment": "covered",
+              "reason": "L01解释脸部参照如何展示薄，画面计划保留举起、放低及真实透脸参照。没有把原作者穿着感受候选当作已经验证的效果。"
+            }
+          ],
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "用布料后仍可见的脸作参照，把轻薄变成不用试穿也能查看的画面。",
+            "reason": "购买关注、拍法和作用均有口播落点；撑开及脸部可辨的必要条件由本组计划画面承担。"
+          },
+          "L2": {
+            "verdict": "pass",
+            "viewer_chain": "先看0—10.73秒原声示范，再静音回看开头并听L01解释透脸参照。",
+            "stage_cues": [
+              "原声阶段显示Video asal",
+              "讲解前显示Ulasan semula · Kain",
+              "口播Tengok semula pembukaannya.",
+              "独立短标Kain nipis"
+            ],
+            "reason": "可见阶段栏和口播共同明确回看，解释的是刚展示的内容；这是计划关系判断，不是实际连续播放验收。"
+          }
+        },
+        {
+          "group_id": "G2",
+          "scope": "planned_group_teaching_only",
+          "source_relations": [
+            {
+              "relation": "原作者在柔软等描述附近展开再收拢面料，使触感描述伴随手上演示。",
+              "evidence_ids": [
+                "BT-E003",
+                "BT-E004",
+                "BT-E005",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:6.877:12.808",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:12.808:20.512"
+              ],
+              "point_ids": [
+                "BT-P02"
+              ],
+              "line_ids": [
+                "BT-L02"
+              ],
+              "assessment": "covered",
+              "reason": "L02把柔软、弹性与揉拉明确配对，画面保留同件商品的展开到收拢。原声细词仍是候选，但可见演示足以支撑当前拍法解释，不证明真实穿着效果。"
+            },
+            {
+              "relation": "原作者谈到整齐做工附近拿近商品，让腰边和侧边细节占据更大画面。",
+              "evidence_ids": [
+                "BT-E006",
+                "BT-E007",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:12.808:20.512"
+              ],
+              "point_ids": [
+                "BT-P03"
+              ],
+              "line_ids": [
+                "BT-L02"
+              ],
+              "assessment": "covered",
+              "reason": "第二个Bila明确切换到kemasan，计划随之切近拍；已说明具体查看对象和近拍作用，未推断工艺名称或质量认证。"
+            }
+          ],
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "触感描述配手上拉揉，做工描述配近拍，而非始终只举着商品说。",
+            "reason": "口播直接区分两种关注及各自演示，画面计划承担同件商品、手与面料接触、边缘近景和正常速度条件。基础关系成立，不要求额外反例或心理解释。"
+          },
+          "L2": {
+            "verdict": "pass",
+            "viewer_chain": "先看10.73—19秒原声示范，再回看拉揉，讲到kemasan时转近拍。",
+            "stage_cues": [
+              "Video asal",
+              "Ulasan semula · Kain",
+              "Lembut & anjal",
+              "Kemasan dari dekat"
+            ],
+            "reason": "两个Bila和对应短标提供组内主题切换；近拍安排解释本组刚展示的内容。实际意群切点尚不能由计划或静帧认证。"
+          }
+        },
+        {
+          "group_id": "G3",
+          "scope": "planned_group_teaching_only",
+          "source_relations": [
+            {
+              "relation": "原作者手持单件商品，以七件、划算和日常替换的说法解释多件购买建议。",
+              "evidence_ids": [
+                "BT-E008",
+                "BT-E009",
+                "BT-E015",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:20.512:27.109"
+              ],
+              "point_ids": [
+                "BT-P04"
+              ],
+              "line_ids": [
+                "BT-L03"
+              ],
+              "assessment": "covered",
+              "reason": "L03保留展示外形后以替换用途解释数量的关系。未复述省钱主张不造成核心教学损失；不要求核实现售价，也没有宣称七件同时出现。"
+            }
+          ],
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "商品展示之后，用日常替换用途解释为什么建议多买。",
+            "reason": "不是孤立报数量：口播交代展示对象、七件建议与替换理由，短标提供用途提示。作用应理解为表达安排，不是已验证买家认知或成交结果。"
+          },
+          "L2": {
+            "verdict": "pass",
+            "viewer_chain": "先看19—27.83秒原声数量及替换建议，再回看手持正面和数量建议，听L03解释先后关系。",
+            "stage_cues": [
+              "Video asal",
+              "Ulasan semula · Tukar pakai",
+              "Tukar pakai harian"
+            ],
+            "reason": "当前组已播放相关原声，不依赖背景帧补承接；阶段栏和用途短标使回看对象清楚。"
+          }
+        },
+        {
+          "group_id": "G4",
+          "scope": "planned_group_teaching_only",
+          "source_relations": [
+            {
+              "relation": "原作者翻开内侧展示白色衬片，补充此前外观展示没有直接展开的内部对象。",
+              "evidence_ids": [
+                "BT-E010",
+                "BT-E011",
+                "BT-E012",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:27.109:32.387"
+              ],
+              "point_ids": [
+                "BT-P05"
+              ],
+              "line_ids": [
+                "BT-L04"
+              ],
+              "assessment": "covered",
+              "reason": "L04明确翻开是为了查看衬片并区别于只看外观；计划有展开内侧及后续外观，未添加材质或功效。"
+            },
+            {
+              "relation": "原作者以很久未换的提醒，衔接黄色购物袋入口和购买邀请。",
+              "evidence_ids": [
+                "BT-E016",
+                "BT-E012",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:32.387:37.266"
+              ],
+              "point_ids": [
+                "BT-P04"
+              ],
+              "line_ids": [
+                "BT-L06"
+              ],
+              "assessment": "covered",
+              "reason": "L06保留提醒到消费者购买邀请的表达关系，主题栏另行标出购买邀请；不承担任务范围外的创作者结尾。"
+            },
+            {
+              "relation": "原声换新提醒的完整宾语、尾句逐字和是否完整说完尚不能核清。",
+              "evidence_ids": [
+                "BT-E012",
+                "BT-E016",
+                "raw-speech:8a61b19b-3e7a-4c15-a541-1c5ed791e8b2:32.387:37.266"
+              ],
+              "point_ids": [
+                "BT-P04"
+              ],
+              "line_ids": [
+                "BT-L06"
+              ],
+              "assessment": "uncertain",
+              "reason": "现有资料不支持补全原话；当前稿没有补出具体换新对象或尾句。",
+              "claim_impact": {
+                "status": "does_not_affect_current_claim",
+                "unknown_detail": "换新对象的完整清楚宾语及源片末句逐字、完整性未知。",
+                "reason": "核对L06后，其只概括已由BT-E016支持的提醒和购物入口顺序，没有使用未知宾语、尾句或完整说完的断言。",
+                "claims": [
+                  {
+                    "line_id": "BT-L06",
+                    "channel": "narration",
+                    "quote": "Dia ingatkan penonton yang dah lama tak tukar, kemudian ajak mereka ke beg kuning."
+                  }
+                ]
+              }
+            }
+          ],
+          "L1": {
+            "verdict": "pass",
+            "learner_takeaway": "翻内侧补足外观信息，再区分另一条提醒到购买入口的促单关系。",
+            "reason": "L04解释具体内部对象及信息补充作用；L06解释购买邀请前的理由安排。两者没有混为衬片功效或创作者邀请。全任务范围的关键展示与促单关系均有承担。"
+          },
+          "L2": {
+            "verdict": "pass",
+            "viewer_chain": "先看27.83—37.27秒原声；随后L04回看内侧和外观；再以L06回到较早推荐背景及本组提醒、购买入口上下文。",
+            "stage_cues": [
+              "Video asal",
+              "Ulasan semula · Pelapik",
+              "Pelapik bahagian dalam",
+              "L06前切换Ulasan semula · Ajakan membeli",
+              "Ingatkan tukar, ajak beli"
+            ],
+            "reason": "计划明确从内侧主题转为购买邀请，没有误称L06仍在展示内侧。较早数量画面已在G3播放，回看主题栏提供阶段提示；具体声画落点仍须执行后连续核验。"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "severity": "suggestion",
+          "quote": "Pembeli tahu apa yang dibeli dan kenapa beli lebih.",
+          "reason": "上下文可理解为展示与用途说明的表达作用，但语气直接落在买家已经理解；本次不将它当作买家认知效果已被验证。"
+        },
+        {
+          "severity": "suggestion",
+          "quote": "Peringatan tadi jadi sebab untuk membeli.",
+          "reason": "提醒衔接购买邀请的教学关系清楚；这里仅支持原作者提供购买理由的表达安排，不证明观众因此购买。"
+        }
+      ],
+      "narration_checks": [
+        {
+          "line_id": "BT-L01",
+          "necessity": "necessary",
+          "omission_loss": "删后仍有透脸画面、Kain nipis短标和其他商品演示，但失去把脸部可见作为薄的参照、以及无需上身的明确教学关系。其余句不讲这一关系，短标只命名薄，不能完整承担。",
+          "naturalness": "natural",
+          "reason": "Tengok semula提供回看注意任务，Wajah masih nampak到jadi说明观察依据与作用，独立发声不只是复述举起动作。此为文本判断，非母语听审。"
+        },
+        {
+          "line_id": "BT-L02",
+          "necessity": "necessary",
+          "omission_loss": "删后仍看得到拉揉和近拍，也保留Lembut & anjal、Kemasan dari dekat；但失去讲触感时配手上演示、讲做工时切近拍的两段对应和近拍查看目的。其他句只讲薄、数量和内侧，不能承担。",
+          "naturalness": "natural",
+          "reason": "两个Bila以平行口语结构解释说法与展示的配合，supaya补明近拍目的；不是仅报动作。并列动词没有要求重排源片动作。"
+        },
+        {
+          "line_id": "BT-L03",
+          "necessity": "necessary",
+          "omission_loss": "删后仍有数量建议原声、手持商品和Tukar pakai harian，L06仍讲换新促单；但没有其他讲解明确指出先展示商品、再以日常替换解释多件建议的组织关系。原片保留示范，短标只标用途，不等同于教学拆解。",
+          "naturalness": "natural",
+          "reason": "dulu、kemudian及kenapa beli lebih提供明确先后和解释目标，足以支持独立讲解。末句是较概括的作用判断，但未明确妨碍理解。"
+        },
+        {
+          "line_id": "BT-L04",
+          "necessity": "necessary",
+          "omission_loss": "删后仍能看到翻开的白色衬片和Pelapik bahagian dalam短标；但失去为什么需要补内侧镜头、它与只看外观的信息差。其他口播没有讲内外展示关系，画面和命名短标不能完全承担这一解释。",
+          "naturalness": "natural",
+          "reason": "supaya明确查看目的，bukan meneka daripada gambar luar sahaja说明补拍内侧的作用，语句对象清楚，没有扩成材质或功效判断。"
+        },
+        {
+          "line_id": "BT-L06",
+          "necessity": "necessary",
+          "omission_loss": "删后仍有原声提醒及购买入口，短标Ingatkan tukar, ajak beli也保留两步顺序，L03仍解释日常替换与多件建议；但尚无其他讲解明确区分本段换新提醒如何为随后的购买邀请提供理由。短标承担了顺序，未完整承担该解释关系，因此不是全部重复。",
+          "naturalness": "natural",
+          "reason": "kemudian和Peringatan tadi将提醒与邀请连起来，提供不同于L03数量理由的促单组织解释。dah lama tak tukar沿用有限原声观察，没有擅补未知宾语；末句不作为转化因果认证。"
+        }
+      ],
+      "capacity_review": {
+        "status": "insufficient_evidence",
+        "reason": "先完成整组教学判断；当前文字与计划关系可成立。L02、L03尚无当前配音，其他时长仅为提供的绑定记录，不能据此认证实际声长、气口、字幕同步或连续动作容量。本次已读取全部四批源片采样，但未听审声音或观看实际连续成片；正常速度连续声画容量须另行验收，不反向影响教学价值判断。"
+      }
+    }
+  ]
+}

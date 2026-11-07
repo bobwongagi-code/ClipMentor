@@ -45,8 +45,9 @@ const cancelled = await pendingApproval(
   'run-cancelled-approval',
   'call-cancelled-approval',
 );
+const cancelledRejection = assert.rejects(cancelled.pending, /cancelled/);
 await cancelRun(cancelled.run);
-await assert.rejects(cancelled.pending, /cancelled/);
+await cancelledRejection;
 await flushServerRunPersistence(cancelled.run);
 const cancelledApproval = (await loadAgentRuntimeSidecar(cancelled.run.projectId)).approvals.find(
   (item) => item.runId === cancelled.run.id,

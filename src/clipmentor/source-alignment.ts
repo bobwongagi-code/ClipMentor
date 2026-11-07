@@ -13,7 +13,7 @@ export interface SourceContext {
   scope: 'frozen_task_scope' | 'legacy_scope_unconfirmed';
   source_ranges: Array<[number, number]>;
   evidence_ids: string[];
-  speech: 'asr_available_not_listening_verified' | 'unavailable';
+  speech: 'asr_available_not_listening_verified' | 'model_observation_not_listening_verified' | 'unavailable';
 }
 export interface SourceClaimImpact {
   status: 'affects_current_claim' | 'does_not_affect_current_claim' | 'unresolved';
@@ -42,7 +42,7 @@ const overlaps = (range: [number, number], times: number[]) => times.length === 
 export function isSourceContext(v: unknown): v is SourceContext {
   return object(v) && ['frozen_task_scope', 'legacy_scope_unconfirmed'].includes(v.scope as string) && Array.isArray(v.source_ranges)
     && v.source_ranges.length > 0 && v.source_ranges.every(validRange) && strings(v.evidence_ids)
-    && ['asr_available_not_listening_verified', 'unavailable'].includes(v.speech as string);
+    && ['asr_available_not_listening_verified', 'model_observation_not_listening_verified', 'unavailable'].includes(v.speech as string);
 }
 
 export function isSourceReviewScope(v: unknown): v is SourceReviewScope {
@@ -78,10 +78,12 @@ export function buildSourceContext(a: ClipMentorAnalysis, ranges: Array<[number,
     if (!existing) pool.push(e);
     ids.add(e.evidence_id);
   };
+  let modelSpeech = false;
   for (const e of a.evidence) {
     if (!['original_claim', 'visible_action', 'source_frame'].includes(e.kind)) continue;
     const times = e.source_range_seconds ?? (e.time_seconds === undefined ? undefined : [e.time_seconds]);
     if (!times || !merged.some(r => times.length === 1 ? overlaps(r, times) : times[0] >= r[0] && times[1] <= r[1])) continue;
+    if(e.kind==='original_claim'&&e.observation_method==='saved_source_video_model_receipt'&&e.call_status==='succeeded') modelSpeech=true;
     add({ evidence_id: e.evidence_id, observation: `[${e.kind}; ${e.status}] ${e.text}`, time_seconds: times });
   }
   const transcription = a.source_transcription;
@@ -107,13 +109,13 @@ export function buildSourceContext(a: ClipMentorAnalysis, ranges: Array<[number,
     }
   }
   return { scope: a.source_breakdown?.review_scope ? 'frozen_task_scope' : 'legacy_scope_unconfirmed', source_ranges: merged, evidence_ids: [...ids],
-    speech: speech ? 'asr_available_not_listening_verified' : 'unavailable' };
+    speech: speech ? 'asr_available_not_listening_verified' : modelSpeech ? 'model_observation_not_listening_verified' : 'unavailable' };
 }
 
 function claimImpactShape(v: unknown): v is SourceClaimImpact {
   return object(v) && Object.keys(v).every(k => ['status','unknown_detail','reason','claims'].includes(k))
     && ['affects_current_claim','does_not_affect_current_claim','unresolved'].includes(v.status as string)
-    && text(v.unknown_detail) && text(v.reason) && Array.isArray(v.claims) && v.claims.length > 0
+    && text(v.unknown_detail) && text(v.reason) && Array.isArray(v.claims) && (v.status==='unresolved'||v.claims.length > 0)
     && v.claims.every(c => object(c) && Object.keys(c).every(k => ['line_id','channel','quote'].includes(k))
       && text(c.line_id) && ['narration','caption','label'].includes(c.channel as string) && text(c.quote));
 }
@@ -141,20 +143,39 @@ export function assessSourceAlignment(context: SourceContext, points: Array<{poi
   const relations = value as SourceRelation[];
   const gaps = relations.filter(r => r.assessment === 'material_gap');
   if (gaps.length) return { verdict: 'needs_revision' as const, issues: gaps.map(r => r.relation) };
-  const unclear = relations.filter(r => {
-    if (r.assessment !== 'uncertain') return false;
+  const diagnostics: Array<{relation_index:number;code:string;evidence_ids:string[];point_ids:string[];line_ids:string[];
+    quoted_claim_refs:Array<{line_id:string;channel:string;point_ids:string[];quote_matches:boolean}>}> = [];
+  for (const [index,r] of relations.entries()) {
+    if (r.assessment !== 'uncertain') continue;
     const impact = r.claim_impact;
-    if (!impact || impact.status !== 'does_not_affect_current_claim' || !r.line_ids.length || !r.point_ids.length || !r.evidence_ids.length) return true;
-    // Code verifies the declared scope and real quotations; it does not decide semantic relevance.
-    if (new Set(impact.claims.map(c => JSON.stringify(c))).size !== impact.claims.length
-      || impact.claims.some(c => {
-        const line = lines.find(l => l.line_id === c.line_id);
-        const words = c.channel === 'narration' ? [line?.narration_ms] : c.channel === 'caption' ? line?.caption_lines : line?.labels;
-        return !r.line_ids.includes(c.line_id) || !words?.some(w => typeof w === 'string' && w.includes(c.quote));
-      }) || r.line_ids.some(id => !impact.claims.some(c => c.line_id === id))) return true;
-    return r.point_ids.some(id => !relations.some(other => other.assessment === 'covered' && other.point_ids.includes(id)
-      && other.evidence_ids.some(e => r.evidence_ids.includes(e))
-      && r.line_ids.every(line => other.line_ids.includes(line))));
-  });
-  return unclear.length ? unknown('source_relationship_uncertain') : { verdict: 'pass' as const, issues: [] };
+    const quoteMatches = (c: SourceClaimImpact['claims'][number]) => {
+      const line = lines.find(l => l.line_id === c.line_id);
+      const words = c.channel === 'narration' ? [line?.narration_ms] : c.channel === 'caption' ? line?.caption_lines : line?.labels;
+      return !!words?.some(w => typeof w === 'string' && w.includes(c.quote));
+    };
+    const note = (code:string) => diagnostics.push({relation_index:index,code,evidence_ids:[...r.evidence_ids],point_ids:[...r.point_ids],line_ids:[...r.line_ids],
+      // A trace of existing quotes, never synthesized outer references or approval.
+      quoted_claim_refs:(impact?.claims??[]).map(c=>({line_id:c.line_id,channel:c.channel,
+        point_ids:[...(lines.find(l=>l.line_id===c.line_id)?.point_ids??[])],quote_matches:quoteMatches(c)}))});
+    if (!impact) { note('source_unknown_claim_impact_missing'); continue; }
+    if (impact.status !== 'does_not_affect_current_claim') { note(impact.status==='affects_current_claim'?'source_unknown_affects_current_claim':'source_unknown_impact_unresolved'); continue; }
+    if (!r.point_ids.length) note('source_unknown_point_refs_missing');
+    if (!r.line_ids.length) note('source_unknown_line_refs_missing');
+    if (!r.evidence_ids.length) note('source_unknown_evidence_refs_missing');
+    if (new Set(impact.claims.map(c => JSON.stringify(c))).size !== impact.claims.length) note('source_unknown_duplicate_quotes');
+    if (impact.claims.some(c=>!quoteMatches(c))) note('source_unknown_quote_invalid');
+    if (impact.claims.some(c=>!r.line_ids.includes(c.line_id))) note('source_unknown_quoted_line_not_scoped');
+    if (r.line_ids.some(id=>!impact.claims.some(c=>c.line_id===id))) note('source_unknown_line_quote_missing');
+    const scoped = lines.filter(l=>r.line_ids.includes(l.line_id));
+    if (r.point_ids.some(id=>!scoped.some(l=>l.point_ids.includes(id)))
+      ||scoped.some(l=>!l.point_ids.some(id=>r.point_ids.includes(id)))) note('source_unknown_point_line_mismatch');
+    // Check each real point/line pair separately: multiple supported current
+    // claims need not have been combined into one covered reviewer relation.
+    // The supported claim may use different evidence from the unknown detail;
+    // requiring a shared evidence ID confuses independent support with missing support.
+    if (r.point_ids.some(id=>scoped.filter(l=>l.point_ids.includes(id)).some(line=>!relations.some(other=>
+      other.assessment==='covered'&&other.point_ids.includes(id)&&other.line_ids.includes(line.line_id)
+      &&other.evidence_ids.length>0)))) note('source_unknown_covered_support_missing');
+  }
+  return diagnostics.length ? {...unknown('source_relationship_uncertain'),diagnostics} : { verdict: 'pass' as const, issues: [] };
 }

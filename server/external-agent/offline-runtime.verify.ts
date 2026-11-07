@@ -1,19 +1,38 @@
 import assert from 'node:assert/strict';
-import { isExternalServerDirectCall } from '../../src/agent/external-tool-policy.ts';
-import { ExternalEditorCallError } from './broker.ts';
-import { OfflineExternalEditRuntime } from './offline-runtime.ts';
-import { offlineExternalToolSchemas } from './offline-tools.ts';
-import { executeOfflineTool } from './offline-executor.ts';
-import {
-  editorUrl,
-  editSessionId,
-  MemoryPersistence,
-  projectDoc,
-  projectId,
-} from './offline-runtime.verify-fixtures.ts';
-import { verifyOfflineCommitAndProjectionScenarios } from './offline-runtime-safety.verify-scenarios.ts';
 
 
+
+
+
+
+
+
+
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const isolated=await mkdtemp(join(tmpdir(),'offline-runtime-isolated-')),previousData=process.env.OPENCHATCUT_DATA_DIR;process.env.OPENCHATCUT_DATA_DIR=isolated;
+const ledgerDisconnections: Promise<void>[] = [];
+let restoreDisconnect: (() => void) | undefined;
+try{
+// dispose() deliberately starts ledger disconnect asynchronously. Observe the
+// original operation so teardown cannot remove its store while it is writing.
+const {ExternalSessionRunLedger}=await import('../../src/agent/external-run-ledger.ts');
+const originalDisconnect=ExternalSessionRunLedger.prototype.disconnect;
+ExternalSessionRunLedger.prototype.disconnect=function(){
+  const result=originalDisconnect.call(this);
+  ledgerDisconnections.push(result);
+  return result;
+};
+restoreDisconnect=()=>{ExternalSessionRunLedger.prototype.disconnect=originalDisconnect;};
+const {isExternalServerDirectCall}=await import('../../src/agent/external-tool-policy.ts');
+const {ExternalEditorCallError}=await import('./broker.ts');
+const {OfflineExternalEditRuntime}=await import('./offline-runtime.ts');
+const {offlineExternalToolSchemas}=await import('./offline-tools.ts');
+const {executeOfflineTool}=await import('./offline-executor.ts');
+const {verifyOfflineCommitAndProjectionScenarios}=await import('./offline-runtime-safety.verify-scenarios.ts');
+const {editorUrl,editSessionId,MemoryPersistence,projectDoc,projectId}=await import('./offline-runtime.verify-fixtures.ts');
+assert.equal((await import('../runtime-profile.ts')).runtimeProfile().rootDir,isolated);
 const toolNames = new Set(offlineExternalToolSchemas().map((schema) => schema.name));
 
 for (const allowed of ['begin_edit_session', 'read_timeline', 'read_project', 'read_transcript', 'read_captions', 'read_agent_artifact', 'set_aspect_ratio', 'edit_captions', 'update_watermark', 'import_timeline']) {
@@ -303,9 +322,16 @@ assert.deepEqual(raceStore.current, projectDoc());
 
 await verifyOfflineCommitAndProjectionScenarios();
 
-for (const instance of [
+await Promise.all([
   runtime, interruptedRuntime, resumedRuntime, concurrentRuntime, staleRuntime,
   takeoverRuntime, candidateRuntime, cancelledRuntime, raceRuntime,
-]) instance.dispose();
+].map((instance)=>instance.dispose()));
 
 console.log('offline-runtime.verify: ok');
+
+}finally{
+  await Promise.allSettled(ledgerDisconnections);
+  restoreDisconnect?.();
+  if(previousData===undefined)delete process.env.OPENCHATCUT_DATA_DIR;else process.env.OPENCHATCUT_DATA_DIR=previousData;
+  await rm(isolated,{recursive:true,force:true});
+}

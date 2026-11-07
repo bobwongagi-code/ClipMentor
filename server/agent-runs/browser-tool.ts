@@ -3,6 +3,10 @@ import { jsonSchema, tool } from 'ai';
 import { policyForTool } from '../../src/agent/execution-policy';
 import { ToolActivation } from '../../src/agent/tool-activation';
 import type { AgentToolSchema } from '../../src/agent/tool-schema';
+import { compactToolResultForModel } from '../../src/agent/tool-result-compaction';
+import { projectToolResultForPersistence, attachAgentArtifactRef, artifactPlaceholder } from '../../src/agent/runtime-artifact';
+import { archiveAgentToolResult } from '../../src/agent/runtime-ledger-serialization';
+import type { AgentArtifactRef } from '../../src/agent/runtime-artifact';
 import { toolResultModelOutput } from '../../src/agent/tool-result-output';
 import {
   isFailedToolResult,
@@ -65,6 +69,7 @@ export async function executeBrowserTool(
     release = resolve;
     await previous;
   }
+  let hostRequested=false,hostOutcomeRecorded=false;
   try {
     activation.host?.signal?.throwIfAborted();
     activation.current = activation.current.admit(schema.name);
@@ -84,16 +89,26 @@ export async function executeBrowserTool(
     activation.repeatGuardNote = undefined;
     activation.lastSuccessfulPureTool = undefined;
     pushRunEvent(run, activation.host ? 'server-tool-request' : 'tool-request', { toolCallId, name: schema.name, args, argsDigest });
+    hostRequested=!!activation.host;
     const delivered = activation.host
       ? await activation.host.execute(schema.name,args,toolCallId)
       : await waitForToolResult(run, toolCallId, schema.name, argsDigest);
-    if(activation.host) pushRunEvent(run,'server-tool-result',{toolCallId,name:schema.name,success:!isFailedToolResult(delivered)});
+    let artifactRef:AgentArtifactRef|null=null;
+    if(activation.host){
+      const receipt=delivered&&typeof delivered==='object'&&!Array.isArray(delivered)
+        ?Object.fromEntries(Object.entries(delivered).filter(([key])=>key!=='__images')):delivered;
+      artifactRef=await archiveAgentToolResult(run.projectId,run.id,{toolCallId,toolName:schema.name,result:receipt});
+      pushRunEvent(run,'server-tool-result',{toolCallId,name:schema.name,argsDigest,success:!isFailedToolResult(delivered),
+        result:artifactRef?artifactPlaceholder(artifactRef):compactToolResultForModel(projectToolResultForPersistence(receipt))});
+      hostOutcomeRecorded=true;
+    }
     const followup = delivered && typeof delivered === 'object'
       && '__followup' in delivered && typeof delivered.__followup === 'string'
       ? delivered.__followup
       : null;
     if (followup) activation.followupText = followup;
     const shaped = activation.current.withToolResult(schema.name, delivered);
+    if(artifactRef)attachAgentArtifactRef(shaped.result,artifactRef);
     activation.current = shaped.activation;
     if (isFailedToolResult(shaped.result)) {
       if(!activation.host)throw new Error(toolFailureReason(shaped.result));
@@ -109,6 +124,11 @@ export async function executeBrowserTool(
     }
     return shaped.result;
   } catch (error) {
+    if(hostRequested&&!hostOutcomeRecorded)pushRunEvent(run,'server-tool-result',{
+      toolCallId,name:schema.name,argsDigest:digestToolArgs(args),success:false,
+      outcome:{kind:'outcome_unknown',operationId:toolCallId},
+      error:projectToolResultForPersistence(error instanceof Error?error.message:String(error)),
+    });
     activation.toolFailures.record(schema.name, { success: false, result: error });
     throw error;
   } finally {

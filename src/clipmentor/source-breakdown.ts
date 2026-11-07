@@ -211,12 +211,12 @@ export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown[
     const start = Math.max(window[0], s.source_range_seconds[0]), end = Math.min(window[1], s.source_range_seconds[1]);
     return end > start ? [{ segment_id: s.segment_id, source_range_seconds: [start, end] as [number, number] }] : [];
   });
-  if (ids.some((id) => !b.points.find((p) => p.point_id === id)?.segment_ids.some((segment) => evidence.some((e) => e.segment_id === segment)))) return null;
   const phases = row(plan) && Array.isArray(plan.phases) ? plan.phases.filter((p) => row(p) && p.line_id === line.id) : [];
   if (phases.length > 1) return null;
   const declared = row(phases[0]) ? phases[0].context_source_ranges : undefined;
   if (declared !== undefined && !Array.isArray(declared)) return null;
   const contexts: CopySourceBinding['context_source_ranges'] = [];
+  const selectedEvidence: CopySourceBinding['evidence_source_ranges'] = [];
   for (const c of (declared ?? []) as unknown[]) {
     if (!row(c) || Object.keys(c).some((key) => !['segment_id', 'source_range_seconds', 'purpose'].includes(key))
       || !text(c.segment_id) || !text(c.purpose) || !Array.isArray(c.source_range_seconds) || c.source_range_seconds.length !== 2
@@ -224,16 +224,22 @@ export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown[
       || c.source_range_seconds[0] > c.source_range_seconds[1]) return null;
     const segment = b.segments.find((s) => s.segment_id === c.segment_id);
     const [start, end] = c.source_range_seconds as [number, number];
-    if (!segment || !unit.explanation_segment_ids.includes(segment.segment_id) || directIds.has(segment.segment_id)
+    if (!segment || !unit.explanation_segment_ids.includes(segment.segment_id)
       || start < segment.source_range_seconds[0] || start >= segment.source_range_seconds[1] || end > segment.source_range_seconds[1]
       || start < window[0] || end > window[1]) return null;
-    contexts.push({ segment_id: segment.segment_id, source_range_seconds: [start, end], purpose: c.purpose });
+    if(directIds.has(segment.segment_id)){
+      if(end<=start)return null;
+      selectedEvidence.push({segment_id:segment.segment_id,source_range_seconds:[start,end]});
+    }else contexts.push({ segment_id: segment.segment_id, source_range_seconds: [start, end], purpose: c.purpose });
   }
+  const selectedIds=new Set(selectedEvidence.map(item=>item.segment_id));
+  const pointEvidence=selectedIds.size?[...selectedEvidence,...evidence.filter(item=>!selectedIds.has(item.segment_id))]:evidence;
+  if(ids.some(id=>!b.points.find(point=>point.point_id===id)?.segment_ids.some(segment=>pointEvidence.some(item=>item.segment_id===segment))))return null;
   // Direct evidence and context are selected pictures, not a request to play
   // the envelope continuously. Both edges must still resolve to registered use.
-  const used = [...evidence, ...contexts].map((e) => e.source_range_seconds);
+  const used = [...pointEvidence, ...contexts].map((e) => e.source_range_seconds);
   if (Math.min(...used.map((r) => r[0])) !== window[0] || Math.max(...used.map((r) => r[1])) !== window[1]) return null;
-  return { evidence_source_ranges: evidence, context_source_ranges: contexts };
+  return { evidence_source_ranges: pointEvidence, context_source_ranges: contexts };
 }
 
 /** Resolve executable rows from the CURRENT saved picture plan, never from
@@ -391,7 +397,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
     scope: checkTimeline ? 'registered_timeline_ranges_only' : 'registered_points_and_plan_only', issues, bindings,
     semantic_review_required: true as const, complete_film_accepted: false as const,
     ...(issues.some((i) => i.code === 'copy_picture_outside_explanation') ? {
-      copy_source_binding_help: 'Each line needs its own registered point evidence. Additional same-unit context goes in current picture plan phases[].context_source_ranges: [{segment_id, source_range_seconds:[start,end], purpose}]. A still may use [t,t]. source_seconds encloses these selected ranges; it does not authorize playback of intervening gaps. Context does not prove the teaching claim.',
+      copy_source_binding_help: 'Each line needs its own registered point evidence. Explicit slices of a point segment and additional same-unit context go in current picture plan phases[].context_source_ranges: [{segment_id, source_range_seconds:[start,end], purpose}]. A still may use [t,t]. source_seconds encloses these selected ranges; it does not authorize playback of intervening gaps. Context does not prove the teaching claim.',
     } : {}) });
   if (!a || !b) { issue('source_breakdown_missing', 'analysis'); return result(); }
   if (!isSourceBreakdown(b)) { issue('source_breakdown_invalid', 'analysis'); return result(); }

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { uploadDir } from '../media-dir.ts';
 import { fetchGeneratedResult } from './result-download.ts';
+import {sha256File} from '../../shared/node-content-hash.ts';
 
 function rawFormat(codec: string): string | undefined {
   if (codec === 'pcm') return 's16le';
@@ -68,7 +69,7 @@ function extension(codec: string): string {
   return 'mp3';
 }
 
-export async function saveVoiceAudio(bytes: Buffer, codec: string, sampleRate: number, pitch = 0): Promise<{ path: string; durationSeconds: number }> {
+export async function saveVoiceAudio(bytes: Buffer, codec: string, sampleRate: number, pitch = 0): Promise<{ path: string; durationSeconds: number; sha256:string }> {
   if (!bytes.length) throw new Error('voice provider returned empty audio');
   const dir = uploadDir();
   await mkdir(dir, { recursive: true });
@@ -79,7 +80,7 @@ export async function saveVoiceAudio(bytes: Buffer, codec: string, sampleRate: n
     await writeFile(file, bytes);
   }
   await pitchShift(file, pitch, sampleRate);
-  return { path: `/media/uploads/${file.split('/').pop()!}`, durationSeconds: await probeDuration(file) };
+  return { path: `/media/uploads/${file.split('/').pop()!}`, durationSeconds: await probeDuration(file),sha256:await sha256File(file) };
 }
 
 export async function saveVoiceSubtitle(url: string): Promise<string> {

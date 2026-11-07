@@ -1,13 +1,14 @@
-import { readFile, writeFile, mkdir, mkdtemp, rm, access } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   buildPreviewReviewRequest, reviewClipMentorPreview, validatePreviewReviewInput,
-  PREVIEW_REVIEW_ENDPOINT, PREVIEW_REVIEW_TIMEOUT_MS,
+  PREVIEW_REVIEW_ENDPOINT,
 } from './preview-review.ts';
+import { postSourceVideoTransport, SourceVideoTransportError } from './source-video-transport.ts';
+import type { SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video.ts';
 
 const args = process.argv.slice(2);
 const options: Record<string, string> = {};
@@ -43,30 +44,14 @@ try {
   console.log(JSON.stringify({ status: 'cached', output: prior.output, requests_sent: 0 }));
   process.exit(0);
 }
+let diagnostic: SourceVideoTransportDiagnostic | undefined;
 try {
   const result = await reviewClipMentorPreview(video, input, { key, post: async (body, credential, signal) => {
-    const directory = await mkdtemp(join(tmpdir(), 'clipmentor-review-'));
-    try {
-      const request = join(directory, 'request.json'), response = join(directory, 'response.json');
-      await writeFile(request, body, { mode: 0o600 });
-      const status = await new Promise<number>((accept, reject) => {
-        const child = spawn('curl', ['--disable', '-sS', '--http1.1', '--noproxy', '*', '--proto', '=https',
-          '--max-redirs', '0', '--retry', '0', '--connect-timeout', '30', '--max-time', String(PREVIEW_REVIEW_TIMEOUT_MS / 1000),
-          '--max-filesize', '1048576', '-H', '@-', '-H', 'Content-Type: application/json',
-          '-H', `Idempotency-Key: ${options['--operation']}`, '--data-binary', `@${request}`,
-          '--output', response, '--write-out', '%{http_code}', PREVIEW_REVIEW_ENDPOINT],
-        { stdio: ['pipe', 'pipe', 'ignore'], signal });
-        let code = '';
-        child.stdout.on('data', (chunk) => { if (code.length < 16) code += String(chunk); });
-        child.on('error', () => reject(new Error('Transport failed')));
-        child.on('close', (exit) => exit === 0 && /^\d{3}$/.test(code) ? accept(Number(code)) : reject(new Error('Transport failed')));
-        child.stdin.on('error', () => undefined);
-        child.stdin.end(`Authorization: Bearer ${credential}\n`);
-      });
-      let responseBody: unknown = null;
-      if (status === 200) { try { responseBody = JSON.parse(await readFile(response, 'utf8')); } catch { /* safely rejected by parser */ } }
-      return { status, body: responseBody };
-    } finally { await rm(directory, { recursive: true, force: true }); }
+    try { return await postSourceVideoTransport(body, credential, signal, options['--operation'], tmpdir()); }
+    catch (error) {
+      if (error instanceof SourceVideoTransportError) diagnostic = error.diagnostic;
+      throw error;
+    }
   } });
   await writeFile(output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   await writeFile(ledger, JSON.stringify({ status: 'completed', fingerprint, requests_attempted: 1, output }), { mode: 0o600 });
@@ -74,7 +59,7 @@ try {
 } catch (error) {
   const message = error instanceof Error && /^(Preview review|Invalid preview|Inline request)/.test(error.message)
     && !error.message.includes(key) ? error.message : 'Review failed; inspect operation record, no automatic retry';
-  await writeFile(ledger, JSON.stringify({ status: 'failed', fingerprint, requests_attempted: 1, error: message }), { mode: 0o600 });
+  await writeFile(ledger, JSON.stringify({ status: 'failed', fingerprint, requests_attempted: 1, error: message, ...(diagnostic ? { transport_diagnostic: diagnostic } : {}) }), { mode: 0o600 });
   console.error(message);
   process.exitCode = 1;
 }

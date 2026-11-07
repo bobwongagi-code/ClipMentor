@@ -8,6 +8,9 @@ import {loadOfflineStoredProject} from '../external-agent/offline-project-store'
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {isSafeUploadName} from '../media-dir';
 import {loadReviewBoardInput,renderReviewBoards} from './blueprint-review-board';
+import {readHandoffPolicy} from './handoff';
+import {boundVisualCriteria,visualReferenceFrames} from './visual-done-criteria';
+import {copyReviewDependencies} from './copy-review';
 /** Original production service read extension. Only artifacts are written. */
 export function createBlueprintReviewBoardHandler(){
  const pending=new Set<string>();
@@ -27,6 +30,8 @@ export function createBlueprintReviewBoardHandler(){
    if(url.searchParams.get('expectedRevision')!==revisionOf(snapshot.doc))throw Error('INPUT: 请等待宿主自动保存后重新读取');
    if(pending.has(projectId))throw Error('INPUT: 本工程审片板正在生成，不自动重试');pending.add(projectId);held=projectId;
    const input=await loadReviewBoardInput(projectId);
+   const visual=boundVisualCriteria(await readHandoffPolicy(projectId));
+   if(visual)input.visualReferences=await visualReferenceFrames(visual,copyReviewDependencies());
    if(input.sha256!==createHash('sha256').update(JSON.stringify(snapshot.doc)).digest('hex'))throw Error('INPUT: 生成前工程已变化，请重新读取');
    const view=url.searchParams.get('boardView')??'planner';if(view!=='human'&&view!=='planner')throw Error('INPUT: 未知审片板视图');
    const result=await renderReviewBoards(input,root,undefined,view);

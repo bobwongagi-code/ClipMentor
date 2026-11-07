@@ -16,7 +16,8 @@ import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmento
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview } from '../../clipmentor/production-gate';
 import { checkSourceBreakdown, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
-import {missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
+import {deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
+import {readClipMentorStoryboard} from '../../clipmentor/read-storyboard';
 import {renderClipMentorReviewBoard} from '../../clipmentor/render-review-board';
 
 type Args = Record<string, unknown>;
@@ -25,7 +26,12 @@ const text = (value: unknown): value is string => typeof value === 'string' && !
 // An incomplete current copy must remain repairable. Baseline/source errors still block preparation;
 // the strict production/review gate always checks all issues, including incomplete copy/plan issues.
 function copyPreparationReady(doc: ProjectDoc): boolean {
-  return checkSourceBreakdown(doc).issues.every((i) => ['copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch'].includes(i.code));
+  return checkSourceBreakdown(doc).issues.every((i) => [
+    'copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch',
+    'picture_plan_phase_mode_invalid', 'picture_plan_phase_range_invalid', 'picture_plan_phase_original_missing',
+    'picture_plan_phase_line_invalid', 'picture_plan_group_explanation_missing',
+    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'delivery_sections_invalid',
+  ].includes(i.code));
 }
 
 export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: AgentContext): Promise<unknown> {
@@ -40,6 +46,11 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
   const doc = ctx.getDoc();
   if (name === 'read_clipmentor_analysis') {
     const view = args.view ?? 'full';
+    if(view==='storyboard'){
+      if(['reviewPart','copyPart','packetOffset','packetLimit','packetDigest','evidenceIds'].some(key=>args[key]!==undefined))return{error:'storyboard does not accept copy/review/evidence paging arguments'};
+      return readClipMentorStoryboard(args,ctx);
+    }
+    if(['boardPart','boardDigest','boardOffset'].some(key=>args[key]!==undefined))return{error:'board arguments require the storyboard view'};
     if (!(typeof view === 'string' && ['full', 'source_breakdown', 'current_copy', 'evidence', 'copy_review'].includes(view))) return { error: 'Invalid analysis read view' };
     if (view !== 'copy_review' && args.reviewPart !== undefined) return { error: 'reviewPart requires the copy_review view' };
     if (view !== 'current_copy' && args.copyPart !== undefined) return { error: 'copyPart requires the current_copy view' };
@@ -196,14 +207,20 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       } else if (args.action === 'set_copy_candidate') {
         const unit = a.blueprint.find((entry) => entry.unit_id === args.id);
         const input = args.record;
-        const internal = (unit as unknown as { internal_review?: Record<string, unknown> } | undefined)?.internal_review;
-        if (!unit || !object(internal) || !object(input)
+        const review = unit as unknown as { internal_review?: Record<string, unknown> } | undefined;
+        if (!unit || !review || (review.internal_review !== undefined && !object(review.internal_review)) || !object(input))
+          return { error: 'Registered unit and copy record required' };
+        const internal = review.internal_review ?? {};
+        const current = internal.current_script_candidate;
+        const matchesBase = current === undefined
+          ? input.source_candidate_id === null && internal.current_picture_plan === undefined
+          : text(current) && object(internal[current]) && input.source_candidate_id === current;
+        if (!matchesBase
           || Object.keys(input).some((key) => !['source_candidate_id', 'candidate_id', 'lines', 'plan_id', 'plan', 'line_guidance'].includes(key))
-          || !text(internal.current_script_candidate) || input.source_candidate_id !== internal.current_script_candidate
           || !text(input.candidate_id) || !/^script_candidate_[A-Za-z0-9_-]+$/.test(input.candidate_id) || Object.hasOwn(internal, input.candidate_id)
           || !text(input.plan_id) || !/^picture_plan_[A-Za-z0-9_-]+$/.test(input.plan_id) || Object.hasOwn(internal, input.plan_id)
           || !Array.isArray(input.lines) || !input.lines.length || !object(input.plan) || !text(input.line_guidance)) {
-          return { error: 'Current source candidate, new script_candidate_/picture_plan_ IDs, complete lines, plan and guidance required; history cannot be overwritten' };
+          return { error: 'Use source_candidate_id:null for first copy, or the current saved candidate ID for a revision. New script_candidate_/picture_plan_ IDs, complete lines, plan and guidance required' };
         }
         if (!a.source.sourceContentHash || doc.assets.find((asset) => asset.id === a!.source.asset_id)?.sourceContentHash !== a.source.sourceContentHash
           || !copyPreparationReady(doc)) return { error: 'Resolve source identity and breakdown before registering copy' };
@@ -239,6 +256,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           source_binding: structuredClone(a.source), base_analysis_revision: a.revision };
         internal.current_script_candidate = input.candidate_id;
         internal.current_picture_plan = input.plan_id;
+        review.internal_review = internal;
         unit.line_guidance = input.line_guidance;
         await invalidateChangedReviews(a);
       } else if (args.action === 'select_copy_lines') {
@@ -351,6 +369,11 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     const next = { ...doc, clipMentorAnalysis: a };
     const missingDelivery=missingDeliverySectionKinds(doc,next);
     if(missingDelivery.length)return{error:'delivery_sections_would_be_lost',missing_delivery_kinds:missingDelivery};
+    try{deliverySectionsFromDoc(next);}
+    catch(error){
+      if(!(error instanceof Error)||!/^delivery_[a-z_]+(?::|$)/.test(error.message))throw error;
+      return {error:error.message,next_step:'Fix the current delivery declaration before saving. Use section_id, kind, line, evidence_ids, picture and voice. picture must be a bound image, not a video source range. Move delivery lines out of the body candidate atomically with the new plan.'};
+    }
     const handoff = await checkAnalysisHandoff(next);
     if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; read again' };
     ctx.commands.applyDoc(next);

@@ -1,0 +1,1883 @@
+{
+  "cases": [
+    {
+      "case_id": "new-contact",
+      "source_sha256": "c5001483cd14dd78a18583619f2e26d250857fc0fd0d3dd4aa95357c39bdf2d4",
+      "provenance": "new-contact-终态工程.json; only native timeline/assets and required teaching identity projected; no verdict or expected answer",
+      "doc": {
+        "version": 3,
+        "activeTimelineId": "tl_c48160f2-f931-4a57-ab64-087a98c7e2f8",
+        "timelines": [
+          {
+            "fps": 30,
+            "width": 576,
+            "height": 1024,
+            "items": [
+              {
+                "id": "item_d9797831-951c-4472-b84e-4e01e5543e63",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 322,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 0,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 275,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_53a4281b-8bda-4730-87be-fe8b91bd4a4b",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 306,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 0,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 597,
+                "transform": {
+                  "scale": 0.431,
+                  "x": 24.31,
+                  "y": -9.92
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_bb58cd8f-e482-4dbd-be22-9077ee883859",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 248,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 322,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 903,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_659ba52f-3c5a-4ce2-9509-0ed18ea70b75",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 319,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 309,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1151,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_565388ef-83a6-4f7f-9499-5e886030e53a",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 265,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 570,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1470,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_9455b037-84dc-4661-a10e-e9b91d96285d",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 99,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 210,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1735,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_82d1e1a1-5511-49d8-8eb6-f785676cce4e",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 202,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 630,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1834,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_3634d354-2dc6-4759-b496-f7ffc9f95e7b",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 283,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 835,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2036,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_e8d56375-9f5a-4d0b-a067-97bc1f75854a",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 111,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 834,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2319,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_3d3a5b1e-bd5d-461b-9d33-99ae33d10374",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 70,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 996,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2430,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_588a18d8-f1ec-4527-a858-3df4aac1deef",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 102,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 690,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2500,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_c2bdf9f0-a7d6-441c-8ced-67aaba0e777a",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 241,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 877,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2602,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_ed472164-34e3-4e6d-b11f-839143367789",
+                "track": "track_v1",
+                "durationInFrames": 322,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 275
+              },
+              {
+                "id": "item_187580fe-fb34-4c7f-b841-757f5b0380dd",
+                "track": "track_v1",
+                "durationInFrames": 306,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 597
+              },
+              {
+                "id": "item_e876d4a4-ecbe-4bc1-bb52-0661970b716b",
+                "track": "track_v1",
+                "durationInFrames": 248,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 903
+              },
+              {
+                "id": "item_5b19da84-adf6-4d34-9790-b251a9737f09",
+                "track": "track_v1",
+                "durationInFrames": 319,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 1151
+              },
+              {
+                "id": "item_ed1af9d2-9d48-4e03-a0ca-d7536513cdba",
+                "track": "track_v1",
+                "durationInFrames": 265,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 1470
+              },
+              {
+                "id": "item_6532f04f-bdd7-426e-8bfa-348101fd7ba4",
+                "track": "track_v1",
+                "durationInFrames": 99,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 1735
+              },
+              {
+                "id": "item_1ea67c14-da5a-4118-b787-2e42dac1e712",
+                "track": "track_v1",
+                "durationInFrames": 202,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 1834
+              },
+              {
+                "id": "item_f4fe8857-1479-4e89-8b9d-b738790dee9f",
+                "track": "track_v1",
+                "durationInFrames": 283,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 2036
+              },
+              {
+                "id": "item_c2c3c25f-8a1c-4483-9b5a-777264ee77b9",
+                "track": "track_v1",
+                "durationInFrames": 111,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2319
+              },
+              {
+                "id": "item_944b5b0b-f733-4c2e-8831-d543ee857fd0",
+                "track": "track_v1",
+                "durationInFrames": 70,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2430
+              },
+              {
+                "id": "item_c98d8ec2-2e04-4561-b234-89628c22c715",
+                "track": "track_v1",
+                "durationInFrames": 102,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2500
+              },
+              {
+                "id": "item_5cd59886-e4c8-421c-a378-fa30aa2d483c",
+                "track": "track_v1",
+                "durationInFrames": 241,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2602
+              },
+              {
+                "id": "item_8d31a343-0f2f-4ea0-b276-5b27fd624af4",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 306,
+                "kind": "audio",
+                "sourceAssetId": "902c16f0-42c3-4d1e-8ea3-32ae45c8c28b",
+                "name": "Barely There C1 BT-L01",
+                "src": "/media/uploads/1ffddd63-50ca-40ad-b5b0-799dd69f7580.mp3",
+                "volume": 1,
+                "startFrame": 597,
+                "sourceRevision": "source-v1-0pvr7n6-o9y1rz"
+              },
+              {
+                "id": "item_86f0ce1e-9384-421a-a5ba-b25ab80bdbd8",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 319,
+                "kind": "audio",
+                "sourceAssetId": "31319f33-5350-47fe-ba16-ba6ee2a78fc7",
+                "name": "Barely There four-group BT-L02 · recovered saved provider output",
+                "src": "/media/uploads/17fadc40-84fb-4d63-861c-487121bba70c.mp3",
+                "volume": 1,
+                "startFrame": 1151,
+                "sourceRevision": "source-v1--otde9y0cpjfoq"
+              },
+              {
+                "id": "item_5ea287eb-69f9-418a-aeff-c13cf85578e4",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 301,
+                "kind": "audio",
+                "sourceAssetId": "3bdf88bb-c7cc-4f3d-8cf1-e07884ca1be6",
+                "name": "Barely There four-group BT-L03",
+                "src": "/media/uploads/ff9c9d6c-c8c4-49a8-8440-94fa12f7e2bd.mp3",
+                "volume": 1,
+                "startFrame": 1735,
+                "sourceRevision": "source-v1--41wsno-6aul5t"
+              },
+              {
+                "id": "item_47978953-5ea3-4951-b526-e1c80a47125c",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 180,
+                "kind": "audio",
+                "sourceAssetId": "7885fe85-a8db-429c-9ed1-087584ff6686",
+                "name": "Barely There C1 BT-L04",
+                "src": "/media/uploads/f0bf4f7c-5f17-44eb-9dd9-74495e59dba6.mp3",
+                "volume": 1,
+                "startFrame": 2319,
+                "sourceRevision": "source-v1--y4sxil0vvgo0z"
+              },
+              {
+                "id": "item_a3fde5e7-d726-4279-9c79-7eead4bc1f4c",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 343,
+                "kind": "audio",
+                "sourceAssetId": "0a68345d-f661-4efe-9c4d-6b553872d595",
+                "name": "Barely There C1 BT-L06",
+                "src": "/media/uploads/a60c873d-258f-4adb-b186-beeab7a998fe.mp3",
+                "volume": 1,
+                "startFrame": 2500,
+                "sourceRevision": "source-v1--iae3kl0kgb1ko"
+              },
+              {
+                "id": "item_3a0ebd98-3cd3-425f-b93e-b247427e6259",
+                "track": "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+                "durationInFrames": 2568,
+                "kind": "motion-graphic",
+                "templateId": "ea2cd91e-6e82-4307-8945-a7b3958e124c",
+                "sourceAssetId": "ea2cd91e-6e82-4307-8945-a7b3958e124c",
+                "name": "BT-C1 四组中段 · 蓝白原片阶段牌副本",
+                "code": "const Component = ({ item }) => {\nconst frame=useCurrentFrame(); const p=item.props;\nconst cards=JSON.parse(p.cards);const stages=JSON.parse(p.stages);const labels=JSON.parse(p.labels);\nconst card=cards.find(c=>frame>=c.start&&frame<c.end);\nconst stage=stages.find(c=>frame>=c.start&&frame<c.end);\nconst label=labels.find(c=>frame>=c.start&&frame<c.end);\nconst original=stage && stage.original;const ref=frame>=322&&frame<628;\nconst rootStyle={position:\"absolute\",inset:0,backgroundColor:\"transparent\",fontFamily:p.font};\nconst barStyle={position:\"absolute\",left:0,top:0,width:576,height:60,backgroundColor:original?\"#0D5EA6\":p.yellow,color:original?p.white:p.black,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",fontSize:24,fontWeight:original?700:400,textShadow:\"none\"};\nconst labelStyle={position:\"absolute\",left:24,top:64,width:528,height:36,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",fontSize:24,color:p.black};\nconst plateStyle={position:\"absolute\",left:0,top:800,width:576,height:224,backgroundColor:p.black};\nconst captionStyle={position:\"absolute\",left:24,top:824,width:528,height:168,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:28,lineHeight:\"38px\",whiteSpace:\"pre-wrap\",color:p.white,textShadow:\"none\"};\nconst refStyle={position:\"absolute\",left:24,top:270,width:256,height:199.111111,overflow:\"hidden\"};\nconst imgStyle={position:\"absolute\",left:-7.585185,top:-85.333333,width:273.066667,height:485.451852,maxWidth:\"none\"};\nreturn <div style={rootStyle}><div style={barStyle}>{stage?(original?\"VIDEO ASAL\":stage.text):\"\"}</div>{label&&<div style={labelStyle}>{label.text}</div>}{ref&&p.reference&&<div style={refStyle}><Img src={p.reference} style={imgStyle}/></div>}{!original&&<div style={plateStyle}/ >}{card&&<div style={captionStyle}>{card.text}</div>}</div>;\n};",
+                "props": {
+                  "__description": "冻结revision11；中文意思与重点保存在meaningsZh；分卡为语义页，未逐词听审。",
+                  "cards": "[{\"start\":322,\"end\":383,\"text\":\"Tengok semula pembukaannya.\",\"lineId\":\"BT-L01\"},{\"start\":383,\"end\":493,\"text\":\"Wajah masih nampak\\ndi sebalik kain,\\njadi penonton nampak\",\"lineId\":\"BT-L01\"},{\"start\":493,\"end\":628,\"text\":\"betapa nipisnya kain itu\\ntanpa perlu dipakai\\npada badan.\",\"lineId\":\"BT-L01\"},{\"start\":876,\"end\":1026,\"text\":\"Bila sebut lembut dan anjal,\\ndia ramas dan tarik kain.\",\"lineId\":\"BT-L02\"},{\"start\":1026,\"end\":1195,\"text\":\"Bila sebut kemasan,\\ndia dekatkan pada kamera\\nsupaya pembeli nampak jelas.\",\"lineId\":\"BT-L02\"},{\"start\":1460,\"end\":1559,\"text\":\"Dia tunjuk bentuknya dulu,\",\"lineId\":\"BT-L03\"},{\"start\":1559,\"end\":1668,\"text\":\"kemudian cadangkan tujuh helai\\nuntuk tukar pakai harian.\",\"lineId\":\"BT-L03\"},{\"start\":1668,\"end\":1761,\"text\":\"Pembeli tahu apa yang dibeli\\ndan kenapa beli lebih.\",\"lineId\":\"BT-L03\"},{\"start\":2044,\"end\":2155,\"text\":\"Dia buka bahagian dalam\\nsupaya pembeli boleh lihat\\npelapiknya,\",\"lineId\":\"BT-L04\"},{\"start\":2155,\"end\":2225,\"text\":\"bukan meneka daripada\\ngambar luar sahaja.\",\"lineId\":\"BT-L04\"},{\"start\":2225,\"end\":2327,\"text\":\"Dia ingatkan penonton\\nyang dah lama tak tukar,\",\"lineId\":\"BT-L06\"},{\"start\":2327,\"end\":2437,\"text\":\"kemudian ajak mereka\\nke beg kuning.\",\"lineId\":\"BT-L06\"},{\"start\":2437,\"end\":2568,\"text\":\"Peringatan tadi jadi sebab\\nuntuk membeli.\",\"lineId\":\"BT-L06\"}]",
+                  "stages": "[{\"start\":0,\"end\":322,\"text\":\"Video asal\",\"original\":true},{\"start\":322,\"end\":628,\"text\":\"Ulasan semula · Kain\",\"original\":false},{\"start\":628,\"end\":876,\"text\":\"Video asal\",\"original\":true},{\"start\":876,\"end\":1195,\"text\":\"Ulasan semula · Kain\",\"original\":false},{\"start\":1195,\"end\":1460,\"text\":\"Video asal\",\"original\":true},{\"start\":1460,\"end\":1559,\"text\":\"Ulasan semula · Tukar pakai\",\"original\":false},{\"start\":1559,\"end\":1761,\"text\":\"Ulasan semula · Tukar pakai\",\"original\":false},{\"start\":1761,\"end\":2044,\"text\":\"Video asal\",\"original\":true},{\"start\":2044,\"end\":2155,\"text\":\"Ulasan semula · Pelapik\",\"original\":false},{\"start\":2155,\"end\":2225,\"text\":\"Ulasan semula · Pelapik\",\"original\":false},{\"start\":2225,\"end\":2327,\"text\":\"Ulasan semula · Ajakan membeli\",\"original\":false},{\"start\":2327,\"end\":2568,\"text\":\"Ulasan semula · Ajakan membeli\",\"original\":false}]",
+                  "labels": "[{\"start\":322,\"end\":628,\"text\":\"Kain nipis\"},{\"start\":876,\"end\":1026,\"text\":\"Lembut & anjal\"},{\"start\":1026,\"end\":1195,\"text\":\"Kemasan dari dekat\"},{\"start\":1460,\"end\":1761,\"text\":\"Tukar pakai harian\"},{\"start\":2044,\"end\":2225,\"text\":\"Pelapik bahagian dalam\"},{\"start\":2225,\"end\":2568,\"text\":\"Ingatkan tukar, ajak beli\"}]",
+                  "meaningsZh": "[{\"id\":\"BT-L01\",\"zh\":\"回看开头。隔着布料还能看到她的脸，不用穿上身，观众也能直观看出面料有多薄。\",\"point_ids\":[\"BT-P01\"]},{\"id\":\"BT-L02\",\"zh\":\"说到柔软和弹性，她就揉拢、拉开面料；说到做工，就拿近镜头，让买家看清楚。\",\"point_ids\":[\"BT-P02\",\"BT-P03\"]},{\"id\":\"BT-L03\",\"zh\":\"她先展示版型，再建议买七件用于日常替换。买家既知道买的是什么，也明白为什么多买几件。\",\"point_ids\":[\"BT-P04\"]},{\"id\":\"BT-L04\",\"zh\":\"她翻开里面，让买家直接看清内侧衬片，不用只凭外观去猜。\",\"point_ids\":[\"BT-P05\"]},{\"id\":\"BT-L06\",\"zh\":\"她先提醒很久没换新的观众，再邀请他们去黄色购物袋。前面的换新提醒，给后面的购买邀请提供了理由。\",\"point_ids\":[\"BT-P04\"]}]",
+                  "font": "Noto Sans",
+                  "black": "#111111",
+                  "white": "#FFFFFF",
+                  "yellow": "#FFD83D",
+                  "reference": "/media/uploads/717de221-dd49-4df1-b0ca-2b24e89ce0b5.jpg"
+                },
+                "width": 576,
+                "height": 1024,
+                "startFrame": 275,
+                "sourceRevision": "source-v1--dxyinw0scq96b"
+              },
+              {
+                "id": "item_4dad2696-cc38-4168-95e9-d7a6ae55ba86",
+                "track": "track_v1",
+                "durationInFrames": 275,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 0
+              },
+              {
+                "id": "item_2579a90a-457d-446a-b5da-1e9445509210",
+                "track": "track_v1",
+                "durationInFrames": 228,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2843
+              },
+              {
+                "id": "item_98ab3ea2-1a2e-4f89-bbd4-56540419972e",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 275,
+                "kind": "audio",
+                "sourceAssetId": "df52e6df-1554-4153-a6c8-a25e8e93f45e",
+                "name": "Barely There · 共同成绩片头",
+                "src": "/media/uploads/cbf1b7cc-fea2-4b25-aaef-cdbc20d01873.mp3",
+                "volume": 1,
+                "startFrame": 0,
+                "sourceRevision": "source-v1--tyvvhi-41mcfs"
+              },
+              {
+                "id": "item_1277ca8b-551d-4078-a4f0-feaac39c999e",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 228,
+                "kind": "audio",
+                "sourceAssetId": "4e858d3d-4fe4-4799-a421-72c0377adb4f",
+                "name": "Barely There C1 BT-L05-new-contact",
+                "src": "/media/uploads/8c41d7ae-e784-4af0-9424-75a440a3db5c.mp3",
+                "volume": 1,
+                "startFrame": 2843,
+                "sourceRevision": "source-v1-0i0cxmf01mt40t"
+              },
+              {
+                "id": "item_d49464fe-d7a0-462e-b165-acaed3c7b099",
+                "track": "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+                "durationInFrames": 275,
+                "kind": "motion-graphic",
+                "templateId": "f7c1dc04-8864-4c96-ab86-34fecddd3e52",
+                "sourceAssetId": "f7c1dc04-8864-4c96-ab86-34fecddd3e52",
+                "name": "BT NIUMO approved opening",
+                "code": "const Component=()=>{const f=useCurrentFrame();return <div style={{position:\"absolute\",fontFamily:\"Arial, sans-serif\",textShadow:\"none\",inset:0,background:\"#111111\"}}><Img src=\"/media/uploads/9597377b-d4ec-4d81-97f2-73da262cf67a.jpg\" style={{position:\"absolute\",width:576,height:1024,objectFit:\"cover\"}}/><div style={{position:\"absolute\",inset:0,background:\"rgba(0,0,0,0.72)\"}}/><div style={{position:\"absolute\",left:0,top:0,width:576,height:175,background:\"#111111\"}}/><div style={{position:\"absolute\",top:80,width:576,textAlign:\"center\",color:\"#FFD83D\",fontSize:40,fontWeight:700}}>Barely There</div>{f<157?<><div style={{position:\"absolute\",left:18,top:275,width:540,textAlign:\"center\",color:\"white\",fontSize:44,lineHeight:\"58px\",fontWeight:700}}>256 ribu tontonan<br/>860 unit terjual</div><Img src=\"/media/uploads/5c396c71-711b-4e68-b187-4da6550536dc.png\" style={{position:\"absolute\",left:18,top:445,width:540,height:126,objectFit:\"contain\"}}/></>:<div style={{position:\"absolute\",left:18,top:300,width:540,textAlign:\"center\",color:\"white\",fontSize:40,lineHeight:\"56px\",fontWeight:700}}>Jom tengok<br/>cara dia tunjukkan<br/><span style={{color:\"#FFD83D\"}}>kelebihan produk ini.</span></div>}<div style={{position:\"absolute\",left:0,top:800,width:576,height:224,background:\"#111111\"}}/><div style={{position:\"absolute\",left:24,top:824,width:528,height:168,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:28,lineHeight:\"38px\",whiteSpace:\"pre-wrap\",color:\"white\"}}>{f<157?\"Video ini mendapat 256 ribu tontonan,\\ndengan 860 unit terjual.\":\"Jom tengok cara dia tunjukkan\\nkelebihan produk ini.\"}</div></div>;};",
+                "props": {},
+                "width": 576,
+                "height": 1024,
+                "startFrame": 0,
+                "sourceRevision": "source-v1--91kffn0yiej8r"
+              },
+              {
+                "id": "item_61ffcf42-b207-4653-bf05-b5731d622edf",
+                "track": "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+                "durationInFrames": 228,
+                "kind": "motion-graphic",
+                "templateId": "b98cac26-ceea-416a-a8d4-2b2182e1fe2c",
+                "sourceAssetId": "b98cac26-ceea-416a-a8d4-2b2182e1fe2c",
+                "name": "BT NIUMO approved new contact closing",
+                "code": "const Component=()=>{const f=useCurrentFrame();return <div style={{position:\"absolute\",fontFamily:\"Arial, sans-serif\",textShadow:\"none\",inset:0,background:\"#F7F8FA\"}}><Img src=\"/media/uploads/80688752-4e2c-4970-aadd-2f8c7c14b5cc.png\" style={{position:\"absolute\",left:28,top:24,width:520,height:657,objectFit:\"contain\"}}/><div style={{position:\"absolute\",left:24,top:698,width:528,height:76,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:32,fontWeight:700,color:\"#111111\"}}>{f<119?\"Berminat nak buat video?\":\"Mesej kami\"}</div><div style={{position:\"absolute\",left:0,top:800,width:576,height:224,background:\"#111111\"}}/><div style={{position:\"absolute\",left:24,top:824,width:528,height:168,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:28,lineHeight:\"38px\",whiteSpace:\"pre-wrap\",color:\"white\"}}>{f<119?\"Berminat nak buat video\\nuntuk produk ini?\":\"Mesej kami untuk bincang kerjasama.\"}</div></div>;};",
+                "props": {},
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2843,
+                "sourceRevision": "source-v1-0j4exao04xqu3m"
+              },
+              {
+                "id": "item_f519bd5a-5b00-4a6a-9b5b-e4983eeb166b",
+                "track": "track_ae3c6582-6134-4cc3-8c3c-ea28b9a863c3",
+                "durationInFrames": 157,
+                "kind": "image",
+                "sourceAssetId": "6702181c-05e5-42d7-bb6b-f835bdee98e8",
+                "name": "产品销量.png",
+                "src": "/media/uploads/5c396c71-711b-4e68-b187-4da6550536dc.png",
+                "width": 1006,
+                "height": 234,
+                "startFrame": 0,
+                "transform": {
+                  "scale": 0.938,
+                  "x": 0,
+                  "y": -0.39
+                },
+                "sourceFilename": "产品销量.png",
+                "sourceContentHash": "e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699",
+                "sourceRevision": "source-sha256-e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699"
+              },
+              {
+                "id": "item_e34c03cb-21a7-49aa-b5d2-37d69888004d",
+                "track": "track_ae3c6582-6134-4cc3-8c3c-ea28b9a863c3",
+                "durationInFrames": 228,
+                "kind": "image",
+                "sourceAssetId": "bd2d58ba-3b9a-471a-81b0-2e028bc7e6e2",
+                "name": "产品图.png",
+                "src": "/media/uploads/80688752-4e2c-4970-aadd-2f8c7c14b5cc.png",
+                "width": 1587,
+                "height": 2003,
+                "startFrame": 2843,
+                "transform": {
+                  "scale": 0.903,
+                  "x": 0,
+                  "y": -15.58
+                },
+                "sourceFilename": "产品图.png",
+                "sourceContentHash": "35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae",
+                "sourceRevision": "source-sha256-35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae"
+              }
+            ],
+            "selectedId": "item_e34c03cb-21a7-49aa-b5d2-37d69888004d",
+            "trackOrder": [
+              "track_ae3c6582-6134-4cc3-8c3c-ea28b9a863c3",
+              "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+              "track_4732c1aa-b4b1-4778-969d-8d37af227faf",
+              "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+              "track_v1",
+              "track_c4681d0a-8b6b-4303-a7be-629272766090"
+            ],
+            "tracks": {
+              "track_v1": {
+                "kind": "video"
+              },
+              "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519": {
+                "kind": "video"
+              },
+              "track_4732c1aa-b4b1-4778-969d-8d37af227faf": {
+                "kind": "video"
+              },
+              "track_c4681d0a-8b6b-4303-a7be-629272766090": {
+                "kind": "audio"
+              },
+              "track_95766a88-c7c6-4c2b-a284-af13b16def66": {
+                "kind": "video"
+              },
+              "track_ae3c6582-6134-4cc3-8c3c-ea28b9a863c3": {
+                "kind": "video",
+                "name": "NIUMO bookend native images"
+              }
+            },
+            "id": "tl_c48160f2-f931-4a57-ab64-087a98c7e2f8",
+            "name": "序列 1",
+            "order": 0,
+            "selectedIds": [
+              "item_e34c03cb-21a7-49aa-b5d2-37d69888004d"
+            ],
+            "transitions": []
+          }
+        ],
+        "assets": [
+          {
+            "id": "d24aef47-f694-4a50-a639-42d80e25d75a",
+            "kind": "video",
+            "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+            "durationInFrames": 1118,
+            "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+            "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+          },
+          {
+            "id": "bd2d58ba-3b9a-471a-81b0-2e028bc7e6e2",
+            "kind": "image",
+            "src": "/media/uploads/80688752-4e2c-4970-aadd-2f8c7c14b5cc.png",
+            "durationInFrames": 150,
+            "sourceContentHash": "35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae",
+            "sourceRevision": "source-sha256-35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae"
+          },
+          {
+            "id": "6702181c-05e5-42d7-bb6b-f835bdee98e8",
+            "kind": "image",
+            "src": "/media/uploads/5c396c71-711b-4e68-b187-4da6550536dc.png",
+            "durationInFrames": 150,
+            "sourceContentHash": "e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699",
+            "sourceRevision": "source-sha256-e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699"
+          },
+          {
+            "id": "902c16f0-42c3-4d1e-8ea3-32ae45c8c28b",
+            "kind": "audio",
+            "src": "/media/uploads/1ffddd63-50ca-40ad-b5b0-799dd69f7580.mp3",
+            "durationInFrames": 306,
+            "sourceRevision": "source-v1-0pvr7n6-o9y1rz"
+          },
+          {
+            "id": "8ca84f8d-3ece-411b-9ba8-a536d402841b",
+            "kind": "audio",
+            "src": "/media/uploads/53949b30-644e-4610-a5f1-6b6deff6ed98.mp3",
+            "durationInFrames": 206,
+            "sourceRevision": "source-v1--78nd67-rqhrxf"
+          },
+          {
+            "id": "115e87eb-8eb1-46d2-a765-7f0aea26c3f8",
+            "kind": "audio",
+            "src": "/media/uploads/ff6f0233-0d37-421a-ae3e-28e0c23c5b7a.mp3",
+            "durationInFrames": 188,
+            "sourceRevision": "source-v1--2pkmmk-pb9cj0"
+          },
+          {
+            "id": "7885fe85-a8db-429c-9ed1-087584ff6686",
+            "kind": "audio",
+            "src": "/media/uploads/f0bf4f7c-5f17-44eb-9dd9-74495e59dba6.mp3",
+            "durationInFrames": 180,
+            "sourceRevision": "source-v1--y4sxil0vvgo0z"
+          },
+          {
+            "id": "0a68345d-f661-4efe-9c4d-6b553872d595",
+            "kind": "audio",
+            "src": "/media/uploads/a60c873d-258f-4adb-b186-beeab7a998fe.mp3",
+            "durationInFrames": 343,
+            "sourceRevision": "source-v1--iae3kl0kgb1ko"
+          },
+          {
+            "id": "4e858d3d-4fe4-4799-a421-72c0377adb4f",
+            "kind": "audio",
+            "src": "/media/uploads/8c41d7ae-e784-4af0-9424-75a440a3db5c.mp3",
+            "durationInFrames": 228,
+            "sourceRevision": "source-v1-0i0cxmf01mt40t"
+          },
+          {
+            "id": "04fe8a2e-9353-4c47-b65c-c7676e02de53",
+            "kind": "image",
+            "src": "/media/uploads/717de221-dd49-4df1-b0ca-2b24e89ce0b5.jpg",
+            "durationInFrames": 150,
+            "sourceContentHash": "be2f479782cc02d4ebaddfced6b9d5fc6fb66d8ccc6a1721bb37620f821b2686",
+            "sourceRevision": "source-sha256-be2f479782cc02d4ebaddfced6b9d5fc6fb66d8ccc6a1721bb37620f821b2686"
+          },
+          {
+            "id": "42bd3234-38d3-4314-a24a-55615f95587e",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 2571,
+            "sourceRevision": "source-v1-07igzsy-nsktu9",
+            "props": {}
+          },
+          {
+            "id": "a8fa0fe8-b504-4333-870a-6418a089bf9e",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-a8fa0fe8-b504-4333-870a-6418a089bf9e.mp4",
+            "durationInFrames": 2571,
+            "sourceRevision": "source-v1-0nr69mw-ugsm84",
+            "props": {}
+          },
+          {
+            "id": "31319f33-5350-47fe-ba16-ba6ee2a78fc7",
+            "kind": "audio",
+            "src": "/media/uploads/17fadc40-84fb-4d63-861c-487121bba70c.mp3",
+            "durationInFrames": 319,
+            "sourceRevision": "source-v1--otde9y0cpjfoq"
+          },
+          {
+            "id": "3bdf88bb-c7cc-4f3d-8cf1-e07884ca1be6",
+            "kind": "audio",
+            "src": "/media/uploads/ff9c9d6c-c8c4-49a8-8440-94fa12f7e2bd.mp3",
+            "durationInFrames": 301,
+            "sourceRevision": "source-v1--41wsno-6aul5t"
+          },
+          {
+            "id": "258b9ac6-8f1b-4587-8c7d-95f49adaf55d",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 2568,
+            "sourceRevision": "source-v1--lsmbmu0ou8ssm",
+            "props": {}
+          },
+          {
+            "id": "a14a2209-1dba-4e9a-8fa6-b76ed44e90ab",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-a14a2209-1dba-4e9a-8fa6-b76ed44e90ab.mp4",
+            "durationInFrames": 2568,
+            "sourceRevision": "source-v1--r6yyrh-5tz6fz",
+            "props": {}
+          },
+          {
+            "id": "df52e6df-1554-4153-a6c8-a25e8e93f45e",
+            "kind": "audio",
+            "src": "/media/uploads/cbf1b7cc-fea2-4b25-aaef-cdbc20d01873.mp3",
+            "durationInFrames": 275,
+            "sourceRevision": "source-v1--tyvvhi-41mcfs",
+            "props": {
+              "generation": {
+                "provider": "minimax",
+                "voiceId": "Malay_female_1_v1",
+                "text": "Video ini mendapat 256 ribu tontonan, dengan 860 unit terjual. Jom tengok cara dia tunjukkan kelebihan produk ini.",
+                "speed": 1,
+                "durationSeconds": 9.171906
+              }
+            }
+          },
+          {
+            "id": "ea2cd91e-6e82-4307-8945-a7b3958e124c",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 2568,
+            "sourceRevision": "source-v1--dxyinw0scq96b",
+            "props": {}
+          },
+          {
+            "id": "8eae4845-a0fc-4463-a89a-badb4f1ac5a7",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 275,
+            "sourceRevision": "source-v1-0vkctey-nlkdfl",
+            "props": {}
+          },
+          {
+            "id": "1da34491-4718-40d8-b234-b9be38645d5b",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 228,
+            "sourceRevision": "source-v1--nozi3607f3zf2",
+            "props": {}
+          },
+          {
+            "id": "1cb341c2-d593-4fff-9d6c-5fb144500ae4",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-1cb341c2-d593-4fff-9d6c-5fb144500ae4.mp4",
+            "durationInFrames": 3071,
+            "sourceRevision": "source-v1-03ptl67-1m5ny1",
+            "props": {}
+          },
+          {
+            "id": "027576ff-f602-4d34-b80f-22bfe101ab07",
+            "kind": "image",
+            "src": "/media/uploads/9597377b-d4ec-4d81-97f2-73da262cf67a.jpg",
+            "durationInFrames": 150,
+            "sourceContentHash": "f76ff9feaa94ada7b2d5f2e8a29f3cb1aca89d6cf4f6df8d1bff341637485342",
+            "sourceRevision": "source-sha256-f76ff9feaa94ada7b2d5f2e8a29f3cb1aca89d6cf4f6df8d1bff341637485342"
+          },
+          {
+            "id": "20b5c688-870f-4f53-be7b-55d32b88d8a5",
+            "kind": "image",
+            "src": "/media/uploads/7202ff4d-943f-4075-a9da-866abbfb0f58.png",
+            "durationInFrames": 150,
+            "sourceContentHash": "a9c64fdc26b64f1602c91c0819be2f640237c79267c5d0b8715be83b1914deba",
+            "sourceRevision": "source-sha256-a9c64fdc26b64f1602c91c0819be2f640237c79267c5d0b8715be83b1914deba"
+          },
+          {
+            "id": "f7c1dc04-8864-4c96-ab86-34fecddd3e52",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 275,
+            "sourceRevision": "source-v1--91kffn0yiej8r",
+            "props": {}
+          },
+          {
+            "id": "b98cac26-ceea-416a-a8d4-2b2182e1fe2c",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 228,
+            "sourceRevision": "source-v1-0j4exao04xqu3m",
+            "props": {}
+          },
+          {
+            "id": "efa0b732-487a-4330-923a-34f99fc0da0b",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-efa0b732-487a-4330-923a-34f99fc0da0b.mp4",
+            "durationInFrames": 3071,
+            "sourceRevision": "source-v1--okkjjj0-f0zmx",
+            "props": {}
+          }
+        ],
+        "clipMentorAnalysis": {
+          "source": {
+            "asset_id": "d24aef47-f694-4a50-a639-42d80e25d75a",
+            "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+            "duration_seconds": 37.266667,
+            "fps": 30
+          },
+          "source_breakdown": {
+            "units": [
+              {
+                "unit_id": "BT-U01"
+              }
+            ]
+          }
+        }
+      },
+      "packet": {
+        "units": [
+          {
+            "unit_id": "BT-U01",
+            "points": [
+              {
+                "point_id": "BT-P01",
+                "question": "不用试穿，怎样让人直接看见面料有多薄？",
+                "buying_concern": "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。"
+              },
+              {
+                "point_id": "BT-P02",
+                "question": "看不到真实穿着时，怎样让柔软和弹性的说法有可观察的参照？",
+                "buying_concern": "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。"
+              },
+              {
+                "point_id": "BT-P03",
+                "question": "远景已经看见款式，为什么还需要拿近看做工？",
+                "buying_concern": "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。"
+              },
+              {
+                "point_id": "BT-P04",
+                "question": "原作者怎样用替换需要解释多件建议，并把换新提醒接到购买入口？",
+                "buying_concern": "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。"
+              },
+              {
+                "point_id": "BT-P05",
+                "question": "外观之外，怎样展示买家关心的内侧衬片？",
+                "buying_concern": "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "cooperating",
+      "source_sha256": "2b3a8a353830f8d9629afe6d47c85ff071ed8b508d378f76dd5ca1410e2e5a69",
+      "provenance": "cooperating-终态工程.json; only native timeline/assets and required teaching identity projected; no verdict or expected answer",
+      "doc": {
+        "version": 3,
+        "activeTimelineId": "tl_c48160f2-f931-4a57-ab64-087a98c7e2f8",
+        "timelines": [
+          {
+            "fps": 30,
+            "width": 576,
+            "height": 1024,
+            "items": [
+              {
+                "id": "item_d9797831-951c-4472-b84e-4e01e5543e63",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 322,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 0,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 275,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_53a4281b-8bda-4730-87be-fe8b91bd4a4b",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 306,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 0,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 597,
+                "transform": {
+                  "scale": 0.431,
+                  "x": 24.31,
+                  "y": -9.92
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_bb58cd8f-e482-4dbd-be22-9077ee883859",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 248,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 322,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 903,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_659ba52f-3c5a-4ce2-9509-0ed18ea70b75",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 319,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 309,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1151,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_565388ef-83a6-4f7f-9499-5e886030e53a",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 265,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 570,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1470,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_9455b037-84dc-4661-a10e-e9b91d96285d",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 99,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 210,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1735,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_82d1e1a1-5511-49d8-8eb6-f785676cce4e",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 202,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 630,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 1834,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_3634d354-2dc6-4759-b496-f7ffc9f95e7b",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 283,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 835,
+                "volume": 1,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2036,
+                "transform": {
+                  "scale": 0.951,
+                  "x": 0,
+                  "y": 2.25
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_e8d56375-9f5a-4d0b-a067-97bc1f75854a",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 111,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 834,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2319,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_3d3a5b1e-bd5d-461b-9d33-99ae33d10374",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 70,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 996,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2430,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_588a18d8-f1ec-4527-a858-3df4aac1deef",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 102,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 690,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2500,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_c2bdf9f0-a7d6-441c-8ced-67aaba0e777a",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 241,
+                "kind": "video",
+                "sourceAssetId": "d24aef47-f694-4a50-a639-42d80e25d75a",
+                "name": "爆款视频.mp4",
+                "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+                "srcInFrame": 877,
+                "volume": 0,
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2602,
+                "transform": {
+                  "scale": 0.667,
+                  "x": 0,
+                  "y": -6.51
+                },
+                "sourceFilename": "爆款视频.mp4",
+                "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+                "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+              },
+              {
+                "id": "item_ed472164-34e3-4e6d-b11f-839143367789",
+                "track": "track_v1",
+                "durationInFrames": 322,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 275
+              },
+              {
+                "id": "item_187580fe-fb34-4c7f-b841-757f5b0380dd",
+                "track": "track_v1",
+                "durationInFrames": 306,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 597
+              },
+              {
+                "id": "item_e876d4a4-ecbe-4bc1-bb52-0661970b716b",
+                "track": "track_v1",
+                "durationInFrames": 248,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 903
+              },
+              {
+                "id": "item_5b19da84-adf6-4d34-9790-b251a9737f09",
+                "track": "track_v1",
+                "durationInFrames": 319,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 1151
+              },
+              {
+                "id": "item_ed1af9d2-9d48-4e03-a0ca-d7536513cdba",
+                "track": "track_v1",
+                "durationInFrames": 265,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 1470
+              },
+              {
+                "id": "item_6532f04f-bdd7-426e-8bfa-348101fd7ba4",
+                "track": "track_v1",
+                "durationInFrames": 99,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 1735
+              },
+              {
+                "id": "item_1ea67c14-da5a-4118-b787-2e42dac1e712",
+                "track": "track_v1",
+                "durationInFrames": 202,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 1834
+              },
+              {
+                "id": "item_f4fe8857-1479-4e89-8b9d-b738790dee9f",
+                "track": "track_v1",
+                "durationInFrames": 283,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#111111"
+                },
+                "startFrame": 2036
+              },
+              {
+                "id": "item_c2c3c25f-8a1c-4483-9b5a-777264ee77b9",
+                "track": "track_v1",
+                "durationInFrames": 111,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2319
+              },
+              {
+                "id": "item_944b5b0b-f733-4c2e-8831-d543ee857fd0",
+                "track": "track_v1",
+                "durationInFrames": 70,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2430
+              },
+              {
+                "id": "item_c98d8ec2-2e04-4561-b234-89628c22c715",
+                "track": "track_v1",
+                "durationInFrames": 102,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2500
+              },
+              {
+                "id": "item_5cd59886-e4c8-421c-a378-fa30aa2d483c",
+                "track": "track_v1",
+                "durationInFrames": 241,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2602
+              },
+              {
+                "id": "item_8d31a343-0f2f-4ea0-b276-5b27fd624af4",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 306,
+                "kind": "audio",
+                "sourceAssetId": "902c16f0-42c3-4d1e-8ea3-32ae45c8c28b",
+                "name": "Barely There C1 BT-L01",
+                "src": "/media/uploads/1ffddd63-50ca-40ad-b5b0-799dd69f7580.mp3",
+                "volume": 1,
+                "startFrame": 597,
+                "sourceRevision": "source-v1-0pvr7n6-o9y1rz"
+              },
+              {
+                "id": "item_86f0ce1e-9384-421a-a5ba-b25ab80bdbd8",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 319,
+                "kind": "audio",
+                "sourceAssetId": "31319f33-5350-47fe-ba16-ba6ee2a78fc7",
+                "name": "Barely There four-group BT-L02 · recovered saved provider output",
+                "src": "/media/uploads/17fadc40-84fb-4d63-861c-487121bba70c.mp3",
+                "volume": 1,
+                "startFrame": 1151,
+                "sourceRevision": "source-v1--otde9y0cpjfoq"
+              },
+              {
+                "id": "item_5ea287eb-69f9-418a-aeff-c13cf85578e4",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 301,
+                "kind": "audio",
+                "sourceAssetId": "3bdf88bb-c7cc-4f3d-8cf1-e07884ca1be6",
+                "name": "Barely There four-group BT-L03",
+                "src": "/media/uploads/ff9c9d6c-c8c4-49a8-8440-94fa12f7e2bd.mp3",
+                "volume": 1,
+                "startFrame": 1735,
+                "sourceRevision": "source-v1--41wsno-6aul5t"
+              },
+              {
+                "id": "item_47978953-5ea3-4951-b526-e1c80a47125c",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 180,
+                "kind": "audio",
+                "sourceAssetId": "7885fe85-a8db-429c-9ed1-087584ff6686",
+                "name": "Barely There C1 BT-L04",
+                "src": "/media/uploads/f0bf4f7c-5f17-44eb-9dd9-74495e59dba6.mp3",
+                "volume": 1,
+                "startFrame": 2319,
+                "sourceRevision": "source-v1--y4sxil0vvgo0z"
+              },
+              {
+                "id": "item_a3fde5e7-d726-4279-9c79-7eead4bc1f4c",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 343,
+                "kind": "audio",
+                "sourceAssetId": "0a68345d-f661-4efe-9c4d-6b553872d595",
+                "name": "Barely There C1 BT-L06",
+                "src": "/media/uploads/a60c873d-258f-4adb-b186-beeab7a998fe.mp3",
+                "volume": 1,
+                "startFrame": 2500,
+                "sourceRevision": "source-v1--iae3kl0kgb1ko"
+              },
+              {
+                "id": "item_5d1dca25-2ae8-41a7-b649-1a79bafc6579",
+                "track": "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+                "durationInFrames": 2568,
+                "kind": "motion-graphic",
+                "templateId": "ea2cd91e-6e82-4307-8945-a7b3958e124c",
+                "sourceAssetId": "ea2cd91e-6e82-4307-8945-a7b3958e124c",
+                "name": "BT-C1 四组中段 · 蓝白原片阶段牌副本",
+                "code": "const Component = ({ item }) => {\nconst frame=useCurrentFrame(); const p=item.props;\nconst cards=JSON.parse(p.cards);const stages=JSON.parse(p.stages);const labels=JSON.parse(p.labels);\nconst card=cards.find(c=>frame>=c.start&&frame<c.end);\nconst stage=stages.find(c=>frame>=c.start&&frame<c.end);\nconst label=labels.find(c=>frame>=c.start&&frame<c.end);\nconst original=stage && stage.original;const ref=frame>=322&&frame<628;\nconst rootStyle={position:\"absolute\",inset:0,backgroundColor:\"transparent\",fontFamily:p.font};\nconst barStyle={position:\"absolute\",left:0,top:0,width:576,height:60,backgroundColor:original?\"#0D5EA6\":p.yellow,color:original?p.white:p.black,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",fontSize:24,fontWeight:original?700:400,textShadow:\"none\"};\nconst labelStyle={position:\"absolute\",left:24,top:64,width:528,height:36,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",fontSize:24,color:p.black};\nconst plateStyle={position:\"absolute\",left:0,top:800,width:576,height:224,backgroundColor:p.black};\nconst captionStyle={position:\"absolute\",left:24,top:824,width:528,height:168,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:28,lineHeight:\"38px\",whiteSpace:\"pre-wrap\",color:p.white,textShadow:\"none\"};\nconst refStyle={position:\"absolute\",left:24,top:270,width:256,height:199.111111,overflow:\"hidden\"};\nconst imgStyle={position:\"absolute\",left:-7.585185,top:-85.333333,width:273.066667,height:485.451852,maxWidth:\"none\"};\nreturn <div style={rootStyle}><div style={barStyle}>{stage?(original?\"VIDEO ASAL\":stage.text):\"\"}</div>{label&&<div style={labelStyle}>{label.text}</div>}{ref&&p.reference&&<div style={refStyle}><Img src={p.reference} style={imgStyle}/></div>}{!original&&<div style={plateStyle}/ >}{card&&<div style={captionStyle}>{card.text}</div>}</div>;\n};",
+                "props": {
+                  "__description": "冻结revision11；中文意思与重点保存在meaningsZh；分卡为语义页，未逐词听审。",
+                  "cards": "[{\"start\":322,\"end\":383,\"text\":\"Tengok semula pembukaannya.\",\"lineId\":\"BT-L01\"},{\"start\":383,\"end\":493,\"text\":\"Wajah masih nampak\\ndi sebalik kain,\\njadi penonton nampak\",\"lineId\":\"BT-L01\"},{\"start\":493,\"end\":628,\"text\":\"betapa nipisnya kain itu\\ntanpa perlu dipakai\\npada badan.\",\"lineId\":\"BT-L01\"},{\"start\":876,\"end\":1026,\"text\":\"Bila sebut lembut dan anjal,\\ndia ramas dan tarik kain.\",\"lineId\":\"BT-L02\"},{\"start\":1026,\"end\":1195,\"text\":\"Bila sebut kemasan,\\ndia dekatkan pada kamera\\nsupaya pembeli nampak jelas.\",\"lineId\":\"BT-L02\"},{\"start\":1460,\"end\":1559,\"text\":\"Dia tunjuk bentuknya dulu,\",\"lineId\":\"BT-L03\"},{\"start\":1559,\"end\":1668,\"text\":\"kemudian cadangkan tujuh helai\\nuntuk tukar pakai harian.\",\"lineId\":\"BT-L03\"},{\"start\":1668,\"end\":1761,\"text\":\"Pembeli tahu apa yang dibeli\\ndan kenapa beli lebih.\",\"lineId\":\"BT-L03\"},{\"start\":2044,\"end\":2155,\"text\":\"Dia buka bahagian dalam\\nsupaya pembeli boleh lihat\\npelapiknya,\",\"lineId\":\"BT-L04\"},{\"start\":2155,\"end\":2225,\"text\":\"bukan meneka daripada\\ngambar luar sahaja.\",\"lineId\":\"BT-L04\"},{\"start\":2225,\"end\":2327,\"text\":\"Dia ingatkan penonton\\nyang dah lama tak tukar,\",\"lineId\":\"BT-L06\"},{\"start\":2327,\"end\":2437,\"text\":\"kemudian ajak mereka\\nke beg kuning.\",\"lineId\":\"BT-L06\"},{\"start\":2437,\"end\":2568,\"text\":\"Peringatan tadi jadi sebab\\nuntuk membeli.\",\"lineId\":\"BT-L06\"}]",
+                  "stages": "[{\"start\":0,\"end\":322,\"text\":\"Video asal\",\"original\":true},{\"start\":322,\"end\":628,\"text\":\"Ulasan semula · Kain\",\"original\":false},{\"start\":628,\"end\":876,\"text\":\"Video asal\",\"original\":true},{\"start\":876,\"end\":1195,\"text\":\"Ulasan semula · Kain\",\"original\":false},{\"start\":1195,\"end\":1460,\"text\":\"Video asal\",\"original\":true},{\"start\":1460,\"end\":1559,\"text\":\"Ulasan semula · Tukar pakai\",\"original\":false},{\"start\":1559,\"end\":1761,\"text\":\"Ulasan semula · Tukar pakai\",\"original\":false},{\"start\":1761,\"end\":2044,\"text\":\"Video asal\",\"original\":true},{\"start\":2044,\"end\":2155,\"text\":\"Ulasan semula · Pelapik\",\"original\":false},{\"start\":2155,\"end\":2225,\"text\":\"Ulasan semula · Pelapik\",\"original\":false},{\"start\":2225,\"end\":2327,\"text\":\"Ulasan semula · Ajakan membeli\",\"original\":false},{\"start\":2327,\"end\":2568,\"text\":\"Ulasan semula · Ajakan membeli\",\"original\":false}]",
+                  "labels": "[{\"start\":322,\"end\":628,\"text\":\"Kain nipis\"},{\"start\":876,\"end\":1026,\"text\":\"Lembut & anjal\"},{\"start\":1026,\"end\":1195,\"text\":\"Kemasan dari dekat\"},{\"start\":1460,\"end\":1761,\"text\":\"Tukar pakai harian\"},{\"start\":2044,\"end\":2225,\"text\":\"Pelapik bahagian dalam\"},{\"start\":2225,\"end\":2568,\"text\":\"Ingatkan tukar, ajak beli\"}]",
+                  "meaningsZh": "[{\"id\":\"BT-L01\",\"zh\":\"回看开头。隔着布料还能看到她的脸，不用穿上身，观众也能直观看出面料有多薄。\",\"point_ids\":[\"BT-P01\"]},{\"id\":\"BT-L02\",\"zh\":\"说到柔软和弹性，她就揉拢、拉开面料；说到做工，就拿近镜头，让买家看清楚。\",\"point_ids\":[\"BT-P02\",\"BT-P03\"]},{\"id\":\"BT-L03\",\"zh\":\"她先展示版型，再建议买七件用于日常替换。买家既知道买的是什么，也明白为什么多买几件。\",\"point_ids\":[\"BT-P04\"]},{\"id\":\"BT-L04\",\"zh\":\"她翻开里面，让买家直接看清内侧衬片，不用只凭外观去猜。\",\"point_ids\":[\"BT-P05\"]},{\"id\":\"BT-L06\",\"zh\":\"她先提醒很久没换新的观众，再邀请他们去黄色购物袋。前面的换新提醒，给后面的购买邀请提供了理由。\",\"point_ids\":[\"BT-P04\"]}]",
+                  "font": "Noto Sans",
+                  "black": "#111111",
+                  "white": "#FFFFFF",
+                  "yellow": "#FFD83D",
+                  "reference": "/media/uploads/717de221-dd49-4df1-b0ca-2b24e89ce0b5.jpg"
+                },
+                "width": 576,
+                "height": 1024,
+                "startFrame": 275,
+                "sourceRevision": "source-v1--dxyinw0scq96b"
+              },
+              {
+                "id": "item_e0c70e6f-2041-4e79-877a-1434ef844966",
+                "track": "track_v1",
+                "durationInFrames": 275,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 0
+              },
+              {
+                "id": "item_9c1a84fc-db37-4972-8e02-a71403cd7a74",
+                "track": "track_v1",
+                "durationInFrames": 159,
+                "kind": "solid",
+                "name": "纯色",
+                "width": 1920,
+                "height": 1080,
+                "props": {
+                  "color": "#F7F8FA"
+                },
+                "startFrame": 2843
+              },
+              {
+                "id": "item_f5798eed-150c-4fe3-9de1-3030b9c7ccbc",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 275,
+                "kind": "image",
+                "sourceAssetId": "6702181c-05e5-42d7-bb6b-f835bdee98e8",
+                "name": "产品销量.png",
+                "src": "/media/uploads/5c396c71-711b-4e68-b187-4da6550536dc.png",
+                "width": 1006,
+                "height": 234,
+                "startFrame": 0,
+                "sourceFilename": "产品销量.png",
+                "sourceContentHash": "e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699",
+                "sourceRevision": "source-sha256-e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699"
+              },
+              {
+                "id": "item_fb1ae8a9-f0e7-4db2-8add-04a8fcb99320",
+                "track": "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+                "durationInFrames": 159,
+                "kind": "image",
+                "sourceAssetId": "bd2d58ba-3b9a-471a-81b0-2e028bc7e6e2",
+                "name": "产品图.png",
+                "src": "/media/uploads/80688752-4e2c-4970-aadd-2f8c7c14b5cc.png",
+                "width": 1587,
+                "height": 2003,
+                "startFrame": 2843,
+                "transform": {
+                  "crop": {
+                    "left": 0.2725694444444444,
+                    "top": 0.3408203125,
+                    "right": 0.4756944444444444,
+                    "bottom": 0.5322265625
+                  }
+                },
+                "sourceFilename": "产品图.png",
+                "sourceContentHash": "35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae",
+                "sourceRevision": "source-sha256-35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae"
+              },
+              {
+                "id": "item_9adb89bc-9b3f-48b4-ac06-eb6911e8d5c9",
+                "track": "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+                "durationInFrames": 275,
+                "kind": "motion-graphic",
+                "templateId": "8eae4845-a0fc-4463-a89a-badb4f1ac5a7",
+                "sourceAssetId": "8eae4845-a0fc-4463-a89a-badb4f1ac5a7",
+                "name": "BT 成绩片头 · 同文分卡",
+                "code": "const Component=({item})=>{const f=useCurrentFrame();const p=item.props;const c=JSON.parse(p.cards).find(c=>f>=c.start&&f<c.end);return <div style={{position:\"absolute\",inset:0,fontFamily:\"Noto Sans\",color:\"#FFFFFF\",textShadow:\"none\"}}><div style={{position:\"absolute\",top:100,left:24,width:528,textAlign:\"center\",fontSize:32,fontWeight:700,color:\"#111111\"}}>Prestasi video ini</div><div style={{position:\"absolute\",left:0,top:800,width:576,height:224,backgroundColor:\"#111111\"}}/>{c&&<div style={{position:\"absolute\",left:24,top:824,width:528,height:168,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:28,lineHeight:\"38px\",whiteSpace:\"pre-wrap\"}}>{c.text}</div>}</div>;};",
+                "props": {
+                  "cards": "[{\"start\":0,\"end\":157,\"text\":\"Video ini mendapat 256 ribu tontonan,\\ndengan 860 unit terjual.\",\"lineId\":\"BT-L00\"},{\"start\":157,\"end\":275,\"text\":\"Jom tengok cara dia tunjukkan\\nkelebihan produk ini.\",\"lineId\":\"BT-L00\"}]"
+                },
+                "width": 576,
+                "height": 1024,
+                "startFrame": 0,
+                "sourceRevision": "source-v1-0vkctey-nlkdfl"
+              },
+              {
+                "id": "item_1ba31d0e-04c5-4faf-9ed0-1b148500c252",
+                "track": "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+                "durationInFrames": 159,
+                "kind": "motion-graphic",
+                "templateId": "40490713-38b6-47be-b1c6-434aef60cd26",
+                "sourceAssetId": "40490713-38b6-47be-b1c6-434aef60cd26",
+                "name": "BT 已合作达人结尾 · 同文分卡",
+                "code": "const Component=({item})=>{const f=useCurrentFrame();const p=item.props;const c=JSON.parse(p.cards).find(c=>f>=c.start&&f<c.end);const rootStyle={position:\"absolute\",inset:0,fontFamily:p.font,color:p.white,textShadow:\"none\"};const plate={position:\"absolute\",left:0,top:800,width:576,height:224,backgroundColor:p.black};const caption={position:\"absolute\",left:24,top:824,width:528,height:168,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",textAlign:\"center\",fontSize:28,lineHeight:\"38px\",whiteSpace:\"pre-wrap\"};return <div style={rootStyle}><div style={plate}/>{c&&<div style={caption}>{c.text}</div>}</div>;};",
+                "props": {
+                  "cards": "[{\"start\":0,\"end\":48,\"text\":\"Bila produk dah ada,\",\"lineId\":\"BT-L05\"},{\"start\":48,\"end\":124,\"text\":\"boleh mula rakam dengan gaya anda sendiri,\",\"lineId\":\"BT-L05\"},{\"start\":124,\"end\":159,\"text\":\"berpandukan contoh tadi.\",\"lineId\":\"BT-L05\"}]",
+                  "font": "Noto Sans",
+                  "white": "#FFFFFF",
+                  "black": "#111111"
+                },
+                "width": 576,
+                "height": 1024,
+                "startFrame": 2843,
+                "sourceRevision": "source-v1-0nf67db00fdz4r"
+              },
+              {
+                "id": "item_034d51d4-967b-42a1-bf33-490ec07c9039",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 275,
+                "kind": "audio",
+                "sourceAssetId": "df52e6df-1554-4153-a6c8-a25e8e93f45e",
+                "name": "Barely There · 共同成绩片头",
+                "src": "/media/uploads/cbf1b7cc-fea2-4b25-aaef-cdbc20d01873.mp3",
+                "volume": 1,
+                "startFrame": 0,
+                "sourceRevision": "source-v1--tyvvhi-41mcfs"
+              },
+              {
+                "id": "item_9cf90629-ffcd-4e91-91a2-fe7af7d69125",
+                "track": "track_c4681d0a-8b6b-4303-a7be-629272766090",
+                "durationInFrames": 158,
+                "kind": "audio",
+                "sourceAssetId": "216e46e6-88ca-436f-8bf2-634838c7f4e1",
+                "name": "Barely There C1 BT-L05-cooperating",
+                "src": "/media/uploads/2a1a5ee6-4aed-4167-be1d-f92d7518d60e.mp3",
+                "volume": 1,
+                "startFrame": 2843,
+                "sourceRevision": "source-v1-0oa407q-km9gaf"
+              }
+            ],
+            "selectedId": "item_9cf90629-ffcd-4e91-91a2-fe7af7d69125",
+            "trackOrder": [
+              "track_95766a88-c7c6-4c2b-a284-af13b16def66",
+              "track_4732c1aa-b4b1-4778-969d-8d37af227faf",
+              "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519",
+              "track_v1",
+              "track_c4681d0a-8b6b-4303-a7be-629272766090"
+            ],
+            "tracks": {
+              "track_v1": {
+                "kind": "video"
+              },
+              "track_e6fcfdd4-f56d-4f32-9cb1-2efefa232519": {
+                "kind": "video"
+              },
+              "track_4732c1aa-b4b1-4778-969d-8d37af227faf": {
+                "kind": "video"
+              },
+              "track_c4681d0a-8b6b-4303-a7be-629272766090": {
+                "kind": "audio"
+              },
+              "track_95766a88-c7c6-4c2b-a284-af13b16def66": {
+                "kind": "video"
+              }
+            },
+            "id": "tl_c48160f2-f931-4a57-ab64-087a98c7e2f8",
+            "name": "序列 1",
+            "order": 0,
+            "selectedIds": [
+              "item_9cf90629-ffcd-4e91-91a2-fe7af7d69125"
+            ],
+            "transitions": []
+          }
+        ],
+        "assets": [
+          {
+            "id": "d24aef47-f694-4a50-a639-42d80e25d75a",
+            "kind": "video",
+            "src": "/media/uploads/87d7f13c-3dd8-4910-bc28-8b62f0485441.mp4",
+            "durationInFrames": 1118,
+            "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+            "sourceRevision": "source-sha256-88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab"
+          },
+          {
+            "id": "bd2d58ba-3b9a-471a-81b0-2e028bc7e6e2",
+            "kind": "image",
+            "src": "/media/uploads/80688752-4e2c-4970-aadd-2f8c7c14b5cc.png",
+            "durationInFrames": 150,
+            "sourceContentHash": "35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae",
+            "sourceRevision": "source-sha256-35f97eae442ac880286652e54dd34743b55a7a9e0334a1cf5dc92992c4eaccae"
+          },
+          {
+            "id": "6702181c-05e5-42d7-bb6b-f835bdee98e8",
+            "kind": "image",
+            "src": "/media/uploads/5c396c71-711b-4e68-b187-4da6550536dc.png",
+            "durationInFrames": 150,
+            "sourceContentHash": "e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699",
+            "sourceRevision": "source-sha256-e3848de31aec20da75bd9fbab76277cfe07c9eb26db74e450869d33b254b3699"
+          },
+          {
+            "id": "902c16f0-42c3-4d1e-8ea3-32ae45c8c28b",
+            "kind": "audio",
+            "src": "/media/uploads/1ffddd63-50ca-40ad-b5b0-799dd69f7580.mp3",
+            "durationInFrames": 306,
+            "sourceRevision": "source-v1-0pvr7n6-o9y1rz"
+          },
+          {
+            "id": "8ca84f8d-3ece-411b-9ba8-a536d402841b",
+            "kind": "audio",
+            "src": "/media/uploads/53949b30-644e-4610-a5f1-6b6deff6ed98.mp3",
+            "durationInFrames": 206,
+            "sourceRevision": "source-v1--78nd67-rqhrxf"
+          },
+          {
+            "id": "115e87eb-8eb1-46d2-a765-7f0aea26c3f8",
+            "kind": "audio",
+            "src": "/media/uploads/ff6f0233-0d37-421a-ae3e-28e0c23c5b7a.mp3",
+            "durationInFrames": 188,
+            "sourceRevision": "source-v1--2pkmmk-pb9cj0"
+          },
+          {
+            "id": "7885fe85-a8db-429c-9ed1-087584ff6686",
+            "kind": "audio",
+            "src": "/media/uploads/f0bf4f7c-5f17-44eb-9dd9-74495e59dba6.mp3",
+            "durationInFrames": 180,
+            "sourceRevision": "source-v1--y4sxil0vvgo0z"
+          },
+          {
+            "id": "0a68345d-f661-4efe-9c4d-6b553872d595",
+            "kind": "audio",
+            "src": "/media/uploads/a60c873d-258f-4adb-b186-beeab7a998fe.mp3",
+            "durationInFrames": 343,
+            "sourceRevision": "source-v1--iae3kl0kgb1ko"
+          },
+          {
+            "id": "4e858d3d-4fe4-4799-a421-72c0377adb4f",
+            "kind": "audio",
+            "src": "/media/uploads/8c41d7ae-e784-4af0-9424-75a440a3db5c.mp3",
+            "durationInFrames": 228,
+            "sourceRevision": "source-v1-0i0cxmf01mt40t"
+          },
+          {
+            "id": "04fe8a2e-9353-4c47-b65c-c7676e02de53",
+            "kind": "image",
+            "src": "/media/uploads/717de221-dd49-4df1-b0ca-2b24e89ce0b5.jpg",
+            "durationInFrames": 150,
+            "sourceContentHash": "be2f479782cc02d4ebaddfced6b9d5fc6fb66d8ccc6a1721bb37620f821b2686",
+            "sourceRevision": "source-sha256-be2f479782cc02d4ebaddfced6b9d5fc6fb66d8ccc6a1721bb37620f821b2686"
+          },
+          {
+            "id": "42bd3234-38d3-4314-a24a-55615f95587e",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 2571,
+            "sourceRevision": "source-v1-07igzsy-nsktu9",
+            "props": {}
+          },
+          {
+            "id": "a8fa0fe8-b504-4333-870a-6418a089bf9e",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-a8fa0fe8-b504-4333-870a-6418a089bf9e.mp4",
+            "durationInFrames": 2571,
+            "sourceRevision": "source-v1-0nr69mw-ugsm84",
+            "props": {}
+          },
+          {
+            "id": "31319f33-5350-47fe-ba16-ba6ee2a78fc7",
+            "kind": "audio",
+            "src": "/media/uploads/17fadc40-84fb-4d63-861c-487121bba70c.mp3",
+            "durationInFrames": 319,
+            "sourceRevision": "source-v1--otde9y0cpjfoq"
+          },
+          {
+            "id": "3bdf88bb-c7cc-4f3d-8cf1-e07884ca1be6",
+            "kind": "audio",
+            "src": "/media/uploads/ff9c9d6c-c8c4-49a8-8440-94fa12f7e2bd.mp3",
+            "durationInFrames": 301,
+            "sourceRevision": "source-v1--41wsno-6aul5t"
+          },
+          {
+            "id": "258b9ac6-8f1b-4587-8c7d-95f49adaf55d",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 2568,
+            "sourceRevision": "source-v1--lsmbmu0ou8ssm",
+            "props": {}
+          },
+          {
+            "id": "a14a2209-1dba-4e9a-8fa6-b76ed44e90ab",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-a14a2209-1dba-4e9a-8fa6-b76ed44e90ab.mp4",
+            "durationInFrames": 2568,
+            "sourceRevision": "source-v1--r6yyrh-5tz6fz",
+            "props": {}
+          },
+          {
+            "id": "216e46e6-88ca-436f-8bf2-634838c7f4e1",
+            "kind": "audio",
+            "src": "/media/uploads/2a1a5ee6-4aed-4167-be1d-f92d7518d60e.mp3",
+            "durationInFrames": 158,
+            "sourceRevision": "source-v1-0oa407q-km9gaf"
+          },
+          {
+            "id": "df52e6df-1554-4153-a6c8-a25e8e93f45e",
+            "kind": "audio",
+            "src": "/media/uploads/cbf1b7cc-fea2-4b25-aaef-cdbc20d01873.mp3",
+            "durationInFrames": 275,
+            "sourceRevision": "source-v1--tyvvhi-41mcfs",
+            "props": {
+              "generation": {
+                "provider": "minimax",
+                "voiceId": "Malay_female_1_v1",
+                "text": "Video ini mendapat 256 ribu tontonan, dengan 860 unit terjual. Jom tengok cara dia tunjukkan kelebihan produk ini.",
+                "speed": 1,
+                "durationSeconds": 9.171906
+              }
+            }
+          },
+          {
+            "id": "ea2cd91e-6e82-4307-8945-a7b3958e124c",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 2568,
+            "sourceRevision": "source-v1--dxyinw0scq96b",
+            "props": {}
+          },
+          {
+            "id": "8eae4845-a0fc-4463-a89a-badb4f1ac5a7",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 275,
+            "sourceRevision": "source-v1-0vkctey-nlkdfl",
+            "props": {}
+          },
+          {
+            "id": "40490713-38b6-47be-b1c6-434aef60cd26",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 159,
+            "sourceRevision": "source-v1-0nf67db00fdz4r",
+            "props": {}
+          },
+          {
+            "id": "ca19cca7-5e10-438c-a836-12061b10eb30",
+            "kind": "video",
+            "src": "/media/uploads/openchatcut-derived-ca19cca7-5e10-438c-a836-12061b10eb30.mp4",
+            "durationInFrames": 3002,
+            "sourceRevision": "source-v1-0ku5hs60mlz7oh",
+            "props": {}
+          },
+          {
+            "id": "d2f63696-f7fa-4437-9833-1144d538d3aa",
+            "kind": "image",
+            "src": "/media/uploads/40158016-0687-4b04-b2a1-82318c40a98f.jpg",
+            "durationInFrames": 150,
+            "sourceContentHash": "f76ff9feaa94ada7b2d5f2e8a29f3cb1aca89d6cf4f6df8d1bff341637485342",
+            "sourceRevision": "source-sha256-f76ff9feaa94ada7b2d5f2e8a29f3cb1aca89d6cf4f6df8d1bff341637485342"
+          },
+          {
+            "id": "8cb9c2fc-89db-4403-a506-330b6389133f",
+            "kind": "image",
+            "src": "/media/uploads/5bd8b210-0efb-448a-81d1-f6233f72040a.png",
+            "durationInFrames": 150,
+            "sourceContentHash": "a9c64fdc26b64f1602c91c0819be2f640237c79267c5d0b8715be83b1914deba",
+            "sourceRevision": "source-sha256-a9c64fdc26b64f1602c91c0819be2f640237c79267c5d0b8715be83b1914deba"
+          },
+          {
+            "id": "5d56f240-5cff-4510-a246-0f66aefc6c0d",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 275,
+            "sourceRevision": "source-v1--43glux02sbsaw",
+            "props": {}
+          },
+          {
+            "id": "57c490ff-c4f9-4ada-ab9e-a3c4161315dd",
+            "kind": "motion-graphic",
+            "src": "",
+            "durationInFrames": 159,
+            "sourceRevision": "source-v1--wxbjo10tjhzdf",
+            "props": {}
+          }
+        ],
+        "clipMentorAnalysis": {
+          "source": {
+            "asset_id": "d24aef47-f694-4a50-a639-42d80e25d75a",
+            "sourceContentHash": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+            "duration_seconds": 37.266667,
+            "fps": 30
+          },
+          "source_breakdown": {
+            "units": [
+              {
+                "unit_id": "BT-U01"
+              }
+            ]
+          }
+        }
+      },
+      "packet": {
+        "units": [
+          {
+            "unit_id": "BT-U01",
+            "points": [
+              {
+                "point_id": "BT-P01",
+                "question": "不用试穿，怎样让人直接看见面料有多薄？",
+                "buying_concern": "买家关注轻薄；脸在布料后仍可见，把薄变成有参照的画面。"
+              },
+              {
+                "point_id": "BT-P02",
+                "question": "看不到真实穿着时，怎样让柔软和弹性的说法有可观察的参照？",
+                "buying_concern": "买家关注柔软、弹性；拉开到揉拢把口头触感变成可想象的演示。"
+              },
+              {
+                "point_id": "BT-P03",
+                "question": "远景已经看见款式，为什么还需要拿近看做工？",
+                "buying_concern": "买家想查看做工；靠近镜头让腰边和侧边细节更容易看清。"
+              },
+              {
+                "point_id": "BT-P04",
+                "question": "原作者怎样用替换需要解释多件建议，并把换新提醒接到购买入口？",
+                "buying_concern": "用日常替换解释多件购买，再承接原片促单；我们的结尾另对创作者发出尝试邀请。"
+              },
+              {
+                "point_id": "BT-P05",
+                "question": "外观之外，怎样展示买家关心的内侧衬片？",
+                "buying_concern": "买家还想看里面；翻开内侧补充外观镜头看不到的衬片细节。"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { projectToolResultForPersistence } from '../../src/agent/runtime-artifact';
 import type { AgentRunEvent } from '../../src/persist/agentRuntimeStore';
-import { MAX_SERVER_EVENT_BYTES, type ServerRunEvent } from './store-types';
+import { MAX_SERVER_EVENT_BYTES, MAX_SERVER_TOOL_REQUEST_EVENT_BYTES, type ServerRunEvent } from './store-types';
 
 export function stableValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value == null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -66,10 +66,16 @@ export function eventBytes(event: ServerRunEvent): number {
   return Buffer.byteLength(JSON.stringify(stableValue(event)));
 }
 
-function durableEventData(value: unknown): unknown {
+/** Tool request admission and cold persistence must use the same byte budget. */
+export function serverEventMaxBytes(type: string): number {
+  return type === 'tool-request' || type === 'server-tool-request'
+    ? MAX_SERVER_TOOL_REQUEST_EVENT_BYTES : MAX_SERVER_EVENT_BYTES;
+}
+
+function durableEventData(value: unknown, maxBytes: number): unknown {
   const projected = projectToolResultForPersistence(value);
   const encoded = JSON.stringify(projected);
-  return typeof encoded === 'string' && Buffer.byteLength(encoded) <= MAX_SERVER_EVENT_BYTES
+  return typeof encoded === 'string' && Buffer.byteLength(encoded) <= maxBytes
     ? projected
     : { omitted: true, digest: digestValue(value) };
 }
@@ -79,19 +85,21 @@ export function runtimeEvent(
 ): Omit<AgentRunEvent, 'eventId' | 'projectId' | 'runId' | 'sequence' | 'createdAt'> {
   const raw = stableValue(event.data);
   const fields = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  const type: AgentRunEvent['type'] = event.type === 'tool-request'
+  const type: AgentRunEvent['type'] = (event.type === 'tool-request' || event.type === 'server-tool-request')
     ? 'tool_requested'
-    : event.type === 'tool-result'
+    : (event.type === 'tool-result' || event.type === 'server-tool-result')
       ? 'tool_outcome'
       : 'final';
-  const error = typeof fields.error === 'string' ? fields.error : undefined;
+  const unknown = event.type === 'server-tool-result' && fields.outcome && typeof fields.outcome === 'object'
+    && (fields.outcome as {kind?:unknown}).kind === 'outcome_unknown';
+  const error = typeof fields.error === 'string' ? fields.error : fields.success === false ? 'Tool returned an unsuccessful result' : undefined;
   return {
     type,
     summary: JSON.stringify({
       serverEvent: {
         id: event.id,
         type: event.type,
-        data: durableEventData(raw),
+        data: durableEventData(raw, serverEventMaxBytes(event.type)),
         at: event.at,
       },
     }),
@@ -99,11 +107,12 @@ export function runtimeEvent(
     ...(typeof fields.name === 'string' ? { toolName: fields.name } : {}),
     ...(typeof fields.toolName === 'string' ? { toolName: fields.toolName } : {}),
     ...(typeof fields.argsDigest === 'string' ? { argsDigest: fields.argsDigest } : {}),
-    ...(event.type === 'tool-result'
+    ...((event.type === 'tool-result' || event.type === 'server-tool-result')
       ? {
-          resultDigest: digestValue(error === undefined ? fields.result : { error }),
+          resultDigest: digestValue(fields.error === undefined ? fields.result : { error: fields.error }),
           outcome: {
-            kind: error === undefined ? 'success' as const : 'terminal_failure' as const,
+            kind: unknown ? 'outcome_unknown' as const : error === undefined ? 'success' as const : 'terminal_failure' as const,
+            ...(unknown && typeof fields.toolCallId === 'string' ? {operationId: fields.toolCallId} : {}),
             ...(error ? { summary: error } : {}),
           },
         }

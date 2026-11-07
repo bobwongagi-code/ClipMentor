@@ -124,6 +124,18 @@ const phaseRequest = () => buildCopyTeachingReviewRequest([{ case_id: 'group-pro
 const phaseProjection = phaseRequest().input.cases[0].packet.units[0].picture_plan!;
 assert.deepEqual(phaseProjection.execution_plan!.content, phaseUnit.picture_plan.execution_plan!.content);
 assert.deepEqual(phaseProjection.registered_revisits, phaseUnit.picture_plan.registered_revisits);
+phaseUnit.picture_plan.execution_plan!.content.composition={
+ detail:'Fixture layout',
+ caption_policy:'One semantic phrase per card',
+ comparison_detail:'Crop only the hand without assigning product numbers',
+ author_note:'Keep this reasoning out',
+};
+assert.deepEqual(phaseRequest().input.cases[0].packet.units[0].picture_plan!.execution_plan!.content.composition,{
+ detail:'Fixture layout',
+ caption_policy:'One semantic phrase per card',
+ comparison_detail:'Crop only the hand without assigning product numbers',
+});
+delete phaseUnit.picture_plan.execution_plan!.content.composition;
 // Metadata must still be stripped; retaining operational data must not leak author judgments.
 Object.assign((phaseUnit.picture_plan.execution_plan!.content.phases as any[])[0], { self_review: 'AUTHOR_PHASE_VERDICT' });
 assert(!JSON.stringify(phaseRequest()).includes('AUTHOR_PHASE_VERDICT'));

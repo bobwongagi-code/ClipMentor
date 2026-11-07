@@ -9,6 +9,8 @@ import {sourceSpeech,translatedLabels,unitUnknowns} from './blueprint-review-boa
 import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest} from '../../src/clipmentor/production-gate';
 import {isClipMentorAnalysis} from '../../src/clipmentor/analysis';
 import {deliverySectionsShape} from '../../src/clipmentor/delivery-bindings';
+import {deliveryTimeline} from '../../src/clipmentor/delivery-sections';
+import {panelDeliveryIssues,panelStoryboardTimes,panelSalesEvidence} from './production-panel-delivery';
 import type {ProjectDoc} from '../../src/editor/types';
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex'),clone=structuredClone;
 let network=0;const fetchBefore=globalThis.fetch;globalThis.fetch=async()=>{network++;throw Error('Network forbidden');};
@@ -21,6 +23,104 @@ try{
  const scoped=(value:unknown,bindings:ProjectDoc[])=>planReviewBoards({value,bindings,sha256:'a'.repeat(64),hashMode:'file',assertUnchanged:async()=>{}});
  const endings=(doc:ProjectDoc)=>{const ir=(doc.clipMentorAnalysis!.blueprint[0] as any).internal_review;return ir[ir.current_picture_plan].delivery_sections as any[];};
  const ending=(doc:ProjectDoc)=>endings(doc).find(s=>s.kind==='creator_invitation')!;
+ await test('Panel binds one product opening and two distinct audience endings before review',async()=>{
+  const doc=clone(materials[0]), sections=endings(doc);
+  const opening=sections.find(s=>s.kind==='performance_opening');
+  const newContact=ending(doc);newContact.section_id='new_contact';
+  const partner=clone(ending(materials[1]));partner.section_id='existing_partner';
+  const storySource=doc.clipMentorAnalysis!.source;
+  const hash='a'.repeat(64),storyId=`clipmentor-storyboard-${hash}`,storySrc=`/media/uploads/${storyId}.jpg`;
+  doc.assets.push({id:storyId,name:'Original storyboard',kind:'image',src:storySrc,sourceContentHash:hash,
+   width:960,height:632,durationInFrames:1,props:{clipmentorStoryboardSource:storySource.asset_id,clipmentorStoryboardHash:storySource.sourceContentHash,clipmentorStoryboardTimes:panelStoryboardTimes(doc)}});
+  partner.picture={asset_id:storyId,src:storySrc,sha256:hash,description:'Storyboard from the current video'};
+  const evidence=doc.clipMentorAnalysis!.evidence.find(e=>e.kind==='operator_supplied'&&e.source_ids.includes(newContact.picture.asset_id))!;
+  assert(evidence);
+  evidence.source_ids.push(storyId);
+  partner.evidence_ids=[evidence.evidence_id];delete partner.evidence;
+  sections.push(partner);
+  const scope={productAssetId:opening.picture.asset_id,productAssetHash:opening.picture.sha256,salesAssetId:'unconfirmed-sales-image',
+   ctaAssetId:newContact.picture.asset_id,ctaAssetHash:newContact.picture.sha256};
+  assert(deliverySectionsShape(sections));assert.deepEqual(panelDeliveryIssues(doc,scope),[]);
+  assert(panelDeliveryIssues(doc,{...scope,audience:'new_contact'}).includes('delivery_audience_scope_mismatch'));
+  for(const audience of ['new_contact','existing_partner'] as const){
+   const one=clone(doc),onePlan=(one.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+   onePlan[onePlan.current_picture_plan].delivery_sections=endings(one).filter(s=>s.kind==='performance_opening'||s.section_id===audience);
+   assert.deepEqual(panelDeliveryIssues(one,{...scope,audience}),[],'one selected ending retains its own validation');
+  }
+  const layered={...scope,bookends:'layered-v1' as const};
+  assert.deepEqual(panelDeliveryIssues(doc,layered),['opening_original_underlay_missing','new_contact_product_commission_composition_missing']);
+  const composed=clone(doc),[composedOpen,composedNew]=endings(composed);
+  const originalAsset=composed.assets.find(a=>a.id===storySource.asset_id)!;
+  delete composedOpen.picture.crop;delete composedNew.picture.crop;
+  composedOpen.picture.layout={kind:'original_underlay',source:{asset_id:originalAsset.id,src:originalAsset.src,sha256:originalAsset.sourceContentHash},
+   range:[0,8],shade:0.63,show_sales:false,headline:[],transition:['Produk yang sama?','Jom tengok.']};
+  composedNew.picture.layout={kind:'product_commission',product_crop:{left:0,top:0,right:0,bottom:0.55},
+   commission_crop:{left:0,top:0.62,right:0,bottom:0.12}};
+  assert.deepEqual(panelDeliveryIssues(composed,layered),[]);
+  const originalPoster=clone(composed),posterSection=endings(originalPoster)[1];
+  posterSection.picture.layout={kind:'recruitment_card',poster:{asset_id:posterSection.picture.asset_id,src:posterSection.picture.src,sha256:posterSection.picture.sha256}};
+  assert.deepEqual(panelDeliveryIssues(originalPoster,layered),[]);
+  const substituted=clone(originalPoster),substitutedSection=endings(substituted)[1];
+  const substitute={...clone(substituted.assets.find(a=>a.id===substitutedSection.picture.asset_id)!),
+   id:'self-made-card',src:'/media/uploads/self-made-card.png',sourceContentHash:'c'.repeat(64),width:720,height:1280};
+  substituted.assets.push(substitute);
+  Object.assign(substitutedSection.picture,{asset_id:substitute.id,src:substitute.src,sha256:substitute.sourceContentHash});
+  for(const evidence of substituted.clipMentorAnalysis!.evidence)if(substitutedSection.evidence_ids.includes(evidence.evidence_id))evidence.source_ids.push(substitute.id);
+  assert(panelDeliveryIssues(substituted,layered).includes('new_contact_cta_image'),'linking the original poster behind a replacement cannot satisfy use of the supplied CTA');
+  const confirmed=clone(composed),confirmedOpen=endings(confirmed)[0];
+  const sales=panelSalesEvidence(storySource.asset_id,scope.productAssetId);
+  assert.deepEqual(sales.source_ids,[storySource.asset_id,scope.productAssetId]);
+  assert.equal(sales.evidence_id,panelSalesEvidence(storySource.asset_id,scope.productAssetId).evidence_id);
+  assert.notEqual(sales.evidence_id,panelSalesEvidence('another-source',scope.productAssetId).evidence_id);
+  confirmed.clipMentorAnalysis!.evidence.push(sales);
+  confirmedOpen.evidence_ids.push(sales.evidence_id);
+  confirmedOpen.picture.layout.show_sales=true;
+  confirmedOpen.picture.layout.headline=['成绩按用户提供的原片截图'];
+  const confirmedScope={...layered,salesAssetId:scope.productAssetId,salesAssetHash:scope.productAssetHash,
+   salesEvidenceId:sales.evidence_id,salesEvidenceSha256:createHash('sha256').update(sales.text).digest('hex')};
+  assert.deepEqual(panelDeliveryIssues(confirmed,confirmedScope),[]);
+  const changedFact=clone(confirmed);changedFact.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===sales.evidence_id)!.text+=' changed';
+  assert(panelDeliveryIssues(changedFact,confirmedScope).includes('opening_sales_binding_invalid'));
+  const wrongSource=clone(confirmed);wrongSource.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===sales.evidence_id)!.source_ids=['another-source',scope.productAssetId];
+  assert(panelDeliveryIssues(wrongSource,confirmedScope).includes('opening_sales_binding_invalid'));
+  const composedPacket=await copyTeachingPacketFromDoc(composed);
+  const projected=buildCopyTeachingReviewRequest([{case_id:'composed',packet:composedPacket}]);
+  assert.deepEqual(projected.input.cases[0].packet.delivery_sections?.map(s=>s.picture.layout),
+   [composedOpen.picture.layout,composedNew.picture.layout,undefined]);
+  const draft=planReviewBoards({value:composed,sha256:'c'.repeat(64),hashMode:'project',assertUnchanged:async()=>{}});
+  assert.deepEqual(draft.plans[0].rows[0].frames.map(f=>f.label),['开场过渡','接入原片']);
+  const html=humanReviewBoardPage(draft.plans[0],draft.data,draft.lint,[],[{criterion:{id:'hook',sectionId:composedOpen.section_id,
+    quote:'原话 <不要漏掉>\n下一行',question:'能认出原片吗？',pictureStage:'开场过渡',layout:'original_underlay',
+    reference:{assetId:'frozen-reference',fileName:'NIUMO V7.mp4',seconds:1.5}},base64:'aGVsbG8='}]);
+  assert.match(html,/原话 &lt;不要漏掉&gt;\n下一行/);
+  assert.match(html,/NIUMO V7\.mp4 · 1\.5秒/);
+  assert.match(html,/<details class="picture-note"><summary>核对参照（不上屏）<\/summary><figure><img[^>]*alt="参照画面"/);
+  assert(html.indexOf('能认出原片吗？')<html.indexOf('第1组 · 教什么'));
+  assert(!html.includes('frozen-reference'));
+  const unknown=clone(composed),[unknownOpen]=endings(unknown);unknownOpen.picture.layout.show_sales=true;
+  unknownOpen.picture.layout.headline=['10 juta tontonan'];
+  assert(panelDeliveryIssues(unknown,layered).includes('opening_sales_binding_invalid'));
+  const mismatch=clone(composed),[mismatchOpen]=endings(mismatch);mismatchOpen.picture.layout.source.sha256='0'.repeat(64);
+  assert.throws(()=>panelDeliveryIssues(mismatch,layered),/opening_original_binding_invalid/);
+  const overlap=clone(composed),[,overlapNew]=endings(overlap);
+  overlapNew.picture.layout.product_crop=overlapNew.picture.layout.commission_crop;
+  assert.throws(()=>panelDeliveryIssues(overlap,layered),/delivery_sections_invalid/);
+  assert.deepEqual(deliveryTimeline(doc).issues,['delivery_timeline_requires_one_audience']);
+  const prepared=planReviewBoards({value:doc,sha256:'b'.repeat(64),hashMode:'project',assertUnchanged:async()=>{}});
+  assert.deepEqual(new Set(prepared.plans.map(p=>p.variant)),new Set(['new_contact','existing_partner']));
+  assert(prepared.plans.every(p=>p.rows.filter(r=>r.stage==='closing').length===1));
+  assert.deepEqual(panelDeliveryIssues(doc,{...scope,ctaAssetId:storyId}),['new_contact_cta_image']);
+  assert.deepEqual(panelDeliveryIssues(doc,{...scope,productAssetId:storyId}),['opening_product_image']);
+  assert.deepEqual(panelDeliveryIssues(doc,{...scope,ctaAssetHash:'0'.repeat(64)}),['new_contact_cta_image']);
+  assert(panelDeliveryIssues(doc,{...scope,salesAssetId:opening.picture.asset_id}).includes('opening_sales_attribution_unconfirmed'));
+  const invalid=clone(doc);invalid.assets.find(a=>a.id===storyId)!.props!.clipmentorStoryboardHash='wrong-source';
+  assert.deepEqual(panelDeliveryIssues(invalid,scope),['existing_partner_storyboard']);
+  const stale=clone(doc);stale.assets.find(a=>a.id===storyId)!.props!.clipmentorStoryboardTimes=[0,1,2];
+  assert.deepEqual(panelDeliveryIssues(stale,scope),['existing_partner_storyboard']);
+  const incomplete=clone(doc);endings(incomplete).pop();
+  assert.deepEqual(panelDeliveryIssues(incomplete,scope),['existing_partner_storyboard']);
+  const duplicate=clone(sections);duplicate.at(-1).section_id='unknown';assert(!deliverySectionsShape(duplicate));
+ });
  async function regression(name:string,fn:()=>unknown){try{fn();console.log('PASS '+name);tests.push(name);}catch(error){regressions.push({name,error:String(error)});console.log('FAIL '+name+' '+String(error));}}
  await regression('F2 delivery Chinese conflicts are rejected before a misleading board can be generated',()=>{
   const value=clone(c.green) as any,bindings=clone(materials),line=value.delivery_sections.creator_endings.new_contact,bound=ending(bindings[0]).line;
@@ -78,7 +178,7 @@ try{
   const value=clone(c.green) as any,bindings=clone(materials);value.release_status={copy_review:'not_requested',audio_measurement:'not_done'};
   (bindings[0].clipMentorAnalysis as any).production_copy_review={verdict:'needs_revision'};
   const result=scoped(value,bindings),html=humanReviewBoardPage(result.plans[0],result.data,result.lint,bindings),header=html.match(/<header>[\s\S]*?<\/header>/)![0];
-  assert(header.includes('审核状态未在本板核验'));assert(!header.includes('未送审'),'a candidate flag must not overwrite supplied project history');assert(!header.includes('已审核通过'));
+  assert(!header.includes('审核状态未在本板核验'));assert(!header.includes('未送审'),'a candidate flag must not overwrite supplied project history');assert(!header.includes('已审核通过'));
  });
  assert.deepEqual(regressions,[],'Adversarial reader/binding regressions must all pass');
  await test('Read-only boards remain available in frozen handoffs without widening mutation access',async()=>{
@@ -100,6 +200,12 @@ try{
  for(const u of data.clipMentorAnalysis.blueprint){const ir=u.internal_review;for(const l of ir[ir.current_script_candidate].lines)add(l);for(const l of ir[ir.current_picture_plan].selected_narration??[])add(l);}
  for(const l of [data.delivery_sections.opening,...Object.values(data.delivery_sections.creator_endings)])add(l);
  const p=prepare(data),board=p.plans[0],page=humanReviewBoardPage(board,p.data,p.lint,materials);
+ await test('Audience CTA routes are concise and both endings share the teaching body',()=>{
+  const merged={...board,rows:[...board.rows.filter(r=>r.stage!=='closing'),...p.plans.flatMap(plan=>plan.rows.filter(r=>r.stage==='closing').map(r=>({...r,ending_variant:plan.variant})))]};
+  const html=humanReviewBoardPage(merged,p.data,p.lint,materials);
+  assert(html.includes('上传的 CTA 素材'));assert(html.includes('产品图＋Storyboard'));
+  assert(html.includes('共用片头与教学主体，按达人阶段生成两个片尾版本。'));
+ });
  await test('P2 interval overlap oracle includes every original claim, sorts by time and excludes touching endpoints',()=>{
   for(const id of ['GM-G1','GM-G2','GM-G3','GM-G4','GM-G5']){
    const rows=board.rows.filter(r=>r.unit_id===id&&r.stage==='original');
@@ -113,7 +219,7 @@ try{
   assert(page.indexOf('class="speech-meaning"')<page.indexOf('class="source-ms"'));assert(page.includes('原片 5.2秒'));
  });
  await test('P3 missing Chinese is explicit, wrong count and wrong type never guess pairings',()=>{
-  const legacy=prepare(c.green),html=humanReviewBoardPage(legacy.plans[0],legacy.data,legacy.lint,materials);assert(html.includes('缺中文'));assert(html.includes('Transferproof.'));
+  const legacy=prepare(c.green),html=humanReviewBoardPage(legacy.plans[0],legacy.data,legacy.lint,materials);assert(html.includes('此条原话暂无中文译文'));assert(html.includes('Transferproof.'));
   for(const value of [[],['only one','too','many'],7]){
    const v=clone(data),u=v.clipMentorAnalysis.blueprint[0],ir=u.internal_review,l=ir[ir.current_script_candidate].lines[0];l.labels_zh=value;
    v.narration_and_captions.find((q:any)=>q.id===l.id).labels_zh=value;
@@ -122,11 +228,11 @@ try{
    const bad=humanReviewBoardPage(prepared.plans[0],prepared.data,prepared.lint,materials);assert(bad.includes('data-input-code="INPUT"'));assert(!bad.includes('→ only one'));
   }
  });
- await test('P4 R1 links resolve, R2 uses exact group unknowns, R3/R4 retain bound facts verbatim',()=>{
+ await test('Human board links original speech and keeps author business notes off the delivery cards',()=>{
   const ids=new Set([...page.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]));const links=[...page.matchAll(/href="#((?:speech|source-group)-[^"]+)"/g)].map(m=>m[1]);assert.equal(links.length,6);assert(links.every(id=>ids.has(id)));assert(page.includes('回看原片 41–51.5秒'));
   for(const unknown of unitUnknowns(p.data,'GM-G4'))assert(page.includes(unknown.replace(/&/g,'&amp;')));
-  for(const doc of materials)for(const e of doc.clipMentorAnalysis!.evidence.filter(e=>e.kind==='operator_supplied'))if(['GM-OP-metrics','GM-OP-terms'].includes(e.evidence_id))assert(page.includes(e.text),'bound business fact must stay verbatim');
-  assert(page.includes('登记口径，核对左侧截图'));assert(page.includes('画面安排与合作条件'));assert(page.includes('口播说法（原文）'));
+  for(const doc of materials)for(const e of doc.clipMentorAnalysis!.evidence.filter(e=>e.kind==='operator_supplied'))if(['GM-OP-metrics','GM-OP-terms'].includes(e.evidence_id))assert(!page.includes(e.text),'raw author business notes must stay off the human board');
+  assert(!page.includes('候选业务登记'));assert(!page.includes('技术信息'));assert(!page.includes('口播说法（原文）'));
   assert(page.includes('Ulasan semula → 回看讲解'));assert(page.includes('Video asal → 原片'));
   const reused=clone(board);reused.rows.find(r=>r.line_ids.includes('GM-L05'))!.range=[0,1];
   const reusedPage=humanReviewBoardPage(reused,p.data,p.lint,materials),section=reusedPage.split('data-card="group-5"')[1].split('data-card="endings"')[0];assert(section.includes('href="#speech-1-0"'),'cross-group reuse links to the source group, not a false missing claim');

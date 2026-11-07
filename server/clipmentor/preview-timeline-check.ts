@@ -1,8 +1,9 @@
-import { checkTransitionManifest } from '../../src/clipmentor/transition-check.ts';
+import { checkTransitionManifest, type Scene, type PictureLayer } from '../../src/clipmentor/transition-check.ts';
 import { evaluatePreviewTeachingJudgment, validatePreviewReviewInput, type PreviewTeachingJudgment, type ReviewReceipt } from './preview-review.ts';
 
-type Scene = { start_frame: number; end_frame: number; kind: string; content: number | number[]; label?: string };
 type Manifest = { fps: number; total_frames: number; scenes: Scene[] };
+type ActualSegment = {scene_index:number;start_seconds:number;end_seconds:number;duration_seconds:number;kind:string;label:string|null;
+  source_start_seconds:number|number[]|null;source_end_exclusive_seconds:number|null;scheduled_composition:boolean;layer:PictureLayer|null};
 type Observation = ReviewReceipt & { path: string };
 type IssueCode = 'static_description_over_video' | 'possible_dynamic_omission' | 'pause_not_separately_described'
   | 'pause_used_in_positive_evidence' | 'wording_requires_evidence';
@@ -40,13 +41,20 @@ export function checkPreviewTimelineObservations(manifestValue: unknown, resultV
   const judgment = resultValue.judgment as PreviewTeachingJudgment;
   const fps = manifest.fps;
   const overlaps = (a: number, b: number, c: number, d: number) => Math.max(a, c) < Math.min(b, d);
-  const factsBetween = (start: number, end: number) => manifest.scenes.flatMap((s, scene_index) => {
+  const factsBetween = (start: number, end: number) => manifest.scenes.flatMap<ActualSegment>((s, scene_index) => {
     const a = Math.max(start, s.start_frame / fps), b = Math.min(end, s.end_frame / fps);
     if (a >= b) return [];
+    if(s.kind==='composition')return s.layers.map(l=>({
+      scene_index,start_seconds:a,end_seconds:b,duration_seconds:b-a,
+      kind:l.kind==='video'?'video':l.kind==='image'?'still':l.kind,label:s.label??null,
+      source_start_seconds:l.source_start_seconds===undefined?null:l.source_start_seconds+(l.kind==='video'?(a-s.start_frame/fps)*(l.playback_rate??1):0),
+      source_end_exclusive_seconds:l.kind==='video'&&l.source_start_seconds!==undefined?l.source_start_seconds+(b-s.start_frame/fps)*(l.playback_rate??1):null,
+      scheduled_composition:true,layer:l,
+    }));
     const moving = s.kind === 'video' || s.kind === 'original';
     const offset = moving ? a - s.start_frame / fps : 0;
     return [{ scene_index, start_seconds: a, end_seconds: b, duration_seconds: b - a,
-      kind: s.kind, label: s.label ?? null, source_start_seconds: Array.isArray(s.content) ? s.content : s.content + offset,
+      kind: s.kind, label: s.label ?? null, scheduled_composition:false,layer:null,source_start_seconds: Array.isArray(s.content) ? s.content : s.content + offset,
       source_end_exclusive_seconds: moving ? Number(s.content) + b - s.start_frame / fps : null }];
   });
   const units = judgment.continuity.map(unit => {
@@ -85,9 +93,9 @@ export function checkPreviewTimelineObservations(manifestValue: unknown, resultV
       const substantialVideos = videos.filter(s => s.duration_seconds > .005 + Number.EPSILON * 16);
       const exclusiveStatic = staticClaim && /(?:全程|只有|全部|始终|仅有)/.test(r.observed);
       const hasStatic = actual.some(s => (s.kind === 'still' || s.kind === 'relation') && s.duration_seconds > .005);
-      const definiteConflict = exclusiveStatic || !hasStatic;
+      const definiteConflict = (exclusiveStatic || !hasStatic) && !substantialVideos.some(s=>s.scheduled_composition);
       if (staticClaim && substantialVideos.length) issue('static_description_over_video', definiteConflict ? 'execution_description_conflict' : 'needs_semantic_check',
-        '静态描述的证据范围含动态素材；混合区间可能只是概括不全，只有排他性静态断言或全动态区间才构成明确类型冲突。均不等于像素/观感验收。', [r.path], substantialVideos.map(s => s.scene_index));
+        '静态描述的证据范围含动态素材；混合区间可能只是概括不全，只有排他性静态断言或全动态区间才构成明确类型冲突。多轨仅能确认安排了动态层，可能被遮挡，不能据此证明实际可见。均不等于像素/观感验收。', [r.path], substantialVideos.map(s => s.scene_index));
       if (imageSummary && substantialVideos.length) issue('possible_dynamic_omission', 'needs_semantic_check',
         '“两张回顾画面”未交代区间内的动态素材；可能是概括，不能单凭“张”断言模型没看到视频。', [r.path], substantialVideos.map(s => s.scene_index));
       const references = input.reference_text.filter(t => overlaps(r.start_seconds, r.end_seconds, t.start_seconds, t.end_seconds));

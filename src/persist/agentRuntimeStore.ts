@@ -272,6 +272,40 @@ export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<b
     }
   }));
 }
+/** Atomic index replacement: old immutable bodies remain until the archive is indexed.
+ * Caller must build and verify a lossless archive; concurrent index changes fail closed. */
+export async function archiveAgentArtifacts(record:AgentArtifactRecord, expected:AgentArtifactRecord[]):Promise<boolean>{
+ requireProjectId(record.projectId);
+ if(!expected.length||new Set(expected.map(e=>e.artifactId)).size!==expected.length
+  ||record.toolName!=='clipmentor-production-task-history'||record.kind!=='checkpoint-source'
+  ||expected.some(e=>e.projectId!==record.projectId||e.runId!==record.runId||e.kind!=='checkpoint-source'
+   ||!['clipmentor-production-task','clipmentor-production-task-history'].includes(e.toolName??''))
+  ||record.originalBytes>MAX_ARTIFACT_BYTES||!isValidArtifactRecord(record,record.projectId,record.artifactId)
+  ||new TextEncoder().encode(record.body).byteLength!==record.originalBytes||await sha256Text(record.body)!==record.bodySha256)return false;
+ return enqueue(record.projectId,()=>withProjectLock(record.projectId,async()=>{
+  const generation=await agentSessionWriteGeneration(record.projectId),key=agentArtifactKey(record.projectId,record.artifactId,generation);
+  if(await kvGet(key)!==undefined)return false;
+  for(const e of expected){const actual=await kvGet<AgentArtifactRecord>(agentArtifactKey(record.projectId,e.artifactId,generation));
+   if(!actual||JSON.stringify(actual)!==JSON.stringify(e))return false;}
+  await kvSet(key,record);
+  let committed=false;
+  try{
+   const mutation=await mutateOnce(record.projectId,current=>{
+    if(!current.runs.some(r=>r.runId===record.runId)||expected.some(e=>!current.artifacts.some(a=>a.artifactId===e.artifactId&&a.bodySha256===e.bodySha256)))return [current,false];
+    const ids=new Set(expected.map(e=>e.artifactId)),kept=current.artifacts.filter(a=>!ids.has(a.artifactId));
+    if(kept.length+1>MAX_PROJECT_ARTIFACTS||kept.reduce((n,a)=>n+a.originalBytes,0)+record.originalBytes>MAX_PROJECT_ARTIFACT_BYTES)return [current,false];
+    const {body:_body,version:_version,...index}=record;
+    return [{...current,artifacts:[...kept,index],runs:current.runs.map(r=>r.runId===record.runId?{...r,artifactIds:[...r.artifactIds.filter(id=>!ids.has(id)),record.artifactId]}:r)},true];
+   });
+   committed=mutation.result;
+   if(!committed)return false;
+   // Cleanup is after the durable pointer swap. Failure leaves harmless duplicates.
+   await Promise.all(expected.map(e=>kvDel(agentArtifactKey(record.projectId,e.artifactId,generation)).catch(()=>undefined)));
+   notify(record.projectId);return true;
+  }finally{if(!committed)await kvDel(key);}
+ }));
+}
+
 export async function deleteAgentArtifacts(
   projectId: string,
   artifactIds: readonly string[],

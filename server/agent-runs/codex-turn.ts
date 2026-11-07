@@ -75,6 +75,7 @@ async function summarizeWithCodex(
 ): Promise<string> {
   const requestId = `summary-${input.run.id}-${input.requestIndex}-${crypto.randomUUID().slice(0, 8)}`;
   let text = '';
+  await input.activation.host?.beforeRequest();
   await recordHandoffDispatch(input.run,'summary',{backend:'codex',system:systemPrompt,prompt,tools:[]});
   await runServerCodexTurn(
     {
@@ -280,6 +281,7 @@ export async function executeServerCodexTurn(
   const runTurn = deps.runTurn ?? runServerCodexTurn;
   try {
     input.signal.throwIfAborted();
+    await input.activation.host?.beforeRequest();
     await recordHandoffDispatch(input.run,'author',{backend:'codex',model:input.model,system:input.instructions,prompt:serializeMessagesForPrompt([...prepared.messages]),tools:codexToolSpecs(schemas)});
     arm();
     if (input.signal.aborted) onAbort();

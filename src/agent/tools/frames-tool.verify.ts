@@ -37,4 +37,7 @@ assert.ok('itemId' in (assetSchema.input_schema.properties ?? {}));
 const sourceTimesSchema = assetSchema.input_schema.properties?.sourceTimesMs as { maxItems?: number };
 assert.equal(sourceTimesSchema.maxItems, 8);
 
+
+assert.deepEqual(explicitSourceTimesMs({frames:[2,59]},30),[66,1966],"frame-derived seeks must not round into the next frame or EOF");
+assert.deepEqual(constrainSourceFrameArgs({sourceTimesMs:[99999]},{startFrame:0,endFrame:60},30).sourceTimesMs,[1966],"clamping to the final frame must not advance past it");
 console.log('frames-tool.verify: explicit coordinate spaces and visible source-window clamping ok');

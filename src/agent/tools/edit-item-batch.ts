@@ -1,3 +1,9 @@
+import {assertHandoffCopy} from '../../clipmentor/handoff-copy';
+import {resolveFrozenEditParameters,assertFrozenParameterChanges} from '../../clipmentor/execution-parameters';
+import type { AgentContext } from '../context';
+import { makeDraft } from '../../editor/store';
+import { GENERIC_ITEM_KINDS } from './edit-item-generic';
+import { assertDeliveryPicturePreservation } from '../../clipmentor/delivery-bindings';
 import type { OpResult } from './edit-item-shared';
 
 type Args = Record<string, unknown>;
@@ -157,4 +163,85 @@ export function executeAtomicEditBatch<Draft>(
     ripple: args.ripple === true,
     results: operations.map(operation => byOperation.get(operation)!.result),
   };
+}
+
+
+interface ContextEditDraft {
+  engine: ReturnType<typeof makeDraft>;
+  context: AgentContext;
+  replacementSlots: Array<{ track: unknown; start: number }>;
+}
+interface ContextEditHandlers {
+  validateAdd: (ctx: AgentContext, entry: Record<string, unknown>) => OpResult;
+  validate: (ctx: AgentContext, operation: EditItemOperation) => OpResult;
+  apply: (ctx: AgentContext, plan: OpResult, ripple: boolean) => OpResult;
+}
+function stageReplacementDeletes(draft: ContextEditDraft, operations: EditItemOperation[], validateAdd: ContextEditHandlers['validateAdd']): EditItemOperation[] {
+  const state = draft.context.getState();
+  // Resolve aliases, source windows and library templates through the same
+  // validator as commit. Raw asset lookup guessed a one-frame duration.
+  const adds = operations.filter(op => op.bucket === 'adds').flatMap(op => {
+    const plan = validateAdd(draft.context, op.entry);
+    if (!plan.ok || plan.error || typeof plan.startFrame !== 'number' || !Number.isFinite(plan.startFrame)) return [];
+    const asset = draft.context.getDoc().assets.find(a => a.id === plan.assetId);
+    const template = draft.context.templates.find(t => t.id === plan.templateId);
+    const duration = plan.durationInFrames ?? asset?.durationInFrames ?? template?.durationInFrames;
+    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return [];
+    return [{ start: plan.startFrame, end: plan.startFrame + duration, track: plan.track }];
+  });
+  const early = operations.filter(op => {
+    if (op.bucket !== 'deletes' || !GENERIC_ITEM_KINDS.has(String(op.entry.type))) return false;
+    const id = String(op.entry.itemId ?? op.entry.id ?? '');
+    const old = state.items.find(item => item.id === id || (id && item.id.startsWith(id)));
+    if (!old) return false; // normal validation reports missing/invalid targets atomically
+    return adds.some(add => add.track === old.track
+      && add.start < old.startFrame + old.durationInFrames && add.end > old.startFrame);
+  });
+  draft.replacementSlots = adds.filter(add => early.some(op => {
+    const id = String(op.entry.itemId ?? op.entry.id ?? '');
+    const old = state.items.find(item => item.id === id || (id && item.id.startsWith(id)))!;
+    return add.track === old.track && add.start < old.startFrame + old.durationInFrames && add.end > old.startFrame;
+  }));
+  return [...early, ...operations.filter(op => !early.includes(op))];
+}
+
+
+/** Shared publication contract for UI and server; host-specific capabilities
+ * stay in their validators, not in separate ordering/preservation implementations. */
+export function executeContextEditBatch(args: Args, ctx: AgentContext, handlers: ContextEditHandlers): OpResult {
+  const before = ctx.getDoc();
+  const frozen = !!ctx.getAgentRunId?.() && !!before.clipMentorAnalysis;
+  if (frozen) {
+    try { assertHandoffCopy('edit_item', args, ctx); }
+    catch (error) { return { error: error instanceof Error ? error.message : String(error), atomic: true, aborted: true }; }
+  }
+  const checkActive = () => {
+    if (ctx.getAgentRunSignal?.().aborted) throw new Error('agent_run_cancelled: no edit published');
+  };
+  return executeAtomicEditBatch<ContextEditDraft>(args, {
+    createDraft: () => {
+      const engine = makeDraft(before);
+      return { engine, replacementSlots: [], context: { ...ctx, ...engine } };
+    },
+    orderOperations: (draft, operations) => stageReplacementDeletes(draft, operations, handlers.validateAdd),
+    validate: (draft, operation) => {
+      if(frozen && operation.bucket!=='deletes'){
+        const resolved=resolveFrozenEditParameters(draft.engine.getDoc(),{[operation.bucket]:[operation.entry]});
+        operation.entry=(resolved[operation.bucket] as Args[])[0];
+      }
+      return handlers.validate(draft.context, operation);
+    },
+    apply: (draft, plan) => {
+      const placedBefore = draft.replacementSlots.some(slot => slot.track === plan.track && slot.start === plan.startFrame)
+        ? new Set(draft.engine.getState().items.map(i => i.id)) : null;
+      const result = handlers.apply(draft.context, plan, args.ripple === true);
+      if (placedBefore) {
+        const placed = draft.engine.getState().items.filter(i => !placedBefore.has(i.id));
+        if (placed.some(i => i.startFrame !== plan.startFrame)) return { error: 'replacement_position_conflict: requested slot is still occupied; no edit published' };
+      }
+      return result;
+    },
+    validateDraft: (draft) => { checkActive(); if(frozen)assertFrozenParameterChanges(before,draft.engine.getDoc()); assertDeliveryPicturePreservation(before, draft.engine.getDoc()); },
+    publish: (draft) => { checkActive(); ctx.commands.applyDoc(draft.engine.getDoc()); },
+  });
 }

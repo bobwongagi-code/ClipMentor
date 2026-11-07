@@ -1,3 +1,4 @@
+import {verifyGroupedReviewReceipts} from './copy-review-groups.verify-suite';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -6,13 +7,17 @@ import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { AgentContext } from '../../src/agent/context';
-import type { CopyReviewRequest } from '../../shared/clipmentor-copy-review';
+import { isCopyReviewFailure, type CopyReviewRequest } from '../../shared/clipmentor-copy-review';
+import viewerChainResponse from '../../src/clipmentor/fixtures/viewer-chain-raw-review-20261029.json';
 import { makeDraft, replayActions } from '../../src/editor/store';
 import { executeTool } from '../../src/agent/tools';
 import { policyForTool } from '../../src/agent/execution-policy';
 import { isExternalDraftTool } from '../../src/agent/external-tool-policy';
-import { copyReviewSubject, copyTeachingPacketFromDoc, checkCopyProduction } from '../../src/clipmentor/production-gate';
-import { CopyReviewError, reviewClipMentorCopy, runIsolatedCodexReview, type CopyReviewDependencies } from './copy-review';
+import { projectServerRunToolResult } from '../../src/agent/serverRunToolResult';
+import { copyReviewSubject, copyTeachingPacketFromDoc, checkCopyProduction, normalizeGroupReview } from '../../src/clipmentor/production-gate';
+import groupedProject from '../../src/clipmentor/fixtures/grouped-registration-v1.json';
+import groupedRawResponse from '../../src/clipmentor/fixtures/four-group-raw-review-20261028.json';
+import { CopyReviewError, reviewClipMentorCopy, revalidateStoredCopyReview, runIsolatedCodexReview, type CopyReviewDependencies } from './copy-review';
 import { clipMentorCopyReviewPlugin } from '../plugins/clipmentor-copy-review';
 import type { ViteDevServer } from 'vite';
 import regression from '../../src/clipmentor/fixtures/copy-teaching-blind-v2-20261019.json';
@@ -26,6 +31,8 @@ import { ToolActivation } from '../../src/agent/tool-activation';
 import { TOOL_SCHEMAS } from '../../src/agent/tools';
 import { ToolFailureTracker, isFailedToolResult, structuredToolFailure } from '../../src/agent/toolFailure';
 import { createAcceptanceLoop } from '../agent-runs/acceptance-loop';
+import sharp from 'sharp';
+import type {BoundVisualCriteria} from './visual-done-criteria';
 import { ServerRunToolExecutor } from '../../src/agent/serverRunToolExecutor';
 import { FakeLockManager, MemoryStorage } from '../../src/agent/serverRunToolExecutor.verify-helpers';
 import { saveStoredServerRun, readStoredServerRun } from '../../src/agent/serverRunSessionStorage';
@@ -84,12 +91,12 @@ const goodRaw = () => ({ cases: [{ case_id: 'current', units: [{ unit_id: 'U1', 
 assert(migrateProjectDoc(base), 'the runtime fixture must be a readable persisted project, not just a tool-shaped object');
 const root = await mkdtemp(join(tmpdir(), 'clipmentor-copy-review-test-'));
 let calls = 0, extracted = 0;
-let mode: 'pass' | 'fail' | 'unknown' | 'copy_block' | 'copy_unmatched' | 'throw' | 'invalid' = 'pass';
+let mode: 'pass' | 'fail' | 'unknown' | 'copy_block' | 'copy_unmatched' | 'throw' | 'invalid' | 'chain_invalid' | 'frames' = 'pass';
 const sensitive = 'synthetic-credential-must-not-appear';
 const deps: CopyReviewDependencies = {
   directory: root, resolve: (name) => name === 'review-test.mp4' ? 'mock-original' : null,
   hash: async () => 'a'.repeat(64),
-  frame: async () => { extracted++; return 'aGVsbG8='; },
+  frame: async () => { extracted++; if(mode==='frames')throw Error(sensitive);return 'aGVsbG8='; },
   async run(prompt, frames, runId, projectId) {
     calls++;
     assert(prompt.includes('CURRENT_PLAN_CONTENT'));
@@ -103,6 +110,8 @@ const deps: CopyReviewDependencies = {
     assert(prompt.includes('有表达作用不等于值得独立占用旁白'));
     assert(prompt.includes('独立发声的必要性'), 'the server asks for deletion loss, not just expressive function');
     for (const field of ['group_checks', 'planned_group_teaching_only', 'learner_takeaway', 'viewer_chain', 'stage_cues']) assert(prompt.includes(field));
+    for (const rule of ['covered 必须有本组 point_ids', '可记 optional_depth，point_ids 和 line_ids 可空', '本组确实缺少关键落点则记 material_gap'])
+      assert(prompt.includes(rule), 'the actual reviewer sees how to account for a relation without a local teaching landing');
     for (const question of ['值得讲吗？', '讲得直接吗？', '说得自然吗？', '证据支持吗？']) {
       assert(prompt.includes(question), `the actual independent review request must include ${question}`);
     }
@@ -112,6 +121,7 @@ const deps: CopyReviewDependencies = {
     if (mode === 'throw') throw new Error(sensitive);
     if (mode === 'invalid') return {};
     const raw = goodRaw();
+    if (mode === 'chain_invalid') Object.assign(raw.copy_units[0].group_checks.L2, {viewer_chain:['Original',5]});
     if (mode === 'copy_block') return { ...raw, copy_units: [{ ...raw.copy_units[0], verdict: 'pass', findings: [{ severity: 'blocking', quote: line.narration_ms, reason: 'Synthetic copy error' }] }] };
     if (mode === 'copy_unmatched') {
       raw.copy_units[0].verdict = 'needs_revision';
@@ -131,6 +141,7 @@ async function request(operationId = randomUUID()): Promise<CopyReviewRequest> {
 }
 const nativeFetch = globalThis.fetch;
 try {
+  await verifyGroupedReviewReceipts({root,deps,base,request,goodRaw});
   const diagnosticEnvelope = { error: 'Offline saved failure', operationId: contract171.request.operationId,
     diagnostic: contract171.diagnostic, requestsAttempted: 1, production_approved: false };
   assert.deepEqual(structuredToolFailure({ ...diagnosticEnvelope, raw_review: 'must-not-reach-author', private_path: '/private' }), diagnosticEnvelope,
@@ -159,6 +170,39 @@ try {
   const pass = await reviewClipMentorCopy(first, deps);
   assert.equal(pass.receipt.verdict, 'pass'); assert.equal(calls, 1);
   assert.deepEqual(pass.receipt.units[0].group_checks, goodRaw().copy_units[0].group_checks);
+  {
+    const req = await request(), raw:any = goodRaw();
+    const relation = {...raw.copy_units[0].group_checks.source_relations[0],assessment:'uncertain',
+      relation:'Unresolved extra source detail',reason:'The current statement does not assert that detail; its visible relation remains covered.'};
+    raw.copy_units[0].group_checks.source_relations.push(relation);
+    let modelCalls=0;
+    const localDeps={...deps,frame:async()=>Buffer.from('offline-fixture').toString('base64'),run:async()=>{modelCalls++;return raw;}};
+    const original=await reviewClipMentorCopy(req,localDeps);
+    assert.equal(original.receipt.verdict,'insufficient_evidence');
+    const ledgerPath=join(root,req.operationId+'.json'),bytes=await readFile(ledgerPath,'utf8');
+    const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
+    const annotation={originalLedgerSha256:hash(bytes),actor:'authorized-operator-fixture',scopes:[{
+      unit_id:raw.copy_units[0].unit_id,relation_index:1,relation_sha256:hash(JSON.stringify(relation)),
+      reviewer_reason_quote:relation.reason,claim_impact:{status:'does_not_affect_current_claim',unknown_detail:'Extra source detail',
+        reason:'Only the covered visible relation is asserted in the exact checked sentence.',
+        claims:[{line_id:req.packet.units[0].lines[0].line_id,channel:'narration',quote:req.packet.units[0].lines[0].narration_ms}]}}]};
+    const noCalls={...localDeps,run:async()=>{throw Error('offline revalidation must not call a provider');}};
+    await assert.rejects(revalidateStoredCopyReview(req,noCalls,{...annotation,originalLedgerSha256:'0'.repeat(64)}),/binding_invalid/);
+    await assert.rejects(revalidateStoredCopyReview({...req,projectId:'unbound-project'},noCalls,annotation),/original_unavailable/);
+    const badQuote=structuredClone(annotation);badQuote.scopes[0].reviewer_reason_quote='invented reviewer approval';
+    await assert.rejects(revalidateStoredCopyReview(req,noCalls,badQuote),/scope_invalid/);
+    const resolved=await revalidateStoredCopyReview(req,noCalls,annotation);
+    assert.equal(resolved.receipt.verdict,'pass');assert.equal(modelCalls,1);
+    assert.equal(await readFile(ledgerPath,'utf8'),bytes,'raw response and original failed receipt are immutable');
+    assert.deepEqual((await reviewClipMentorCopy(req,noCalls,undefined,true)).receipt,original.receipt,'original read remains the original verdict');
+    assert.deepEqual(await revalidateStoredCopyReview(req,noCalls,annotation),resolved,'same offline annotation is idempotent, not a new operation');
+    const overwrite=structuredClone(annotation);overwrite.scopes[0].claim_impact.reason+=' changed';
+    await assert.rejects(revalidateStoredCopyReview(req,noCalls,overwrite),/already_recorded/);
+    const projectedDoc=structuredClone(base);projectedDoc.clipMentorAnalysis!.production_copy_review=resolved.receipt;
+    assert.equal((await checkCopyProduction(projectedDoc,'clipmentor')).allowed,true);
+    projectedDoc.clipMentorAnalysis!.revision++;
+    assert.equal((await checkCopyProduction(projectedDoc,'clipmentor')).allowed,false,'changed copy cannot reuse offline scope projection');
+  }
   const oldRequest=await request();delete oldRequest.packet.units[0].source_context;
   const oldResult=structuredClone(pass);oldResult.operationId=oldRequest.operationId;
   delete oldResult.receipt.teaching_review!.packet.units[0].source_context;
@@ -266,10 +310,16 @@ try {
   // Source reconstruction can discover a gap outside selected point IDs. Keep raw
   // opinions, bind the result, and recover it through the actual Agent read entry.
   for (const [kind, expected] of [['missing', 'insufficient_evidence'], ['material_gap', 'needs_revision'],
-    ['uncertain', 'insufficient_evidence'], ['optional_depth', 'pass'], ['covered', 'pass']] as const) {
+    ['uncertain', 'insufficient_evidence'], ['optional_depth', 'pass'], ['covered_without_landing', 'insufficient_evidence'], ['covered', 'pass']] as const) {
     const req = await request(), raw = goodRaw();
     if (kind === 'missing') delete (raw.copy_units[0].group_checks as Record<string, unknown>).source_relations;
-    else raw.copy_units[0].group_checks.source_relations[0].assessment = kind;
+    else if (kind === 'optional_depth' || kind === 'covered_without_landing') {
+      raw.copy_units[0].group_checks.source_relations.push({
+        relation: 'Another source relation discussed elsewhere', evidence_ids: ['F1'], point_ids: [], line_ids: [],
+        assessment: kind === 'optional_depth' ? 'optional_depth' : 'covered',
+        reason: 'This relation has no teaching landing in this group',
+      });
+    } else raw.copy_units[0].group_checks.source_relations[0].assessment = kind;
     let attempts = 0;
     const result = await reviewClipMentorCopy(req, { ...deps, run: async () => { attempts++; return raw; } });
     assert.equal(result.receipt.verdict, expected);
@@ -380,6 +430,27 @@ try {
   assert.equal(visualRuns, 1);
   assert.equal(visualPass.receipt.verdict, 'pass');
   assert.equal(visualPass.receipt.teaching_review!.packet.units[0].points.length, 2);
+  const selected = structuredClone(base);
+  const selectedPlan = (selected.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  selectedPlan.copy.lines[0].source_seconds = [60, 61.5];
+  const phase = selectedPlan.picture_plan_test.phases[0];
+  phase.source_seconds = [60, 61.5];
+  phase.context_source_ranges = [
+    { segment_id: 'S1', source_range_seconds: [60, 60 + 1 / 30], purpose: 'Exactly one source frame for the comparison' },
+    { segment_id: 'S1', source_range_seconds: [60.7, 61.5], purpose: 'Narrow demonstration' },
+  ];
+  const selectedRequest = await request();
+  selectedRequest.packet = await copyTeachingPacketFromDoc(selected);
+  selectedRequest.subject.digest = (await copyReviewSubject(selected)).digest;
+  const selectedResult = await reviewClipMentorCopy(selectedRequest, { ...deps, async run(_prompt, frames) {
+    const original = frames.filter(f => f.phase === 'original').map(f => f.source_seconds);
+    const explanation = frames.filter(f => f.phase === 'explanation').map(f => f.source_seconds);
+    assert(!original.includes(60), 'the broad source samples would miss the selected still');
+    assert.equal(explanation.filter(seconds => seconds === 60).length, 1);
+    assert(explanation.includes(61.1), 'the narrow demonstration must also reach the reviewer');
+    return goodRaw();
+  } });
+  assert.equal(selectedResult.receipt.verdict, 'pass');
   assert(visualPass.receipt.teaching_review!.packet.units[0].points[1].treatment_reason!.includes('AUTHOR_VISUAL_REASON'));
   assert.equal(visualPass.receipt.teaching_review!.review.units[0].points[1].quotes.length, 0);
   assert.deepEqual((await reviewClipMentorCopy(visualRequest, visualDeps)).receipt, visualPass.receipt);
@@ -431,6 +502,12 @@ try {
     } });
     assert.equal(checked.receipt.verdict, expected, 'a top-level pass cannot waive the per-line judgment');
   }
+  const unresolvedRelation = await reviewClipMentorCopy(await request(), {...deps,run:async()=>{
+    const raw=goodRaw();
+    (raw.copy_units[0].group_checks.source_relations as unknown[]).push({relation:'Synthetic unselected relationship remains unverified',evidence_ids:['F1'],point_ids:[],line_ids:[],assessment:'uncertain',reason:'No current line can be quoted for the unselected relationship',claim_impact:{status:'unresolved',unknown_detail:'Meaning of an unselected relation is unknown',reason:'Cannot establish whether it is a material omission',claims:[]}});
+    return raw;
+  }});
+  assert.equal(unresolvedRelation.receipt.verdict,'insufficient_evidence','an unresolved source relation is a valid non-passing receipt, not a service failure');
   const omitted = await reviewClipMentorCopy(await request(), { ...deps, run: async () => {
     const raw = goodRaw(); raw.copy_units[0].narration_checks = []; return raw;
   } });
@@ -643,7 +720,7 @@ try {
     Object.defineProperty(globalThis, 'localStorage', { value: new MemoryStorage(), configurable: true });
     const originalSettle = codexTurnManager.settleToolResult;
     try {
-      for (const runtimeMode of ['throw', 'invalid', 'unknown', 'fail', 'pass'] as const) {
+      for (const runtimeMode of ['frames', 'throw', 'invalid', 'chain_invalid', 'unknown', 'fail', 'pass'] as const) {
         mode = runtimeMode;
         active = context();
         const { run, capability } = createRunWithCapability({ projectId: 'test-project', sessionGeneration: 'legacy',
@@ -708,17 +785,19 @@ try {
             emit({ type: 'done' });
           },
         });
-        assert.equal(calls, beforeRuntime + 1, 'one fake review, never a provider request or automatic retry');
+        assert.equal(calls, beforeRuntime + (runtimeMode==='frames'?0:1), 'at most one fake review; extraction failure never starts it');
         assert(settlement);
-        const technicalFailure = runtimeMode === 'throw' || runtimeMode === 'invalid';
+        const technicalFailure = runtimeMode === 'frames' || runtimeMode === 'throw' || runtimeMode === 'invalid' || runtimeMode === 'chain_invalid';
         assert.equal(settlement.success, !technicalFailure);
         const event = run.events.find(e => e.type === 'tool-result')!;
         assert(event);
         if (technicalFailure) {
           const diagnostic = (settlement.result as any).diagnostic;
-          assert.equal(diagnostic?.code, runtimeMode === 'throw' ? 'model_turn_failed' : 'response_scope_invalid',
+          assert.equal(diagnostic?.code, runtimeMode==='frames'?'frames_unavailable':runtimeMode === 'throw' ? 'model_turn_failed' : runtimeMode === 'chain_invalid' ? 'response_receipt_invalid' : 'response_scope_invalid',
             'the author must receive structured diagnostics through the actual failed-settlement bridge');
-          assert.equal(diagnostic.requestsAttempted, 1);
+          if(runtimeMode==='chain_invalid') assert.deepEqual(diagnostic.responseContract,{field:'group_checks.L2.viewer_chain',unitIndex:0,reason:'expected_nonempty_text_or_text_list'});
+          assert.equal(diagnostic.requestsAttempted, runtimeMode==='frames'?0:1);
+          if(runtimeMode==='frames'){assert.equal(diagnostic.frameFailure.reason,'extraction_failed');assert.equal(diagnostic.frameFailure.unit_id,'U1');assert(outcome.messages.some(m=>JSON.stringify(m.content).includes('frameFailure')));}
           assert.equal(diagnostic.retryable, false);
           assert.equal(diagnostic.operationId, runtimeArgs.operationId);
           assert.equal(settlement.result.production_approved, false);

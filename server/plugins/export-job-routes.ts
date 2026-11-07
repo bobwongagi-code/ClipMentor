@@ -109,9 +109,16 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     try {
       const body = (await readJsonBody(req)) as ExportRequest | null;
       controller.signal.throwIfAborted();
+      const operationId = exportOperationId(body);
+      const previous=operationId?getGenerationJobSnapshot(operationId):undefined;
+      if(previous){
+        if(previous.params.kind!=='export')throw new Error('Operation belongs to a different job kind');
+        requestAbort.dispose();
+        sendJson(res,200,{renderId:previous.id,projectRevision:previous.params.projectRevision,timelineId:previous.params.timelineId});
+        return;
+      }
       acceptedSubmission = await acceptExportSubmission(body, { signal: controller.signal });
       const { plan } = acceptedSubmission;
-      const operationId = exportOperationId(body);
       const cleanupRenderMedia = acceptedSubmission.cleanup;
       const uuid = randomUUID();
       const outDir = uploadDir();
@@ -121,6 +128,8 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       controller.signal.throwIfAborted();
       const jobParams: Record<string, unknown> = {
         kind: 'export',
+        exportAttemptId: uuid,
+        ...(plan.projectRevision ? {projectRevision:plan.projectRevision,timelineId:plan.timelineId} : {}),
         format: plan.format,
         codec: plan.media.codec,
         name: plan.filename,
@@ -195,11 +204,20 @@ export function registerExportJobRoute(server: ViteDevServer): void {
           },
         },
       );
+      const snapshot=getGenerationJobSnapshot(jobId);
+      if(snapshot?.params.kind!=='export')throw new Error('Operation belongs to a different job kind');
+      // Concurrent duplicate requests can both pass the initial lookup. Only
+      // the request that created the job may own its controller/media cleanup.
+      if(snapshot?.params.exportAttemptId!==uuid){
+        await cleanupRenderMedia();requestAbort.dispose();
+        sendJson(res,200,{renderId:jobId,projectRevision:snapshot?.params.projectRevision,timelineId:snapshot?.params.timelineId});
+        return;
+      }
       queued = true;
       trackExportJobController(jobId, controller);
       controller.signal.throwIfAborted();
       requestAbort.dispose();
-      sendJson(res, 200, { renderId: jobId });
+      sendJson(res, 200, { renderId: jobId,projectRevision:snapshot?.params.projectRevision,timelineId:snapshot?.params.timelineId });
     } catch (error) {
       if (acceptedSubmission && !queued) await acceptedSubmission.cleanup().catch(() => undefined);
       if (controller.signal.aborted) return;

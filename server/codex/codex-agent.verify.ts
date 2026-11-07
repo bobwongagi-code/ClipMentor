@@ -231,6 +231,14 @@ lines.on('line', (line) => {
       method: 'item/agentMessage/delta',
       params: { threadId: activeThread, turnId: activeTurn, delta: 'Tool confirmed.' },
     });
+    for (const [turnId, phase, text] of [
+      [activeTurn, 'commentary', 'Partial review draft'],
+      ['old-turn', 'final_answer', 'Stale result'],
+      [activeTurn, 'final_answer', 'Final review result'],
+    ]) send({
+      method: 'item/completed',
+      params: { threadId: activeThread, turnId, item: { type: 'agentMessage', phase, text } },
+    });
     send({
       method: 'turn/completed',
       params: { threadId: activeThread, turn: { id: activeTurn, status: 'completed' } },
@@ -300,6 +308,7 @@ try {
 
   const manager = new CodexTurnManager();
   const events: CodexTurnStreamEvent[] = [];
+  const finalAnswers: string[] = [];
   await manager.run(client, {
     requestId: 'request-1',
     system: 'Use OpenChatCut tools.',
@@ -324,9 +333,10 @@ try {
           __images: [{ frame: 1, base64: 'aGVsbG8=' }, { frame: 2, base64: 'd29ybGQ=' }] },
       }), 'ok');
     }
-  }, new AbortController().signal);
+  }, new AbortController().signal, text => finalAnswers.push(text));
 
   assert.equal(manager.hasRequest('request-1'), false);
+  assert.deepEqual(finalAnswers, ['Final review result']);
   assert.deepEqual(events.map((event) => event.type), [
     'tool-end', 'tool-start', 'tool-end', 'context-usage', 'text-delta', 'done',
   ]);

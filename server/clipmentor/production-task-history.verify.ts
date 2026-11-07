@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {gzipSync} from 'node:zlib';
+import {configureSharedKvBackend} from '../../src/persist/sharedKv';
+import {createAgentRun,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar,archiveAgentArtifacts,type AgentArtifactRecord} from '../../src/persist/agentRuntimeStore';
+import {compactProductionTaskHistory,unpackProductionHistory} from './production-task-history';
+const memory=new Map<string,unknown>();configureSharedKvBackend({writeAgentRuntime:async r=>{memory.set(r.key,structuredClone(r.value));return {accepted:true,found:true,value:r.value};},updateAgentRunLease:async()=>{throw Error('unused');},get:async<T>(k:string)=>structuredClone(memory.get(k)) as T,set:async(k,v)=>{memory.set(k,structuredClone(v));},delete:async k=>{memory.delete(k);},keys:async()=>[...memory.keys()]});
+const projectId='history-test',runId='history-run';
+await createAgentRun({version:1,projectId,runId,status:'running',askOnly:false,userInputPreview:'test',userInputDigest:'a'.repeat(64),createdAt:1,updatedAt:1,artifactIds:[],checkpointIds:[],proposalIds:[],events:[]});
+const original:AgentArtifactRecord[]=[];
+for(let i=0;i<194;i++){
+ const body=JSON.stringify({type:'clipmentor-production-task/v1',task:{sequence:i,attempts:{review:9},error:'original failure',payload:'repeated'.repeat(40)}});
+ const r:AgentArtifactRecord={version:1,projectId,runId,artifactId:'p_'+i,kind:'checkpoint-source',toolName:'clipmentor-production-task',body,bodySha256:createHash('sha256').update(body).digest('hex'),originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:i+1,redacted:false,binaryOmitted:false};
+ assert(await storeAgentArtifact(r));original.push(r);
+}
+assert(await compactProductionTaskHistory(projectId,runId));
+const sidecar=await loadAgentRuntimeSidecar(projectId);assert.equal(sidecar.artifacts.length,179);
+for(const r of original.slice(-2))assert.deepEqual(await loadAgentArtifact(projectId,r.artifactId),r);
+const archive=await loadAgentArtifact(projectId,sidecar.artifacts.find(a=>a.toolName==='clipmentor-production-task-history')!.artifactId);assert(archive);
+assert.deepEqual(unpackProductionHistory(archive).sort((a,b)=>a.createdAt-b.createdAt),original.slice(-18,-2));
+const legacyRaw=JSON.stringify(unpackProductionHistory(archive));
+const legacy={...archive,body:JSON.stringify({type:'clipmentor-production-history/gzip-v1',sha256:createHash('sha256').update(legacyRaw).digest('hex'),count:16,data:gzipSync(legacyRaw).toString('base64')})};
+assert.deepEqual(unpackProductionHistory(legacy),unpackProductionHistory(archive),'existing gzip archives remain readable');
+assert.equal(await compactProductionTaskHistory(projectId,runId),false);
+const changed={...original[193],bodySha256:'wrong'};
+assert.equal(await archiveAgentArtifacts({...archive,artifactId:'h_bad'},[changed]),false);
+assert.deepEqual(await loadAgentArtifact(projectId,original[193].artifactId),original[193]);
+assert.throws(()=>unpackProductionHistory({...archive,body:archive.body.replace('brotli-v1','bad')}));
+assert.equal(await archiveAgentArtifacts({...archive,artifactId:'h_foreign',runId:'foreign'},[original[193]]),false);
+console.log('PASS lossless history archive, exact failures/counters, latest recovery points, stale/cross-run rejection and idempotence; zero providers');

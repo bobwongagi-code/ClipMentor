@@ -1,12 +1,13 @@
+import {currentExecutionView} from './execution-view';
 import { runProjectMigrations } from '../../src/persist/migrations';
 import { revisionOf } from '../../src/agent/external-edit-session';
 import {randomUUID,createHash} from 'node:crypto';
 import {HANDOFF_PREFIX,HANDOFF_RUN_PREFIX,HANDOFF_HISTORY_PREFIX,HANDOFF_TEMPLATE_VERSION,parseHandoffBrief,parseHandoffPolicy,handoffRecord,handoffToolAccess,handoffControlText,handoffAssetsOf,type HandoffPolicy,type HandoffRunBinding} from '../../shared/clipmentor-handoff';
 import {getStoredEntry,withSerializedProjectStore} from '../plugins/project-store';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
-import {copyReviewSubject,copyTeachingPacketFromDoc} from '../../src/clipmentor/production-gate';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
-import {prepareProductionBlueprint} from './production-readiness';
+import {createProductionPreparation} from './production-readiness';
+import {assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaApproved} from './visual-done-criteria';
 import {storeAgentArtifact,loadAgentArtifact} from '../../src/persist/agentRuntimeStore';
 import {digestValue} from '../agent-runs/store-values';
 import {getRun,recoverServerRun,flushRunPersistence,type ServerRun} from '../agent-runs/store';
@@ -20,14 +21,21 @@ export async function assertHandoffSubject(policy:HandoffPolicy,doc:ProjectDoc):
  if(!doc.timelines.some(t=>t.id===policy.brief.timelineId)||doc.activeTimelineId!==policy.brief.timelineId)throw new Error('handoff_timeline_missing');
  const ids=policy.assetBindings.map(a=>String(a.id));
  if(digestValue(handoffAssets(doc,ids))!==digestValue(policy.assetBindings))throw new Error('handoff_assets_changed');
+ const visual=boundVisualCriteria(policy);
  if(policy.brief.phase==='execution'){
   if(!doc.clipMentorAnalysis||checkSourceBreakdown(doc).status!=='structurally_ready')throw new Error('handoff_blueprint_incomplete');
-  await prepareProductionBlueprint(doc);
-  const packet=await copyTeachingPacketFromDoc(doc);
+  const prepared=await createProductionPreparation(doc),packet=prepared.rawPacket;
+  assertVisualCriteriaPlan(visual,packet.delivery_sections);
   if(!packet.units.length||packet.units.some(u=>!u.picture_plan?.execution_plan))throw new Error('handoff_picture_plan_required');
-  const subject=await copyReviewSubject(doc),b=policy.brief.blueprint;
+  const subject=prepared.reviewed.subject,b=policy.brief.blueprint;
   if(!b||b.revision!==subject.revision||b.digest!==subject.digest)throw new Error('handoff_blueprint_changed');
  }
+}
+function assertVisualApproval(policy:HandoffPolicy,doc:ProjectDoc){
+ if(policy.brief.phase!=='execution')return;
+ const criteria=boundVisualCriteria(policy),receipt=doc.clipMentorAnalysis?.production_copy_review;
+ if(criteria&&!visualCriteriaApproved(criteria,receipt))
+  throw Error('handoff_visual_criteria_review_missing_or_stale');
 }
 export async function readHandoffPolicy(projectId:string):Promise<HandoffPolicy|null>{
  const entry=await getStoredEntry(handoffKey(projectId));if(!entry.found)return null;const p=parseHandoffPolicy(entry.value);
@@ -74,8 +82,9 @@ export async function prepareHandoff(projectId:string,messages:readonly {role:st
  if(policy.brief.budget.maxModelTurns===0)throw new Error('handoff_model_budget_exhausted');
  const snapshot=await loadOfflineStoredProject(projectId);if(!snapshot)throw new Error('handoff_project_missing');
  await assertHandoffSubject(policy,snapshot.doc);
+ assertVisualApproval(policy,snapshot.doc);
  const controlText=handoffControlText(policy.brief,policy.digest),taskDetails=messages.at(-1)!.content;
- const blueprint=policy.brief.phase==='execution'?snapshot.doc.clipMentorAnalysis:null;
+ const blueprint=policy.brief.phase==='execution'?await currentExecutionView(snapshot.doc):null;
  const data={kind:'task_data_not_control',objective:policy.brief.objective,doneCriteria:policy.brief.doneCriteria,taskDetails,
   blueprint,sourceAssets:policy.assetBindings};
  const content=JSON.stringify(data);if(Buffer.byteLength(content)>512*1024)throw new Error('handoff_payload_too_large');
@@ -109,6 +118,7 @@ export async function assertRunHandoff(run:ServerRun):Promise<HandoffPolicy|null
  if(!handoffRecord(v)||v.version!==1||v.runId!==run.id||v.projectId!==run.projectId||v.policyDigest!==policy.digest||v.templateVersion!==HANDOFF_TEMPLATE_VERSION)throw new Error('handoff_run_binding_required');
  const snapshot=await loadOfflineStoredProject(run.projectId);if(!snapshot)throw new Error('handoff_project_missing');
  await assertHandoffSubject(policy,snapshot.doc);
+ assertVisualApproval(policy,snapshot.doc);
  const artifact=await loadAgentArtifact(run.projectId,String(v.payloadArtifactId));if(!artifact)throw new Error('handoff_payload_missing');
  if(policy.startedAt===null||Date.now()>=policy.startedAt+policy.brief.budget.maxElapsedMs)throw new Error('handoff_deadline_exceeded');
  return policy;

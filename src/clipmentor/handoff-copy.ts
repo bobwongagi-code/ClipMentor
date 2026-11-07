@@ -1,3 +1,4 @@
+import {deliverySectionsFromDoc} from './delivery-sections';
 import { handoffRecord } from '../../shared/clipmentor-handoff';
 import type { AgentContext } from '../agent/context';
 import { captionsOnTrack, defaultTrackId, resolveTrackId } from '../editor/types';
@@ -26,12 +27,25 @@ export function assertHandoffCopy(name: string, args: Record<string, unknown>, c
     }
     add(group.join(' '));
     const plan = internal[String(internal.current_picture_plan)];
+    if (handoffRecord(plan) && handoffRecord(plan.composition) && typeof plan.composition.detail === 'string') {
+      try {
+        const detail: unknown = JSON.parse(plan.composition.detail);
+        if (handoffRecord(detail)) {
+          if (Array.isArray(detail.production_rows)) detail.production_rows.filter(handoffRecord).forEach(r => add(r.stage_label));
+          if (handoffRecord(detail.layout_spec)) for (const stage of ['original','explanation']) {
+            const layout = detail.layout_spec[stage];
+            if (handoffRecord(layout) && handoffRecord(layout.stage_bar)) add(layout.stage_bar.text);
+          }
+        }
+      } catch { /* Prose and author notes are not sources of exact on-screen text. */ }
+    }
     if (handoffRecord(plan) && handoffRecord(plan.viewer_stage_cues)) {
       const cues = plan.viewer_stage_cues;
       if (handoffRecord(cues.original)) add(cues.original.text);
       if (Array.isArray(cues.revisit)) cues.revisit.filter(handoffRecord).forEach(v => add(v.text));
     }
   }
+  for(const s of deliverySectionsFromDoc(ctx.getDoc())){add(s.line.narration_ms);s.line.caption_lines.forEach(add);add(s.line.caption_lines.join(' '));s.line.labels.forEach(add);}
   if (name === 'edit_captions' && args.action === 'display_text') {
     const json = typeof args.json === 'string' ? JSON.parse(args.json) : args.json;
     if (!handoffRecord(json)) throw new Error('handoff_caption_input_invalid');

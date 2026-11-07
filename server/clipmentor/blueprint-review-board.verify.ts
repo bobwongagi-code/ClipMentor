@@ -38,6 +38,28 @@ try{
    }
   }
  });
+ await test('Human board surfaces a likely timing overrun without upgrading the lint verdict',async()=>{
+  const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
+  const prepared=planReviewBoards(input(c.green,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[]));
+  const {data,lint}=prepared,board=prepared.plans[0];
+  const group=lint.groups.find(g=>g.line_ids.includes('GM-L02'))!;
+  const card=(overrides:Partial<typeof group>,id='group-2')=>{
+   const report={...lint,groups:[{...group,...overrides}]};
+   return humanReviewBoardPage(board,data,report).split('data-card="'+id+'"')[1].split('</section>')[0];
+  };
+  // Green Makes saved L02: point estimate above capacity, empirical lower estimate below it.
+  const values={complete:true,estimated_seconds:13.731998,picture_seconds:12,empirical_lower_seconds:10.833947};
+  assert.match(card(values),/口播估计约13\.7秒，画面约12秒；估算可能偏长，待配音后核对。/);
+  assert.doesNotMatch(card(values,'group-1'),/估算可能偏长/);
+  assert.match(card({...values,empirical_lower_seconds:12.1}),/是否偏紧？这是估算，仍以配音实测为准。/);
+  for(const overrides of [
+   {...values,estimated_seconds:12,empirical_lower_seconds:10},
+   {...values,estimated_seconds:12.04,empirical_lower_seconds:10},
+   {...values,complete:false},
+   {...values,picture_seconds:null},
+   {...values,estimated_seconds:null},
+  ])assert.doesNotMatch(card(overrides),/估算可能偏长|是否偏紧/);
+ });
  await test('A4 actual four-group middle and historical full v5 reuse retain separate source facts',async()=>{
   const four=planReviewBoards(input(c.barelyFour)).plans[0];assert.equal(four.rows.filter(r=>r.stage==='original').length,4);assert(four.reuse.some(r=>r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L04'))&&r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L06'))));
   // Historical v5 has a source-video invitation; the saved four-group middle
@@ -71,6 +93,20 @@ try{
  let green=clone(c.green) as unknown as Record<string,unknown>;
  for(const asset of bindings[0].assets){const path=join(media,asset.src.split('/').at(-1)!);if(asset.kind==='video')await exec(ffmpegBin(),['-v','error','-y','-f','lavfi','-i','testsrc2=size=96x160:rate=30:duration=69.2','-c:v','libx264','-pix_fmt','yuv420p',path]);else await exec(ffmpegBin(),['-v','error','-y','-f','lavfi','-i',`testsrc=size=${asset.width}x${asset.height}:rate=1`,'-frames:v','1',path]);const original=asset.sourceContentHash!,replacement=hash(await readFile(path));green=JSON.parse(JSON.stringify(green).replaceAll(original,replacement));for(let k=0;k<bindings.length;k++)bindings[k]=JSON.parse(JSON.stringify(bindings[k]).replaceAll(original,replacement));}
  const source=bindings[0].assets.find(a=>a.kind==='video')!,sourceFile=join(media,source.src.split('/').at(-1)!);
+ await test('Panel Storyboard creates a reusable local image from the bound original',async()=>{
+  const {createPanelStoryboard}=await import('./production-panel-delivery');
+  const project=clone(bindings[0]),signal=new AbortController().signal;
+  const asset=await createPanelStoryboard(project,signal);assert(asset);
+  assert.equal(asset.props?.clipmentorStoryboardSource,source.id);
+  assert.equal(asset.props?.clipmentorStoryboardHash,source.sourceContentHash);
+  const times=asset.props?.clipmentorStoryboardTimes as number[];
+  assert.equal(times.length,3);assert(times.every((time,index)=>index===0||time>times[index-1]));
+  const bytes=await readFile(join(media,asset.src.split('/').at(-1)!));
+  assert(bytes.length>1000);assert.equal(hash(bytes),asset.sourceContentHash);
+  project.assets.push(asset);
+  assert.equal(await createPanelStoryboard(project,signal),undefined,'identical valid assets are reused');
+  await assert.rejects(createPanelStoryboard(bindings[0],AbortSignal.abort(Error('fixture abort'))),/fixture abort/);
+ });
  await test('A5 source request decodes exact known 30fps frame and full resolution',async()=>{
   for(const frame of [0,21,195,2075]){const actual=join(root,'actual.jpg'),reference=join(root,'reference.jpg');await extractOneFrame(sourceFile,Math.floor(frame/30*1000),actual,false);await exec(ffmpegBin(),['-v','error','-y','-i',sourceFile,'-vf','select=eq(n\\,'+frame+')','-frames:v','1','-q:v','4',reference]);assert.deepEqual(await readFile(actual),await readFile(reference));}
  });
@@ -119,15 +155,48 @@ try{
  await test('H2-H6 human has one body, Chinese first, illustration boundaries and neutral warnings',async()=>{
   const {humanBoardQuestions}=await import('./blueprint-review-board-human');const prepared=planReviewBoards(input(green,bindings)),questions=humanBoardQuestions(prepared.plans[0],(await import('../../src/clipmentor/blueprint-lint')).lintBlueprint(green));
   assert([...questions.get('GM-G1')??[]].some(q=>q.includes('指定画面')));assert([...questions.get('GM-G5')??[]].some(q=>q.includes('画面说明相同')));for(const id of ['GM-G2','GM-G3','GM-G4'])assert(!questions.has(id));
-  const result=await renderReviewBoards(await generateInput(),join(root,'human'),undefined,'human');assert.equal(result.artifacts.length,1);assert.equal(result.artifacts[0].frame_count,36);const page=await readFile(result.artifacts[0].path,'utf8');
-  assert.equal((page.match(/data-card="group-/g)??[]).length,5);assert.equal((page.match(/class="explanation"/g)??[]).length,6);assert.equal((page.match(/class="ending"/g)??[]).length,2);assert(page.includes('成绩开场'));assert(page.includes('版式示意，非渲染'));assert(page.includes('示意模板'));assert(!page.includes('text-shadow'));
-  const visible=page.split('<footer>')[0].replace(/<style>[\s\S]*?<\/style>/g,'').replace(/<details[\s\S]*?<\/details>/g,'').replace(/<[^>]+>/g,'');assert(!/[a-f0-9]{64}|#[a-f0-9]{6}|\bf\d+\b|Reference only|tool_crop_px|asset_id|B05/iu.test(visible));assert(!/画面已匹配|审核通过|验收通过/.test(visible));assert(!/data-verdict=/.test(page));assert(!page.includes('<details id="technical" open'));
+  const result=await renderReviewBoards(await generateInput(),join(root,'human'),undefined,'human');assert.equal(result.artifacts.length,1);assert.equal(result.artifacts[0].frame_count,38);const page=await readFile(result.artifacts[0].path,'utf8');
+  assert.equal((page.match(/data-card="group-/g)??[]).length,5);assert.equal((page.match(/class="explanation"/g)??[]).length,6);assert.equal((page.match(/class="ending"/g)??[]).length,2);assert(page.includes('<h2>片头</h2>'));assert(page.includes('版式示意，非渲染'));assert(page.includes('示意模板'));assert(!page.includes('text-shadow'));
+  const visible=page.split('<footer>')[0].replace(/<style>[\s\S]*?<\/style>/g,'').replace(/<details[\s\S]*?<\/details>/g,'').replace(/<[^>]+>/g,'');assert(!/[a-f0-9]{64}|#[a-f0-9]{6}|\bf\d+\b|Reference only|tool_crop_px|asset_id|B05/iu.test(visible));assert(!/画面已匹配|审核通过|验收通过/.test(visible));assert(!/data-verdict=/.test(page));assert(!page.includes('<details id="technical"')&&!page.includes('候选业务登记'));
   for(const line of prepared.data.lines){const escaped=(t:string)=>t.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));assert(page.includes(escaped(line.text)));assert(page.includes(escaped(line.zh)));const found=page.indexOf('data-line-id="'+line.id+'"');assert(found>=0);const segment=page.slice(found,page.indexOf('</div>',found));assert(segment.indexOf('class="meaning"')<segment.indexOf('class="narration"'));}
   assert.equal(networks,0);
  });
- await test('H6 only declared repetition, capacity lower bound and visible quantity produce questions',async()=>{
+ await test('Creator endings expose the same crop and actual uncropped evidence before freeze',async()=>{
+  const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
+  const prepared=planReviewBoards(input(green,bindings));
+  const first=prepared.plans[0].rows.find(r=>r.stage==='closing')!;
+  const second=structuredClone(first);
+  first.key='ending/new';first.ending_variant='new_contact';
+  second.key='ending/existing';second.ending_variant='existing_partner';second.asset_id='separate-upload-same-bytes';
+  const board={...prepared.plans[0],rows:[...prepared.plans[0].rows,second]};
+  const page=()=>humanReviewBoardPage(board,prepared.data,prepared.lint);
+  assert(page().includes('同一张原图与同一裁切'));
+  assert(page().includes('原海报的佣金区'));
+  assert(page().includes('本商品的原片 Storyboard'));
+  second.asset_hash='a'.repeat(64);
+  assert(!page().includes('同一张原图与同一裁切'));
+  second.asset_hash=first.asset_hash;
+  second.crop={left:0,top:0,right:0,bottom:0};
+  assert(!page().includes('同一张原图与同一裁切'));
+  board.rows.pop();
+  assert(!page().includes('同一张原图与同一裁切'));
+  first.ending_variant='unclassified';
+  assert(!page().includes('原海报的佣金区'));
+  assert(!page().includes('本商品的原片 Storyboard'));
+  const output=await renderReviewBoards(await generateInput(),join(root,'ending-source-proof'),undefined,'human');
+  const html=await readFile(output.artifacts[0].path,'utf8');
+  const reference=join(root,'original-closing-proof.jpg');
+  const asset=bindings.flatMap(doc=>doc.assets).find(a=>a.id===first.asset_id)!;
+  await extractOneFrame(join(media,asset.src.split('/').at(-1)!),0,reference,false);
+  assert(html.includes('核对未裁原图'));
+  assert(html.includes('data:image/jpeg;base64,'+(await readFile(reference)).toString('base64')));
+  assert.equal(networks,0);
+ });
+ await test('H6 declared repetition, two levels of estimated capacity, and visible quantity produce questions',async()=>{
   const {humanBoardQuestions}=await import('./blueprint-review-board-human'),{lintBlueprint}=await import('../../src/clipmentor/blueprint-lint');const prepared=planReviewBoards(input(green,bindings)),board=clone(prepared.plans[0]),lint=lintBlueprint(green),last=board.rows.find(r=>r.line_ids.includes('GM-L06'))!;last.range=[53,56];last.lint.push({rule_id:'B04',level:'warn',location:'GM-L06',excerpt:'RM20,000',message:'not a decision'});const g=lint.groups.find(g=>g.line_ids.includes('GM-L06'))!;g.estimated_seconds=30;g.empirical_lower_seconds=25;g.picture_seconds=10;
-  const q=[...humanBoardQuestions(board,lint).get('GM-G5')??[]];assert(q.some(q=>q.includes('重复使用')));assert(q.some(q=>q.includes('RM20,000')));assert(q.some(q=>q.includes('估计约30秒')));g.empirical_lower_seconds=9;assert(![...humanBoardQuestions(board,lint).get('GM-G5')??[]].some(q=>q.includes('估计约30秒')));
+  const questions=()=>[...humanBoardQuestions(board,lint).get('GM-G5')??[]];
+  const q=questions();assert(q.some(q=>q.includes('重复使用')));assert(q.some(q=>q.includes('RM20,000')));assert(q.some(q=>q.includes('估计约30秒')&&q.includes('是否偏紧')));
+  g.empirical_lower_seconds=9;assert(questions().some(q=>q.includes('估计约30秒')&&q.includes('估算可能偏长')));assert(!questions().some(q=>q.includes('估计约30秒')&&q.includes('是否偏紧')));
  });
  await test('Adversarial H6 includes opening and ending visible-quantity questions',async()=>{
   const {humanBoardQuestions,humanReviewBoardPage}=await import('./blueprint-review-board-human');const p=planReviewBoards(input(green,bindings)),board=clone(p.plans[0]);

@@ -1,6 +1,6 @@
 import type { AgentContext } from '../agent/context';
 import type { SourceVideoRequest, SourceVideoResult, SourceVideoReceipt } from '../../shared/clipmentor-source-video';
-import { validateSourceVideoTask } from '../../shared/clipmentor-source-video';
+import { observationTaskWithBoundaryContext, validateSourceVideoTask } from '../../shared/clipmentor-source-video';
 import { copyReviewSubject, copyTeachingPacketFromDoc } from './production-gate';
 
 /** Paid source observation only: no approval binding, project mutation or editing. */
@@ -19,7 +19,7 @@ export async function requestSourceVideo(args: Record<string, unknown>, ctx: Age
     const request:SourceVideoRequest = {operationId:args.operationId,maxRequests:1,projectId:project,authorRunId:author,
       source:{src:asset.src,hash:a.source.sourceContentHash,fps:a.source.fps,duration:a.source.duration_seconds},
       subject:{revision:subject.revision,digest:subject.digest,units:subject.units.map(({unit_id,candidate_id})=>({unit_id,candidate_id}))},packet,
-      ...(args.observationTask===undefined?{}:{observationTask:args.observationTask})};
+      ...(args.observationTask===undefined?{}:{observationTask:observationTaskWithBoundaryContext(args.observationTask,a.source.duration_seconds)})};
     if(ctx.getDoc()!==doc) return {error:'Project changed; no request sent',requestsSent:0};
     ctx.onToolProgress?.('3.8连续源片视听观察：一次预算，不重试，不改稿或制作');
     const timeout=AbortSignal.timeout(660000), outer=ctx.getAgentRunSignal?.();sent=true;
@@ -55,9 +55,9 @@ export async function readSourceVideo(args: Record<string, unknown>, ctx: AgentC
     const receipt=await response.json() as SourceVideoReceipt;
     if(receipt.operationId!==args.operationId || receipt.projectId!==projectId || receipt.requestsSent!==0
       || receipt.actual_handoff_verified!==false || receipt.complete_film_accepted!==false) return {error:'Invalid saved source receipt',requestsSent:0};
-    const subject=await copyReviewSubject(doc);
+    const subject=await copyReviewSubject(doc).catch(()=>null);
     const a=doc.clipMentorAnalysis,asset=doc.assets.find(x=>x.id===a?.source.asset_id);
-    return {ok:true,receipt,current_binding:ctx.getDoc()===doc && subject.digest===receipt.subject.digest && subject.revision===receipt.subject.revision
+    return {ok:true,receipt,current_binding:ctx.getDoc()===doc && subject?.digest===receipt.subject.digest && subject?.revision===receipt.subject.revision
       && a?.source.sourceContentHash===receipt.source_hash && asset?.sourceContentHash===receipt.source_hash ? 'current':'stale',requestsSent:0,
       note:'Receipt read only. Validation means structure/time tolerance, not semantic or production approval. Original failure and raw timestamps are retained.'};
   } catch { return {error:'Cannot read/bind saved source receipt; no model request sent',requestsSent:0}; }

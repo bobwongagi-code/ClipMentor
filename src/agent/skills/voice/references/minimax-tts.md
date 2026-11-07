@@ -19,7 +19,7 @@ Grounded in OpenChatCut’s voice tool + server adapter (`server/plugins/voice.t
 | Streaming | `stream`; `excludeAggregatedAudio`; `forceCbr` only with streamed MP3. OpenChatCut still persists one local asset |
 | Language/text | languageBoost, textNormalization, latexRead, pronunciation tone entries |
 | Voice composition | timbreWeights (1–4 voices, weights 1–100), voiceModify pitch/intensity/timbre/effect |
-| Subtitle | `subtitleEnable` + sentence/word/word_streaming; downloaded as a durable JSON sidecar |
+| Subtitle | `subtitleEnable` + sentence/word/word_streaming; non-streaming `subtitle_file` is downloaded as a durable JSON sidecar; inline streaming subtitles are not assembled here |
 | Placement | **Media pool only** — does not place on the timeline |
 
 ## When to use
@@ -57,6 +57,8 @@ submit_voice({
 ```
 
 Then place with `edit_item` only if the user wants it on a track.
+
+For an already-authorized new ClipMentor synthesis that needs execution anchors, request `subtitleEnable: true`, `subtitleType: "word"`, `stream: false` in that same call. The original voice response stores the sidecar together with text, audio and subtitle hashes and the measured duration; browser and server execution retain that binding. The execution view validates the saved files before exposing word/caption boundaries. A word request alone does not prove that word timestamps were returned. Sentence-only, missing, malformed or mismatched results stay unavailable; timing is not independent listening or picture/review approval. Streaming inline subtitles are not handled by this file-sidecar anchor path. Do not synthesize unchanged existing audio again just to retrofit timestamps.
 
 ## Rules
 

@@ -7,6 +7,57 @@ const hash=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v
 const strings=(v:unknown):v is string[]=>Array.isArray(v)&&v.length>0&&v.every(text)&&new Set(v).size===v.length;
 export const deliveryCropShape=(v:unknown):boolean=>row(v)&&Object.keys(v).length===4&&['left','top','right','bottom'].every(k=>typeof v[k]==='number'&&Number.isFinite(v[k])&&Number(v[k])>=0&&Number(v[k])<1)&&Number(v.left)+Number(v.right)<1&&Number(v.top)+Number(v.bottom)<1;
 type FrameRange = [number, number];
+type PictureCrop = {left:number;top:number;right:number;bottom:number};
+type PictureAsset = {asset_id:string;src:string;sha256:string};
+export type DeliveryLayout =
+ | {kind:'original_underlay';source:{asset_id:string;src:string;sha256:string};range:[number,number];shade:number;show_sales:boolean;headline:string[];transition:string[]}
+ | {kind:'product_commission';product_crop:PictureCrop;commission_crop:PictureCrop}
+ | {kind:'recruitment_card';poster:PictureAsset}
+ | {kind:'product_storyboard';product:PictureAsset;storyboard:PictureAsset;attachment:PictureAsset};
+export const endingCardLayout=(layout:DeliveryLayout|undefined)=>layout?.kind==='recruitment_card'||layout?.kind==='product_storyboard'?layout:undefined;
+export const endingCardSources=(layout:NonNullable<ReturnType<typeof endingCardLayout>>)=>layout.kind==='recruitment_card'?[layout.poster]:[layout.product,layout.storyboard,layout.attachment];
+function referenceOnlyMediaReader(assets:readonly MediaAsset[]) {
+ const references=assets.filter(a=>a.props?.clipmentorReferenceOnly===true);
+ const identities=new Set(references.flatMap(a=>[a.id,a.src,...(a.sourceContentHash?[a.sourceContentHash]:[])]));
+ const paths=new Set(references.map(a=>a.src));
+ const contains=(entry:unknown):boolean=>{
+  if(typeof entry==='string')return identities.has(entry)
+   ||(entry.match(/\/media\/uploads\/[^\s"'<>?#()[\]{}\\\x60]+/g)??[]).some(path=>paths.has(path));
+  if(Array.isArray(entry))return entry.some(contains);
+  return row(entry)&&Object.values(entry).some(contains);
+ };
+ return contains;
+}
+/** References can stay in the library. Executable instances, including embedded media, cannot use them. */
+export function assertNoReferenceMedia(doc:ProjectDoc,previous?:ProjectDoc):void {
+ for(const reference of previous?.assets.filter(a=>a.props?.clipmentorReferenceOnly===true)??[]){
+  if(doc.assets.some(a=>(a.id===reference.id||a.src===reference.src)&&a.props?.clipmentorReferenceOnly!==true))
+   throw Error('reference_only_asset_role_cannot_change');
+ }
+ const assets=[...(previous?.assets??[]),...doc.assets];
+ if(!assets.some(a=>a.props?.clipmentorReferenceOnly===true))return;
+ const used=referenceOnlyMediaReader(assets);
+ if(doc.timelines.some(t=>t.items.some(i=>used([i,doc.assets.find(a=>a.id===i.sourceAssetId||a.src===i.src)?.props]))))
+  throw Error('reference_only_asset_cannot_enter_timeline');
+}
+function deliveryLayoutShape(v:unknown):v is DeliveryLayout {
+ if(!row(v))return false;
+ const titles=(lines:unknown,min:number)=>Array.isArray(lines)&&lines.length>=min&&lines.length<=4
+  &&lines.every(line=>text(line)&&Array.from(line).length<=42&&!/[\p{Cc}\p{Cf}]/u.test(line));
+ if(v.kind==='original_underlay')return Object.keys(v).length===7&&row(v.source)&&Object.keys(v.source).length===3
+  &&text(v.source.asset_id)&&typeof v.source.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(v.source.src)&&hash(v.source.sha256)
+  &&Array.isArray(v.range)&&v.range.length===2&&v.range.every(n=>typeof n==='number'&&Number.isFinite(n))
+  &&v.range[0]>=0&&v.range[1]>v.range[0]&&typeof v.shade==='number'&&v.shade>=0.35&&v.shade<=0.8&&typeof v.show_sales==='boolean'
+  &&titles(v.headline,v.show_sales?1:0)&&(v.show_sales||Array.isArray(v.headline)&&v.headline.length===0)&&titles(v.transition,1);
+ const asset=(a:unknown):a is PictureAsset=>row(a)&&Object.keys(a).length===3&&text(a.asset_id)&&typeof a.src==='string'
+  &&/^\/media\/uploads\/[^/?#]+$/.test(a.src)&&hash(a.sha256);
+ if(v.kind==='recruitment_card')return Object.keys(v).length===2&&asset(v.poster);
+ if(v.kind==='product_storyboard')return Object.keys(v).length===4&&asset(v.product)&&asset(v.storyboard)&&asset(v.attachment)
+  &&v.product.asset_id!==v.storyboard.asset_id&&v.product.asset_id!==v.attachment.asset_id;
+ if(v.kind!=='product_commission'||Object.keys(v).length!==3||!deliveryCropShape(v.product_crop)||!deliveryCropShape(v.commission_crop))return false;
+ const p=v.product_crop as PictureCrop,c=v.commission_crop as PictureCrop;
+ return 1-p.bottom<=c.top||1-c.bottom<=p.top||1-p.right<=c.left||1-c.right<=p.left;
+}
 interface PictureDisplay { fps: number; ranges: FrameRange[] }
 function displayShape(v: unknown): v is PictureDisplay {
  return row(v) && Object.keys(v).length === 2 && typeof v.fps === 'number' && Number.isFinite(v.fps) && v.fps > 0
@@ -17,25 +68,32 @@ export interface DeliverySection {
  section_id:string; kind:'performance_opening'|'creator_invitation';
  line:{line_id:string;narration_ms:string;caption_lines:string[];meaning_zh:string;labels:string[];labels_zh?:string[]};
  evidence_ids:string[]; evidence?:Array<{evidence_id:string;text:string}>;
- picture:{asset_id:string;src:string;sha256:string;description:string;crop?:{left:number;top:number;right:number;bottom:number};
+ picture:{asset_id:string;src:string;sha256:string;description:string;crop?:PictureCrop;layout?:DeliveryLayout;
   /** Half-open native-picture intervals relative to this section's audio, at the declared fps. Omission requires the full section. */
   display?:PictureDisplay};
  voice:{provider:string;voiceId:string;speed:1;existing_audio?:{assetId:string;src:string;sha256:string;durationSeconds:number;text:string}};
 }
 const normalize=(s:string)=>s.replace(/\s+/g,' ').trim();
 export function deliverySectionsShape(v:unknown):v is DeliverySection[]{
- if(!Array.isArray(v)||v.length<1||v.length>2)return false;
+ if(!Array.isArray(v)||v.length<1||v.length>3)return false;
  return v.every(s=>row(s)&&Object.keys(s).every(k=>['section_id','kind','line','evidence_ids','evidence','picture','voice'].includes(k))&&text(s.section_id)
   &&['performance_opening','creator_invitation'].includes(String(s.kind))&&strings(s.evidence_ids)
   &&row(s.line)&&text(s.line.line_id)&&text(s.line.narration_ms)&&text(s.line.meaning_zh)&&Array.isArray(s.line.caption_lines)&&s.line.caption_lines.length>0&&s.line.caption_lines.every(text)
   &&normalize(s.line.narration_ms)===normalize(s.line.caption_lines.join(' '))&&Array.isArray(s.line.labels)&&s.line.labels.every(text)&&labelTranslationsShape(s.line.labels_zh,s.line.labels)
   &&row(s.picture)&&text(s.picture.asset_id)&&typeof s.picture.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.picture.src)&&hash(s.picture.sha256)&&text(s.picture.description)
   &&(s.picture.crop===undefined||deliveryCropShape(s.picture.crop))
+  &&(s.picture.layout===undefined||(s.picture.crop===undefined&&deliveryLayoutShape(s.picture.layout)
+    &&(s.picture.layout.kind==='original_underlay'?s.kind==='performance_opening':s.kind==='creator_invitation'
+      &&s.section_id===(s.picture.layout.kind==='product_storyboard'?'existing_partner':'new_contact'))))
   &&(s.picture.display===undefined||displayShape(s.picture.display))
   &&row(s.voice)&&text(s.voice.provider)&&text(s.voice.voiceId)&&s.voice.speed===1
   &&(s.voice.existing_audio===undefined||(row(s.voice.existing_audio)&&text(s.voice.existing_audio.assetId)&&typeof s.voice.existing_audio.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.voice.existing_audio.src)&&hash(s.voice.existing_audio.sha256)&&s.voice.existing_audio.text===s.line.narration_ms&&typeof s.voice.existing_audio.durationSeconds==='number'&&Number.isFinite(s.voice.existing_audio.durationSeconds)&&s.voice.existing_audio.durationSeconds>0))
   &&(s.evidence===undefined||(Array.isArray(s.evidence)&&s.evidence.length===s.evidence_ids.length&&new Set(s.evidence.map(e=>row(e)?e.evidence_id:null)).size===s.evidence.length&&s.evidence.every(e=>row(e)&&text(e.evidence_id)&&(s.evidence_ids as string[]).includes(e.evidence_id)&&text(e.text)))))
-  &&new Set(v.map(s=>s.section_id)).size===v.length&&new Set(v.map(s=>s.line.line_id)).size===v.length&&new Set(v.map(s=>s.kind)).size===v.length;
+  &&new Set(v.map(s=>s.section_id)).size===v.length&&new Set(v.map(s=>s.line.line_id)).size===v.length
+  &&v.filter(s=>s.kind==='performance_opening').length<=1
+  &&(v.filter(s=>s.kind==='creator_invitation').length<=1||v.filter(s=>s.kind==='creator_invitation').length===2
+    &&v.some(s=>s.kind==='creator_invitation'&&s.section_id==='new_contact')
+    &&v.some(s=>s.kind==='creator_invitation'&&s.section_id==='existing_partner'));
 }
 /** A small extension of the current picture plan, not source evidence or a parallel blueprint. */
 export function deliverySectionsFromDoc(doc:ProjectDoc):DeliverySection[]{
@@ -49,9 +107,30 @@ export function deliverySectionsFromDoc(doc:ProjectDoc):DeliverySection[]{
  if(!all.length)return all;
  if(!deliverySectionsShape(all))throw new Error('delivery_sections_duplicate');
  const lineIds=doc.clipMentorAnalysis!.blueprint.flatMap(u=>{const i=(u as unknown as Row).internal_review;if(!row(i))return[];const c=i[String(i.current_script_candidate)];return row(c)&&Array.isArray(c.lines)?c.lines.filter(row).map(l=>l.id):[];});
+ const usesReference=referenceOnlyMediaReader(doc.assets);
  for(const s of all){
   const a=doc.assets.find(a=>a.id===s.picture.asset_id);
+  if(usesReference([s.picture.asset_id,s.picture.src,s.picture.sha256,s.picture.layout]))throw Error('delivery_reference_only_asset_forbidden');
   if(!a||a.kind!=='image'||a.src!==s.picture.src||a.sourceContentHash!==s.picture.sha256||lineIds.includes(s.line.line_id))throw new Error('delivery_asset_binding_invalid');
+  const layout=s.picture.layout;
+  const ending=endingCardLayout(layout);
+  if(ending){
+   const wholePoster=ending.kind==='recruitment_card'&&ending.poster.asset_id===a.id;
+   if((!wholePoster&&(a.width!==720||a.height!==1280))||endingCardSources(ending).some(ref=>!doc.assets.some(media=>
+    media.kind==='image'&&media.id===ref.asset_id&&media.src===ref.src&&media.sourceContentHash===ref.sha256)))throw Error('delivery_ending_card_source_invalid');
+   if(ending.kind==='product_storyboard'&&endingCardSources(ending).some(ref=>ref.asset_id===a.id))throw Error('delivery_ending_card_source_invalid');
+   if(ending.kind==='product_storyboard'&&[ending.storyboard,ending.attachment].some(ref=>{
+    const media=doc.assets.find(m=>m.id===ref.asset_id)!;
+    return media.props?.clipmentorStoryboardSource!==doc.clipMentorAnalysis!.source.asset_id||
+     media.props?.clipmentorStoryboardHash!==doc.clipMentorAnalysis!.source.sourceContentHash;
+   }))throw Error('delivery_ending_storyboard_source_invalid');
+  }
+  if(layout?.kind==='original_underlay'){
+   const source=doc.clipMentorAnalysis!.source;
+   if(layout.source.asset_id!==source.asset_id||layout.source.sha256!==source.sourceContentHash||layout.range[1]>source.duration_seconds
+    ||!doc.assets.some(a=>a.kind==='video'&&a.id===source.asset_id&&a.src===layout.source.src&&a.sourceContentHash===layout.source.sha256))
+    throw new Error('delivery_opening_original_binding_invalid');
+  }
   const evidence=s.evidence_ids.map(id=>doc.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===id));
   if(evidence.some(e=>!e||e.kind!=='operator_supplied'||!e.source_ids.includes(a.id)||e.call_status==='failed'))throw new Error('delivery_evidence_missing');
   s.evidence=evidence.map(e=>({evidence_id:e!.evidence_id,text:e!.text}));
@@ -73,7 +152,7 @@ export function deliveryAudio(doc:ProjectDoc,s:DeliverySection):{asset:MediaAsse
   const g=a.props?.generation as Row|undefined;return a.kind==='audio'&&g?.text===s.line.narration_ms&&g.provider===s.voice.provider&&g.voiceId===s.voice.voiceId&&g.speed===1&&typeof g.durationSeconds==='number'&&Number.isFinite(g.durationSeconds)&&g.durationSeconds>0;
  });
  const seconds=old?.durationSeconds??(asset?.props?.generation as Row|undefined)?.durationSeconds;
- if(!asset||typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||asset.durationInFrames!==Math.round(seconds*fps))throw new Error('delivery_audio_missing:'+s.section_id);
+ if(!asset||typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||![Math.round(seconds*fps),Math.ceil(seconds*fps)].includes(asset.durationInFrames))throw new Error('delivery_audio_missing:'+s.section_id);
  return{asset,frames:asset.durationInFrames};
 }
 /** One range contract for review/readback, save protection and export. Never infer it from prose or MG code. */
@@ -122,6 +201,7 @@ function reviewedPictureDisplay(doc: ProjectDoc, section: DeliverySection): bool
  return s.kind === section.kind && s.line.line_id === section.line.line_id && s.line.narration_ms === section.line.narration_ms
   && s.voice.provider === section.voice.provider && s.voice.voiceId === section.voice.voiceId && s.voice.speed === section.voice.speed
   && ['asset_id','src','sha256','description'].every(k => picture[k] === section.picture[k as keyof DeliverySection['picture']])
+  && JSON.stringify(picture.layout)===JSON.stringify(section.picture.layout)
   && ['left','top','right','bottom'].every(k => (row(picture.crop) ? picture.crop[k] : undefined) === section.picture.crop?.[k as keyof NonNullable<DeliverySection['picture']['crop']>])
   && s.picture.display.fps === section.picture.display.fps && JSON.stringify(s.picture.display.ranges) === JSON.stringify(section.picture.display.ranges);
 }
@@ -129,19 +209,33 @@ function reviewedPictureDisplay(doc: ProjectDoc, section: DeliverySection): bool
 export function missingDeliverySectionKinds(before:ProjectDoc,after:ProjectDoc):DeliverySection['kind'][] {
  // Compare scope only; existing checks decide evidence validity and repairability.
  // The normal import/review paths still validate the full section and actual assets.
- const kinds=(doc:ProjectDoc)=>new Set<DeliverySection['kind']>((doc.clipMentorAnalysis?.blueprint??[]).flatMap(u=>{
+ const declarations=(doc:ProjectDoc)=>(doc.clipMentorAnalysis?.blueprint??[]).flatMap(u=>{
   const i=(u as unknown as Row).internal_review;if(!row(i))return[];const p=i[String(i.current_picture_plan)];
-  return row(p)&&Array.isArray(p.delivery_sections)?p.delivery_sections.filter(row).map(s=>s.kind).filter((kind):kind is DeliverySection['kind']=>kind==='performance_opening'||kind==='creator_invitation'):[];
- }));
- const next=kinds(after);return [...kinds(before)].filter(kind=>!next.has(kind));
+  return row(p)&&Array.isArray(p.delivery_sections)?p.delivery_sections.filter(row):[];
+ });
+ const previous=declarations(before),next=declarations(after);
+ const kinds=['performance_opening','creator_invitation'] as const;
+ const missing=kinds.filter(kind=>previous.some(s=>s.kind===kind)&&!next.some(s=>s.kind===kind));
+ const audiences=['new_contact','existing_partner'];
+ if(!missing.includes('creator_invitation')&&audiences.every(id=>previous.some(s=>s.kind==='creator_invitation'&&s.section_id===id))
+  &&audiences.some(id=>!next.some(s=>s.kind==='creator_invitation'&&s.section_id===id)))missing.push('creator_invitation');
+ return missing;
 }
 /** Preserve registered native pictures across a draft commit, including other edit tools.
  * Embedded MG images cannot replace a separately bound evidence asset. Crop/layout
  * edits and contiguous native replacements remain allowed; empty timelines can be built.
  */
 export function assertDeliveryPicturePreservation(before: ProjectDoc, after: ProjectDoc): void {
- const sections = deliverySectionsFromDoc(before);
+ assertNoReferenceMedia(after,before);
  if(after.clipMentorAnalysis&&missingDeliverySectionKinds(before,after).length)throw new Error('delivery_sections_would_be_lost');
+ let sections:DeliverySection[];
+ try{sections=deliverySectionsFromDoc(before);}
+ catch(error){
+  if(!(error instanceof Error)||error.message!=='delivery_sections_invalid'||!after.clipMentorAnalysis
+   ||before.timelines.some(timeline=>timeline.items.length)||after.timelines.some(timeline=>timeline.items.length))throw error;
+  deliverySectionsFromDoc(after);
+  return;
+ }
  for (const previous of before.timelines) {
   for (const section of sections) {
    const matches = (i: typeof previous.items[number]) => i.kind === 'image'

@@ -114,7 +114,8 @@ try {
   assert.equal(mixed.full_film_accepted, false);
   const mismatched = await execExportQaTool('verify_export', { src: '/media/uploads/export.mp4', executionManifest: { ...manifest, fps: 25 } }, ctx) as any;
   assert.equal(mismatched.preview_binding, 'timing_mismatch');
-  assert.equal(mismatched.ok, false, 'a stale/timebase-mismatched manifest cannot masquerade as checked output');
+  assert.equal(mismatched.ok, true, 'the completed report must remain readable');
+  assert.equal(mismatched.qa_passed, false, 'a stale/timebase-mismatched manifest cannot masquerade as checked output');
 
   const technicalFetcher = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -123,8 +124,8 @@ try {
     return new Response(JSON.stringify(data), { status: 200 });
   };
   const missingTiming = await execExportQaTool('verify_export', { src: '/media/uploads/export.mp4', executionManifest: manifest }, ctx) as any;
-  assert.equal(missingTiming.preview_binding, 'timing_mismatch', 'unknown output metadata must not be called matching');
-  assert.equal(missingTiming.ok, false);
+  assert.match(missingTiming.error, /invalid or inconsistent report/, 'missing metadata must not be called matching');
+  assert.notEqual(missingTiming.qa_passed, true);
   globalThis.fetch = technicalFetcher;
 
   renderJobResult = {

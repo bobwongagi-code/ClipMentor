@@ -1,5 +1,6 @@
 import type { MediaAsset, TimelineState } from '../editor/types';
 import type { MinimaxLanguageBoost } from '../../shared/media-provider-params';
+import {voiceAssetProvenance,type MinimaxSubtitleBinding} from '../../shared/voice-word-timing';
 
 export type VoiceProvider =
   | 'elevenlabs'
@@ -66,6 +67,8 @@ export interface SubmitVoiceArgs {
 interface VoiceResponse {
   path?: string;
   subtitlePath?: string;
+  subtitleBinding?:MinimaxSubtitleBinding;
+  sha256?:string;
   durationSeconds?: number;
   error?: string;
 }
@@ -105,7 +108,8 @@ export async function submitVoice(args: SubmitVoiceArgs, state: TimelineState): 
   const durationInFrames = result.durationSeconds && Number.isFinite(result.durationSeconds)
     ? Math.max(1, Math.round(result.durationSeconds * state.fps))
     : await probeAudio(result.path, state.fps);
-  const props = { ...(result.subtitlePath ? { minimaxSubtitlePath: result.subtitlePath, minimaxSubtitleType: args.subtitleType ?? 'sentence' } : {}),
+  const provenance=voiceAssetProvenance(result,args.subtitleType);
+  const props = { ...provenance.props,
     generation: { provider:args.provider,voiceId,text,speed:args.speed??1,
       ...(typeof result.durationSeconds==='number'&&Number.isFinite(result.durationSeconds)&&result.durationSeconds>0?{durationSeconds:result.durationSeconds}:{}) } };
   return {
@@ -113,6 +117,7 @@ export async function submitVoice(args: SubmitVoiceArgs, state: TimelineState): 
     name: args.name?.trim() || `Voice · ${voiceId}`,
     kind: 'audio',
     src: result.path,
+    ...provenance,
     durationInFrames,
     props,
   };

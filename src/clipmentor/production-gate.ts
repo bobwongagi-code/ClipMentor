@@ -1,3 +1,5 @@
+import {assertHandoffCopy} from './handoff-copy';
+import {assertNoReferenceMedia} from './delivery-bindings';
 import {deliverySectionsFromDoc,deliverySectionsShape,deliveryReview,deliveryReviewCriteria,type DeliverySection} from './delivery-sections';
 import { buildSourceContext, sourceReviewRanges, isSourceContext, assessSourceAlignment, sourceRelationsShape, type SourceContext, type SourceRelation } from './source-alignment';
 import { clipMentorHandoffBlock } from './handoff-guard';
@@ -9,7 +11,7 @@ import type { AgentContext } from '../agent/context';
 import type { ProjectDoc } from '../editor/types';
 import regression from './fixtures/copy-review-blind-20261019.json';
 import teachingRegression from './fixtures/copy-teaching-blind-v2-20261019.json';
-import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges } from './source-breakdown';
+import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations } from './source-breakdown';
 
 export const COPY_REVIEW_PROTOCOL = 'creator-copy-v2';
 // Included in the subject digest: old approvals cannot silently certify changed review criteria.
@@ -48,7 +50,10 @@ export interface GroupReview {
   source_relations?: SourceRelation[];
   L1: { verdict: Verdict; learner_takeaway: string; reason: string };
   L2: { verdict: Verdict; viewer_chain: string; stage_cues: string | string[]; reason: string };
+  /** Original playback-group judgments; unit totals are a deterministic view, not a new opinion. */
+  group_reviews?: PlaybackGroupReview[];
 }
+export interface PlaybackGroupReview extends Omit<GroupReview, 'group_reviews'> { group_id: string; verdict?: Verdict }
 export interface NarrationCheck {
   line_id: string;
   necessity: 'necessary' | 'redundant' | 'uncertain';
@@ -78,12 +83,14 @@ export interface CopyProductionReview {
   units: CopyUnitJudgment[];
   teaching_review?: TeachingEnvelope;
   delivery_checks?: unknown[];
+  visual_criteria_digest?: string;
+  visual_criteria_checks?: Array<{id:string;answer:'yes'|'no'|'unknown';observation:string;picture_stage:string}>;
 }
 type Row = Record<string, unknown>;
 const row = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const verdict = (v: unknown): v is Verdict => (typeof v === 'string' && ['pass', 'needs_revision', 'insufficient_evidence'].includes(v));
-function groupReviewShape(v: unknown): v is GroupReview {
+function groupReviewBaseShape(v: unknown): v is GroupReview {
   return row(v) && v.scope === 'planned_group_teaching_only'
     && (v.source_relations === undefined || sourceRelationsShape(v.source_relations))
     && row(v.L1) && verdict(v.L1.verdict) && text(v.L1.learner_takeaway) && text(v.L1.reason)
@@ -91,15 +98,84 @@ function groupReviewShape(v: unknown): v is GroupReview {
     && (text(v.L2.stage_cues) || (Array.isArray(v.L2.stage_cues) && v.L2.stage_cues.length > 0 && v.L2.stage_cues.every(text)))
     && text(v.L2.reason);
 }
+function playbackGroupReviewShape(v: unknown): v is PlaybackGroupReview {
+  return groupReviewBaseShape(v) && row(v) && text(v.group_id) && !Object.hasOwn(v, 'group_reviews')
+    && Array.isArray(v.source_relations) && v.source_relations.length > 0
+    && (v.verdict === undefined || verdict(v.verdict));
+}
+function groupReviewShape(v: unknown): v is GroupReview {
+  return groupReviewBaseShape(v) && (v.group_reviews === undefined
+    || (Array.isArray(v.group_reviews) && v.group_reviews.length > 0 && v.group_reviews.every(playbackGroupReviewShape)
+      && new Set(v.group_reviews.map(g => g.group_id)).size === v.group_reviews.length));
+}
+function playbackGroupIds(unit: TeachingPacket['units'][number]) {
+  const content = unit.picture_plan?.execution_plan?.content;
+  const grouped = groupedPlaybackRelations(content?.phases, unit.lines.map(l => l.line_id), unit.unit_id);
+  return grouped?.originals.map((_, i) => `G${i + 1}`) ?? [];
+}
+const combinedVerdict = (values: Verdict[]): Verdict => values.includes('needs_revision') ? 'needs_revision'
+  : values.includes('insufficient_evidence') ? 'insufficient_evidence' : 'pass';
+function completePlaybackGroups(groups: PlaybackGroupReview[], unit: TeachingPacket['units'][number]) {
+  const ids = playbackGroupIds(unit);
+  return ids.length > 0 && groups.length === ids.length && new Set(groups.map(g => g.group_id)).size === ids.length
+    && groups.every(g => ids.includes(g.group_id));
+}
+export class GroupReviewContractError extends Error {
+  readonly groupIndex?: number;
+  constructor(groupIndex?: number) { super('group_checks_viewer_chain_invalid'); this.groupIndex = groupIndex; }
+}
+/** Canonical receipts keep text; a nonempty text list carries the same ordered information. */
+function normalizeViewerChain(value: unknown, groupIndex?: number): unknown {
+  if (!row(value) || !row(value.L2)) return value;
+  const chain = value.L2.viewer_chain;
+  if (text(chain)) return value;
+  if (!Array.isArray(chain) || !chain.length || !chain.every(text)) throw new GroupReviewContractError(groupIndex);
+  return { ...value, L2: { ...value.L2, viewer_chain: chain.join('\n') } };
+}
+/** Response-boundary conversion only. Never edits the raw model response or a consumed ledger. */
+export function normalizeGroupReview(value: unknown, unit: TeachingPacket['units'][number]): unknown {
+  value = Array.isArray(value) ? value.map((g, i) => normalizeViewerChain(g, i)) : normalizeViewerChain(value);
+  if (!Array.isArray(value)) {
+    if (row(value) && Array.isArray(value.group_reviews)) {
+      value = { ...value, group_reviews: value.group_reviews.map((g, i) => normalizeViewerChain(g, i)) };
+    }
+    if (row(value) && value.group_reviews !== undefined
+      && (!groupReviewShape(value) || !completePlaybackGroups(value.group_reviews!, unit))) throw new Error('group_checks_group_coverage_invalid');
+    return value;
+  }
+  if (!value.length || !value.every(playbackGroupReviewShape) || !completePlaybackGroups(value, unit)) throw new Error('group_checks_group_coverage_invalid');
+  const groups = structuredClone(value);
+  const ordered = playbackGroupIds(unit).map(id => groups.find(g => g.group_id === id)!);
+  return {
+    scope: 'planned_group_teaching_only', source_relations: groups.flatMap(g => g.source_relations!),
+    L1: { verdict: combinedVerdict(ordered.flatMap(g => [g.L1.verdict, ...(g.verdict ? [g.verdict] : [])])),
+      learner_takeaway: ordered.map(g => `${g.group_id}: ${g.L1.learner_takeaway}`).join('\n'),
+      reason: ordered.map(g => `${g.group_id}: ${g.L1.reason}`).join('\n') },
+    L2: { verdict: combinedVerdict(ordered.flatMap(g => [g.L2.verdict, ...(g.verdict ? [g.verdict] : [])])),
+      viewer_chain: ordered.map(g => `${g.group_id}: ${g.L2.viewer_chain}`).join('\n'),
+      stage_cues: ordered.flatMap(g => Array.isArray(g.L2.stage_cues) ? g.L2.stage_cues : [g.L2.stage_cues]),
+      reason: ordered.map(g => `${g.group_id}: ${g.L2.reason}`).join('\n') },
+    group_reviews: groups,
+  } satisfies GroupReview;
+}
 /** Structural completeness and declared verdicts only; this cannot prove teaching quality. */
 export function assessGroupReview(v: unknown, unit?: TeachingPacket['units'][number]) {
   if (!groupReviewShape(v)) return { verdict: 'insufficient_evidence' as Verdict, layer: 'structure' as const };
+  if (v.group_reviews) {
+    try {
+      if (!unit || !completePlaybackGroups(v.group_reviews, unit)
+        || canonical(v.source_relations) !== canonical(v.group_reviews.flatMap(g => g.source_relations!))) {
+        return { verdict: 'insufficient_evidence' as Verdict, layer: 'structure' as const };
+      }
+    } catch { return { verdict: 'insufficient_evidence' as Verdict, layer: 'structure' as const }; }
+  }
   if (unit?.source_context) {
     const source = assessSourceAlignment(unit.source_context, unit.points, unit.lines, v.source_relations);
     if (source.verdict !== 'pass') return { ...source, layer: 'source_alignment' as const };
   }
-  if (v.L1.verdict !== 'pass') return { verdict: v.L1.verdict, layer: 'L1' as const };
-  return { verdict: v.L2.verdict, layer: 'L2' as const };
+  const first = combinedVerdict([v.L1.verdict, ...(v.group_reviews ?? []).flatMap(g => [g.L1.verdict, ...(g.verdict ? [g.verdict] : [])])]);
+  if (first !== 'pass') return { verdict: first, layer: 'L1' as const };
+  return { verdict: combinedVerdict([v.L2.verdict, ...(v.group_reviews ?? []).map(g => g.L2.verdict)]), layer: 'L2' as const };
 }
 export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
   return row(v) && v.scope === 'copy_and_planned_picture_only' && text(v.protocol)
@@ -115,6 +191,9 @@ export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
       && (u.group_checks === undefined || groupReviewShape(u.group_checks)))
     && new Set(v.units.map((u) => u.unit_id)).size === v.units.length
     && (v.delivery_checks === undefined || Array.isArray(v.delivery_checks))
+    && (v.visual_criteria_digest === undefined ? v.visual_criteria_checks===undefined
+      : typeof v.visual_criteria_digest==='string'&&/^[a-f0-9]{64}$/.test(v.visual_criteria_digest)&&Array.isArray(v.visual_criteria_checks)
+        &&v.visual_criteria_checks.every(c=>row(c)&&text(c.id)&&['yes','no','unknown'].includes(String(c.answer))&&text(c.observation)&&typeof c.picture_stage==='string'))
     && (v.teaching_review === undefined || (row(v.teaching_review) && teachingPacket(v.teaching_review.packet) && teachingReviewShape(v.teaching_review.review)));
 }
 
@@ -188,8 +267,14 @@ export async function copyReviewSubject(doc: ProjectDoc) {
   // Preserve clean historical bindings, but a receipt that formerly exposed
   // extra author metadata cannot silently certify the newly isolated input.
   const changedDeliveryInput=canonical(delivery)!==canonical(projectedDelivery);
+  const hasBoundComposition=a.blueprint.some(unit=>{
+    const review=(unit as unknown as Row).internal_review;
+    const plan=row(review)&&text(review.current_picture_plan)?review[review.current_picture_plan]:undefined;
+    return row(plan)&&row(plan.composition)&&(text(plan.composition.caption_policy)||text(plan.composition.comparison_detail));
+  });
   const bytes = new TextEncoder().encode(canonical({ ...(delivery.length?{delivery_review_criteria:deliveryReviewCriteria(delivery)}:{}),
     ...(changedDeliveryInput?{reviewable_delivery_sections:projectedDelivery}:{}),
+    ...(hasBoundComposition?{planned_composition_projection:'caption-and-comparison-v1'}:{}),
     protocol: COPY_REVIEW_PROTOCOL, input_policy: COPY_REVIEW_INPUT_POLICY, calibration: teachingRegression, narration_review_criteria: NARRATION_REVIEW_CRITERIA, visual_review_criteria: VISUAL_REVIEW_CRITERIA, group_review_criteria: GROUP_REVIEW_CRITERIA, analysis: content,
     actual_source_hash: doc.assets.find((v) => v.id === a.source.asset_id)?.sourceContentHash ?? null }));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -227,6 +312,7 @@ export async function checkCopyProduction(
   const a = doc.clipMentorAnalysis;
   if (!a && creativeMode !== 'clipmentor') return result('not_clipmentor', true);
   if (!a) return result('analysis_missing');
+  try{assertNoReferenceMedia(doc);}catch{return result('reference_only_asset_cannot_enter_timeline');}
   if (!a.source.sourceContentHash || doc.assets.find((v) => v.id === a.source.asset_id)?.sourceContentHash !== a.source.sourceContentHash) return result('source_hash_missing_or_changed');
   const r = a.production_copy_review;
   if (r === undefined) return result('copy_review_missing');
@@ -247,7 +333,9 @@ export async function checkCopyProduction(
     const reviewed = r.units.find((u) => u.unit_id === unit.unit_id)!;
     const group = assessGroupReview(reviewed.group_checks, registered.units.find(u => u.unit_id === unit.unit_id));
     if (group.verdict !== 'pass') return { ...result('copy_group_review_not_passed'),
-      group_unit_id: unit.unit_id, group_layer: group.layer, group_verdict: group.verdict };
+      group_unit_id: unit.unit_id, group_layer: group.layer, group_verdict: group.verdict,
+      ...('issues' in group?{group_issues:group.issues}:{}),
+      ...('diagnostics' in group?{source_reference_diagnostics:group.diagnostics}:{}) };
   }
   for (const unit of subject.units) {
     const reviewed = r.units.find((u) => u.unit_id === unit.unit_id)!;
@@ -309,6 +397,7 @@ export async function clipMentorProductionBlock(name: string, args: Row, ctx: Ag
   // Hashing is asynchronous: never execute a mutation against a newer, unchecked doc.
   if (ctx.getDoc() !== doc) return { error: 'ClipMentor 制作被拦截：检查期间工程已变化，请重新读取。', production_gate: { ...gate, allowed: false, code: 'project_changed_during_gate' } };
   if (!gate.allowed) return { error: `ClipMentor 制作被拦截：${gate.code}。先完成当前稿件的独立审核；不得绕过或沿用旧批准。`, production_gate: gate };
+  if(ctx.getAgentRunId?.())try{assertHandoffCopy(name,args,ctx);}catch(error){return{error:error instanceof Error?error.message:String(error),production_gate:{...gate,allowed:false,code:'execution_copy_not_frozen'}};}
   if (['submit_render_job', 'submit_export'].includes(name)) {
     const timeline = checkSourceBreakdown(doc, true);
     if (timeline.status !== 'structurally_ready') return { error: 'ClipMentor 导出被拦截：实际源片范围与讲解单元尚未对齐。', production_gate: { ...gate, allowed: false, code: 'breakdown_timeline_not_ready', breakdown_issues: timeline.issues } };
@@ -374,7 +463,7 @@ const PLAN_FIELDS = {
   root: ['unit_id', 'script_candidate_id', 'source_range', 'source_seconds', 'original_source_ranges', 'composition', 'constraints',
     'phases', 'lines', 'viewer_stage_cues', 'experience_group', 'original_playback', 'visual_only_points', 'revisit_policy',
     'excluded_line_ids', 'excluded_current_lines'],
-  composition: ['canvas', 'detail'],
+  composition: ['canvas', 'detail', 'caption_policy', 'comparison_detail'],
   phases: ['line_id', 'point_ids', 'source_seconds', 'source_range_seconds', 'segment_ids', 'picture', 'purpose', 'mode',
     'audio_seconds', 'duration_seconds', 'duration_frames', 'capacity', 'constraints', 'context_source_ranges'],
   context_source_ranges: ['segment_id', 'source_range_seconds', 'purpose'],
@@ -406,6 +495,8 @@ function reviewablePlan(value: unknown, container: PlanContainer = 'root'): unkn
       if (typeof entry === 'string') return [[key, entry]];
       return [[key, reviewablePlan(entry, 'composition')]];
     }
+    if(container==='composition'&&(key==='caption_policy'||key==='comparison_detail'))
+      return text(entry)?[[key,entry]]:[];
     const child = PLAN_CHILDREN[container]?.[key];
     if (child) {
       if (child.many) {
@@ -436,29 +527,9 @@ function checkGroupedReviewHandoff(unit: TeachingPacket['units'][number]) {
   if (!plan?.execution_plan) return;
   const content = reviewablePlan(plan.execution_plan.content) as Row;
   const phases = content.phases;
-  if (!Array.isArray(phases) || !phases.some(p => row(p) && (p.mode === 'original' || p.mode === 'explanation'))) return;
-  const originals: Array<[number, number]> = [];
-  const revisits: NonNullable<typeof plan>['registered_revisits'] = [];
-  const explanationLines: string[] = [];
-  let current: [number, number] | undefined;
-  let currentExplained = false;
-  for (const [i, phase] of phases.entries()) {
-    if (!row(phase) || (typeof phase.mode !== 'string' || !['original', 'explanation'].includes(phase.mode))) throw new Error(`picture_plan_phase_mode_invalid:${unit.unit_id}:${i}`);
-    const range = phase.source_range_seconds ?? phase.source_seconds;
-    if (!sourceRangeShape(range)) throw new Error(`picture_plan_phase_range_invalid:${unit.unit_id}:${i}`);
-    if (phase.mode === 'original') {
-      if (current && !currentExplained) throw new Error(`picture_plan_group_explanation_missing:${unit.unit_id}:${i}`);
-      current = range; currentExplained = false; originals.push(range);
-    }
-    else {
-      if (!current) throw new Error(`picture_plan_phase_original_missing:${unit.unit_id}:${i}`);
-      if (!text(phase.line_id) || !unit.lines.some(l => l.line_id === phase.line_id)) throw new Error(`picture_plan_phase_line_invalid:${unit.unit_id}:${i}`);
-      explanationLines.push(phase.line_id); currentExplained = true;
-      const revisit = { from_source_range: current, to_source_range: range };
-      if (!revisits.some(r => canonical(r) === canonical(revisit))) revisits.push(revisit);
-    }
-  }
-  if (!currentExplained || !unit.lines.every(l => explanationLines.includes(l.line_id))) throw new Error(`picture_plan_group_explanation_missing:${unit.unit_id}`);
+  const grouped = groupedPlaybackRelations(phases, unit.lines.map(l => l.line_id), unit.unit_id);
+  if (!grouped) return;
+  const { originals, revisits, explanationLines } = grouped;
   if (canonical(originals) !== canonical(plan.original_source_ranges)) throw new Error(`picture_plan_original_order_mismatch:${unit.unit_id}`);
   if (canonical(revisits) !== canonical(plan.registered_revisits)) throw new Error(`picture_plan_revisits_mismatch:${unit.unit_id}`);
   const cues = content.viewer_stage_cues;
@@ -742,6 +813,7 @@ function reviewableDeliverySections(sections: DeliverySection[]): DeliverySectio
     evidence_ids: [...s.evidence_ids],
     ...(s.evidence ? { evidence: s.evidence.map(e => ({ evidence_id: e.evidence_id, text: e.text })) } : {}),
     picture: { asset_id: s.picture.asset_id, src: s.picture.src, sha256: s.picture.sha256, description: s.picture.description,
+      ...(s.picture.layout ? { layout: structuredClone(s.picture.layout) } : {}),
       ...(s.picture.crop ? { crop: { left: s.picture.crop.left, top: s.picture.crop.top, right: s.picture.crop.right, bottom: s.picture.crop.bottom } } : {}),
       ...(s.picture.display ? { display: { fps: s.picture.display.fps,
         ranges: s.picture.display.ranges.map(r => [r[0], r[1]] as [number, number]) } } : {}) },

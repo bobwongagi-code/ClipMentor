@@ -11,7 +11,9 @@ import { policyForTool, validateAgentToolInvocation } from '../../src/agent/exec
 import { CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS } from '../../src/agent/tools/schemas/clipmentor-analysis-tools.ts';
 import { clipMentorProductionBlock } from '../../src/clipmentor/production-gate.ts';
 import { execClipMentorAnalysisTool } from '../../src/agent/tools/clipmentor-analysis-tools.ts';
+import { confirmedUnsubmittedGateway } from '../clipmentor/production-recovery';
 import type { AgentContext } from '../../src/agent/context.ts';
+import sharp from 'sharp';
 
 const directory = await mkdtemp(join(tmpdir(),'preview-bridge-verify-'));
 const video = join(directory,'preview.mp4');
@@ -65,6 +67,26 @@ try {
   assert.equal(failure.requestOutcome,'unknown');
   assert.equal((await previewBridge({action:'read',projectId:failed.projectId,operationId:failed.operationId},failedDeps)).requestsSent,0,'receipt reads send no new request');
   const attempts=calls;await previewBridge(failed,failedDeps);assert.equal(calls,attempts,'unknown failure cannot relaunch');
+  await writeFile(join(deps.directory,String(failed.projectId),String(failed.operationId),`${failed.operationId}.operation.json`),
+    JSON.stringify({status:'failed',requests_attempted:1,error:'Preview review HTTP 504; attempt consumed, no automatic retry'}));
+  const knownFailure=await previewBridge({action:'read',projectId:failed.projectId,operationId:failed.operationId},failedDeps);
+  assert.equal(knownFailure.upstream_http_status,504);
+  assert.equal(knownFailure.requestsSent,0);
+  assert.equal(calls,attempts,'typed failure comes from the saved ledger, with no new request');
+
+  const transportLedger = join(deps.directory,failed.projectId,failed.operationId,`${failed.operationId}.operation.json`);
+  const diagnostic = {version:'source-transport-v1',operation_id:failed.operationId,
+    started_at:new Date().toISOString(),ended_at:new Date().toISOString(),request_bytes:100,
+    curl_exit_code:7,error_kind:'curl_failed',http_status:null,
+    metrics:{size_upload:0,time_pretransfer:0,time_starttransfer:0},request_ids:{},response_body:{bytes:0}};
+  for(const op of [failed.operationId,randomUUID()]){
+    await writeFile(transportLedger,JSON.stringify({status:'failed',requests_attempted:1,
+      transport_diagnostic:{...diagnostic,operation_id:op}}));
+    const reply=await previewBridge({action:'read',projectId:failed.projectId,operationId:failed.operationId,videoSha256},failedDeps);
+    assert.equal(confirmedUnsubmittedGateway('preview_review',{body:reply},failed.operationId,failed.projectId),op===failed.operationId);
+  }
+  assert.equal(calls,attempts,'reading transport diagnostics never launches a process');
+
   assert.deepEqual(policyForTool('review_clipmentor_preview',{action:'request'}),{effect:'irreversible_external',recovery:'outcome_unknown'});
   assert.deepEqual(policyForTool('review_clipmentor_preview',{action:'read'}),{effect:'read',recovery:'pure'});
   assert.equal(await clipMentorProductionBlock('review_clipmentor_preview',{},ctx),null,'pending copy gate permits review, never production');
@@ -97,6 +119,36 @@ try {
   const good=await previewBridge(approved,passDeps);
   assert.equal(good.effective_review.status,'pass','accurate complete control is not universally blocked');
   assert.equal(good.effective_review.can_use_as_pass,true);assert.equal(good.full_film_accepted,false);
+  const ref=join(directory,'reference.jpg');
+  await sharp({create:{width:40,height:60,channels:3,background:'#976349'}}).jpeg().toFile(ref);
+  const refHash=createHash('sha256').update(await readFile(ref)).digest('hex'),criteriaDigest='a'.repeat(64);
+  const quote='  原片画面铺底。\n  ';
+  const visualInput={...cleanInput,points:[{point_id:'delivery/intro',teaching_goal_zh:'原画面',product_relevance:'片头'}],
+    units:[{unit_id:'delivery/intro',point_ids:['delivery/intro'],output_range_seconds:[0,2]}]};
+  const visualDeps={...deps,resolve:(name:string)=>name==='reference.jpg'?ref:deps.resolve(name),
+    visualCriteria:async()=>({digest:criteriaDigest,entries:[{src:'/media/uploads/reference.jpg',sha:refHash,
+      criterion:{id:'intro',quote,question:'能看到原片吗？',sectionId:'intro',pictureStage:'成绩截图',layout:'original_underlay' as const,
+        reference:{assetId:'ref',fileName:'reference.jpg',seconds:0}}}]}),
+    run:async(args:string[])=>{
+      const clean=JSON.parse(await readFile(args[args.indexOf('--input')+1],'utf8'));
+      assert.equal(clean.visual_criteria[0].quote,quote);
+      assert.equal(clean.visual_criteria[0].fileName,'reference.jpg');
+      assert.equal(clean.visual_criteria[0].base64.slice(0,4),'/9j/');
+      assert.deepEqual(clean.units.at(-1).output_range_seconds,[0,2]);
+      const visualJudgment={coverage:clean.points.map((p:{point_id:string})=>({point_id:p.point_id,depiction:[evidence(.1,1,'原片')],
+        teaching:finding([evidence(.1,1,'原片可见')])})),
+        continuity:clean.units.map((u:{unit_id:string;point_ids:string[]})=>({unit_id:u.unit_id,point_ids:u.point_ids,
+          previous:[evidence(0,.1,'过渡')],current:[evidence(.1,1,'原片')],relation:'continuation',
+          narrative:finding([evidence(.1,1,'原片')]),teaching:finding([evidence(.1,1,'原片')])}))};
+      await writeFile(args[args.indexOf('--out')+1],JSON.stringify({...makeResult(visualJudgment),
+        input_sha256:createHash('sha256').update(JSON.stringify(clean)).digest('hex')}));
+    }};
+  const visualRun={...body(),input:visualInput,executionManifest:manifest};
+  const visualResult=await previewBridge(visualRun,visualDeps);
+  assert.equal(visualResult.effective_review.can_use_as_pass,true);
+  assert.equal(visualResult.visualCriteriaDigest,criteriaDigest);
+  await assert.rejects(previewBridge({...visualRun,operationId:randomUUID(),input:{...visualInput,visual_criteria:[]}},visualDeps));
+  await assert.rejects(previewBridge({...visualRun,operationId:randomUUID(),input:cleanInput},visualDeps),/section missing/);
   const rawPath=join(deps.directory,'project-a',approved.operationId,'result.json');
   const rawBytes=await readFile(rawPath,'utf8');
   const formalRead={action:'read',operationId:approved.operationId};

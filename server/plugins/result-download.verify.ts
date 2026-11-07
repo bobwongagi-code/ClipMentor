@@ -70,6 +70,17 @@ async function settleWithin<T>(operation: Promise<T>, timeoutMs = 500): Promise<
   assert.equal(await res.text(), '{"subtitles":[]}');
 }
 
+// MiniMax serves valid JSON as an opaque attachment; bytes still must be JSON.
+for(const mime of ['application/json','application/octet-stream']){
+ const valid=scriptedFetch([ok('[{"text":"hello"}]',mime)]);
+ assert.equal(await (await fetchGeneratedResult(URL_,'subtitle',valid)).text(),'[{"text":"hello"}]');
+ for(const invalid of ['<html>error</html>','not json','null']){
+  const bad=scriptedFetch([ok(invalid,mime)]);
+  await assert.rejects(fetchGeneratedResult(URL_,'subtitle',bad),/invalid JSON/);
+  assert.equal(bad.calls.length,1);
+ }
+}
+
 // ──Success after instant 5xx: This is the half that really saves money──
 {
   const s = scriptedFetch([status(502), ok()]);

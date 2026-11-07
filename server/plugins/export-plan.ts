@@ -1,3 +1,4 @@
+import { revisionOf } from '../../src/agent/external-edit-session.ts';
 import type { ProjectDoc, Timeline, TimelineState } from '../../src/editor/types.ts';
 import { resolveTimelineRenderPlan, sequenceGraphError } from '../../src/editor/sequenceGraph.ts';
 import { isTimelineState } from '../../src/persist/migrations/normalize.ts';
@@ -46,6 +47,8 @@ export const EXPORT_MEDIA = {
   wav: { codec: 'wav', ext: 'wav', mime: 'audio/wav' },
 } as const;
 export interface ExportPlan {
+  /** Identity of the committed source, before temporary media materialization. */
+  projectRevision?: string;
   state: TimelineState;
   project?: ProjectDoc;
   timelineId?: string;
@@ -184,6 +187,7 @@ export function planExport(body: ExportRequest | null): ExportPlan {
   return {
     state,
     project,
+    projectRevision: project ? revisionOf(project) : undefined,
     timelineId,
     format,
     media,

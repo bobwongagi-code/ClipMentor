@@ -85,9 +85,10 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
       }),
     });
     const result = (await response.json().catch(() => null)) as ExportQaResponse | null;
-    if (!response.ok || !result?.report) {
+    if (!response.ok || result?.ok === false || !result?.report) {
       return { error: result?.error ?? `export QA failed (${response.status})` };
     }
+    if (!validQaReport(result.report)) return { error: 'export QA returned an invalid or inconsistent report' };
 
     const report = mergeExportQaIssues(result.report, captionLayoutQaIssues(state));
     // Geometry-aware caption check: warns when a caption band covers the
@@ -99,9 +100,13 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
       || Math.abs(transitions.duration_seconds - merged.durationSeconds) > 1 / transitions.fps
       || Math.abs(transitions.fps - merged.fps) > Number.EPSILON * Math.max(transitions.fps, merged.fps) * 4);
     return {
-      ok: merged.ok && !manifestTimingMismatch,
+      // Reading a completed negative QA report is a successful operation.
+      // Keep its verdict separate so settlement cannot discard the issues.
+      ok: true,
+      qa_passed: merged.ok && !manifestTimingMismatch,
+      full_film_accepted: false,
       ...(transitions ? { transition_self_check: transitions, preview_binding: manifestTimingMismatch ? 'timing_mismatch' : 'timing_only_not_content_verified',
-        human_review_requested: false, full_film_accepted: false } : {}),
+        human_review_requested: false } : {}),
       src: resolved.src,
       report: merged,
       cutCount: cutTimesSeconds.length,
@@ -115,11 +120,29 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
         : transitions.next
         : merged.ok && merged.summary.warnings === 0
         ? 'Export passed automated QA.'
-        : 'Inspect every issue and evidence row. Fix confirmed problems, export again, and rerun verify_export. Stop after three attempts and report any remaining issue to the user.',
+        : 'Inspect the saved issues and evidence within the authorized scope and remaining budget. Do not automatically retry, edit, or re-export. QA completion is not final acceptance.',
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function validQaReport(report: ExportQaReport): boolean {
+  const nonnegative = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+  if (!report || typeof report !== 'object' || typeof report.ok !== 'boolean'
+    || typeof report.hasVideo !== 'boolean' || typeof report.hasAudio !== 'boolean'
+    || ![report.durationSeconds, report.width, report.height, report.fps].every(nonnegative)
+    || (report.hasVideo && !(report.width > 0 && report.height > 0 && report.fps > 0))) return false;
+  if (![report.blackFrames, report.frozenFrames, report.silence].every(intervals => Array.isArray(intervals)
+    && intervals.every(i => i && [i.startSeconds, i.endSeconds, i.durationSeconds].every(nonnegative)
+      && i.endSeconds >= i.startSeconds))) return false;
+  if (!Array.isArray(report.issues) || !report.issues.every(i => i && typeof i.code === 'string' && i.code.trim()
+    && typeof i.message === 'string' && i.message.trim() && ['error', 'warning'].includes(i.severity)
+    && (i.startSeconds === undefined || nonnegative(i.startSeconds))
+    && (i.endSeconds === undefined || nonnegative(i.endSeconds)))) return false;
+  const errors = report.issues.filter(i => i.severity === 'error').length;
+  const warnings = report.issues.filter(i => i.severity === 'warning').length;
+  return report.summary?.errors === errors && report.summary?.warnings === warnings && report.ok === (errors === 0);
 }
 
 export async function execExportQaTool(name: string, args: Args, ctx: AgentContext): Promise<unknown> {

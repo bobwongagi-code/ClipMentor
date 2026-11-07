@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { readFile, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer, build } from 'vite';
 import type { CustomSkill } from '../../persist/skillStore';
 import type { SkillFile } from './plugin-skills';
 import type { SkillDefinition } from './skill-types';
@@ -85,7 +87,8 @@ try {
     const loaded = loader.execPluginSkillTool('load_skill', { name: 'clipmentor', file, offset: 0 });
     assert(loaded && typeof loaded === 'object' && 'contents' in loaded, `cannot load ${file}`);
     const result = loaded as { contents: Record<string, string>; nextOffset: number | null };
-    // Read the actual tool's continuation pages; a new linked reference can push planning past one page.
+    // Support files may exceed the real tool page budget. Exercise the same
+    // continuation the Agent must use; do not enlarge the limit or truncate docs.
     let offset = result.nextOffset;
     let previousOffset = 0;
     while (offset !== null) {
@@ -102,6 +105,17 @@ try {
     assert(expected.trim().length > 0, `${file} must not be empty`);
     assert.equal(result.contents[file], expected, `${file} must load completely`);
     assert.equal(offset, null);
+    if (file === 'references/reproduction-lessons.md') {
+      const cases = JSON.parse(await readFile(new URL('../../clipmentor/fixtures/barely-there-learning-20261030.json', import.meta.url), 'utf8'));
+      // Real excerpts must remain reachable through the shipped skill, not
+      // merely in a planner's production folder. This is packaging, not grading.
+      for (const entry of cases.cases) {
+        for (const side of [entry.before, entry.after, entry.before.creator_invitation, entry.after.consumer_teaching]) {
+          if (side?.narration_ms) assert(result.contents[file].includes(side.narration_ms), `bundled case ${entry.id} lost its actual excerpt`);
+        }
+      }
+      assert(!result.contents[file].includes('/Users/'), 'the shipped lesson must be portable');
+    }
     if (file === 'references/planning.md') {
       for (const requirement of ['Production review checkpoints', '1. Blueprint review', '2. Audio-visual capacity review',
         '3. Continuous viewing review', 'group_checks.L1', 'omission_loss']) assert(result.contents[file].includes(requirement));
@@ -116,6 +130,28 @@ try {
   const clipMentor = pluginFiles.PLUGIN_SKILLS.find(skill => skill.slug === 'clipmentor')!;
   assert(clipMentor.body.includes('Review responsibilities and priority'));
   assert(clipMentor.body.includes('teaching first → measured audio/picture fit → continuous preview acceptance'));
+
+  // Targeted distribution smoke: compile the real Vite skill glob and read
+  // the built module from an isolated directory without source-tree lookup.
+  // This proves this packaged component, not a full application installation.
+  const dist = await mkdtemp(join(tmpdir(), 'clipmentor-skill-dist-'));
+  try {
+    await build({ root, configFile: false, publicDir: false, logLevel: 'silent', build: {
+      outDir: dist, emptyOutDir: true, minify: false,
+      lib: { entry: join(root, 'src/agent/skills/plugin-skills.ts'), formats: ['es'], fileName: () => 'skills.mjs' },
+    } });
+    const built = await import(pathToFileURL(join(dist, 'skills.mjs')).href);
+    const installed = built.getPluginSkill('clipmentor');
+    assert(installed);
+    assert.equal(built.readPluginSkillFile('clipmentor'), clipMentor.body, 'root access returns parsed instructions');
+    for (const file of ['SKILL.md', ...clipMentor.files]) {
+      assert.equal(built.readPluginSkillFile('clipmentor', file),
+        await readFile(new URL(`./clipmentor/${file}`, import.meta.url), 'utf8'));
+    }
+    assert(!installed.files.some((file: string) => file.includes('fixtures/') || file.includes('production/')));
+    assert(!installed.files.some((file: string) => /__pycache__|\.py[co]$|(^|\/)\.DS_Store$|\.log$/.test(file)), 'no cache or local-log resources in the skill package');
+    assert.deepEqual(await readdir(dist), ['skills.mjs'], 'no private production files, caches or test oracles in the built skill component');
+  } finally { await rm(dist, { recursive: true, force: true }); }
 
   const withSupport = pluginFiles.PLUGIN_SKILLS.find((skill) => skill.files.length > 0);
   assert(withSupport, 'at least one bundled skill must expose a support file');

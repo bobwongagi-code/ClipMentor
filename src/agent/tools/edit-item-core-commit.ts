@@ -1,4 +1,6 @@
 import type { AgentContext } from '../context';
+import { applyGeneric } from './edit-item-generic';
+import { replaceTimelineItemAsset } from './edit-item-pool-replacement';
 import type { OpResult } from './edit-item-generic-result';
 
 export function commitMediaPlan(ctx: AgentContext, plan: OpResult): OpResult {
@@ -79,5 +81,33 @@ export function commitSolidPlan(ctx: AgentContext, plan: OpResult, ripple: boole
       durationInFrames: plan.durationInFrames ?? 150,
     },
     ripple,
+  };
+}
+
+export function commitPoolAssetReplacement(ctx: AgentContext, plan: OpResult): OpResult {
+  const doc = ctx.getDoc();
+  const asset = doc.assets.find((candidate) => candidate.id === plan.assetId);
+  if (!asset) return { error: `pool asset vanished: ${String(plan.assetId)}` };
+  const next = replaceTimelineItemAsset(doc, doc.activeTimelineId, String(plan.itemId), asset, {
+    durationInFrames: Number(plan.durationInFrames),
+    srcInFrame: typeof plan.srcInFrame === 'number' ? plan.srcInFrame : undefined,
+  });
+  ctx.commands.applyDoc(next);
+  if (plan.genericUpdate) {
+    const updated = applyGeneric(plan.genericUpdate as OpResult, ctx.commands);
+    if (!updated?.ok || updated.error) return updated ?? { error: 'invalid replacement update' };
+  }
+  const committed = ctx.getState().items.find((item) => item.id === plan.itemId);
+  return {
+    ok: true,
+    plan: 'replacePoolAsset',
+    itemId: plan.itemId,
+    assetId: asset.id,
+    kind: asset.kind,
+    track: committed?.track,
+    startFrame: committed?.startFrame,
+    durationInFrames: plan.durationInFrames,
+    sourceStartFrame: plan.sourceStartFrame,
+    sourceDurationInFrames: plan.sourceDurationInFrames,
   };
 }

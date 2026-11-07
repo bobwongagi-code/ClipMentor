@@ -26,6 +26,7 @@ export interface PreviewReviewInput {
   points: PreviewFocus[];
   units: Array<{ unit_id: string; point_ids: string[]; output_range_seconds?: [number, number] }>;
   reference_text: PreviewReferenceText[];
+  visual_criteria?: Array<{point_id:string;quote:string;question:string;fileName:string;seconds:number;base64:string}>;
 }
 export interface ReviewReceipt {
   start_seconds: number;
@@ -84,11 +85,18 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
     units.add(unit.unit_id);
   }
   // Whitelist fields: author reasons, expected verdicts and prior reviews never enter the prompt.
+  const visual=value.visual_criteria;
+  if(visual!==undefined&&(!Array.isArray(visual)||!visual.length||visual.length>4||new Set(visual.map(v=>object(v)?v.point_id:null)).size!==visual.length
+    ||!visual.every(v=>object(v)&&typeof v.point_id==='string'&&v.point_id.startsWith('delivery/criterion/')&&ids.has(v.point_id)
+      &&text(v.quote)&&v.quote.length<=1000&&text(v.question)&&v.question.length<=300&&text(v.fileName)&&v.fileName.length<=240
+      &&typeof v.seconds==='number'&&Number.isFinite(v.seconds)&&v.seconds>=0&&text(v.base64)&&v.base64.length<=1_500_000&&/^[A-Za-z0-9+/]+={0,2}$/.test(v.base64))))
+    throw Error('Invalid preview visual criteria');
   return { duration_seconds: value.duration_seconds,
     points: value.points.map((p) => ({ point_id: p.point_id, teaching_goal_zh: p.teaching_goal_zh, product_relevance: p.product_relevance })),
     units: value.units.map((u) => ({ unit_id: u.unit_id, point_ids: [...u.point_ids], ...(u.output_range_seconds === undefined ? {} : { output_range_seconds: [...u.output_range_seconds] as [number, number] }) })),
     reference_text: value.reference_text.map((r) => ({ channel: r.channel, start_seconds: r.start_seconds,
-      end_seconds: r.end_seconds, text: r.text })) };
+      end_seconds: r.end_seconds, text: r.text })),
+    ...(Array.isArray(visual)?{visual_criteria:visual.map(v=>({point_id:v.point_id,quote:v.quote,question:v.question,fileName:v.fileName,seconds:v.seconds,base64:v.base64}))}:{}) };
 }
 
 export function assertExternalVideoUrlSize(bytes: number): void {
@@ -99,6 +107,7 @@ export function assertExternalVideoUrlSize(bytes: number): void {
 
 export function buildPreviewReviewRequest(video: Uint8Array, input: PreviewReviewInput) {
   const clean = validatePreviewReviewInput(input);
+  const {visual_criteria:criteria,...material}=clean;
   const instruction = `你是独立视听复核员，面向创作者学习产品表达的教学预览。正常顺序看完视频，只按视频和下列学习目标评审，不改稿，不猜作者意图，不强行找问题。
 分别判断动作是否出现、教学作用是否传达，以及叙事承接和教学承接。顺序可理解不等于为什么值得学已经传达；可以回顾，也可以由清晰的画面组织承担解释，不强制每点一句旁白或固定回看用语。原片有动作不自动完成教学解释。目标是表达方式，不是产品功效认证。
 每个supported判断给实际预览时间及证据。口播/短标引用原句；画面组织说明具体对象、阶段和组合如何表达对应价值，不只写“清楚、自然、方便”。不要把目标清单里的意义冒充视频已经说出的意义。听不清留未知。reference_text是工程文字依据，不是逐词听审结果。没有充分依据用insufficient_evidence，不用推测补全。允许不同项目有不同结论，不计算成片总分。
@@ -106,10 +115,14 @@ export function buildPreviewReviewRequest(video: Uint8Array, input: PreviewRevie
 {"coverage":[{"point_id":"目标ID","depiction":[证据],"teaching":判断}],"continuity":[{"unit_id":"单元或衔接ID","point_ids":["相关目标ID"],"previous":[证据],"current":[证据],"relation":"continuation或recap或new_information","narrative":判断,"teaching":判断}]}
 判断={"status":"supported或not_supported或insufficient_evidence","reasoning":"实际依据及限制","evidence":[证据]}
 证据={"start_seconds":0,"end_seconds":1,"channel":"original或narration或annotation或visual_organization","observed":"实际观察","quote":"仅口播或文字时引用；视觉组织可不填"}
-学习目标和工程文字：\n${JSON.stringify(clean)}`;
+学习目标和工程文字：\n${JSON.stringify(material)}${clean.points.some(p=>p.point_id.startsWith('delivery/'))
+ ?'\n以 delivery/ 开头的是交付验收。根据实际导出像素和口播判断所列要求，逐项给时间证据；teaching 字段在这里填交付效果，无需教学知识。coverage 的正向结论至少给一条与本段相交的 visual_organization 证据。片头可用本段和相邻画面核承接。'
+ :''}${criteria?'\n用户原话、问题和参照另附。用实际导出视频的本段画面回答每个问题，参照图仅用于对比。无法在实际导出中定位时填 insufficient_evidence。':''}`;
   const shell = { contents: [{ role: 'user', parts: [
     { inlineData: { mimeType: 'video/mp4', data: '' }, videoMetadata: { fps: 5 } }, { text: instruction },
   ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json' } };
+  for(const {base64,...criterion} of criteria??[])shell.contents[0].parts.push({text:JSON.stringify(criterion)},
+    {inlineData:{mimeType:'image/jpeg',data:base64}} as typeof shell.contents[0]['parts'][number]);
   const overhead = Buffer.byteLength(JSON.stringify(shell));
   const expectedBytes = overhead + 4 * Math.ceil(video.byteLength / 3);
   if (!video.byteLength || !Number.isSafeInteger(expectedBytes) || expectedBytes > INLINE_REQUEST_MAX_BYTES) {
@@ -154,6 +167,11 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
       || covered.has(row.point_id) || !receipts(row.depiction) || !finding(row.teaching)) { issues.push('invalid_coverage_row'); continue; }
     covered.add(row.point_id);
     positive(row.teaching, true, row.point_id);
+    if(row.point_id.startsWith('delivery/')&&row.teaching.status==='supported'){
+      const window=input.units.find(unit=>unit.unit_id===row.point_id)?.output_range_seconds;
+      if(!window||!row.teaching.evidence.some(e=>e.channel==='visual_organization'&&e.start_seconds<window[1]&&e.end_seconds>window[0]))
+        issues.push(`${row.point_id}:delivery_visual_evidence_missing_in_section`);
+    }
   }
   for (const p of input.points) if (!covered.has(p.point_id)) issues.push(`${p.point_id}:missing_coverage`);
   if (!value.continuity.length) issues.push('missing_continuity');

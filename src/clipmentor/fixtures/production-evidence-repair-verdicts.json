@@ -1,0 +1,26 @@
+{
+  "source_receipt_id": "b5e81865-3d0f-480b-85c0-2db300a11b2b",
+  "source_sha256": "bbc29fd5dfc0b91c1258b98ffcec9ba623e1a8fe71ac172c454d3e213da2d1f1",
+  "units": [
+    {
+      "unit_id": "U-01",
+      "verdict": "pass"
+    },
+    {
+      "unit_id": "U-02",
+      "verdict": "pass"
+    },
+    {
+      "unit_id": "U-03",
+      "verdict": "pass"
+    },
+    {
+      "unit_id": "U-04",
+      "verdict": "pass"
+    },
+    {
+      "unit_id": "U-05",
+      "verdict": "insufficient_evidence"
+    }
+  ]
+}

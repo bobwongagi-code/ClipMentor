@@ -46,6 +46,7 @@ function bodySummary(p: Awaited<ReturnType<typeof prefix>>, httpStatus:number|nu
 export async function postSourceVideoTransport(body: string, key: string, signal: AbortSignal, operationId: string,
   runtimeRoot: string, launch: typeof spawn = spawn, cleanup: typeof rm = rm): Promise<{status:number;body:unknown;diagnostic:Diagnostic}> {
   signal.throwIfAborted();
+  // Let curl finish reporting transfer metrics before the outer 600s deadline.
   const directory=await mkdtemp(join(runtimeRoot,'source-video-'));
   let capturedDiagnostic:Diagnostic|undefined;
   try {
@@ -54,7 +55,7 @@ export async function postSourceVideoTransport(body: string, key: string, signal
     const started=new Date().toISOString();let output='',spawnFailed=false;
     const result=await new Promise<{exit:number|null}>((resolve)=>{
       let child:ReturnType<typeof spawn>;
-      try {child=launch('curl',['--disable','-sS','--http1.1','--noproxy','*','--proto','=https','--max-redirs','0','--retry','0','--connect-timeout','30','--max-time','600','--max-filesize','1048576',
+      try {child=launch('curl',['--disable','-sS','--http1.1','--noproxy','*','--proto','=https','--max-redirs','0','--retry','0','--connect-timeout','30','--max-time','595','--max-filesize','1048576',
         '-H','@-','-H','Content-Type: application/json','-H',`Idempotency-Key: ${operationId}`,'--data-binary',`@${request}`,
         '--dump-header',headers,'--output',response,'--write-out',`{"http_code":%{http_code},${METRICS.map(k=>`"${k}":%{${k}}`).join(',')}}`,PREVIEW_REVIEW_ENDPOINT],
         {stdio:['pipe','pipe','ignore'],signal});}

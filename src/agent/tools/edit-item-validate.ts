@@ -18,14 +18,12 @@ import {
   validateGenericAdd,
   validateGenericDelete,
   validateGenericUpdate,
+  resolveClipUpdateEntry,
   validateSlipUpdate,
 } from './edit-item-generic';
 import { parseTransitionAssetId, parseZoomLibraryId } from './library-catalog';
 import {
   rejectSpecializedUnknownFields,
-  resolveUpdateType,
-  shouldCoerceEffectUpdateToClip,
-  stripEffectLocators,
 } from './edit-item-fields';
 import {
   cleanOverrides,
@@ -70,29 +68,16 @@ export function validateAdd(ctx: AgentContext, entry: Entry): OpResult {
 
 export function validateUpdate(ctx: AgentContext, entry: Entry): OpResult {
   if (entry.operation !== undefined) return validateSlipUpdate(ctx.getState(), entry);
-  const item = findItem(ctx.getState().items, entry.itemId ?? entry.id ?? entry.targetItemId);
-  const type = resolveUpdateType(entry, item?.kind, GENERIC_ITEM_KINDS);
-  // Common LLM mistake: type:"effect" (or default effect) + volume/timing on a real clip.
-  if (shouldCoerceEffectUpdateToClip(entry, type, item?.kind, GENERIC_ITEM_KINDS) && item) {
-    return validateGenericUpdate(
-      ctx.getState(),
-      stripEffectLocators(entry, item.kind, item.id),
-      ctx.getDoc().assets,
-    );
-  }
+  const normalized = resolveClipUpdateEntry(ctx.getState(), entry);
+  if ('error' in normalized) return normalized;
+  const type = normalized.type;
   if (type === 'transition' || type === 'effect') {
     const unknown = rejectSpecializedUnknownFields('updates', type, entry);
     if (unknown) return { error: unknown };
     return type === 'transition' ? validateTransitionUpdate(ctx, entry) : validateEffectUpdate(ctx, entry);
   }
   if (GENERIC_ITEM_KINDS.has(type)) {
-    // Effect-style locators (targetItemId) are not generic update fields: normalize
-    // when the live item resolved, so {volume, targetItemId} rows survive validation.
-    return validateGenericUpdate(
-      ctx.getState(),
-      item ? stripEffectLocators(entry, type, item.id) : entry,
-      ctx.getDoc().assets,
-    );
+    return validateGenericUpdate(ctx.getState(), normalized.entry, ctx.getDoc().assets);
   }
   return {
     error: `update type not supported: ${type}`,

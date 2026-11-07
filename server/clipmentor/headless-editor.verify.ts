@@ -18,7 +18,7 @@ try{
   if(failExport)return Response.json({error:'Injected export failure'},{status:500});
   const body=JSON.parse(String(init?.body)),accepted=await acceptExportSubmission(body);
   try{setUploadsDirProvider(()=>root);await renderTimeline({state:accepted.plan.state,project:accepted.plan.project,timelineId:accepted.plan.timelineId,
-   outputLocation:join(root,'headless.mp4'),codec:'h264',videoBitrate:1000000});rendered=true;return Response.json({renderId:'fixture-render'});}
+   outputLocation:join(root,'headless.mp4'),codec:'h264',videoBitrate:1000000});rendered=true;return Response.json({renderId:'fixture-render',projectRevision:accepted.plan.projectRevision,timelineId:accepted.plan.timelineId});}
   finally{await accepted.cleanup();}
  };
  const effect=async<T>(_kind:unknown,_key:string,work:(id:string)=>Promise<T>)=>work('fixture-operation');

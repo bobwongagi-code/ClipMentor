@@ -11,9 +11,13 @@ import { resolveUploadFile, isSafeUploadName, uploadDir } from '../media-dir';
 import { previewEditBridge, executePreviewMaterial, type PreviewEditDeps } from '../clipmentor/preview-edit';
 import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
+import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { readJson } from '../agent-runs/request';
 import { buildPreviewReviewRequest, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput } from '../clipmentor/preview-review';
 import { checkPreviewTimelineObservations, previewReviewWindows } from '../clipmentor/preview-timeline-check';
+import { boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria } from '../clipmentor/visual-done-criteria';
+import { productionReviewRequirements } from '../clipmentor/production-task';
+import { copyReviewDependencies } from '../clipmentor/copy-review';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const SHA = /^[a-f0-9]{64}$/;
@@ -28,9 +32,11 @@ export interface PreviewBridgeDependencies {
   directory: string;
   resolve: (name: string) => string | null;
   run: (args: string[], signal?: AbortSignal) => Promise<void>;
+  visualCriteria?(projectId:string):Promise<BoundVisualCriteria|undefined>;
 }
 function dependencies(): PreviewBridgeDependencies {
   return { directory: join(runtimeProfile().rootDir, 'clipmentor-preview-reviews'), resolve: resolveUploadFile,
+    async visualCriteria(projectId){return boundVisualCriteria(await productionReviewRequirements(projectId));},
     run: async (args, signal) => { await execute(process.execPath, ['--import', loader, cli, ...args],
       { signal, timeout: 660_000, maxBuffer: 64 * 1024, windowsHide: true }); } };
 }
@@ -47,7 +53,8 @@ export function previewEditDependencies(profile: RuntimeProfile = runtimeProfile
 export async function previewBridge(body: Record<string, unknown>, deps: PreviewBridgeDependencies, signal?: AbortSignal) {
   if (!project(body.projectId) || typeof body.operationId !== 'string' || !UUID.test(body.operationId)
     || typeof body.action !== 'string' || !['request', 'read'].includes(body.action)) throw new Error('Invalid preview operation');
-  const directory = join(deps.directory, body.projectId, body.operationId);
+  const operationId = body.operationId;
+  const directory = join(deps.directory, body.projectId, operationId);
   const bindingFile = join(directory, 'binding.json'), output = join(directory, 'result.json');
   const manifestFile = join(directory, 'execution-manifest.json');
   const read = async () => {
@@ -116,8 +123,15 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       scheduled_audio_gaps: u.scheduled_audio_gaps, issues: u.issues,
     })) };
     const ledger = await readFile(join(directory, `${body.operationId}.operation.json`), 'utf8').then(JSON.parse).catch(() => null);
+    const gatewayFailure=ledger?.status==='failed'&&typeof ledger.error==='string'
+      ? /^Preview review HTTP ([0-9]{3}); attempt consumed, no automatic retry$/.exec(ledger.error) : null;
+    const failed = !result && ledger?.status === 'failed' && ledger.requests_attempted === 1;
+    const diagnostic = failed ? safeSourceTransportDiagnostic(ledger.transport_diagnostic,'',operationId) : undefined;
     return { operationId: body.operationId, projectId: body.projectId, videoSha256: binding.videoSha256,
-      status: result ? 'completed' : ledger?.status ?? 'reserved', effective_review: effectiveReview, timeline_check: timelineReadback, result,
+      ...(binding.visualCriteriaDigest?{visualCriteriaDigest:binding.visualCriteriaDigest}:{}),
+      ...(failed?{receipt_persisted:true}:{}), ...(diagnostic?{transport_diagnostic:diagnostic}:{}),
+      status: result ? 'completed' : ledger?.status ?? 'reserved',
+      ...(gatewayFailure&&!result?{upstream_http_status:Number(gatewayFailure[1])}:{}), effective_review: effectiveReview, timeline_check: timelineReadback, result,
       requestsAttempted: 1, requestsSent: 0, full_film_accepted: false, scope: 'rendered_preview_continuous_review' };
   };
   if (body.action === 'read') {
@@ -129,6 +143,19 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     || typeof body.videoSha256 !== 'string' || !SHA.test(body.videoSha256) || !object(body.input)
     || Object.keys(body.input).some(k => !['duration_seconds','points','units','reference_text'].includes(k))) throw new Error('One authorized immutable preview required');
   const input = validatePreviewReviewInput(body.input);
+  const criteria=await deps.visualCriteria?.(body.projectId);
+  if(criteria){
+    if(body.executionManifest===undefined)throw Error('Visual criteria require saved preview windows');
+    const frames=await visualReferenceFrames(criteria,{...copyReviewDependencies(),resolve:deps.resolve});
+    input.visual_criteria=frames.map(({criterion,base64})=>{
+      const window=input.units.find(u=>u.unit_id==='delivery/'+criterion.sectionId)?.output_range_seconds;
+      const point_id='delivery/criterion/'+criterion.id;
+      if(!window||input.points.some(p=>p.point_id===point_id)||input.units.some(u=>u.unit_id===point_id))throw Error('Visual criterion section missing from preview');
+      input.points.push({point_id,teaching_goal_zh:criterion.question,product_relevance:'用户交付要求'});
+      input.units.push({unit_id:point_id,point_ids:[point_id],output_range_seconds:window});
+      return {point_id,quote:criterion.quote,question:criterion.question,fileName:criterion.reference.fileName,seconds:criterion.reference.seconds,base64};
+    });
+  }
   const manifestHash = body.executionManifest === undefined ? undefined : digest(body.executionManifest);
   if (body.executionManifest !== undefined) {
     previewReviewWindows(body.executionManifest,input);
@@ -139,11 +166,11 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   // Reuse the existing bounded inline preflight; no R2/URL upload or re-encode.
   const prepared = buildPreviewReviewRequest(await readFile(video), input);
   if (prepared.video_sha256 !== body.videoSha256) throw new Error('Preview changed during preflight');
-  const fingerprint = digest({ src: body.src, videoSha256: body.videoSha256, input,
+  const fingerprint = digest({ src: body.src, videoSha256: body.videoSha256, input,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) });
   await mkdir(directory, { recursive: true, mode: 0o700 });
   try { await writeFile(bindingFile, JSON.stringify({ projectId: body.projectId, operationId: body.operationId,
-    fingerprint, videoSha256: body.videoSha256, inputSha256: prepared.input_sha256,
+    fingerprint, videoSha256: body.videoSha256, inputSha256: prepared.input_sha256,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) }), { flag: 'wx', mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;

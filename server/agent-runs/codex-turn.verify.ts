@@ -648,3 +648,31 @@ function sequence(events: readonly CodexTurnStreamEvent[]): ServerCodexTurnDeps 
   assert.equal(run.status,'failed');assert.match(run.error??'',/deadline exceeded/i);
 }
 console.log('server Codex turn and execution regression suite passed');
+
+// A headless production dispatch must reserve the task budget before starting Codex.
+{
+  const input = makeInput(makeRun());
+  let reservations = 0;
+  let dispatches = 0;
+  const activation: ActivationState = {
+    ...input.activation,
+    host: {
+      maxTurns: 1, deadlineAt: Date.now() + 10_000,
+      async execute() { throw new Error('No tool requested'); },
+      async beforeRequest() {
+        reservations++;
+        if (reservations > 1) throw new Error('model budget exhausted');
+      },
+    },
+  };
+  const deps: ServerCodexTurnDeps = {
+    async runTurn(_request, emit) {
+      assert.equal(reservations, 1);
+      dispatches++;
+      emit({type:'done'});
+    },
+  };
+  await executeServerCodexTurn({...input,activation},deps);
+  await assert.rejects(executeServerCodexTurn({...input,activation},deps), /model budget exhausted/);
+  assert.equal(dispatches,1);
+}

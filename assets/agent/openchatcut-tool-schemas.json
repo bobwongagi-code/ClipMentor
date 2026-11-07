@@ -2300,7 +2300,7 @@
     },
     {
       "name": "edit_item",
-      "description": "Unified item-level operations across video, image, audio, gif, svg, motion-graphic, text, solid, effect, and transition types. Flex crop (flexcrop) is a spatial inset crop — not a timeline trim. Use edit_item updates.transform.crop or transform.flexCrop {left?,right?,top?,bottom?} in composition pixels (Crop Left/Right 0..canvas width, Crop Top/Bottom 0..canvas height; cropped pixels are fully transparent; null clears). The user does not need to say \"one pass\", \"do not recheck frames\", or \"do not use run_code\" — those are the default. \"Keep only the dashboard/panel/region\" = crop the selected clip (omit itemId or pass \"selected\") so only that region remains, then stop. Set every needed edge in one update. Do not call run_code, probe_media, e2b, or edit_asset. adds place library items (effect/transition/zoom/MG/SFX), a POOL asset as a clip (type=video|image|gif|svg|audio, assetId=…), OR authored clips without assetId: type=text (text/fontSize/color/fontWeight/align?) or type=solid (color?). updates move/trim/retime by itemId|id. Omit itemId or pass \"selected\" to target the inspector selection (read_project.timeline.selectedId). If the user names the selected clip, do not pick a neighboring track. Video aliases are bottom-up (V1 = bottom video). Passing assetId on a file-backed clip atomically replaces it from the media pool while preserving item id, track, timeline start, duration, and visual/audio edit state. fromFrame is the canonical timing field (startFrame is accepted as an alias). Unknown fields reject the entire call with \"unknown field\" + Did you mean. Entries run in adds→updates→deletes order against one private draft; only a fully valid/applied draft is published once. Any validator or draft-apply failure discards it with no partial timeline state. validateOnly runs that same sequential draft without publishing. Mutating calls then go through propose→apply. split_item cuts clips.",
+      "description": "Unified item-level operations across video, image, audio, gif, svg, motion-graphic, text, solid, effect, and transition types. Flex crop (flexcrop) is a spatial inset crop — not a timeline trim. Use edit_item updates.transform.crop or transform.flexCrop {left?,right?,top?,bottom?} in composition pixels (Crop Left/Right 0..canvas width, Crop Top/Bottom 0..canvas height; cropped pixels are fully transparent; null clears). The user does not need to say \"one pass\", \"do not recheck frames\", or \"do not use run_code\" — those are the default. \"Keep only the dashboard/panel/region\" = crop the selected clip (omit itemId or pass \"selected\") so only that region remains, then stop. Set every needed edge in one update. Do not call run_code, probe_media, e2b, or edit_asset. adds place library items (effect/transition/zoom/MG/SFX), a POOL asset as a clip (type=video|image|gif|svg|audio, assetId=…), OR authored clips without assetId: type=text (text/fontSize/color/fontWeight/align?) or type=solid (color?). updates move/trim/retime by itemId|id. Omit itemId or pass \"selected\" to target the inspector selection (read_project.timeline.selectedId). If the user names the selected clip, do not pick a neighboring track. Video aliases are bottom-up (V1 = bottom video). Passing assetId on a file-backed clip atomically replaces it from the media pool while preserving item id, track, timeline start, duration, and visual/audio edit state. For a motion-graphic clip, assetId must reference another code-backed motion-graphic pool asset; code/template/source identity and default props switch together, explicit props override the new defaults. MG replacement also accepts generic placement/visual fields (track, fromFrame, durationInFrames, props, transform, keyframes, filters); source windows and speed are not supported. fromFrame is the canonical timing field (startFrame is accepted as an alias). Unknown fields reject the entire call with \"unknown field\" + Did you mean. Entries run in adds→updates→deletes order against one private draft; only a fully valid/applied draft is published once. Any validator or draft-apply failure discards it with no partial timeline state. validateOnly runs that same sequential draft without publishing. Mutating calls then go through propose→apply. split_item cuts clips.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -3039,7 +3039,7 @@
     },
     {
       "name": "verify_export",
-      "description": "Quality-check a COMPLETED video export before delivery. Pass renderId from submit_render_job/track_export, or a /media/uploads/ export src. Checks stream presence, duration, resolution, frame rate, black/frozen frames, long silence, and audio peaks. Returns a structured issue list plus a labeled before/after contact sheet around timeline edit points. Run after every important export; inspect warnings and fix the timeline before re-exporting when needed. executionManifest: pass the actual renderer-produced fps/total_frames/scenes/audios JSON unchanged, never a hand-filled Shot table. Structural transition self-check and merged Agent tasks run automatically. With only executionManifest this is local data-only (zero HTTP/model requests), not media QA or approval. Agent handles merged candidates within authorized scope; no per-flag human approvals.",
+      "description": "Quality-check a COMPLETED video export before delivery. Pass renderId from submit_render_job/track_export, or a /media/uploads/ export src. Checks stream presence, duration, resolution, frame rate, black/frozen frames, long silence, and audio peaks. Returns a structured issue list plus a labeled before/after contact sheet around timeline edit points. For media QA, ok=true means the report was read successfully, not that the video passed. Check qa_passed and report.ok/issues; a timing mismatch also makes qa_passed=false. full_film_accepted remains false. Network/malformed-report failures return error. Preserve negative reports and warnings; neither technical QA nor image evidence replaces continuous viewing or final acceptance. Run after important exports within authorized budget; do not automatically retry, edit, or re-export. executionManifest: pass the actual renderer-produced fps/total_frames/scenes/audios JSON unchanged, never a hand-filled Shot table. Structural transition self-check and merged Agent tasks run automatically. With only executionManifest this is local data-only (zero HTTP/model requests), not media QA or approval. Agent handles merged candidates within authorized scope; no per-flag human approvals.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -4099,24 +4099,6 @@
       }
     },
     {
-      "name": "render_clipmentor_review_board",
-      "description": "Generate a single-file offline INTERNAL blueprint review board from the current saved project. Read-only for project/media; no provider, network media, review, TTS or production render. view=human combines Chinese-first teaching cards and layout illustrations for the current saved project, including only its registered creator ending(s); two endings require an explicit complete candidate via the CLI; view=planner retains phase-order diagnostics. Both are internal, not creator Storyboard or semantic approval. Returns artifact paths/counts, not images. Requires host auto-save; never invent a save tool. No approval is granted. Local unregistered candidate JSON uses board:clipmentor-blueprint with explicit material bindings.",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "view": {
-            "type": "string",
-            "enum": [
-              "human",
-              "planner"
-            ],
-            "description": "human for human review; planner for unchanged phase diagnostics. Omission keeps planner compatibility."
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
       "name": "edit_clipmentor_preview",
       "description": "Read/apply/render ONE host-authorized local preview revision. Read the immutable server permit first; For overlay mode, apply requires an independently inspected tailFrame. For an explicitly authorized narration merge, omit tailFrame; server-defined frame/audio cuts and existing-caption reuse are immutable. Creates a new native baseline-based timeline, preserves all old timelines and all content outside the explicitly authorized cuts/patches. No new narration or rewriting. No model/API can create a permit. Exact project/source hashes and approved changes are checked on every operation. Render budget is one, failures consume it. Does NOT waive copy/teaching review or approve the film. No TTS, rewrite or unrelated edits.",
       "input_schema": {
@@ -4516,6 +4498,24 @@
       }
     },
     {
+      "name": "render_clipmentor_review_board",
+      "description": "Generate a single-file offline INTERNAL blueprint review board from the current saved project. Read-only for project/media; no provider, network media, review, TTS or production render. view=human combines Chinese-first teaching cards and layout illustrations for the current saved project, including only its registered creator ending(s); two endings require an explicit complete candidate via the CLI; view=planner retains phase-order diagnostics. Both are internal, not creator Storyboard or semantic approval. Returns artifact paths/counts, not images. Requires host auto-save; never invent a save tool. No approval is granted. Local unregistered candidate JSON uses board:clipmentor-blueprint with explicit material bindings.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "view": {
+            "type": "string",
+            "enum": [
+              "human",
+              "planner"
+            ],
+            "description": "human for human review; planner for unchanged phase diagnostics. Omission keeps planner compatibility."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "read_clipmentor_analysis",
       "description": "Read project-owned analysis, source_breakdown ledger, deterministic plan issues and actual timeline/source bindings. structurally_ready is NOT semantic or full-film approval. Missing coverage, changed source ranges and undeclared revisits require repair. Pending/unknown source statuses remain unchanged.",
       "input_schema": {
@@ -4528,9 +4528,29 @@
               "source_breakdown",
               "current_copy",
               "evidence",
-              "copy_review"
+              "copy_review",
+              "storyboard"
             ],
-            "description": "Default full retains history. source_breakdown: authoritative plan. current_copy: selected copy and picture plans; use copyPart plus unitId to avoid loading historical or large plan data. copy_review: persisted independent receipt metadata, all findings and typed teaching judgments, operation ID and current/stale binding. Read saved results without requesting another review; a historical pass is not a current approval."
+            "description": "Default full retains history. source_breakdown: authoritative plan. current_copy: selected copy and picture plans. copy_review: saved independent receipt, not a new approval. storyboard: read-only current saved plan board, with supplied/source references separate from real saved-layout stills; no model call, edits, approval or listening. Start with summary; use unitId for exact card details or images. Pending host auto-save must finish before reading, never invent a separate save tool."
+          },
+          "boardPart": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "source",
+              "actual"
+            ],
+            "description": "Only storyboard. Default summary gives current card index and board_url; unitId must copy the exact card.id from that summary (unit:/delivery: scoped); subject_id is only the raw source ID. source/actual require unitId + boardDigest from summary. Actual is saved native layout, not a predicted layout."
+          },
+          "boardDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Only storyboard. Required for images and every continued image page; refuse changed snapshots rather than mixing versions."
+          },
+          "boardOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Only storyboard images. Default 0; read next_offset until null with the same boardDigest. At most six images per page, no silent truncation."
           },
           "copyPart": {
             "type": "string",
@@ -4578,7 +4598,7 @@
           },
           "unitId": {
             "type": "string",
-            "description": "With current_copy, select one blueprint unit. With copy_review, optionally filter receipt judgments to one reviewed unit; required for reviewPart=packet. The receipt verdict remains the whole-review verdict, not a new per-unit approval."
+            "description": "With storyboard, copy the exact card.id from the saved board summary; do not use subject_id or guess from a raw unit/section ID. With current_copy, select one blueprint unit. With copy_review, optionally filter receipt judgments to one reviewed unit; required for reviewPart=packet. The receipt verdict remains the whole-review verdict, not a new per-unit approval."
           }
         },
         "additionalProperties": false
@@ -4586,7 +4606,7 @@
     },
     {
       "name": "revise_clipmentor_analysis",
-      "description": "Reversible project-only analysis write. set_copy_candidate: atomically register a new unit-local copy candidate and picture plan without loading/replacing historical blueprint; read current_copy with copyPart first. import: portable Teashell historical input, no overwrite. revise: replace an existing record by ID; wordIndex/endSeconds correct one transcript endpoint. append: add candidate records {product?,evidence?,points?,blueprint?,transcripts?}, never approvals or overwrites. Evidence status by kind: original_claim=candidate_unverified_speech; visible_action=agent_observed_candidate; expression_analysis_not_verified_causal_effect=inferred_not_verified_causal_effect; operator_supplied=operator_provided_not_independently_verified. Visible actions require observation_id and returned frame IDs, observation_method=main_agent_direct_image_read_not_independently_verified, call_status=unknown. New points status=candidate, review_status=pending. Supplemental transcripts status=operator_provided_segment_text_not_independently_listened; coarse segment times, no invented word alignment. Keep unclear speech unknown, do not infer efficacy or causality from actions. Use current expectedRevision. No timeline/model calls/local paths.",
+      "description": "Reversible project-only analysis write. set_copy_candidate: atomically register a new unit-local copy candidate and picture plan without loading/replacing historical blueprint; read current_copy with copyPart first. import: existing native ClipMentorAnalysis, full local planner JSON containing clipMentorAnalysis, or portable Teashell historical input; no overwrite. Full planner delivery declarations must match the bound opening and selected creator ending with real image/evidence bindings; never import only the body and claim the full film. Imported receipts/flags do not approve production. Planned picture phases can register before measured voice. Later local revisions must retain already registered delivery purposes; body-only tasks need no added opening/ending. revise: replace an existing record by ID; wordIndex/endSeconds correct one transcript endpoint. append: add candidate records {product?,evidence?,points?,blueprint?,transcripts?}, never approvals or overwrites. Evidence status by kind: original_claim=candidate_unverified_speech; visible_action=agent_observed_candidate; expression_analysis_not_verified_causal_effect=inferred_not_verified_causal_effect; operator_supplied=operator_provided_not_independently_verified. Visible actions require observation_id and returned frame IDs, observation_method=main_agent_direct_image_read_not_independently_verified, call_status=unknown. New points status=candidate, review_status=pending. Supplemental transcripts status=operator_provided_segment_text_not_independently_listened; coarse segment times, no invented word alignment. Keep unclear speech unknown, do not infer efficacy or causality from actions. Use current expectedRevision. No timeline/model calls/local paths.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -6454,6 +6474,23 @@
       }
     },
     {
+      "name": "read_clipmentor_source_video",
+      "description": "Read a saved source-video observation receipt by operationId, including failures, exact validation diagnostics, raw observations and an explicitly saved offline revalidation. No model call, retry, approval or project mutation. Host marks current/stale by source hash and current revision/content digest. Original failed status is retained even if offline structure validation is now valid. Inspect semantic caveats separately; not actual edited handoff or film acceptance.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "operationId"
+        ]
+      }
+    },
+    {
       "name": "render_clipmentor_review_board",
       "description": "Generate a single-file offline INTERNAL blueprint review board from the current saved project. Read-only for project/media; no provider, network media, review, TTS or production render. view=human combines Chinese-first teaching cards and layout illustrations for the current saved project, including only its registered creator ending(s); two endings require an explicit complete candidate via the CLI; view=planner retains phase-order diagnostics. Both are internal, not creator Storyboard or semantic approval. Returns artifact paths/counts, not images. Requires host auto-save; never invent a save tool. No approval is granted. Local unregistered candidate JSON uses board:clipmentor-blueprint with explicit material bindings.",
       "input_schema": {
@@ -6472,23 +6509,6 @@
       }
     },
     {
-      "name": "read_clipmentor_source_video",
-      "description": "Read a saved source-video observation receipt by operationId, including failures, exact validation diagnostics, raw observations and an explicitly saved offline revalidation. No model call, retry, approval or project mutation. Host marks current/stale by source hash and current revision/content digest. Original failed status is retained even if offline structure validation is now valid. Inspect semantic caveats separately; not actual edited handoff or film acceptance.",
-      "input_schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "operationId": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "operationId"
-        ]
-      }
-    },
-    {
       "name": "read_clipmentor_analysis",
       "description": "Read project-owned analysis, source_breakdown ledger, deterministic plan issues and actual timeline/source bindings. structurally_ready is NOT semantic or full-film approval. Missing coverage, changed source ranges and undeclared revisits require repair. Pending/unknown source statuses remain unchanged.",
       "input_schema": {
@@ -6501,9 +6521,29 @@
               "source_breakdown",
               "current_copy",
               "evidence",
-              "copy_review"
+              "copy_review",
+              "storyboard"
             ],
-            "description": "Default full retains history. source_breakdown: authoritative plan. current_copy: selected copy and picture plans; use copyPart plus unitId to avoid loading historical or large plan data. copy_review: persisted independent receipt metadata, all findings and typed teaching judgments, operation ID and current/stale binding. Read saved results without requesting another review; a historical pass is not a current approval."
+            "description": "Default full retains history. source_breakdown: authoritative plan. current_copy: selected copy and picture plans. copy_review: saved independent receipt, not a new approval. storyboard: read-only current saved plan board, with supplied/source references separate from real saved-layout stills; no model call, edits, approval or listening. Start with summary; use unitId for exact card details or images. Pending host auto-save must finish before reading, never invent a separate save tool."
+          },
+          "boardPart": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "source",
+              "actual"
+            ],
+            "description": "Only storyboard. Default summary gives current card index and board_url; unitId must copy the exact card.id from that summary (unit:/delivery: scoped); subject_id is only the raw source ID. source/actual require unitId + boardDigest from summary. Actual is saved native layout, not a predicted layout."
+          },
+          "boardDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Only storyboard. Required for images and every continued image page; refuse changed snapshots rather than mixing versions."
+          },
+          "boardOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Only storyboard images. Default 0; read next_offset until null with the same boardDigest. At most six images per page, no silent truncation."
           },
           "copyPart": {
             "type": "string",
@@ -6551,7 +6591,7 @@
           },
           "unitId": {
             "type": "string",
-            "description": "With current_copy, select one blueprint unit. With copy_review, optionally filter receipt judgments to one reviewed unit; required for reviewPart=packet. The receipt verdict remains the whole-review verdict, not a new per-unit approval."
+            "description": "With storyboard, copy the exact card.id from the saved board summary; do not use subject_id or guess from a raw unit/section ID. With current_copy, select one blueprint unit. With copy_review, optionally filter receipt judgments to one reviewed unit; required for reviewPart=packet. The receipt verdict remains the whole-review verdict, not a new per-unit approval."
           }
         },
         "additionalProperties": false

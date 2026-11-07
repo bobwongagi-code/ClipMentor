@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { buildSourceContext, sourceReviewRanges, assessSourceAlignment, type SourceRelation } from './source-alignment';
+import { buildSourceContext, sourceReviewRanges, assessSourceAlignment, sourceRelationsShape, type SourceRelation } from './source-alignment';
 import { buildCopyTeachingReviewRequest, assessGroupReview } from './production-gate';
 import type { TeachingPacket } from './production-gate';
 import type { ClipMentorAnalysis } from './analysis';
@@ -146,8 +146,23 @@ assert.equal(assessSourceAlignment(b.source_context!,b.points,[scopedLine],[scop
  'the non-impact declaration cannot replace a supported current relationship');
 assert.equal(assessSourceAlignment(b.source_context!,b.points,[scopedLine],[scopedCovered,scopedUnknown,{...lost}]).verdict,'needs_revision',
  'a non-impacting unknown never cancels a material teaching gap');
+const unlocated=structuredClone(scopedUnknown);unlocated.point_ids=[];unlocated.line_ids=[];
+unlocated.claim_impact.status='unresolved';unlocated.claim_impact.claims=[];
+assert(sourceRelationsShape([unlocated]),'an explicitly unresolved unselected relation has no fabricated copy quote');
+assert.equal(assessSourceAlignment(b.source_context!,b.points,[scopedLine],[scopedCovered,unlocated]).verdict,'insufficient_evidence');
+for(const status of ['affects_current_claim','does_not_affect_current_claim']){
+ const empty=structuredClone(unlocated);empty.claim_impact.status=status;
+ assert(!sourceRelationsShape([empty]),'claim-specific judgments still require real quotations');
+}
 const impactSnapshot=JSON.stringify(scopedUnknown);
 assessSourceAlignment(b.source_context!,b.points,[scopedLine],[scopedCovered,scopedUnknown]);
 assert.equal(JSON.stringify(scopedUnknown),impactSnapshot,'aggregation cannot rewrite the original assessment');
 console.log('source-alignment: frozen Barely There/Teashell inputs, source-first projection, unselected evidence/speech, material gap vs optional depth, basic/auxiliary/visual controls, invalid references and scoped compact passages passed; no model calls.');
 console.log(JSON.stringify({compact_passages:spoken.length,pool_entries:pool.length,elapsed_ms:Math.round((performance.now()-begin)*100)/100}));
+
+const independentContext={...b.source_context!,evidence_ids:[...b.source_context!.evidence_ids,'independent-current-support']};
+const independentCovered={...scopedCovered,evidence_ids:['independent-current-support']};
+assert.equal(assessSourceAlignment(independentContext,b.points,[scopedLine],[independentCovered,scopedUnknown]).verdict,'pass','supported current claim and unrelated unknown need not share evidence IDs');
+assert.equal(assessSourceAlignment(independentContext,b.points,[scopedLine],[{...independentCovered,evidence_ids:['not-in-context']},scopedUnknown]).verdict,'insufficient_evidence','unknown evidence references still block');
+assert.equal(assessSourceAlignment(independentContext,b.points,[scopedLine],[{...independentCovered,line_ids:[]},scopedUnknown]).verdict,'insufficient_evidence','support must land on the actual line');
+assert.equal(assessSourceAlignment(independentContext,b.points,[scopedLine],[{...independentCovered,evidence_ids:[]},scopedUnknown]).verdict,'insufficient_evidence','empty supporting evidence still blocks');

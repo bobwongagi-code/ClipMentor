@@ -69,7 +69,7 @@ export function inspectSourceVideoObservation(value: unknown, input: ReturnType<
       &&Math.abs(x.t-b.boundary_seconds)<=0.01):-1;
     if(index<0||seen.has(index)){error('invalid_task_boundary_identity');continue;}
     seen.add(index);const {c,t}=expected[index];
-    if(!bounded(b,c)||b.start_seconds>t||b.end_seconds<t
+    if(!bounded(b,c)||b.start_seconds>t+(t===0?0.01:0)||b.end_seconds<t-(t===input.duration_seconds?0.01:0)
       ||!['sentence_boundary','inside_speech','uncertain'].includes(b.status)
       ||!speech(b.before)||!speech(b.after)||!text(b.reason)||!text(b.time_uncertainty)
       ||(b.status!=='uncertain'&&b.before.status!=='heard'&&b.after.status!=='heard')) error('invalid_task_boundary_evidence');
@@ -159,7 +159,7 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     const candidates = response.body.candidates;
     if (!Array.isArray(candidates) || candidates.length !== 1 || candidates[0]?.finishReason !== 'STOP') throw new Error('Incomplete model response');
     const raw = candidates[0]?.content?.parts?.filter((p:any) => !p.thought && typeof p.text === 'string').map((p:any)=>p.text).join('') ?? '';
-    const parsed = JSON.parse(raw.replace(/^\s*```(?:json)?\s*/,'').replace(/\s*```\s*$/,''));
+    const parsed = normalizeTaskObservation(JSON.parse(raw.replace(/^\s*```(?:json)?\s*/,'').replace(/\s*```\s*$/,'')),input);
     const observation = validateSourceVideoObservation(parsed,input);
     if (await deps.hash(file) !== request.source.hash) throw new Error('Source changed');
     const result:SourceVideoResult = {operationId:request.operationId,requestsAttempted:1,subject:request.subject,source_hash:request.source.hash,
@@ -212,6 +212,12 @@ function publicObservation(raw: unknown): unknown {
   return JSON.parse(content.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, ''));
 }
 
+function normalizeTaskObservation(raw: unknown,input: ReturnType<typeof sourceVideoInput>) {
+  if(!input.observation_task||!object(raw)||Object.hasOwn(raw,'task_observation')||!object(raw.observation_task))return raw;
+  const {observation_task,...rest}=raw;
+  return {...rest,task_observation:observation_task};
+}
+
 /** Project every duplicate diagnostic on read, including nested and offline-revalidated results. */
 function publicTransportRecord(value:any,operationId:string):any {
   if(!object(value))return value;
@@ -253,14 +259,23 @@ export async function readSourceVideoReceipt(operationId: string, projectId: str
 /** Explicit local recovery of an unchanged saved response. The original failed ledger is never overwritten. No post() call. */
 export async function recoverSourceVideoReceipt(request: SourceVideoRequest, reservedArchive: unknown, deps: SourceVideoDependencies): Promise<SourceVideoReceipt> {
   const input = sourceVideoInput(request);
-  if (!object(reservedArchive) || reservedArchive.status !== 'reserved' || reservedArchive.requests_attempted !== 1) throw new Error('Original reserved archive required');
+  if (reservedArchive!==undefined&&(!object(reservedArchive)||reservedArchive.status!=='reserved'||reservedArchive.requests_attempted!==1))
+    throw new Error('Original reserved archive required');
+  if (!OPERATION_ID.test(request.operationId)) throw new Error('Invalid receipt identity');
   const ledgerPath = join(deps.directory, `${request.operationId}.json`);
   const originalText = await readFile(ledgerPath, 'utf8'), failed = JSON.parse(originalText);
+  const original = reservedArchive ?? failed;
+  const rawObservation=publicObservation(failed.raw_response);
+  const normalized=normalizeTaskObservation(rawObservation,input);
+  if(reservedArchive===undefined&&(rawObservation===normalized||failed.projectId!==request.projectId
+    ||failed.validation?.status!=='invalid'||failed.validation.issues?.length!==1
+    ||failed.validation.issues[0].code!=='missing_task_observation'))
+   throw new Error('Saved response is not eligible for field alias recovery');
   const fingerprint = hash(VERSION + JSON.stringify(request));
   if (failed.status !== 'failed' || failed.requests_attempted !== 1 || failed.phase !== 'validate_response' || failed.http_status !== 200
-    || failed.fingerprint !== fingerprint || reservedArchive.fingerprint !== fingerprint
-    || JSON.stringify(failed.subject) !== JSON.stringify(request.subject) || reservedArchive.source_hash !== request.source.hash
-    || JSON.stringify(reservedArchive.input) !== JSON.stringify(input)) throw new Error('Recovery source/input binding mismatch');
+    || failed.fingerprint !== fingerprint || original.fingerprint !== fingerprint
+    || JSON.stringify(failed.subject) !== JSON.stringify(request.subject) || original.source_hash !== request.source.hash
+    || JSON.stringify(original.input) !== JSON.stringify(input)) throw new Error('Recovery source/input binding mismatch');
   const name = decodeURIComponent(request.source.src.slice('/media/uploads/'.length));
   if (!isSafeUploadName(name)) throw new Error('Invalid source');
   const file = deps.resolve(name);
@@ -268,13 +283,13 @@ export async function recoverSourceVideoReceipt(request: SourceVideoRequest, res
   const video = await deps.read(file);
   if (hash(video) !== request.source.hash) throw new Error('Recovery source changed');
   const prepared = buildSourceVideoRequest(video, request);
-  if (hash(prepared.body) !== reservedArchive.request_sha256) throw new Error('Frozen request hash mismatch');
-  const observation = validateSourceVideoObservation(publicObservation(failed.raw_response), input);
+  if (hash(prepared.body) !== original.request_sha256) throw new Error('Frozen request hash mismatch');
+  const observation = validateSourceVideoObservation(normalized, input);
   const validation = inspectSourceVideoObservation(observation, input);
   const raw = failed.raw_response;
   const result: SourceVideoResult = {operationId:request.operationId,requestsAttempted:1,subject:request.subject,source_hash:request.source.hash,
     requested_model:PREVIEW_REVIEW_MODEL,returned_model:typeof raw.modelVersion === 'string' ? raw.modelVersion : null,method_version:VERSION,
-    request_sha256:reservedArchive.request_sha256,input_sha256:prepared.input_sha256,video_bytes:video.length,
+    request_sha256:original.request_sha256,input_sha256:prepared.input_sha256,video_bytes:video.length,
     input_media:{full_original_video:true,audio_stream_present:true,video_fps_requested:5},validation,raw_observation:observation,
     ...(request.observationTask===undefined?{}:{observation_task:request.observationTask}),
     finish_reasons:['STOP'],usage:raw.usageMetadata ?? null,scope:'source_windows_and_planned_capacity_only',actual_handoff_verified:false,complete_film_accepted:false};

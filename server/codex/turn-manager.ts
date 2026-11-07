@@ -31,6 +31,7 @@ interface TurnSession {
   readonly client: CodexAppServerClient;
   readonly toolNames: ReadonlySet<string>;
   readonly emit: StreamSink;
+  readonly onFinalAnswer?: (text: string) => void;
   readonly completion: Promise<void>;
   readonly finish: (event: Extract<CodexTurnStreamEvent, { type: 'done' | 'error' }>) => boolean;
   readonly pendingTools: Map<string, PendingToolCall>;
@@ -226,7 +227,8 @@ function turnStartParams(threadId: string, request: CodexTurnRequest): Record<st
   };
 }
 
-function createSession(request: CodexTurnRequest, client: CodexAppServerClient, emit: StreamSink): TurnSession {
+function createSession(request: CodexTurnRequest, client: CodexAppServerClient, emit: StreamSink,
+  onFinalAnswer?: (text: string) => void): TurnSession {
   const { promise: completion, resolve: resolveCompletion } = Promise.withResolvers<void>();
   let session: TurnSession;
   session = {
@@ -234,6 +236,7 @@ function createSession(request: CodexTurnRequest, client: CodexAppServerClient, 
     client,
     toolNames: new Set(request.tools.map((tool) => tool.name)),
     emit,
+    onFinalAnswer,
     completion,
     pendingTools: new Map<string, PendingToolCall>(),
     threadId: null,
@@ -264,9 +267,10 @@ export class CodexTurnManager {
     request: CodexTurnRequest,
     emit: StreamSink,
     signal: AbortSignal,
+    onFinalAnswer?: (text: string) => void,
   ): Promise<void> {
     if (this.sessions.has(request.requestId)) throw new Error('requestId is already active');
-    const session = createSession(request, client, emit);
+    const session = createSession(request, client, emit, onFinalAnswer);
     this.sessions.set(request.requestId, session);
     const subscriptions = this.subscribe(session);
     const onAbort = () => session.finish({ type: 'error', message: 'Codex turn cancelled.' });
@@ -337,6 +341,12 @@ export class CodexTurnManager {
     const turnId = identifier(params.turnId) ?? identifier(turn?.id);
     if (turnId && !session.turnId) session.turnId = turnId;
     if (turnId && session.turnId !== turnId) return;
+    if (notification.method === 'item/completed' && turnId && !session.terminal) {
+      const item = object(params.item);
+      if (item?.type === 'agentMessage' && item.phase === 'final_answer' && typeof item.text === 'string')
+        session.onFinalAnswer?.(item.text);
+      return;
+    }
     if (notification.method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
       session.emit({ type: 'text-delta', delta: params.delta });
       return;

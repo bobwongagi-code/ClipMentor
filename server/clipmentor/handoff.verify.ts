@@ -60,7 +60,7 @@ try{
  const packet=JSON.parse(artifact.body);assert(packet.sent.instructions.includes(HANDOFF_TEMPLATE_VERSION));
  assert(!packet.sent.instructions.includes(input.systemPrompt));assert.equal(packet.ignoredClientInstructions.text,input.systemPrompt);
  assert.equal(packet.plannerDetails.text,input.messages.at(-1)!.content);assert.equal(packet.sent.messages[0].role,'user');assert(!packet.sent.messages[0].content.includes('OLD_ROLE_CLAIM_NOT_SENT'));assert.equal(packet.ignoredClientHistory.messages.length,1);
- assert(JSON.parse(packet.sent.messages[0].content).blueprint.blueprint.length===1,'actual frozen content delivered, not just a desktop path');
+ assert(JSON.parse(packet.sent.messages[0].content).blueprint.packet.units.length===1,'actual frozen content delivered, not just a desktop path');
  await assertHandoffInput(run,{instructions:packet.sent.instructions,messages:packet.sent.messages});
  const {executeServerCodexTurn}=await import('../agent-runs/codex-turn');
  const {ToolActivation}=await import('../../src/agent/tool-activation');const {ToolFailureTracker}=await import('../../src/agent/toolFailure');
@@ -148,6 +148,37 @@ try{
  const rebound=await bind({...brief,briefId:'C-after-chat-clear'},digest);assert.equal(rebound.status,200,JSON.stringify(rebound.body));
  const ordinary=await post({...input,projectId:'ordinary-non-clipmentor',runId:'47474747-4747-4747-8747-474747474747'});assert.equal(ordinary.status,201,'ordinary unregistered tasks retain their behavior');
  await cancelRun(getRun('47474747-4747-4747-8747-474747474747')!);
+ const visualProject='visual-fixture',visualDoc=structuredClone(snapshot.doc);
+ visualDoc.assets[0].src='/media/uploads/synthetic-source.mp4';
+ await setStoredEntry(`project:${visualProject}`,visualDoc);
+ const visualSnapshot=(await loadOfflineStoredProject(visualProject))!;
+ const visualSubject=await copyReviewSubject(visualSnapshot.doc);
+ const criterion={id:'opening',quote:'  原片画面铺底。\n  ',question:'同屏能看到成绩吗？',layout:'unrepresented',pictureStage:'成绩截图',
+  sectionId:'opening',reference:{assetId:'source',fileName:'NIUMO V7.mp4',seconds:1}};
+ const planning={...brief,projectId:visualProject,phase:'planning',blueprint:null,doneCriteria:[criterion]};
+ const visualBind=(b:unknown,previousDigest:unknown=null)=>post({action:'bind_clipmentor_handoff',projectId:visualProject,
+  expectedProjectRevision:visualSnapshot.revision,previousDigest,brief:b});
+ assert.equal((await visualBind({...planning,doneCriteria:[criterion,criterion]})).status,400);
+ assert.equal((await visualBind({...planning,doneCriteria:[{...criterion,reference:{...criterion.reference,assetId:'missing'}}]})).status,400);
+ const visualRegistered=await visualBind(planning);assert.equal(visualRegistered.status,200);
+ const visualPolicy=await readHandoffPolicy(visualProject);assert.deepEqual(visualPolicy?.brief.doneCriteria,[criterion]);
+ const visualDispatch=await visualBind({...planning,phase:'execution',revision:2,
+  blueprint:{revision:visualSubject.revision,digest:visualSubject.digest}},visualRegistered.body.digest);
+ assert.equal(visualDispatch.status,400);assert.match(JSON.stringify(visualDispatch.body),/criterion_unresolved/);
+ const {boundVisualCriteria}=await import('./visual-done-criteria');
+ const {acceptProductionTask}=await import('./production-task');
+ const bound=boundVisualCriteria(visualPolicy)!;
+ let accepted=0;
+ const humanTask={projectId:visualProject,status:'awaiting_review',completed:{export:{artifact:{renderId:'fixture-render'}},self_check:{artifact:{visualCriteriaDigest:bound.digest}}}} as import('./production-task').ProductionTask;
+ const acceptanceStore={save:async()=>{accepted++;},load:async()=>humanTask};
+ await assert.rejects(acceptProductionTask(humanTask,true,acceptanceStore),/逐项/);
+ await assert.rejects(acceptProductionTask(humanTask,true,acceptanceStore,{digest:'0'.repeat(64),confirmed:['opening']}),/逐项/);
+ await assert.rejects(acceptProductionTask(humanTask,true,acceptanceStore,{digest:bound.digest,confirmed:['opening','opening']}),/逐项/);
+ assert.equal(accepted,0);
+ await assert.rejects(acceptProductionTask(humanTask,true,acceptanceStore,{digest:bound.digest,confirmed:['opening'],renderId:'old-render'}),/当前成片版本/);
+ await acceptProductionTask(humanTask,true,acceptanceStore,{digest:bound.digest,confirmed:['opening'],renderId:'fixture-render'});
+ assert.equal(accepted,1);
+ assert.deepEqual(humanTask.visualAcceptance,{criteriaDigest:bound.digest,renderId:'fixture-render',confirmedIds:['opening']});
  assert.equal(modelNetworkCalls,0);
  console.log('handoff: real HTTP admission, mode/role/type/stale binding refusals, fixed generated control + separated planner data, immutable readback, role/old-review gates, cross-run budget, store protection, no ordinary-task false positive; zero provider calls');
 }finally{

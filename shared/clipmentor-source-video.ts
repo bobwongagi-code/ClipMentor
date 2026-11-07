@@ -47,6 +47,17 @@ export function validateSourceVideoTask(value: unknown, duration: number, unitId
     ids.add(c.context_id);
   }
 }
+/** Expand only observation contexts whose internal cut lands exactly on a window edge. */
+export function observationTaskWithBoundaryContext(task: SourceVideoTask, duration: number): SourceVideoTask {
+  const paddingSeconds = 2;
+  return {...task, contexts:task.contexts.map(context=>{
+    const [start,end]=context.source_range_seconds;
+    return {...context,source_range_seconds:[
+      start>0&&context.boundary_seconds.includes(start)?Math.max(0,start-paddingSeconds):start,
+      end<duration&&context.boundary_seconds.includes(end)?Math.min(duration,end+paddingSeconds):end,
+    ]};
+  })};
+}
 export interface SourceVideoObservation {
   windows: Array<{ window_id: string; observed_sequence: string; endpoint: string;
     evidence: Array<{ start_seconds: number; end_seconds: number; visible: string; audible: string }> }>;

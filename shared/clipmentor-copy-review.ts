@@ -33,8 +33,10 @@ export interface CopyReviewFailure {
   retryable: false;
   inspection?: { expectedBatches: number; deliveredBatches: number; invalidBatchCalls: number; outputChars: number };
   frameFailure?: {unit_id:string;phase:'context'|'original'|'explanation'|'delivery';source_seconds:number;
-    asset_id?:string;delivery_view?:'supplied_full'|'planned_crop';
+    asset_id?:string;delivery_view?:'supplied_full'|'planned_crop'|'planned_composition';
     reason:'extraction_failed'|'image_payload_invalid'|'asset_unavailable_or_changed'|'audio_unavailable_or_changed'};
+  responseContract?: { field: 'group_checks.L2.viewer_chain'; unitIndex: number; groupIndex?: number;
+    reason: 'expected_nonempty_text_or_text_list' };
 }
 export function isCopyReviewFailure(v: unknown): v is CopyReviewFailure {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
@@ -44,7 +46,7 @@ export function isCopyReviewFailure(v: unknown): v is CopyReviewFailure {
     || ![0, 1, null].includes(d.requestsAttempted as 0 | 1 | null) || d.retryable !== false
     || (d.operationId !== undefined && (typeof d.operationId !== 'string'
       || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(d.operationId)))
-    || Object.keys(d).some(k => !['code', 'stage', 'operationId', 'requestsAttempted', 'retryable', 'inspection', 'frameFailure'].includes(k))) return false;
+    || Object.keys(d).some(k => !['code', 'stage', 'operationId', 'requestsAttempted', 'retryable', 'inspection', 'responseContract', 'frameFailure'].includes(k))) return false;
   if (d.frameFailure !== undefined) {
     if(d.code!=='frames_unavailable'||!d.frameFailure||typeof d.frameFailure!=='object'||Array.isArray(d.frameFailure))return false;
     const f=d.frameFailure as Record<string,unknown>,id=(v:unknown)=>typeof v==='string'&&!!v.trim();
@@ -53,8 +55,16 @@ export function isCopyReviewFailure(v: unknown): v is CopyReviewFailure {
       ||!['extraction_failed','image_payload_invalid','asset_unavailable_or_changed','audio_unavailable_or_changed'].includes(String(f.reason))
       ||Object.keys(f).some(k=>!['unit_id','phase','source_seconds','asset_id','delivery_view','reason'].includes(k))
       ||(f.asset_id!==undefined&&!id(f.asset_id))
-      ||(f.delivery_view!==undefined&&!['supplied_full','planned_crop'].includes(String(f.delivery_view)))
+      ||(f.delivery_view!==undefined&&!['supplied_full','planned_crop','planned_composition'].includes(String(f.delivery_view)))
       ||(f.phase==='delivery'?(f.source_seconds!==0||!id(f.asset_id)):(f.asset_id!==undefined||f.delivery_view!==undefined||['asset_unavailable_or_changed','audio_unavailable_or_changed'].includes(String(f.reason)))))return false;
+  }
+  if (d.responseContract !== undefined) {
+    if (d.code !== 'response_receipt_invalid' || !d.responseContract || typeof d.responseContract !== 'object' || Array.isArray(d.responseContract)) return false;
+    const c = d.responseContract as Record<string, unknown>;
+    if (c.field !== 'group_checks.L2.viewer_chain' || c.reason !== 'expected_nonempty_text_or_text_list'
+      || !Number.isSafeInteger(c.unitIndex) || Number(c.unitIndex) < 0
+      || (c.groupIndex !== undefined && (!Number.isSafeInteger(c.groupIndex) || Number(c.groupIndex) < 0))
+      || Object.keys(c).some(k => !['field', 'unitIndex', 'groupIndex', 'reason'].includes(k))) return false;
   }
   if (d.inspection !== undefined) {
     if (!d.inspection || typeof d.inspection !== 'object' || Array.isArray(d.inspection)) return false;
@@ -82,6 +92,6 @@ export interface CopyReviewResult {
   cached?: true;
   receipt: CopyProductionReview;
   inspection: { scope: 'copy_and_planned_picture_only'; sampled_frames: number; continuous_viewing: false; listening: false;
-    delivery_images?:Array<{section_id:string;asset_id:string;view:'supplied_full'|'planned_crop';sha256:string;crop?:{left:number;top:number;right:number;bottom:number}}>;
+    delivery_images?:Array<{section_id:string;asset_id:string;view:'supplied_full'|'planned_crop'|'planned_composition';sha256:string;crop?:{left:number;top:number;right:number;bottom:number}}>;
     input_policy?: typeof COPY_REVIEW_INPUT_POLICY };
 }

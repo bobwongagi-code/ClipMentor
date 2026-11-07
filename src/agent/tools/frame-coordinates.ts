@@ -1,3 +1,4 @@
+import {sourceFrameSeekMs}from'../../../shared/source-frame-seek';
 import type {SourceFrameWindow} from '../../editor/sourceLimit';
 type Args=Record<string,unknown>;
 const MAX_FRAMES = 8;
@@ -17,7 +18,7 @@ export function explicitSourceTimesMs(args: Args, fps: number): number[] | undef
   const normalized = values
     ?.filter((value) => Number.isFinite(value) && value >= 0)
     .slice(0, MAX_FRAMES)
-    .map(Math.round);
+    .map(sourceFrameSeekMs);
   return normalized?.length ? normalized : undefined;
 }
 
@@ -71,7 +72,7 @@ export function constrainSourceFrameArgs(
   const constrained = { ...args };
   if (Array.isArray(args.sourceTimesMs) && args.sourceTimesMs.length) {
     constrained.sourceTimesMs = args.sourceTimesMs.map((value) =>
-      Math.round((clampFrame((Number(value) / 1000) * fps) / fps) * 1000));
+      sourceFrameSeekMs((clampFrame((Number(value) / 1000) * fps) / fps) * 1000));
   } else if (Array.isArray(args.frames) && args.frames.length) {
     constrained.frames = args.frames.map((value) => clampFrame(Number(value)));
   } else if (Array.isArray(args.seconds) && args.seconds.length) {
