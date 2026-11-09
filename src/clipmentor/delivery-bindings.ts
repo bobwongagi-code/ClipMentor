@@ -37,7 +37,7 @@ export function assertNoReferenceMedia(doc:ProjectDoc,previous?:ProjectDoc):void
  const assets=[...(previous?.assets??[]),...doc.assets];
  if(!assets.some(a=>a.props?.clipmentorReferenceOnly===true))return;
  const used=referenceOnlyMediaReader(assets);
- if(doc.timelines.some(t=>t.items.some(i=>used([i,doc.assets.find(a=>a.id===i.sourceAssetId||a.src===i.src)?.props]))))
+ if(doc.timelines.some(t=>t.items.some(i=>used([i,doc.assets.find(a=>a.id===i.sourceAssetId||a.src===i.src)]))))
   throw Error('reference_only_asset_cannot_enter_timeline');
 }
 function deliveryLayoutShape(v:unknown):v is DeliveryLayout {

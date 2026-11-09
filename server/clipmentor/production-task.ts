@@ -436,7 +436,7 @@ export async function acceptProductionTask(task:ProductionTask,languageConfirmed
  if(task.status!=='awaiting_review'||languageConfirmed!==true)throw new Error('Final reviewer must confirm Malay delivery suitability');
  const {readHandoffPolicy}=await import('./handoff');
  const {boundVisualCriteria}=await import('./visual-done-criteria');
- const criteria=boundVisualCriteria(await readHandoffPolicy(task.projectId));
+ const criteria=boundVisualCriteria(await readHandoffPolicy(task.projectId)??task.blueprintApproval?.requirements??null);
  if(task.completed.self_check?.artifact.visualCriteriaDigest!==criteria?.digest
   ||criteria&&(visual?.digest!==criteria.digest||!Array.isArray(visual.confirmed)
    ||visual.confirmed.length!==criteria.entries.length||!criteria.entries.every(({criterion})=>(visual.confirmed as unknown[]).includes(criterion.id))))

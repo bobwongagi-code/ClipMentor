@@ -137,6 +137,11 @@ try {
     const usedAlias=structuredClone(libraryAlias);
     timeline(usedAlias).items.push({...structuredClone(picture(usedAlias)),id:'alias-used',sourceAssetId:'library-alias',src:'/media/uploads/library-alias.png',sourceContentHash:ref.sourceContentHash});
     assert.throws(()=>assertDeliveryPicturePreservation(libraryAlias,usedAlias),/reference_only_asset_cannot_enter_timeline/);
+    const legacyAlias=structuredClone(usedAlias);delete timeline(legacyAlias).items.find(i=>i.id==='alias-used')!.sourceContentHash;
+    assert.throws(()=>assertDeliveryPicturePreservation(libraryAlias,legacyAlias),/reference_only_asset_cannot_enter_timeline/,'legacy clips without redundant hash must use pool asset identity');
+    const distinct=structuredClone(legacyAlias);distinct.assets.find(a=>a.id==='library-alias')!.sourceContentHash='e'.repeat(64);
+    assert.doesNotThrow(()=>assertDeliveryPicturePreservation(libraryAlias,distinct),'different-byte library alias remains usable');
+
     const unmarkedOnly=structuredClone(before);unmarkedOnly.assets.find(a=>a.id===ref.id)!.props={};
     assert.throws(()=>assertDeliveryPicturePreservation(before,unmarkedOnly),/reference_only_asset_role_cannot_change/,
      'unmarking in one save and inserting in a later save cannot bypass the role');

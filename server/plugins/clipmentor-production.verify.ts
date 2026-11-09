@@ -123,6 +123,15 @@ try{
    reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}}))],
   budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}}});
  const variantRequirements=await variantHandoff.readHandoffPolicy(panelTask.projectId);
+ // Crash immediately after the first durable child checkpoint; it must already be a non-runnable bound continuation.
+ const interruptedParent={...structuredClone(confirmationParent),taskId:'first-child-checkpoint-fixture'};
+ const originalChildSave=productionTaskStore.save;let firstChild:import('../clipmentor/production-task').ProductionTask|undefined;
+ productionTaskStore.save=async task=>{await originalChildSave(task);firstChild=structuredClone(task);throw Error('injected child checkpoint crash');};
+ try{await assert.rejects(createBlueprintContinuation(interruptedParent,sourceSnapshot,'existing_partner',variantRequirements,origin),/injected child checkpoint crash/);}finally{productionTaskStore.save=originalChildSave;}
+ assert(firstChild);assert.equal(firstChild.status,'awaiting_blueprint','first persisted child must not auto-launch source analysis');assert.equal(firstChild.stage,'copy_review');assert.equal(firstChild.blueprintApproval?.sourceTaskId,interruptedParent.taskId);
+ const resumedChild=await createBlueprintContinuation(interruptedParent,sourceSnapshot,'existing_partner',variantRequirements,origin);
+ assert.equal(resumedChild.taskId,firstChild.taskId,'confirmation after first-checkpoint crash reuses the fully bound child');
+ assert.equal(resumedChild.attempts.model,0);assert.equal(resumedChild.attempts.review,0);
  const output=await createBlueprintContinuation(confirmationParent,sourceSnapshot,'existing_partner',variantRequirements,origin);
  const replayedOutput=await createBlueprintContinuation(confirmationParent,sourceSnapshot,'existing_partner',variantRequirements,origin);
  assert.equal(output.taskId,replayedOutput.taskId,'duplicate confirmation must reuse one output task');

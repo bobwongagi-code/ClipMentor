@@ -73,19 +73,23 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
   if(!rows.some(p=>p?.id===projectId))await store.writeEntry('projects',[...rows,{id:projectId,
    name:parent.input.product.name+' · '+(audience==='new_contact'?'新建联':'已合作'),updatedAt:Date.now()}]);
  });
+ const saved=await loadOfflineStoredProject(projectId);
+ if(!saved)throw Error('制作副本未保存');
+ const approval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
+  digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),...(selectedRequirements?{requirements:selectedRequirements}:{})};
  const task=await createProductionTask({...parent.input,projectId,
   author:{...parent.input.author,origin},reviewer:{...parent.input.reviewer,origin},
   brief:continuationBrief(parent.input.product.name,audience),
   panelDelivery:{...parent.input.panelDelivery!,audience},
   budget:outputProductionBudget(parent.input.budget,remainingModels),
- });
- const saved=await loadOfflineStoredProject(projectId);
- if(!saved)throw Error('制作副本未保存');
- task.stage='copy_review';task.status='awaiting_blueprint';task.projectRevision=saved.revision;
- task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,sourceRevision:source.revision}};
- task.blueprintApproval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
-  digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),...(selectedRequirements?{requirements:selectedRequirements}:{})};
- await productionTaskStore.save(task);
+ },{...productionTaskStore,async save(task){
+  // Publish a complete, non-runnable continuation in the first durable checkpoint.
+  // Restart or duplicate confirmation can then reuse it before the parent links both outputs.
+  task.stage='copy_review';task.status='awaiting_blueprint';task.projectRevision=saved.revision;
+  task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,sourceRevision:source.revision}};
+  task.blueprintApproval=approval;
+  await productionTaskStore.save(task);
+ }});
  return task;
 }
 

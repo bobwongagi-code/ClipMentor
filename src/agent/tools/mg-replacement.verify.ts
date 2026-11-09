@@ -15,14 +15,20 @@ globalThis.fetch = async () => { requests++; throw new Error('Network forbidden'
 const context = () => ({ ...makeDraft(structuredClone(before)), templates: [], audio: [], getCreativeMode: () => 'clipmentor' });
 let cases = 0;
 try {
-  assert.equal((await checkCopyProduction(before, 'clipmentor')).allowed, true, 'the saved fixture is formally approved, not a synthetic approval');
+  // Preserve the real historical receipt: it is stale on the current gate, not a fresh production approval.
+  const historicalGate=await checkCopyProduction(before,'clipmentor');
+  assert.equal(historicalGate.allowed,false);assert.equal(historicalGate.code,'copy_review_stale');
+  const gated=context();const gatedResult=await executeTool('edit_item',args,gated) as any;
+  assert(gatedResult.error,'the production dispatcher must not admit this historical snapshot');
+  assert.deepEqual(gated.getDoc(),before);cases++;
   const stale = context(); const staleDoc = structuredClone(before); staleDoc.clipMentorAnalysis!.revision++;
   stale.commands.applyDoc(staleDoc);
   const blocked = await executeTool('edit_item', args, stale) as any;
   assert(blocked.error, 'the production entry still rejects a stale review');
   assert.deepEqual(stale.getDoc(), staleDoc); cases++;
   const ctx = context();
-  const dry = await executeTool('edit_item', args, ctx) as any;
+  // Exercise the mutation primitive independently; these cases do not manufacture a current review.
+  const dry = await execEditItemTool('edit_item', args, ctx) as any;
   assert.equal(dry.ok, true, JSON.stringify(dry)); cases++;
   assert.deepEqual(ctx.getDoc(), before, 'validateOnly cannot publish edits');
   const swapOnly = context();
@@ -66,7 +72,7 @@ try {
   assert.equal((await execEditItemTool('edit_item', { updates: [mg] }, missingCode) as any).ok, false); cases++;
   const missingImage = context();
   const native = before.timelines[0]!.items.find(i => i.kind === 'image' && i.startFrame === 0);
-  assert(native, 'fixture must exercise a formally protected native picture');
+  assert(native, 'fixture must exercise a registered native picture');
   const protectedResult = await execEditItemTool('edit_item', { updates: [mg], deletes: [{ type: 'image', itemId: native.id }] }, missingImage) as any;
   assert.equal(protectedResult.ok, false); assert.match(protectedResult.error, /delivery_native_picture/);
   assert.deepEqual(missingImage.getDoc(), before); cases++;
