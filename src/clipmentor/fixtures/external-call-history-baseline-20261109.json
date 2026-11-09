@@ -1,0 +1,797 @@
+{
+  "scope": "43 retained canonical requests only; revalidation/readback and authorized repeats are not extra accidental provider calls",
+  "sources": {
+    "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json": {
+      "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df",
+      "bytes": 30687
+    },
+    "业务片段直传与R2对照-20261108/对照执行状态.json": {
+      "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a",
+      "bytes": 50106
+    },
+    "R2真实容量验证-20261108/结果汇总.json": {
+      "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81",
+      "bytes": 8736
+    },
+    "Rootify网关单次文本连通实测-20261024/实测结果.json": {
+      "sha256": "8a469e606e68184b5b77ff4bb7b38dd0dad8a35dea95879fffedc422a740f9f9",
+      "bytes": 1799
+    },
+    "Rootify网关三次文本实测-20261024/汇总结果.json": {
+      "sha256": "a3483773ed6998ae664546757858b5dc4d80ee58d9716980d0b698db320c4099",
+      "bytes": 6105
+    },
+    "JUDYDOLL本地恢复-20261107/最后一次连续复核实际结果.json": {
+      "sha256": "e1e5bb19948eb1b37c76e45c2dde27352ded0575a49c88c8303bbd168bc2b4e3",
+      "bytes": 2303
+    },
+    "teashell-collab-20261013/Agent审核试行/连续视听复核线路核查-20261018/本次执行状态.json": {
+      "sha256": "3fb4f8c321081dd55ab07848d50310280a3d0f889d4920cf3ac7eae018046531",
+      "bytes": 1614
+    }
+  },
+  "samples": [
+    {
+      "id": "1fb16af3-2332-4dc4-806d-e114121ed3bd",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 40419.799,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/0",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "41ed7ed3bb719481b60b36c3ea510a16afb0d130791a65a4a37cbc04490bd44f"
+    },
+    {
+      "id": "21e131b3-9098-44ad-8efb-34b7c91d6b7b",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 185117.398,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/1",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "21439e553c2fd419fdd18fffb589a8965cd5689c9d0c8aba9e11720174f1e7f2"
+    },
+    {
+      "id": "22aeef27-6d63-4c1e-9cbb-b351932d6dba",
+      "kind": "source_observation",
+      "material": "88b79870147abd8e6726a7762abb9c840f2816dc864a51629cc337e75c07dfab",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 60719.303,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/2",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "1571dd8261cd1229a320c7932b85748a546b9020a8260acf30107b65001abc27"
+    },
+    {
+      "id": "2db8218d-c85a-421d-81ab-d487328c5210",
+      "kind": "source_observation",
+      "material": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 194441.923,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/3",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "49b2846535db550e4baae6853baf49e582f43a8ac0ec3cde8690fb39bb8a0b88"
+    },
+    {
+      "id": "36553b78-ae24-465f-b614-ef667ff5c342",
+      "kind": "source_observation",
+      "material": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 133420.847,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/4",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "49b2846535db550e4baae6853baf49e582f43a8ac0ec3cde8690fb39bb8a0b88"
+    },
+    {
+      "id": "5a74c918-a004-4fbf-8240-ff157d66cf49",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 193921.124,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/5",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "21439e553c2fd419fdd18fffb589a8965cd5689c9d0c8aba9e11720174f1e7f2"
+    },
+    {
+      "id": "6d32bc71-ac73-4b3a-ad9b-1bf77598346d",
+      "kind": "source_observation",
+      "material": "unknown",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": null,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/6",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      }
+    },
+    {
+      "id": "7078a74a-3630-4ea6-853a-2c3fd818ceee",
+      "kind": "source_observation",
+      "material": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 140670.506,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/7",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "62d47847145e3267b36985db67d8e44806491899cb5f4901f7f7baf594e2f8f5"
+    },
+    {
+      "id": "7a83de0e-7fcd-40c0-b318-10f3d306109f",
+      "kind": "source_observation",
+      "material": "ccf1da90a9a9fa898a84b6ebb77486d6f26e262699fa53ce475cd4aa2bcac9d9",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 41603.734,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/8",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "02d7b552ac6428c81f69e96266deeb98440f7ae418a0ef209f62809b062896a7"
+    },
+    {
+      "id": "95f787a7-5def-49dd-8913-38235771414c",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 84629.834,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/9",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "21439e553c2fd419fdd18fffb589a8965cd5689c9d0c8aba9e11720174f1e7f2"
+    },
+    {
+      "id": "9784e584-b8f7-4e8c-823b-1507a8d10856",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 183549.534,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/10",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "21439e553c2fd419fdd18fffb589a8965cd5689c9d0c8aba9e11720174f1e7f2"
+    },
+    {
+      "id": "a6f37004-559a-4b77-87f3-298ab337411e",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 595075.462,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/11",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "9792d69a2629294ac21845d47d6e0edda2eeb06a2e182a7829982cc69c504834"
+    },
+    {
+      "id": "aabe7e0c-e22a-4e8d-809f-270056d56479",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": null,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/12",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "9792d69a2629294ac21845d47d6e0edda2eeb06a2e182a7829982cc69c504834"
+    },
+    {
+      "id": "b09f3f72-a2e4-4689-91af-e432ccabd610",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 44451.766,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/13",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "3db6a60289cfae7e0924dcd002b7de528c24681d58c5255ec97e5d132fbb0db1"
+    },
+    {
+      "id": "b4cae9f0-158b-447f-873f-be568f187806",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 595133.588,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/14",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "9792d69a2629294ac21845d47d6e0edda2eeb06a2e182a7829982cc69c504834"
+    },
+    {
+      "id": "c04740ac-235a-46d5-8c74-a63d4ea19650",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 37722.606,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/15",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "ae02a35e41d7320a6e6abe254dc2d60f01b75d2893f2b689869159b50a91f9de"
+    },
+    {
+      "id": "dd3339c6-4af2-4bd6-ba87-0ea2cc5ff3b2",
+      "kind": "source_observation",
+      "material": "ccf1da90a9a9fa898a84b6ebb77486d6f26e262699fa53ce475cd4aa2bcac9d9",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 47738.864,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/16",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "61bda36dcb8679d9842ae74c4319d485b19ab08a1cd6c1941057774dbad29935"
+    },
+    {
+      "id": "dd5ee7a7-61e1-4645-8c32-b9a2a24caa04",
+      "kind": "source_observation",
+      "material": "567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 36552.669,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/17",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "21439e553c2fd419fdd18fffb589a8965cd5689c9d0c8aba9e11720174f1e7f2"
+    },
+    {
+      "id": "e94d7a1c-860d-47fc-963b-5073f6bf98f8",
+      "kind": "source_observation",
+      "material": "be72d6c5ce77f168738e689d1db442487e39b81a437a44aab467c6282c1b2af0",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": null,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL与既有成片对照-20261107/第2组准备/历史观察请求统计-20261108.json",
+        "pointer": "/entries/18",
+        "sha256": "c6c81cb1f3f24163d9625723063303d14c5e04ff00212db908ec05e9b35aa3df"
+      },
+      "wire_sha256": "62d47847145e3267b36985db67d8e44806491899cb5f4901f7f7baf594e2f8f5"
+    },
+    {
+      "id": "6b85fc74-af7b-4a91-b892-26c1a9071aa1",
+      "kind": "paired_source_excerpt",
+      "material": "judydoll-local",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 55483.405,
+      "preparation_ms": 1.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/0",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "5f842f2a03a8d149be7821143ed7b2c82420599452b52c38252ef8c69c5d1482"
+    },
+    {
+      "id": "e7f87539-6ea1-4594-9250-16150140da2c",
+      "kind": "paired_source_excerpt",
+      "material": "judydoll-local",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 15700.207,
+      "preparation_ms": 7814.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/1",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "e4752f6aed010cff5137772f67669a31ec37aac591e1ba6161b0c16eea5e1a82"
+    },
+    {
+      "id": "361b7248-e379-47b7-beda-637f82e2921d",
+      "kind": "paired_preview_excerpt",
+      "material": "teashell-group",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 17280.221,
+      "preparation_ms": 136925.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/2",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "f3af9a02910c344e9ee357f4c26a9c5c5f0b7d2c2818d011486f495d5b3b46d3"
+    },
+    {
+      "id": "b0050ddf-e662-4ba2-89e3-b1b7b16936d0",
+      "kind": "paired_preview_excerpt",
+      "material": "teashell-group",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 595002.672,
+      "preparation_ms": 29.0,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/3",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "3807878772f51a01db822fe6da80fad85032868054ad680c33b8463c77e09ba2"
+    },
+    {
+      "id": "6bd0b367-4d4d-4870-ab55-5140478fc3f8",
+      "kind": "paired_source_excerpt",
+      "material": "judydoll-local",
+      "route": "r2",
+      "cache": "reused",
+      "request_wait_ms": 17693.254,
+      "preparation_ms": 448.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/4",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "23b767a6ee5646ceac39b4151d174a32cc78356d91b418bf9fc20a7a041589e8"
+    },
+    {
+      "id": "66b634a4-6a61-4ee7-b550-986e85555ec7",
+      "kind": "paired_source_excerpt",
+      "material": "judydoll-local",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 72674.461,
+      "preparation_ms": 2.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/5",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "5f842f2a03a8d149be7821143ed7b2c82420599452b52c38252ef8c69c5d1482"
+    },
+    {
+      "id": "811bec46-9ece-4700-8511-c37f250249b8",
+      "kind": "paired_preview_excerpt",
+      "material": "teashell-group",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 244167.02,
+      "preparation_ms": 29.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/6",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "3807878772f51a01db822fe6da80fad85032868054ad680c33b8463c77e09ba2"
+    },
+    {
+      "id": "a2b1cdbb-1091-4a6b-9b57-003e3c010c78",
+      "kind": "paired_preview_excerpt",
+      "material": "teashell-group",
+      "route": "r2",
+      "cache": "reused",
+      "request_wait_ms": 22063.009,
+      "preparation_ms": 987.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/7",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "88c287774de65c288bb57cdbaf87ddffc6a88b38f7f7f5cc4e012d8dffeb6388"
+    },
+    {
+      "id": "b5c5a936-f6c9-4601-a3f6-3da3471fd858",
+      "kind": "paired_source_excerpt",
+      "material": "judydoll-local",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 27189.59,
+      "preparation_ms": 3.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/8",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "5f842f2a03a8d149be7821143ed7b2c82420599452b52c38252ef8c69c5d1482"
+    },
+    {
+      "id": "c782250a-beb0-4330-8140-ab2ab656c38a",
+      "kind": "paired_source_excerpt",
+      "material": "judydoll-local",
+      "route": "r2",
+      "cache": "reused",
+      "request_wait_ms": 12255.05,
+      "preparation_ms": 772.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/9",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "962afe8e18d345e433ef4b4c02026bebf3103e82b4e2f3a8a0c9c557c9a563a7"
+    },
+    {
+      "id": "b86bb1f8-608a-46c7-b912-b3d4d7ba8fbf",
+      "kind": "paired_preview_excerpt",
+      "material": "teashell-group",
+      "route": "r2",
+      "cache": "reused",
+      "request_wait_ms": 20519.637,
+      "preparation_ms": 702.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/10",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "a594a7a697287be8c92d1f2a2bcd612e2a8e978f02955d9cd5d601f80e71cfb0"
+    },
+    {
+      "id": "f6ea6a77-0b59-48b1-a920-888e4fa3cfc7",
+      "kind": "paired_preview_excerpt",
+      "material": "teashell-group",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 308900.823,
+      "preparation_ms": 22.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "业务片段直传与R2对照-20261108/对照执行状态.json",
+        "pointer": "/trials/11",
+        "sha256": "16404e595fdc52a4a08a7df04288a8d9d7ec04244bac0dd0d41df20fc72b4e5a"
+      },
+      "wire_sha256": "3807878772f51a01db822fe6da80fad85032868054ad680c33b8463c77e09ba2"
+    },
+    {
+      "id": "capacity-20261108/source-10MB",
+      "kind": "capacity_probe_video",
+      "material": "source-10MB",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 37804.0,
+      "preparation_ms": 85099.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "R2真实容量验证-20261108/结果汇总.json",
+        "pointer": "/cases/0",
+        "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81"
+      }
+    },
+    {
+      "id": "capacity-20261108/clip-14MB",
+      "kind": "capacity_probe_video",
+      "material": "clip-14MB",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 16039.0,
+      "preparation_ms": 124072.0,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "R2真实容量验证-20261108/结果汇总.json",
+        "pointer": "/cases/1",
+        "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81"
+      }
+    },
+    {
+      "id": "capacity-20261108/source-25MB",
+      "kind": "capacity_probe_video",
+      "material": "source-25MB",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 42143.0,
+      "preparation_ms": 211119.0,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "R2真实容量验证-20261108/结果汇总.json",
+        "pointer": "/cases/2",
+        "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81"
+      }
+    },
+    {
+      "id": "capacity-20261108/preview-43MB",
+      "kind": "capacity_probe_video",
+      "material": "preview-43MB",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 5668.0,
+      "preparation_ms": 361644.0,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "R2真实容量验证-20261108/结果汇总.json",
+        "pointer": "/cases/3",
+        "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81"
+      }
+    },
+    {
+      "id": "capacity-20261108/preview-71MB",
+      "kind": "capacity_probe_video",
+      "material": "preview-71MB",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 5225.0,
+      "preparation_ms": 660416.0,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "R2真实容量验证-20261108/结果汇总.json",
+        "pointer": "/cases/4",
+        "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81"
+      }
+    },
+    {
+      "id": "capacity-20261108/margin-87MB",
+      "kind": "capacity_probe_video",
+      "material": "margin-87MB",
+      "route": "r2",
+      "cache": "cold",
+      "request_wait_ms": 6153.0,
+      "preparation_ms": 881013.0,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "R2真实容量验证-20261108/结果汇总.json",
+        "pointer": "/cases/5",
+        "sha256": "2cba4da8033dda371f7f442972c1dc38ea18647add23475beef4f13759f6ac81"
+      }
+    },
+    {
+      "id": "a77ac7e6-c2ab-4c30-9c60-b2e8a797fbb3",
+      "kind": "connectivity_probe_text",
+      "material": "150-byte-request",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 141044.093,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "Rootify网关单次文本连通实测-20261024/实测结果.json",
+        "pointer": "",
+        "sha256": "8a469e606e68184b5b77ff4bb7b38dd0dad8a35dea95879fffedc422a740f9f9"
+      }
+    },
+    {
+      "id": "8cd68837-a7f2-45c4-bcf4-20f2413bfd1b",
+      "kind": "connectivity_probe_text",
+      "material": "150-byte-request",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 7154.894,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "Rootify网关三次文本实测-20261024/汇总结果.json",
+        "pointer": "/results/0",
+        "sha256": "a3483773ed6998ae664546757858b5dc4d80ee58d9716980d0b698db320c4099"
+      }
+    },
+    {
+      "id": "fcf2ab7a-fdba-4b7c-bc51-7ca066211f88",
+      "kind": "connectivity_probe_text",
+      "material": "150-byte-request",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 5307.377,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "Rootify网关三次文本实测-20261024/汇总结果.json",
+        "pointer": "/results/1",
+        "sha256": "a3483773ed6998ae664546757858b5dc4d80ee58d9716980d0b698db320c4099"
+      }
+    },
+    {
+      "id": "93a72486-a1f7-40eb-8064-822f6584115f",
+      "kind": "connectivity_probe_text",
+      "material": "150-byte-request",
+      "route": "inline",
+      "cache": "not_applicable",
+      "request_wait_ms": 4789.531,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": true,
+      "repeat_assessment": "authorized_experiment",
+      "evidence": {
+        "file": "Rootify网关三次文本实测-20261024/汇总结果.json",
+        "pointer": "/results/2",
+        "sha256": "a3483773ed6998ae664546757858b5dc4d80ee58d9716980d0b698db320c4099"
+      }
+    },
+    {
+      "id": "fd77f510-3867-4e61-873b-8a8def0410f5",
+      "kind": "preview_review",
+      "material": "judydoll-preview",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 595149.217,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "JUDYDOLL本地恢复-20261107/最后一次连续复核实际结果.json",
+        "pointer": "/last_review_ledger",
+        "sha256": "e1e5bb19948eb1b37c76e45c2dde27352ded0575a49c88c8303bbd168bc2b4e3"
+      }
+    },
+    {
+      "id": "teashell-preview-probe-20261018",
+      "kind": "preview_review",
+      "material": "teashell-preview",
+      "route": "unknown",
+      "cache": "unknown",
+      "request_wait_ms": 120064.0,
+      "preparation_ms": null,
+      "hard_ms": null,
+      "complete_model_response": false,
+      "repeat_assessment": "unknown",
+      "evidence": {
+        "file": "teashell-collab-20261013/Agent审核试行/连续视听复核线路核查-20261018/本次执行状态.json",
+        "pointer": "",
+        "sha256": "3fb4f8c321081dd55ab07848d50310280a3d0f889d4920cf3ac7eae018046531"
+      },
+      "wire_sha256": "e2a431d5882c3aa6894e894701a5d0b7f6061e4fe70a4a246f3c714fd666bad7"
+    }
+  ]
+}

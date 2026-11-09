@@ -1,0 +1,27 @@
+import {readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {waitDistribution,historicalCallBaseline,type HistoricalCallSample} from './external-call-statistics.ts';
+assert.deepEqual(waitDistribution([0,10,20,30,null,undefined,NaN,-1]),{samples:8,known:4,unknown:4,p50_ms:10,p95_ms:30,max_ms:30,method:'nearest_rank'});
+assert.equal(waitDistribution([]).p95_ms,null);assert.equal(waitDistribution([null]).max_ms,null);
+const row:HistoricalCallSample={id:'one',kind:'video',route:'r2',cache:'cold',request_wait_ms:100,preparation_ms:400,hard_ms:null,complete_model_response:true,repeat_assessment:'unknown',wire_sha256:'a'.repeat(64),evidence:{file:'saved.json',pointer:'/rows/0',sha256:'b'.repeat(64)}};
+const report=historicalCallBaseline([row,{...row,evidence:{...row.evidence,pointer:'/copy/0'}},{...row,id:'two',cache:'reused',preparation_ms:0,request_wait_ms:20,repeat_assessment:'authorized_experiment'},{...row,id:'three',route:'inline',cache:'not_applicable',request_wait_ms:null,complete_model_response:false}]);
+assert.equal(report.sample_count,3);assert.equal(report.duplicate_records_excluded,1);assert.equal(report.groups.length,3);
+assert.equal(report.groups.find(g=>g.cache==='cold')?.W_no_complete_model_response.samples,0,'model returned then validation failed is not missing response');
+assert.equal(report.groups.find(g=>g.route==='inline')?.W_no_complete_model_response.unknown,1,'missing duration never becomes zero');
+assert.equal(report.groups.find(g=>g.cache==='cold')?.hard_wait_check.exceeded,null,'missing historical deadline cannot become zero overruns');
+assert.equal(report.D.sample_zero_avoidable_supported,false);assert.equal(report.D.classification_unknown,2);assert.equal(report.D.authorized_experiment_samples,1);assert.equal(report.D.observed_same_wire_extra_submissions,2);
+assert.throws(()=>historicalCallBaseline([row,{...row,request_wait_ms:999}]),/duplicate_conflict/);
+assert.throws(()=>historicalCallBaseline([{...row,request_wait_ms:NaN}]),/duration_invalid/);
+assert.throws(()=>historicalCallBaseline([{...row,evidence:{...row.evidence,sha256:''}}]),/sample_invalid/);
+assert.equal(historicalCallBaseline([{...row,evidence:{...row.evidence,pointer:''}}]).sample_count,1,'empty JSON Pointer references the whole source document');
+assert.throws(()=>historicalCallBaseline([{...row,evidence:{...row.evidence,pointer:'not/a/pointer'}}]),/sample_invalid/);
+const known=historicalCallBaseline([{...row,repeat_assessment:'authorized_experiment',hard_ms:100},{...row,id:'late',repeat_assessment:'avoidable',request_wait_ms:101,hard_ms:100}]);
+assert.equal(known.D.sample_zero_avoidable_supported,false);assert.equal(known.D.avoidable_confirmed,1);assert.equal(known.groups[0].hard_wait_check.exceeded,1);
+console.log('8 baseline regression groups: missing/zero, nearest-rank, cold/reuse separation, raw-vs-validation, deadline unknown, duplicate/conflict, source provenance and authorized/avoidable/unknown repeats passed; no network');
+
+const fixture=JSON.parse(await readFile(new URL('../../src/clipmentor/fixtures/external-call-history-baseline-20261109.json',import.meta.url),'utf8'));
+const historical=historicalCallBaseline(fixture.samples);
+assert.equal(historical.sample_count,43);assert.equal(fixture.samples.filter((r:HistoricalCallSample)=>r.complete_model_response===true).length,27);assert.equal(fixture.samples.filter((r:HistoricalCallSample)=>r.complete_model_response===false).length,16);
+assert.equal(historical.D.classification_unknown,21);assert.equal(historical.D.authorized_experiment_samples,22);assert.equal(historical.D.sample_zero_avoidable_supported,false);
+assert.equal(historical.groups.every(g=>g.hard_wait_check.exceeded===null),true,'old logs did not retain declared hard deadlines');
+console.log('Saved 43-request baseline fixture: original response vs validation, 22 experiment samples and 21 unknown repeat classifications retained');

@@ -391,7 +391,7 @@ const copyResult=await recoverProductionGateway('request_clipmentor_copy_review'
  return copyCalls<4?{error:'failed',operationId:args.operationId,diagnostic:{operationId:args.operationId,
   code:'response_receipt_invalid',stage:'response_validation',requestsAttempted:1,retryable:false}}:{review_approved:false};
 },async()=>{},6);
-assert.equal(copyCalls,4);assert.equal(new Set(copyIds).size,4);assert.deepEqual((copyResult as {review_approved:boolean}).review_approved,false);
+assert.equal(copyCalls,1);assert.equal(new Set(copyIds).size,1);assert.equal((copyResult as {diagnostic:{code:string}}).diagnostic.code,'response_receipt_invalid','schema failures retain original verdict and are not paid retries');
 for(const [code,stage,attempts] of [['operation_unavailable','reservation',1],['review_storage_failed','persistence',1],['model_turn_failed','model_turn',null]] as const){
  let n=0;await recoverProductionGateway('request_clipmentor_copy_review',gatewayArgs,'test',()=>true,async args=>{
   n++;return {error:'failed',operationId:args.operationId,diagnostic:{operationId:args.operationId,code,stage,requestsAttempted:attempts,retryable:false}};
@@ -413,6 +413,22 @@ await advanceProductionTask(replay,async(t,c)=>{
  }
  return {artifact:{saved:true}};
 },store);
-assert.equal(copyPaid,4);assert.equal(replay.attempts.review,4);assert.equal(replay.status,'awaiting_review');
+assert.equal(copyPaid,1);assert.equal(replay.attempts.review,1);assert.equal(replay.status,'awaiting_review');
 assert.equal(Object.values(replay.effects).filter(e=>e.transportUnsubmitted).length,0);
-console.log('Charged review retries replay their saved terminal result even at zero remaining budget.');
+console.log('Schema/unknown review outcomes preserve original effect and never spend a second review on replay.');
+
+// Preparation failures with a bound zero-request receipt are not paid model attempts.
+for(const kind of ['observation','preview_review'] as const){
+ const receipt={model_retry_policy:'no_automatic_retry',status:'failed',operationId:originalOperation,projectId:'test',receipt_persisted:true,requestsAttempted:0,requestsSent:0,phase:'prepare'};
+ const wrap=(value:unknown)=>({body:kind==='observation'?{receipt:value}:value});
+ assert.equal(confirmedUnsubmittedGateway(kind,wrap(receipt),originalOperation,'test'),true);
+ for(const patch of [{requestsSent:1},{requestsAttempted:1},{projectId:'foreign'},{operationId:'other'}])
+  assert.equal(confirmedUnsubmittedGateway(kind,wrap({...receipt,...patch}),originalOperation,'test'),false);
+}
+for(const name of ['observe_clipmentor_source_video','review_clipmentor_preview'] as const){
+ let calls=0;await recoverProductionGateway(name,{...gatewayArgs,action:'request',videoSha256:'preview'},'test',()=>true,async args=>{
+  calls++;const row={...sourceGatewayFailure(args,504).receipt,videoSha256:'preview',model_retry_policy:'no_automatic_retry'};
+  return name==='observe_clipmentor_source_video'?{receipt:row}:row;
+ },async()=>{throw Error('governed model request cannot be resubmitted');},6);assert.equal(calls,1);
+}
+console.log('Bound zero-request preparations remain free; unknown/wrong bindings remain charged; governed model failures do not retry.');

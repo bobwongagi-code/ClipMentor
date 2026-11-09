@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,readdir,rm,writeFile,mkdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
+import {createHash,randomUUID} from 'node:crypto';
+const directory=await mkdtemp(join(tmpdir(),'cc-external-integration-'));
+process.env.OPENCHATCUT_DATA_DIR=directory;
+const originalFetch=globalThis.fetch;
+const wav=Buffer.alloc(44+16000*2);wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(wav.length-44,40);
+let calls=0,signalSeen=false;
+globalThis.fetch=(async(url,init)=>{
+ if(String(url)==='https://voice.invalid/v1/t2a_v2'){calls++;signalSeen=!!init?.signal;return Response.json({data:{audio:wav.toString('hex')},base_resp:{status_code:0}});}
+ throw Error('Unexpected outbound request in zero-network test');
+}) as typeof fetch;
+try{
+ const {voiceGenerationPlugin}=await import('../plugins/voice.ts');
+ let handler:any;const plugin=voiceGenerationPlugin({minimaxBaseUrl:'https://voice.invalid',minimaxApiKey:'offline-secret',minimaxModel:'speech-2.8-hd'} as never);
+ (plugin.configureServer as Function)({middlewares:{use:(_path:string,fn:any)=>handler=fn},config:{logger:{error:()=>{}}}});
+ const server=createServer((req,res)=>void handler(req,res));server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();assert(address&&typeof address==='object');
+ const url=`http://127.0.0.1:${address.port}/generate/voice`;
+ const body={provider:'minimax',text:'Satu produk.',voiceId:'Malay_female_1_v1',speed:1,audioFormat:'wav',sampleRate:16000,channel:1};
+ const post=(project:string,recover=false,text=body.text)=>originalFetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-ClipMentor-Project':project,'X-ClipMentor-Operation':`fixture-${createHash('sha256').update(text).digest('hex')}`,...(recover?{'X-ClipMentor-Recover':'1'}:{})},body:JSON.stringify({...body,text})});
+ try{
+  const first=await post('project');assert.equal(first.status,200);const audio=await first.json();assert.ok(audio.durationSeconds>0.9);assert.equal(calls,1);assert(signalSeen);
+  const reused=await post('project',true);assert.equal(reused.status,200);const same=await reused.json();assert.equal(calls,1);assert.equal(same.path,audio.path,'repair/recovery reuses saved bytes instead of another local audio copy');
+  const missing=await post('other-project',true);assert.equal(missing.status,400);assert.equal(calls,1,'read-only recovery never synthesizes missing audio');
+  const unsupported=await originalFetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-ClipMentor-Recover':'1'},body:JSON.stringify({provider:'elevenlabs',text:'known',voiceId:'fixture'})});
+  assert.equal(unsupported.status,400);assert.match((await unsupported.json()).error,/Saved voice recovery unavailable/);assert.equal(calls,1,'unsupported provider recovery must not start any synthesis');
+  const changed=await post('project',false,'Dua produk.');assert.equal(changed.status,200);assert.equal(calls,2,'changed text is never treated as same synthesis');
+  const longProject='p'.repeat(160),longVoice=await post(longProject,false,'Projek panjang.');assert.equal(longVoice.status,200,'existing 160-character project IDs can synthesize');assert.equal(calls,3);
+  assert.equal((await post(longProject,true,'Projek panjang.')).status,200,'existing max-length project IDs can cold-recover saved voice');assert.equal(calls,3);
+  assert.equal((await post('p'.repeat(161),false,'Invalid project.')).status,400,'invalid overlong project is rejected before provider submission');assert.equal(calls,3);
+  console.log('PASS actual voice HTTP route: durable raw, stable audio, scoped reuse, read-only recovery, changed text and signal');
+ }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
+ const {previewBridge}=await import('../plugins/clipmentor-preview-review.ts');
+ const {previewReviewIdentity,buildPreviewReviewRequest,PREVIEW_REVIEW_ENDPOINT}=await import('./preview-review.ts');
+ const video=Buffer.from('offline exact preview bytes'),sha=(s:string|Buffer)=>createHash('sha256').update(s).digest('hex');
+ const input={visual_criteria:[{point_id:'delivery/criterion/v1',quote:'用户要求',question:'是否可见',fileName:'ref.jpg',seconds:0,base64:'A'.repeat(1_100_000)},{point_id:'delivery/criterion/v2',quote:'用户要求',question:'是否可见',fileName:'ref2.jpg',seconds:0,base64:'A'.repeat(1_100_000)}],duration_seconds:2,points:[{point_id:'p',teaching_goal_zh:'观察动作',product_relevance:'商品展示'},{point_id:'delivery/criterion/v1',teaching_goal_zh:'构图',product_relevance:'商品展示'},{point_id:'delivery/criterion/v2',teaching_goal_zh:'构图',product_relevance:'商品展示'}],units:[{unit_id:'u',point_ids:['p'],output_range_seconds:[0,2]}],reference_text:[{channel:'narration',start_seconds:0,end_seconds:2,text:'kata'}]};
+ const request=buildPreviewReviewRequest(video,input as never),identity=previewReviewIdentity(sha(video),video.length,input as never);
+ const projectId=randomUUID(),operationId=randomUUID(),root=join(directory,'preview'),op=join(root,projectId,operationId);
+ await mkdir(op,{recursive:true});
+ const binding={projectId,operationId,videoSha256:sha(video),inputSha256:identity.input_sha256};
+ await writeFile(join(op,'binding.json'),JSON.stringify(binding));await writeFile(join(op,'input.json'),JSON.stringify(request.input));
+ const {body:_wire,input:_frozenInput,...requestInfo}=request;
+ const response={status:200,body:{candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({coverage:[],continuity:[]})}]}}]}};
+ await writeFile(join(op,`${operationId}.operation.json`),JSON.stringify({status:'failed',requests_attempted:1,error:'local result write failed'}));
+ const {externalCall}=await import('./external-call.ts');
+ assert.ok(Buffer.byteLength(JSON.stringify(input))>2_000_000);
+ const archive={fingerprint:sha(PREVIEW_REVIEW_ENDPOINT+identity.version+identity.logical_request_sha256),response,requestInfo};
+ assert.ok(Buffer.byteLength(JSON.stringify(archive))<100_000,'frozen input is referenced by digest, not duplicated in response archive');
+ await externalCall({directory:op,kind:'video',purpose:'preview-continuous-review-v1',identity:{operation:operationId,fingerprint:archive.fingerprint},requestId:operationId,execute:async()=>archive});
+ let runs=0;const deps={directory:root,resolve:()=>null,run:async()=>{runs++;throw Error('No relaunch allowed');}};
+ const recovered=await previewBridge({action:'read',projectId,operationId},deps as never);
+ assert.equal(recovered.status,'completed');assert.equal(recovered.local_response_recovery,true);assert.equal(recovered.effective_review.can_use_as_pass,false,'a parseable raw response with missing judgments stays blocked');assert.equal(recovered.full_film_accepted,false);assert.equal(runs,0);
+ const record=JSON.parse(await readFile(join(op,`${operationId}.operation.json`),'utf8'));assert.equal(record.status,'failed','historical operation remains failed');
+ const rawFile=join(op,'external-calls',(await readdir(join(op,'external-calls'))).find(n=>n.endsWith('.response'))!);
+ const originalRaw=await readFile(rawFile,'utf8');const changedJudgment=JSON.parse(originalRaw);changedJudgment.value.response.body.candidates[0].content.parts[0].text=JSON.stringify({coverage:[],continuity:[],unexpected:'changed'});await writeFile(rawFile,JSON.stringify(changedJudgment));
+ const corruptResponse=await previewBridge({action:'read',projectId,operationId},deps as never);assert.equal(corruptResponse.result,null,'changed model response fails authoritative archive SHA, even with unchanged input/method');await writeFile(rawFile,originalRaw);
+ const tampered=JSON.parse(await readFile(rawFile,'utf8'));tampered.value.requestInfo.input_sha256='f'.repeat(64);await writeFile(rawFile,JSON.stringify(tampered));
+ const wrong=await previewBridge({action:'read',projectId,operationId},deps as never);assert.equal(wrong.result,null);assert.equal(runs,0);
+ console.log('PASS actual preview cold read: raw response locally reinterpreted, wrong binding rejected, no relaunch/false approval');
+ const manifest={fps:30,total_frames:300,scenes:[{start_frame:0,end_frame:60,kind:'original',content:0},{start_frame:60,end_frame:66,kind:'still',content:4,label:'breath'},{start_frame:66,end_frame:180,kind:'video',content:2},{start_frame:180,end_frame:300,kind:'still',content:5}]};
+ const clean={duration_seconds:10,points:[{point_id:'P',teaching_goal_zh:'原声到回看',product_relevance:'产品展示'}],units:[{unit_id:'transition-1',point_ids:['P']}],reference_text:[]};
+ const evidence=(start_seconds:number,end_seconds:number,observed:string)=>({start_seconds,end_seconds,channel:'visual_organization',observed});
+ const finding=(evidence:unknown[],status='supported')=>({status,reasoning:'离线对照依据',evidence});
+ const judgment={coverage:[{point_id:'P',depiction:[evidence(2.2,10,'动态视频与静帧混合')],teaching:finding([evidence(2.2,10,'动态与静态交替')])}],continuity:[{unit_id:'transition-1',point_ids:['P'],previous:[evidence(0,2,'原片')],current:[evidence(2.2,10,'解释性回看')],relation:'recap',narrative:finding([evidence(2,2.3,'气口保留原片画面，接着进入动态视频')]),teaching:finding([evidence(2.2,10,'动态视频与静帧配合讲解')])}]};
+ const cold=async(value:unknown)=>{
+  const id=randomUUID(),dir=join(root,projectId,id);await mkdir(dir,{recursive:true});
+  const plan=buildPreviewReviewRequest(video,clean),identity=previewReviewIdentity(sha(video),video.length,clean);
+  const {body:_b,input:_i,...requestInfo}=plan;
+  await writeFile(join(dir,'binding.json'),JSON.stringify({projectId,operationId:id,videoSha256:sha(video),inputSha256:plan.input_sha256,executionManifestSha256:sha(JSON.stringify(manifest))}));
+  await writeFile(join(dir,'input.json'),JSON.stringify(plan.input));await writeFile(join(dir,'execution-manifest.json'),JSON.stringify(manifest));
+  await writeFile(join(dir,`${id}.operation.json`),JSON.stringify({status:'failed',requests_attempted:1,error:'local result write failed'}));
+  await externalCall({directory:dir,kind:'video',purpose:'preview-continuous-review-v1',identity:{operation:id},requestId:id,execute:async()=>({requestInfo,fingerprint:sha(PREVIEW_REVIEW_ENDPOINT+identity.version+identity.logical_request_sha256),response:{status:200,body:{candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(value)}]}}]}}})});
+  return {id,dir,result:await previewBridge({action:'read',projectId,operationId:id},deps as never)};
+ };
+ const positive=await cold(judgment);assert.equal(positive.result.effective_review.can_use_as_pass,true,'valid cold recovery must reach the existing gate, not be universally blocked');assert.equal(positive.result.full_film_accepted,false);
+ const negative=structuredClone(judgment);negative.coverage[0].teaching.status='insufficient_evidence';assert.equal((await cold(negative)).result.effective_review.can_use_as_pass,false,'negative original verdict stays negative');
+ await writeFile(join(positive.dir,'execution-manifest.json'),JSON.stringify({...manifest,total_frames:301}));assert.equal((await previewBridge({action:'read',projectId,operationId:positive.id},deps as never)).effective_review.can_use_as_pass,false,'changed execution cannot inherit valid judgment');assert.equal(runs,0);
+ console.log('PASS paired preview controls: valid saved judgment+frozen actual manifest accepted; negative judgment/changed manifest refused; no relaunch');
+ console.log('3 external-call integration groups passed; provider calls are offline substitutes; external network/model/TTS/render calls 0');
+}finally{globalThis.fetch=originalFetch;await rm(directory,{recursive:true,force:true});}

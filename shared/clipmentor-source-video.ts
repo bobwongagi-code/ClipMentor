@@ -1,4 +1,37 @@
 import type { CopyReviewRequest } from './clipmentor-copy-review';
+/** Submitted bytes and their source clock; never a claim that the complete film was reviewed. */
+export interface ObservationMaterial {
+  version: 'observation-material-v1'; kind: 'full_file' | 'stream_copy_excerpt';
+  parent_sha256: string; parent_bytes: number; parent_duration_seconds: number;
+  requested_range_seconds: [number, number] | null;
+  actual_source_range_seconds: [number, number];
+  submitted_sha256: string; submitted_bytes: number; submitted_duration_seconds: number;
+  source_seconds_at_submitted_zero: number;
+  stream_copy: boolean; packet_payloads_verified: boolean;
+  coverage: 'submitted_range_only'; complete_film_accepted: false;
+}
+export function isObservationMaterial(value: unknown): value is ObservationMaterial {
+  if(!value||typeof value!=='object'||Array.isArray(value))return false;
+  if(Object.keys(value).some(k=>!['version','kind','parent_sha256','parent_bytes','parent_duration_seconds','requested_range_seconds',
+    'actual_source_range_seconds','submitted_sha256','submitted_bytes','submitted_duration_seconds','source_seconds_at_submitted_zero',
+    'stream_copy','packet_payloads_verified','coverage','complete_film_accepted'].includes(k)))return false;
+  const v=value as ObservationMaterial,finite=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x);
+  const range=(r:unknown):r is [number,number]=>Array.isArray(r)&&r.length===2&&r.every(finite)&&r[0]>=0&&r[1]>r[0];
+  if(v.version!=='observation-material-v1'||!['full_file','stream_copy_excerpt'].includes(v.kind)
+    ||!(/^[a-f0-9]{64}$/.test(v.parent_sha256))||!(/^[a-f0-9]{64}$/.test(v.submitted_sha256))
+    ||!Number.isSafeInteger(v.parent_bytes)||v.parent_bytes<=0||!Number.isSafeInteger(v.submitted_bytes)||v.submitted_bytes<=0
+    ||!finite(v.parent_duration_seconds)||v.parent_duration_seconds<=0||!finite(v.submitted_duration_seconds)||v.submitted_duration_seconds<=0
+    ||!finite(v.source_seconds_at_submitted_zero)||!range(v.actual_source_range_seconds)
+    ||(v.requested_range_seconds!==null&&(!range(v.requested_range_seconds)||v.requested_range_seconds[1]>v.parent_duration_seconds))
+    ||v.coverage!=='submitted_range_only'||v.complete_film_accepted!==false)return false;
+  if(v.kind==='full_file')return v.parent_sha256===v.submitted_sha256&&v.parent_bytes===v.submitted_bytes
+    &&v.source_seconds_at_submitted_zero===0&&v.submitted_duration_seconds===v.parent_duration_seconds
+    &&v.actual_source_range_seconds[0]===0&&v.actual_source_range_seconds[1]===v.parent_duration_seconds
+    &&v.stream_copy===false&&v.packet_payloads_verified===false
+    &&(v.requested_range_seconds===null||(v.requested_range_seconds[0]===0&&v.requested_range_seconds[1]===v.parent_duration_seconds));
+  return v.stream_copy===true&&v.packet_payloads_verified===true&&v.requested_range_seconds!==null
+    &&v.actual_source_range_seconds[0]<=v.requested_range_seconds[0]&&v.actual_source_range_seconds[1]>=v.requested_range_seconds[1];
+}
 export interface SourceVideoTask {
   version: 'source-boundaries-v1';
   contexts: Array<{
@@ -80,6 +113,8 @@ export interface SourceVideoTransportDiagnostic {
   curl_exit_code: number | null;
   error_kind: 'none' | 'curl_timeout' | 'aborted' | 'spawn_failed' | 'curl_failed' | 'invalid_metrics';
   http_status: number | null;
+  /** Observed transport boundary, not an inferred gateway/upstream root cause. Recomputed on read. */
+  response_boundary?: 'response_received' | 'gateway_or_upstream_error_unattributed' | 'body_not_fully_sent' | 'no_final_response_unattributed' | 'local_process_failure';
   cleanup_status?: 'completed' | 'failed';
   metrics: Partial<Record<'size_upload' | 'size_download' | 'time_namelookup' | 'time_connect' | 'time_appconnect' | 'time_pretransfer' | 'time_starttransfer' | 'time_total', number>>;
   /** Sent bytes do not prove the gateway received the entire body. First byte may be HTTP 100. */
@@ -95,6 +130,9 @@ export interface SourceVideoTransportDiagnostic {
 }
 
 export interface SourceVideoReceipt {
+  preparation_stage?: 'local_read' | 'r2_upload' | 'r2_readback' | 'r2_sign';
+  observation_material?: ObservationMaterial;
+  model_retry_policy?: 'no_automatic_retry';
   operationId: string; status: 'preparing' | 'reserved' | 'failed' | 'completed';
   requestsAttempted: number; requestsSent: 0 | 1 | 'unknown'; projectId: string; subject: SourceVideoRequest['subject']; source_hash: string;
   phase?: string; upstream_http_status?: number | null; error?: string; validation?: SourceVideoValidation;
@@ -111,7 +149,8 @@ export interface SourceVideoResult {
   subject: SourceVideoRequest['subject']; source_hash: string;
   requested_model: string; returned_model: string | null; method_version: string;
   request_sha256: string; input_sha256: string; video_bytes: number;
-  input_media: { full_original_video: true; audio_stream_present: true; video_fps_requested: 5 };
+  input_media: { full_original_video: boolean; audio_stream_present: true; video_fps_requested: 5 };
+  observation_material?: ObservationMaterial;
   validation: SourceVideoValidation;
   raw_observation: SourceVideoObservation; finish_reasons: string[]; usage: unknown;
   scope: 'source_windows_and_planned_capacity_only'; actual_handoff_verified: false; complete_film_accepted: false;
@@ -150,9 +189,13 @@ export function safeSourceTransportDiagnostic(v: unknown, key: string, operation
   if (typeof b.prefix_sha256 === 'string' && /^[a-f0-9]{64}$/.test(b.prefix_sha256)) response.prefix_sha256=b.prefix_sha256;
   if (status(b.error_code)) response.error_code=b.error_code;
   if (TYPES.includes(b.error_type)) response.error_type=b.error_type;
+  const httpStatus=status(v.http_status)?v.http_status:null;
+  const boundary:Diagnostic['response_boundary']=httpStatus!==null&&httpStatus>=400?'gateway_or_upstream_error_unattributed':
+    httpStatus!==null&&httpStatus>=200?'response_received':v.error_kind==='spawn_failed'?'local_process_failure':
+    number(metrics.size_upload)&&metrics.size_upload<v.request_bytes?'body_not_fully_sent':'no_final_response_unattributed';
   return {version:'source-transport-v1',operation_id:operationId,started_at:v.started_at,ended_at:v.ended_at,request_bytes:v.request_bytes,
     curl_exit_code:Number.isInteger(v.curl_exit_code) && v.curl_exit_code >= 0 && v.curl_exit_code <= 255 ? v.curl_exit_code : null,
-    error_kind:v.error_kind,http_status:status(v.http_status)?v.http_status:null,metrics,request_ids:ids,
+    error_kind:v.error_kind,http_status:httpStatus,response_boundary:boundary,metrics,request_ids:ids,
     ...(['completed','failed'].includes(v.cleanup_status)?{cleanup_status:v.cleanup_status}:{}),
     ...(number(metrics.size_upload)?{upload_matches_request_bytes:metrics.size_upload===v.request_bytes}:{}),
     first_byte_may_be_interim:true,response_body:response};

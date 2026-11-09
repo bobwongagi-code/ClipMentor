@@ -1,3 +1,4 @@
+import {externalCall} from './external-call';
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
 import {deliveryReview} from '../../src/clipmentor/delivery-sections';
 import { createHash } from 'node:crypto';
@@ -453,8 +454,11 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     signal = outerSignal ? AbortSignal.any([timeout, outerSignal]) : timeout;
     signal.throwIfAborted();
     stage = 'model_turn_failed';
-    raw = await deps.run(prompt, frames, `clipmentor-review:${request.operationId}`, request.projectId, signal);
+    raw = await externalCall({directory:deps.directory,kind:'review',maxResponseBytes:4_500_000,purpose:'independent-copy-review-v1',requestId:request.operationId,preserveErrors:true,
+      identity:{fingerprint,prompt_sha256:digest(prompt),inspection},signal,
+      execute:childSignal=>deps.run(prompt,frames,`clipmentor-review:${request.operationId}`,request.projectId,childSignal)});
     rawReceived = true;
+    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'reserved',requests_attempted:attempts,image_inspection:inspection,raw_review:raw}));
     signal.throwIfAborted();
     stage = 'source_unavailable_or_changed';
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed during review');

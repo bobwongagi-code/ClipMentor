@@ -7,7 +7,9 @@ import { sourceVideoDependencies, observeSourceVideo, readSourceVideoReceipt, So
 export function clipMentorSourceVideoPlugin(deps?: SourceVideoDependencies): Plugin {
   return { name: 'clipmentor-source-video', configureServer(server) {
     server.middlewares.use('/api/clipmentor/observe-video', async (req: IncomingMessage, res: ServerResponse) => {
-      const send = (status: number, value: unknown) => { if (!res.destroyed) { res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-store'); res.end(JSON.stringify(value)); } };
+      const headers=(status:number)=>{if(!res.headersSent){res.statusCode=status;
+        res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');}};
+      const send = (status: number, value: unknown) => { if (!res.destroyed) { headers(status);res.end(JSON.stringify(value)); } };
       if (req.method !== 'POST') { req.resume(); send(405, { error: 'POST required' }); return; }
       if (!editorCredentialAuthorized(req, true)) { req.resume(); send(401, { error: 'Editor origin required' }); return; }
       if (!String(req.headers['content-type']).startsWith('application/json')) { req.resume(); send(415, { error: 'JSON required' }); return; }
@@ -22,7 +24,17 @@ export function clipMentorSourceVideoPlugin(deps?: SourceVideoDependencies): Plu
         if (body?.action === 'read_receipt') {
           if (Object.keys(body).some(k => !['action','operationId','projectId'].includes(k))) throw new Error('Invalid read request');
           send(200, await readSourceVideoReceipt(body.operationId, body.projectId, dependencies));
-        } else send(200, await observeSourceVideo(body, dependencies, abort.signal));
+        } else {
+          // Match the existing preview route: keep local fetch alive only after
+          // source preflight and reservation, during the same single post().
+          const waiting={...dependencies,post:async(...args:Parameters<SourceVideoDependencies['post']>)=>{
+            headers(200);res.write('\n');
+            const heartbeat=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write('\n');},20_000);
+            heartbeat.unref();
+            try{return await dependencies.post(...args);}finally{clearInterval(heartbeat);}
+          }};
+          send(200,await observeSourceVideo(body,waiting,abort.signal));
+        }
       } catch (error) {
         if (error instanceof SourceVideoOperationError) {
           send(error.receipt.validation ? 422 : 502, {error:error.message,receipt:error.receipt});

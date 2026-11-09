@@ -1,0 +1,79 @@
+[
+  {
+    "source_record": "业务片段直传与R2对照-20261108/trial-04.json",
+    "source_record_sha256": "9fb50ca1263da27ac639941bb12162441097c4dcc2e95b663b0520b82159d48b",
+    "diagnostic": {
+      "version": "source-transport-v1",
+      "operation_id": "b0050ddf-e662-4ba2-89e3-b1b7b16936d0",
+      "started_at": "2026-11-08T11:49:00.629Z",
+      "ended_at": "2026-11-08T11:58:55.662Z",
+      "request_bytes": 19368135,
+      "curl_exit_code": 28,
+      "error_kind": "curl_timeout",
+      "http_status": 100,
+      "metrics": {
+        "size_upload": 19368135,
+        "size_download": 0,
+        "time_namelookup": 0.001632,
+        "time_connect": 0.002008,
+        "time_appconnect": 1.059256,
+        "time_pretransfer": 1.059335,
+        "time_starttransfer": 1.51533,
+        "time_total": 595.002672
+      },
+      "request_ids": {},
+      "upload_matches_request_bytes": true,
+      "first_byte_may_be_interim": true,
+      "response_body": {
+        "format": "missing",
+        "bytes": 0,
+        "inspected_bytes": 0,
+        "truncated": false,
+        "message_class": "none"
+      },
+      "cleanup_status": "completed"
+    },
+    "expected_boundary": "no_final_response_unattributed"
+  },
+  {
+    "source_record": "R2真实容量验证-20261108/source-25MB-结果.json",
+    "source_record_sha256": "665767af345c0c28a15a124cfe7db23129e8f9d5788efaf630dd7cb5c2a117fc",
+    "diagnostic": {
+      "version": "source-transport-v1",
+      "operation_id": "74e6aa31-8628-4891-8ef8-7442fd86d7e7",
+      "started_at": "2026-11-08T10:08:06.307Z",
+      "ended_at": "2026-11-08T10:08:48.447Z",
+      "request_bytes": 1994,
+      "curl_exit_code": 0,
+      "error_kind": "none",
+      "http_status": 400,
+      "metrics": {
+        "size_upload": 1994,
+        "size_download": 107,
+        "time_namelookup": 0.001788,
+        "time_connect": 0.002245,
+        "time_appconnect": 1.049415,
+        "time_pretransfer": 1.049516,
+        "time_starttransfer": 42.10591,
+        "time_total": 42.106857
+      },
+      "request_ids": {
+        "x-oneapi-request-id": "202611081007451958491528268d9d6P4RW80yB"
+      },
+      "upload_matches_request_bytes": true,
+      "first_byte_may_be_interim": true,
+      "response_body": {
+        "format": "json",
+        "bytes": 107,
+        "inspected_bytes": 107,
+        "truncated": false,
+        "message_class": "invalid_argument",
+        "prefix_sha256": "1fd9ccc03b01ade99d0fa5e53ce62c2d9dff6a775b6f4ba20e197ca333ed6d28",
+        "error_code": 400,
+        "error_type": "upstream_error"
+      },
+      "cleanup_status": "completed"
+    },
+    "expected_boundary": "gateway_or_upstream_error_unattributed"
+  }
+]

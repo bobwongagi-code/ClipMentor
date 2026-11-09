@@ -54,3 +54,13 @@ Ordinary clip-update locators (`itemId`, `id`, `targetItemId`, and selected-clip
 
 
 Internal blueprint review boards use the original saved analysis and local media. The human view includes source-speech Chinese, label translations and both explicitly bound creator endings; conflicts refuse generation rather than mixing revisions. Achievement-opening guidance remains optional and evidence-bound, not a fixed approved sentence. See [usage and boundaries](docs/clipmentor-blueprint-review.md). No production project, review verdict or media is updated by generating a board.
+
+## External-call recovery and offline acceptance (2026-11-09)
+
+MiniMax, Fun-ASR, copy review, source observation and preview review use a private, hash-bound response ledger before local parsing. Unknown outcomes never grant automatic model resubmission; saved negative reviews remain negative. Voice recovery is read-only and binds the existing audio bytes. Existing production budgets, editor ownership and content gates remain authoritative. Original media or a question-specific stream-copy excerpt is selected before submission; the bounded R2/inline transport does not resize, silently change route, or approve content.
+
+Run `npm run verify:clipmentor-external-calls` for paired positive/negative controls, independent loopback HTTP counting and real SIGKILL/new-process recovery at raw, audio and project boundaries. The tests verify actual saved audio and project bindings and preserve spent budgets. They use synthetic fixtures, not real paid services; they do not certify physical power-loss recovery, edit-lease crashes, teaching quality or final-film acceptance.
+
+`npm run report:clipmentor-calls -- [runtime-directory]` reads only governed records and reports per-kind known/unknown samples, P50/P95/max waits, saved-response reuse and prevented duplicates. Raw archives use private existing runtime directories, not media URLs. Missing historical timings/deadlines remain unknown. The 43-request provenance fixture separates 22 authorized experiment requests from 21 requests with unknown repetition necessity; identical request bodies are not proof of avoidable waste. No global zero-duplicate or long-term gateway reliability claim follows from these fixtures.
+
+Recovery coverage remains bounded: the SIGKILL project-attachment test uses a test adapter around the real store rather than the full headless tool. A source-observation crash after private raw archival but before the outer source receipt is updated remains stopped without a second submission; automatic cold recovery for that outer-receipt gap is not established by the voice/preview tests.

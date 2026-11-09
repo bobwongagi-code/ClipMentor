@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -41,6 +41,12 @@ try {
   assert(!('language_hints' in (submitted[0].parameters as Record<string, unknown>)));
   assert.equal(result.status, 'completed');
   assert.deepEqual(await transcribeClipMentorSource(first, deps), result); assert.equal(calls, 1, 'same operation never charges again');
+  const firstLedger=join(directory,`${first.operationId}.json`),savedFirst=JSON.parse(await readFile(firstLedger,'utf8'));
+  savedFirst.result.status='failed';savedFirst.result.words=[];savedFirst.result.chunks[0].status='failed';savedFirst.result.chunks[0].words=[];savedFirst.result.chunks[0].failure_stage='timestamps';
+  savedFirst.result.issues=['chunk-1:provider_request_failed_or_invalid_timestamps'];
+  const frozenFailure=JSON.stringify(savedFirst);await writeFile(firstLedger,frozenFailure);
+  const recovered=await transcribeClipMentorSource(first,deps);assert.equal(recovered.status,'completed');assert.equal(recovered.words[0].text,'hello');assert.equal(calls,1);
+  assert.equal(await readFile(firstLedger,'utf8'),frozenFailure,'local raw recovery preserves the original failure');
   await assert.rejects(transcribeClipMentorSource({ ...first, language: 'vi' }, deps), /another source or configuration/);
   assert.equal(calls, 1);
   const vi = await transcribeClipMentorSource({ ...args(), language: 'vi' }, deps);
@@ -58,6 +64,8 @@ try {
   assert.equal(budget.requests_attempted, 0); assert.equal(calls, beforeBudget);
   assert.equal(budget.status, 'failed');
 
+  const reuseCount=calls;await transcribeClipMentorSource(args(),deps);assert.equal(calls,reuseCount,'same complete source/chunks with a new operation reuse raw results');
+  deps.directory=join(directory,'partial-case');
   failAt = calls + 2;
   const partialArgs = args(); const partial = await transcribeClipMentorSource(partialArgs, deps);
   assert.equal(partial.status, 'partial'); assert.equal(partial.requests_attempted, 2);
@@ -65,12 +73,12 @@ try {
   assert(!JSON.stringify(partial).includes(secret));
   const afterPartial = calls;
   await transcribeClipMentorSource(partialArgs, deps); assert.equal(calls, afterPartial);
-  failAt = -1; duration = 240; oversized = true;
+  failAt = -1; duration = 240; oversized = true;deps.directory=join(directory,'split-case');
   const split = await transcribeClipMentorSource(args(), deps);
   assert.equal(split.chunks.length, 2); assert(split.chunks.every((c) => c.audio_bytes <= 8_000_000));
   assert.equal(split.chunks[1].offset_seconds, 119); oversized = false;
 
-  duration = 100; missingTimes = true;
+  duration = 100; missingTimes = true;deps.directory=join(directory,'missing-times-case');
   const missing = await transcribeClipMentorSource(args(), deps);
   assert.equal(missing.status, 'failed'); assert.equal(missing.requests_attempted, 1);
   assert.equal(missing.words.length, 0, 'never fabricate timing from plain text'); missingTimes = false;
@@ -91,7 +99,7 @@ try {
   seedKeystore({ CLIPMENTOR_FUNASR_API_KEY: secret, CLIPMENTOR_FUNASR_ENDPOINT: endpoint });
   assert.equal(keyStatus().keys.CLIPMENTOR_FUNASR_API_KEY.configured, true);
   assert(!JSON.stringify(keyStatus()).includes(secret), 'key status exposes presence only');
-  const saved = await readFile(join(directory, `${partialArgs.operationId}.json`), 'utf8');
+  const saved = await readFile(join(directory,'partial-case', `${partialArgs.operationId}.json`), 'utf8');
   assert(!saved.includes(secret));
 
   let handler: ((req: IncomingMessage, res: ServerResponse) => void) | undefined;

@@ -1,3 +1,5 @@
+import {readSavedExternalResponse} from '../clipmentor/external-call';
+import { getKey } from '../keystore';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createHash } from 'node:crypto';
@@ -13,7 +15,7 @@ import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { readJson } from '../agent-runs/request';
-import { buildPreviewReviewRequest, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput } from '../clipmentor/preview-review';
+import { PREVIEW_REVIEW_ENDPOINT, interpretPreviewResponse, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput } from '../clipmentor/preview-review';
 import { checkPreviewTimelineObservations, previewReviewWindows } from '../clipmentor/preview-timeline-check';
 import { boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria } from '../clipmentor/visual-done-criteria';
 import { productionReviewRequirements } from '../clipmentor/production-task';
@@ -38,7 +40,9 @@ function dependencies(): PreviewBridgeDependencies {
   return { directory: join(runtimeProfile().rootDir, 'clipmentor-preview-reviews'), resolve: resolveUploadFile,
     async visualCriteria(projectId){return boundVisualCriteria(await productionReviewRequirements(projectId));},
     run: async (args, signal) => { await execute(process.execPath, ['--import', loader, cli, ...args],
-      { signal, timeout: 660_000, maxBuffer: 64 * 1024, windowsHide: true }); } };
+      { signal, timeout: 660_000, maxBuffer: 64 * 1024, windowsHide: true,
+        env:{...process.env,...Object.fromEntries((['ROOTIFY_GATEWAY_API_KEY','CLIPMENTOR_VIDEO_TRANSPORT','CLIPMENTOR_R2_ACCOUNT_ID','CLIPMENTOR_R2_BUCKET','CLIPMENTOR_R2_API_TOKEN','PROXY_URL','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_BUCKET','R2_ENABLED'] as const)
+          .map(name=>[name,getKey(name)]))} }); } };
 }
 
 /** Reads honor references and configured roots; new files go to the writable root only. */
@@ -60,7 +64,22 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const read = async () => {
     const binding = JSON.parse(await readFile(bindingFile, 'utf8'));
     if (binding.projectId !== body.projectId || binding.operationId !== body.operationId) throw new Error('Invalid binding');
-    const result = await readFile(output, 'utf8').then(JSON.parse).catch(() => null);
+    let result = await readFile(output, 'utf8').then(JSON.parse).catch(() => null);
+    let locallyRecovered=false;
+    if(!result){
+      try{
+        const saved=await readSavedExternalResponse(directory,operationId) as {fingerprint:string;requestInfo:Record<string,any>;response:{status:number;body:unknown}}|undefined;
+        if(!saved)throw Error('Saved response unavailable');
+        const input=validatePreviewReviewInput(JSON.parse(await readFile(join(directory,'input.json'),'utf8')));
+        const info=saved.requestInfo;
+        if(!info||info.video_sha256!==binding.videoSha256||info.input_sha256!==binding.inputSha256||digest(input)!==binding.inputSha256)throw Error('Saved raw binding mismatch');
+        const identity=previewReviewIdentity(binding.videoSha256,info.media_transfer?.bytes,input);
+        const expected=createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+identity.version+identity.logical_request_sha256).digest('hex');
+        if(saved.fingerprint!==expected||info.version!==identity.version||info.instruction_sha256!==identity.instruction_sha256)throw Error('Saved raw method mismatch');
+        if(!/^[a-f0-9]{64}$/.test(info.request_sha256)||info.media_transfer?.sha256!==binding.videoSha256)throw Error('Saved wire/media binding missing');
+        result=interpretPreviewResponse(saved.response,{...info,input} as Parameters<typeof interpretPreviewResponse>[1],getKey('ROOTIFY_GATEWAY_API_KEY'));locallyRecovered=true;
+      }catch{/* Missing/invalid raw is never a new submission or an approval. */}
+    }
     if (result && (result.video_sha256 !== binding.videoSha256 || result.input_sha256 !== binding.inputSha256
       || result.full_film_accepted !== false)) throw new Error('Invalid preview receipt');
     if (body.videoSha256 !== undefined && body.videoSha256 !== binding.videoSha256) throw new Error('Invalid preview identity');
@@ -125,14 +144,15 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     const ledger = await readFile(join(directory, `${body.operationId}.operation.json`), 'utf8').then(JSON.parse).catch(() => null);
     const gatewayFailure=ledger?.status==='failed'&&typeof ledger.error==='string'
       ? /^Preview review HTTP ([0-9]{3}); attempt consumed, no automatic retry$/.exec(ledger.error) : null;
-    const failed = !result && ledger?.status === 'failed' && ledger.requests_attempted === 1;
+    const attempted = ledger?.requests_attempted === 0 ? 0 : 1;
+    const failed = !result && ledger?.status === 'failed' && [0,1].includes(ledger.requests_attempted);
     const diagnostic = failed ? safeSourceTransportDiagnostic(ledger.transport_diagnostic,'',operationId) : undefined;
     return { operationId: body.operationId, projectId: body.projectId, videoSha256: binding.videoSha256,
       ...(binding.visualCriteriaDigest?{visualCriteriaDigest:binding.visualCriteriaDigest}:{}),
       ...(failed?{receipt_persisted:true}:{}), ...(diagnostic?{transport_diagnostic:diagnostic}:{}),
-      status: result ? 'completed' : ledger?.status ?? 'reserved',
+      status: result ? 'completed' : ledger?.status ?? 'reserved',...(locallyRecovered?{local_response_recovery:true,original_operation_status:ledger?.status}:{}),
       ...(gatewayFailure&&!result?{upstream_http_status:Number(gatewayFailure[1])}:{}), effective_review: effectiveReview, timeline_check: timelineReadback, result,
-      requestsAttempted: 1, requestsSent: 0, full_film_accepted: false, scope: 'rendered_preview_continuous_review' };
+      requestsAttempted: attempted, model_retry_policy:ledger?.model_retry_policy, requestsSent: 0, full_film_accepted: false, scope: 'rendered_preview_continuous_review' };
   };
   if (body.action === 'read') {
     if (Object.keys(body).some(k => !['action','projectId','operationId','videoSha256','executionManifest'].includes(k))) throw new Error('Invalid receipt read');
@@ -163,8 +183,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const name = body.src.slice('/media/uploads/'.length);
   const video = isSafeUploadName(name) ? deps.resolve(name) : null;
   if (!video || (await stat(video)).size > 70_000_000 || await sha256File(video) !== body.videoSha256) throw new Error('Preview hash or file invalid');
-  // Reuse the existing bounded inline preflight; no R2/URL upload or re-encode.
-  const prepared = buildPreviewReviewRequest(await readFile(video), input);
+  // Deterministic original-byte preflight; the CLI selects the configured transport without re-encoding.
+  const prepared = previewReviewIdentity(body.videoSha256, (await stat(video)).size, input);
   if (prepared.video_sha256 !== body.videoSha256) throw new Error('Preview changed during preflight');
   const fingerprint = digest({ src: body.src, videoSha256: body.videoSha256, input,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) });
@@ -181,8 +201,12 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const inputFile = join(directory, 'input.json');
   await writeFile(inputFile, JSON.stringify(input), { flag: 'wx', mode: 0o600 });
   if (manifestHash !== undefined) await writeFile(manifestFile, JSON.stringify(body.executionManifest), { flag: 'wx', mode: 0o600 });
-  try { await deps.run(['--video',video,'--input',inputFile,'--out',output,'--operation',body.operationId], signal); }
-  catch { return { ...await read(), requestsSent: null, requestOutcome: 'unknown', error: 'Continuous review failed or unknown; attempt consumed, no retry' }; }
+  try { await deps.run(['--video',video,'--expected-video-sha256',body.videoSha256 as string,'--input',inputFile,'--out',output,'--operation',body.operationId], signal); }
+  catch {
+    const saved=await read();
+    return saved.requestsAttempted===0 ? {...saved,requestsSent:0,requestOutcome:'not_submitted',error:'Media preparation failed; no model request sent'}
+      : {...saved,requestsSent:null,requestOutcome:'unknown',error:'Continuous review failed or unknown; attempt consumed, no retry'};
+  }
   return { ...await read(), requestsSent: 1 };
 }
 
@@ -197,15 +221,28 @@ export function clipMentorPreviewReviewPlugin(deps?: PreviewBridgeDependencies):
     });
 
     server.middlewares.use('/api/clipmentor/review-preview', async (req: IncomingMessage, res: ServerResponse) => {
-      const send = (status: number, value: unknown) => { if (!res.destroyed) { res.statusCode = status;
-        res.setHeader('Content-Type','application/json'); res.setHeader('Cache-Control','no-store'); res.end(JSON.stringify(value)); } };
+      const headers=(status:number)=>{if(!res.headersSent){res.statusCode=status;
+        res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');}};
+      const send = (status: number, value: unknown) => { if (!res.destroyed) { headers(status);res.end(JSON.stringify(value)); } };
       if (req.method !== 'POST') { req.resume(); send(405,{error:'POST required'}); return; }
       if (!editorCredentialAuthorized(req,true)) { req.resume(); send(401,{error:'Editor origin required'}); return; }
       if (!String(req.headers['content-type']).startsWith('application/json')) { req.resume(); send(415,{error:'JSON required'}); return; }
       const abort = new AbortController();
       const close = () => { if (!res.writableEnded) abort.abort(); };
       res.on('close', close);
-      try { send(200,await previewBridge(await readJson(req,256*1024),deps??dependencies(),abort.signal)); }
+      try {
+        const body=await readJson(req,256*1024),original=deps??dependencies();
+        // Start only after bridge preflight/reservation, at the existing single
+        // run boundary. JSON permits whitespace before the terminal receipt.
+        // This keeps the local fetch alive without a second provider request.
+        const waiting={...original,run:async(args:string[],signal?:AbortSignal)=>{
+          headers(200);res.write('\n');
+          const heartbeat=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write('\n');},20_000);
+          heartbeat.unref();
+          try{await original.run(args,signal);}finally{clearInterval(heartbeat);}
+        }};
+        send(200,await previewBridge(body,waiting,abort.signal));
+      }
       catch { send(400,{error:'Preview review unavailable or invalid; retain operationId, no retry. No credential or local path is returned.'}); }
       finally { res.off('close',close); }
     });

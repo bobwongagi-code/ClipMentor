@@ -94,9 +94,11 @@
     "verify:extract-audio": "tsx server/plugins/extract-audio.verify.ts",
     "verify:clipmentor-transitions": "tsx server/clipmentor/transition-check.verify.ts",
     "check:clipmentor-transitions": "tsx server/clipmentor/transition-check.mts",
-    "verify:clipmentor-source-video": "tsx server/clipmentor/source-video.verify.ts",
+    "verify:clipmentor-source-video": "tsx server/clipmentor/observation-material.verify.ts && tsx server/clipmentor/video-media-adversarial.verify.ts && tsx server/clipmentor/source-video.verify.ts && tsx server/clipmentor/video-media.verify.ts && tsx server/clipmentor/video-media-cli.verify.ts && node server/clipmentor/video-media-crash.verify.mjs",
     "board:clipmentor-blueprint": "tsx server/clipmentor/blueprint-review-board-cli.mts",
-    "check:clipmentor-blueprint": "tsx server/clipmentor/blueprint-check.mts"
+    "check:clipmentor-blueprint": "tsx server/clipmentor/blueprint-check.mts",
+    "verify:clipmentor-external-calls": "tsx server/clipmentor/external-call.verify.ts && tsx server/clipmentor/external-call-integration.verify.ts && tsx server/clipmentor/external-call-statistics.verify.ts && node --import tsx server/clipmentor/external-call-recovery.verify.mjs",
+    "report:clipmentor-calls": "tsx server/clipmentor/external-call-report.mts"
   },
   "dependencies": {
     "@ai-sdk/alibaba": "^2.0.16",

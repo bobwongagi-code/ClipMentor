@@ -217,6 +217,24 @@ try {
     status:'review_required',can_use_as_pass:true}}),{status:200})) as typeof fetch;
   assert.equal(((await execClipMentorAnalysisTool('review_clipmentor_preview',formalRead,ctx)) as any).can_use_as_pass,false,'inconsistent gate cannot be promoted by browser');
   globalThis.fetch=localFetch;
+  // A legitimate long review must expose headers and JSON whitespace while
+  // the ONE original operation is still pending, rather than losing its result
+  // to the local client's shorter silent-header timeout.
+  const originalRun=deps.run;let release!:()=>void,started!:()=>void;
+  const held=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{started=r;});
+  deps.run=async args=>{started();await held;await originalRun(args);};
+  const beforeWaiting=calls;
+  try{
+   const waiting=fetch(`${origin}/api/clipmentor/review-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body()),signal:AbortSignal.timeout(1000)});
+   await entered;
+   const response=await waiting;assert.equal(response.status,200);
+   const reader=response.body!.getReader(),first=await reader.read();
+   assert.equal(new TextDecoder().decode(first.value).trim(),'','pending response carries no fabricated verdict');
+   assert.equal(calls,beforeWaiting,'headers arrive before the held original operation finishes');
+   release();let text=new TextDecoder().decode(first.value);
+   for(;;){const part=await reader.read();if(part.done)break;text+=new TextDecoder().decode(part.value);}
+   assert.equal(JSON.parse(text).status,'completed');assert.equal(calls,beforeWaiting+1,'keepalive does not submit another operation');
+  }finally{release();deps.run=originalRun;}
   const unauth=await originalFetch(`${origin}/api/clipmentor/review-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body())});
   assert.equal(unauth.status,401);
   assert.equal(await readFile(video,'utf8'),bytes.toString(),'review does not modify media');

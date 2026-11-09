@@ -45,6 +45,7 @@ export function voiceGenerationPlugin(options: VoiceOptions): Plugin {
         if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed — use POST' }); return; }
         try {
           const input = validateVoiceRequest(await readJson(req));
+          if(req.headers['x-clipmentor-recover']==='1'&&input.provider!=='minimax')throw Error('Saved voice recovery unavailable for this provider; do not resubmit');
           if (isAiVoiceProvider(input.provider)) {
             const audio = await generateAiVoice(options, input);
             const saved = await saveVoiceAudio(audio.bytes, audio.codec, audio.sampleRate);
@@ -54,7 +55,15 @@ export function voiceGenerationPlugin(options: VoiceOptions): Plugin {
           let bytes: Buffer;
           let subtitleUrl: string | undefined;
           if (input.provider === 'minimax') {
-            const result = await minimaxVoice(options, input);
+            const scope=req.headers['x-clipmentor-project'];
+            const operation=req.headers['x-clipmentor-operation'];
+            if(scope!==undefined&&(typeof scope!=='string'||!(/^[a-zA-Z0-9_-]{1,160}$/).test(scope)))throw Error('Invalid voice project scope');
+            if(operation!==undefined&&(typeof operation!=='string'||!(/^[a-zA-Z0-9_-]{1,128}$/).test(operation)))throw Error('Invalid voice operation');
+            const controller=new AbortController();const disconnected=()=>controller.abort();
+            res.once('close',disconnected);
+            let result;
+            try{result=await minimaxVoice(options,input,{scope:typeof scope==='string'?scope:undefined,operationId:typeof operation==='string'?operation:undefined,signal:controller.signal,readOnly:req.headers['x-clipmentor-recover']==='1'});}
+            finally{res.removeListener('close',disconnected);}
             bytes = result.audio;
             subtitleUrl = result.subtitleUrl;
           } else if (input.provider === 'elevenlabs') bytes = await elevenLabsVoice(options, input);

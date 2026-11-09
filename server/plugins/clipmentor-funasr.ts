@@ -1,3 +1,5 @@
+import {ExternalHttpError,readSavedExternalResponse} from '../clipmentor/external-call.ts';
+import {externalFetch} from '../clipmentor/external-fetch.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createHash } from 'node:crypto';
@@ -89,7 +91,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Could not reserve transcription operation');
     const prior = JSON.parse(await readFile(ledger, 'utf8')) as { fingerprint: string; result?: SourceTranscription };
     if (prior.fingerprint !== fingerprint) throw new Error('Operation ID already belongs to another source or configuration');
-    if (prior.result) return prior.result;
+    if (prior.result) return recoverSavedAsr(prior.result,ledger,fingerprint,deps.directory);
     throw new Error('Prior operation is running or outcome unknown; no automatic replay');
   }
   const result: SourceTranscription = {
@@ -131,13 +133,14 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
       await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'request_reserved', requests_attempted: result.requests_attempted }));
       let stage: 'network' | 'http' | 'json' | 'timestamps' = 'network';
       try {
-        const response = await deps.fetch(endpoint, {
+        const response = await externalFetch({directory:deps.directory,kind:'asr',purpose:'fun-asr-chunk-v1',
+          scope:{model:FUNASR_MODEL,source:sourceHash,language:request.language,range:[chunk.offset_seconds,chunk.end_seconds]},requestId:`${request.operationId}:${chunk.chunk_id}`,endpoint,fetch:deps.fetch,init:{
           method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-DashScope-SSE': 'disable' },
           body: JSON.stringify({ model: FUNASR_MODEL, input: { messages: [{ role: 'user', content: [{ type: 'input_audio',
             input_audio: { data: `data:audio/mp3;base64,${Buffer.from(encoded[i]).toString('base64')}` } }] }] },
           parameters: { format: 'mp3', sample_rate: '16000', ...(request.language === 'auto' ? {} : { language_hints: [request.language] }) }, resources: [] }),
-        });
+        }});
         chunk.http_status = response.status; stage = 'http';
         if (!response.ok) throw new Error('Provider HTTP failure');
         stage = 'json'; const body: unknown = await response.json();
@@ -145,7 +148,8 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
         chunk.words = parsed.words; chunk.detected_language = parsed.language; chunk.request_id = parsed.requestId;
         chunk.separator_entries_skipped = parsed.separators;
         chunk.status = 'completed';
-      } catch {
+      } catch (error) {
+        if(error instanceof ExternalHttpError){chunk.http_status=error.status;stage='http';}
         // Never expose upstream bodies, request headers, audio or credential-bearing exceptions.
         chunk.status = 'failed'; chunk.error = 'provider_request_failed_or_invalid_timestamps';
         chunk.failure_stage = stage;
@@ -153,18 +157,8 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
         break;
       }
     }
-    Object.assign(result, stitchAsrChunks(result.chunks));
     if (await deps.hash(file) !== sourceHash) result.issues.push('source_changed_during_transcription');
-    if (result.conflicts.length) result.issues.push('overlap_conflict');
-    for (const chunk of result.chunks) {
-      if (chunk.words.some((w) => w.end_seconds > chunk.end_seconds || w.start_seconds < chunk.offset_seconds)) result.issues.push(`${chunk.chunk_id}:word_outside_chunk`);
-    }
-    if (result.words.some((w) => w.end_seconds > metadata.duration)) result.issues.push('source_time_out_of_bounds');
-    const languages = new Set(result.chunks.flatMap((c) => c.detected_language ? [c.detected_language] : []));
-    if (languages.size === 1) result.detected_language = [...languages][0];
-    else if (languages.size > 1) result.issues.push('detected_language_disagreement');
-    const completed = result.chunks.filter((c) => c.status === 'completed').length;
-    result.status = completed === result.chunks.length ? 'completed' : completed ? 'partial' : 'failed';
+    settleAsr(result,metadata.duration);
   } catch {
     result.issues.push('extraction_budget_or_operation_failed');
     result.status = result.chunks.some((c) => c.status === 'completed') ? 'partial' : 'failed';
@@ -185,6 +179,40 @@ function processOutput(binary: string, args: string[]): Promise<string> {
     child.once('close', (code) => { clearTimeout(timeout); if (code === 0) resolve(output); else reject(new Error('Media processing failed')); });
   });
 }
+function settleAsr(result:SourceTranscription,duration:number){
+    Object.assign(result, stitchAsrChunks(result.chunks));
+    if (result.conflicts.length) result.issues.push('overlap_conflict');
+    for (const chunk of result.chunks) {
+      if (chunk.words.some((w) => w.end_seconds > chunk.end_seconds || w.start_seconds < chunk.offset_seconds)) result.issues.push(`${chunk.chunk_id}:word_outside_chunk`);
+    }
+    if (result.words.some((w) => w.end_seconds > duration)) result.issues.push('source_time_out_of_bounds');
+    const languages = new Set(result.chunks.flatMap((c) => c.detected_language ? [c.detected_language] : []));
+    if (languages.size === 1) result.detected_language = [...languages][0];
+    else if (languages.size > 1) result.issues.push('detected_language_disagreement');
+    const completed = result.chunks.filter((c) => c.status === 'completed').length;
+    result.status = completed === result.chunks.length ? 'completed' : completed ? 'partial' : 'failed';
+}
+async function recoverSavedAsr(original:SourceTranscription,ledger:string,fingerprint:string,directory:string){
+ if(original.status==='completed')return original;
+ const result=structuredClone(original);let recovered=false;
+ for(const chunk of result.chunks){
+  if(chunk.status!=='failed')continue;
+  try{
+   const saved=await readSavedExternalResponse(directory,`${original.operation_id}:${chunk.chunk_id}`);
+   if(!object(saved)||saved.status!==200||typeof saved.text!=='string')continue;
+   const parsed=parseFunAsrResponse(JSON.parse(saved.text),chunk.offset_seconds);
+   chunk.words=parsed.words;chunk.detected_language=parsed.language;chunk.request_id=parsed.requestId;chunk.separator_entries_skipped=parsed.separators;
+   chunk.status='completed';delete chunk.error;delete chunk.failure_stage;
+   result.issues=result.issues.filter(i=>i!==`${chunk.chunk_id}:provider_request_failed_or_invalid_timestamps`);recovered=true;
+  }catch{/* Invalid/missing original remains failed; never regenerate. */}
+ }
+ if(!recovered)return original;
+ settleAsr(result,original.duration_seconds);
+ const originalText=await readFile(ledger,'utf8');
+ await atomicWriteFile(ledger+'.recovered-raw-v1.json',JSON.stringify({fingerprint,original_ledger_sha256:digest(Buffer.from(originalText)),provider_requests_sent:0,result}));
+ return result;
+}
+
 export function clipMentorAsrDependencies(): Dependencies {
   return {
     key: () => getKey('CLIPMENTOR_FUNASR_API_KEY'), endpoint: () => getKey('CLIPMENTOR_FUNASR_ENDPOINT'),

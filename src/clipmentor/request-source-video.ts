@@ -1,6 +1,6 @@
 import type { AgentContext } from '../agent/context';
 import type { SourceVideoRequest, SourceVideoResult, SourceVideoReceipt } from '../../shared/clipmentor-source-video';
-import { observationTaskWithBoundaryContext, validateSourceVideoTask } from '../../shared/clipmentor-source-video';
+import { observationTaskWithBoundaryContext, validateSourceVideoTask, isObservationMaterial } from '../../shared/clipmentor-source-video';
 import { copyReviewSubject, copyTeachingPacketFromDoc } from './production-gate';
 
 /** Paid source observation only: no approval binding, project mutation or editing. */
@@ -24,8 +24,11 @@ export async function requestSourceVideo(args: Record<string, unknown>, ctx: Age
     ctx.onToolProgress?.('3.8连续源片视听观察：一次预算，不重试，不改稿或制作');
     const timeout=AbortSignal.timeout(660000), outer=ctx.getAgentRunSignal?.();sent=true;
     const response=await (ctx.hostFetch ?? fetch)('/api/clipmentor/observe-video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:outer?AbortSignal.any([outer,timeout]):timeout});
-    if(!response.ok) {
-      const failure = await response.json().catch(() => null) as {receipt?:SourceVideoReceipt} | null;
+    const value=await response.json();
+    const failure=value as {error?:unknown;receipt?:SourceVideoReceipt}|null;
+    // A keepalive response has already sent HTTP 200. The terminal receipt,
+    // not that transport status, determines whether the operation succeeded.
+    if(!response.ok || (failure?.error&&failure.receipt)) {
       const receipt = failure?.receipt;
       if(receipt?.operationId===args.operationId && receipt.subject?.digest===subject.digest && receipt.projectId===project
         && receipt.actual_handoff_verified===false && receipt.complete_film_accepted===false) {
@@ -33,10 +36,15 @@ export async function requestSourceVideo(args: Record<string, unknown>, ctx: Age
       }
       return {error:`Source observation failed or unknown (local HTTP ${response.status}); retain operationId, no retry or new operation`};
     }
-    const r=await response.json() as SourceVideoResult;
+    const r=value as SourceVideoResult;
     if(r.operationId!==args.operationId || r.subject?.digest!==subject.digest || r.subject.revision!==a.revision || r.source_hash!==a.source.sourceContentHash
       || JSON.stringify(r.observation_task)!==JSON.stringify(request.observationTask)
+      || typeof r.input_media?.full_original_video!=='boolean'
       || r.scope!=='source_windows_and_planned_capacity_only' || r.actual_handoff_verified!==false || r.complete_film_accepted!==false) return {error:'Invalid source receipt; do not treat as approval'};
+    const material=r.observation_material;
+    if((r.input_media?.full_original_video===false&&!material)
+      ||(material&&(!isObservationMaterial(material)||material.parent_sha256!==a.source.sourceContentHash||material.coverage!=='submitted_range_only'||material.complete_film_accepted!==false
+        ||r.input_media?.full_original_video!==(material.kind==='full_file')))) return {error:'Invalid submitted-media scope; do not treat as full-source observation'};
     return {ok:true,...r,current_binding:ctx.getDoc()===doc?'current':'stale',requestsSent:r.cached?0:1,
       note:'Source observation only. Actual original-to-narration handoff, narration sync, captions and complete film remain unverified. No project change.'};
   } catch { return {error:'Source observation unavailable or unknown; keep operationId, no retry',...(sent?{}:{requestsSent:0})}; }

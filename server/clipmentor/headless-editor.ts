@@ -151,15 +151,16 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     if(!packet.units.some(u=>u.lines.some(l=>l.narration_ms===args.text))&&!packet.delivery_sections?.some(s=>s.line.narration_ms===args.text))throw new Error('Voice text does not match current reviewed copy');
     const reusable=reusableVoiceForRequest(before,args);if(reusable.status==='reusable')return savedResult(reusable);
     if(reusable.status!=='missing')return{error:`voice_reuse_${reusable.status}:${reusable.reason}`,voice_reuse:reusable,production_approved:false};
-    return options.effect('tts',callId,async()=>{
-    const res=await local('/generate/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)}),data=await res.json();
+    const obtainVoice=async(operationId:string,readOnly=false)=>{
+    const res=await local('/generate/voice',{method:'POST',headers:{'Content-Type':'application/json','X-ClipMentor-Project':options.projectId,'X-ClipMentor-Operation':operationId,...(readOnly?{'X-ClipMentor-Recover':'1'}:{})},body:JSON.stringify(args)}),data=await res.json();
     if(!res.ok||!data.path||!Number.isFinite(data.durationSeconds))throw new Error('Voice result missing measured duration');
     const provenance=voiceAssetProvenance(data,typeof args.subtitleType==='string'?args.subtitleType:undefined);
     const asset:MediaAsset={id:randomUUID(),name:String(args.name??'Reviewed voice'),kind:'audio',src:data.path,durationInFrames:Math.ceil(data.durationSeconds*ctx.getState().fps),...provenance,
      props:{...provenance.props,
       generation:{pitch:args.pitch??0,volume:args.volume??1,languageBoost:args.languageBoost??'auto',sampleRate:args.sampleRate??32000,channel:args.channel??1,audioFormat:args.audioFormat??'mp3',provider:args.provider,voiceId:args.voiceId,text:args.text,speed:args.speedRatio??args.speed??1,operationId:callId,durationSeconds:data.durationSeconds}}};
     ctx.commands.applyDoc({...ctx.getDoc(),assets:[...ctx.getDoc().assets,asset]});await commitDraft();return savedResult({asset});
-   });
+   };
+   return options.effect('tts',callId,id=>obtainVoice(id),id=>obtainVoice(id,true));
    }
    if(name==='submit_render_job'){
     if(revisionOf(before)!==revision)throw new Error('export_requires_committed_project');

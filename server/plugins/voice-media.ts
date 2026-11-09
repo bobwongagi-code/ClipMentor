@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -17,10 +17,11 @@ function rawFormat(codec: string): string | undefined {
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('ffmpeg', args);
+    const timer=setTimeout(()=>{child.kill('SIGKILL');reject(new Error('voice audio processing timed out'));},120_000);
     let error = '';
     child.stderr.on('data', (data) => { error += String(data); });
-    child.on('error', reject);
-    child.on('close', (code) => code === 0 ? resolvePromise() : reject(new Error(error.slice(-500))));
+    child.on('error', error=>{clearTimeout(timer);reject(error);});
+    child.on('close', (code) => {clearTimeout(timer);code === 0 ? resolvePromise() : reject(new Error(error.slice(-500)));});
   });
 }
 
@@ -50,11 +51,12 @@ async function pitchShift(file: string, semitones: number, sampleRate: number): 
 function probeDuration(file: string): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file]);
+    const timer=setTimeout(()=>{child.kill('SIGKILL');reject(new Error('voice duration measurement timed out'));},30_000);
     let output = '';
     child.stdout.on('data', (data) => { output += String(data); });
-    child.on('error', reject);
+    child.on('error', error=>{clearTimeout(timer);reject(error);});
     child.on('close', (code) => {
-      const duration = Number(output.trim());
+      clearTimeout(timer);const duration = Number(output.trim());
       if (code === 0 && Number.isFinite(duration) && duration > 0) resolvePromise(duration);
       else reject(new Error('unable to probe generated audio'));
     });
@@ -76,8 +78,10 @@ export async function saveVoiceAudio(bytes: Buffer, codec: string, sampleRate: n
   let file: string;
   if (rawFormat(codec)) file = await wrapRaw(bytes, codec, sampleRate);
   else {
-    file = join(dir, `${randomUUID()}.${extension(codec)}`);
-    await writeFile(file, bytes);
+    const expected=createHash('sha256').update(bytes).digest('hex');
+    file = join(dir, `${pitch?randomUUID():`voice-${expected}`}.${extension(codec)}`);
+    try{await writeFile(file,bytes,{flag:'wx'});}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+    if(await sha256File(file)!==expected)throw Error('saved voice bytes changed; repair locally, do not regenerate');
   }
   await pitchShift(file, pitch, sampleRate);
   return { path: `/media/uploads/${file.split('/').pop()!}`, durationSeconds: await probeDuration(file),sha256:await sha256File(file) };

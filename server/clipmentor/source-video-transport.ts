@@ -42,7 +42,7 @@ function bodySummary(p: Awaited<ReturnType<typeof prefix>>, httpStatus:number|nu
   return result;
 }
 
-/** Same fixed endpoint, inline request, timeouts and zero retries. Injection is for offline process tests only. */
+/** Same fixed endpoint, verified-media request, timeouts and zero retries. Injection is for offline process tests only. */
 export async function postSourceVideoTransport(body: string, key: string, signal: AbortSignal, operationId: string,
   runtimeRoot: string, launch: typeof spawn = spawn, cleanup: typeof rm = rm): Promise<{status:number;body:unknown;diagnostic:Diagnostic}> {
   signal.throwIfAborted();

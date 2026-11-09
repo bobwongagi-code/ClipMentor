@@ -1,3 +1,5 @@
+import {externalFetch} from '../clipmentor/external-fetch.ts';
+import {runtimeProfile} from '../runtime-profile.ts';
 import { proxyDispatcher } from '../outbound-proxy.ts';
 import { randomUUID } from 'node:crypto';
 
@@ -211,12 +213,13 @@ export async function speechifyVoice(options: VoiceOptions, input: ValidVoiceReq
   return Buffer.from(result.audio_data, 'base64');
 }
 
-export async function minimaxVoice(options: VoiceOptions, input: ValidVoiceRequest): Promise<MinimaxVoiceResult> {
+export async function minimaxVoice(options: VoiceOptions, input: ValidVoiceRequest, context?:{scope?:string;operationId?:string;signal?:AbortSignal;readOnly?:boolean}): Promise<MinimaxVoiceResult> {
   if (!options.minimaxApiKey) throw new Error('MiniMax is not configured. Set MINIMAX_API_KEY in .env.local or 设置面板.');
   const body = minimaxVoiceBody(options.minimaxModel, input);
-  const response = await fetchWithProxy(`${options.minimaxBaseUrl.replace(/\/$/, '')}/v1/t2a_v2`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${options.minimaxApiKey}` }, body: JSON.stringify(body),
-  });
+  const response = await externalFetch({directory:runtimeProfile().rootDir,kind:'voice',purpose:'minimax-voice-v1',
+    scope:{project:context?.scope??randomUUID(),model:input.modelId||options.minimaxModel},requestId:context?.operationId,
+    readOnly:context?.readOnly,endpoint:`${options.minimaxBaseUrl.replace(/\/$/, '')}/v1/t2a_v2`,fetch:fetchWithProxy,maxResponseBytes:64_000_000,
+    init:{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${options.minimaxApiKey}`},body:JSON.stringify(body),signal:context?.signal}});
   if (!response.ok) throw new Error(await providerError(response));
   return minimaxVoiceResult(await response.text(), input.stream === true, input.excludeAggregatedAudio === true);
 }

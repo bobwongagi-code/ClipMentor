@@ -136,6 +136,10 @@ export const KEY_NAMES = [
   "E2B_TEMPLATE",
   "FIRECRAWL_API_KEY",
   "RESOURCE_PREVIEW_TOKEN",
+  "CLIPMENTOR_VIDEO_TRANSPORT",
+  "CLIPMENTOR_R2_ACCOUNT_ID",
+  "CLIPMENTOR_R2_BUCKET",
+  "CLIPMENTOR_R2_API_TOKEN",
   "R2_ACCOUNT_ID",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
@@ -197,6 +201,7 @@ const SETTABLE = new Set<string>(KEY_NAMES);
 // not credentials). Deliberately a separate explicit list rather than derived from
 // KEY_NAMES: adding a key to the whitelist must never accidentally make it non-secret.
 export const NON_SECRET_NAMES: ReadonlySet<string> = new Set([
+  "CLIPMENTOR_VIDEO_TRANSPORT",
   "CLIPMENTOR_FUNASR_ENDPOINT",
   "AGENT_IMPORT_ROOTS",
   "PROXY_URL",

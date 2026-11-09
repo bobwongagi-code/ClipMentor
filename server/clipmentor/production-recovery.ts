@@ -43,6 +43,12 @@ function transportFailure(receipt:Record<string,unknown>,operationId:string) {
 
 export function confirmedUnsubmittedGateway(kind:string,result:unknown,operationId:string,projectId:string) {
   if(kind!=='observation'&&kind!=='preview_review')return false;
+  const body=record(record(result)?.body);
+  const preparation=kind==='observation'?record(body?.receipt):body;
+  if(preparation?.model_retry_policy==='no_automatic_retry'&&preparation.status==='failed'
+    &&preparation.operationId===operationId&&preparation.projectId===projectId&&preparation.receipt_persisted===true
+    &&preparation.requestsAttempted===0&&preparation.requestsSent===0
+    &&(kind!=='observation'||preparation.phase==='prepare'))return true;
   const receipt=gatewayFailure(kind,record(result)?.body,operationId,projectId);
   return !!receipt&&transportFailure(receipt,operationId)==='unsubmitted';
 }
@@ -73,16 +79,15 @@ export async function recoverProductionGateway(
     const row=record(result);
     const receipt=gatewayFailure(kind,result,operationId,projectId,args.videoSha256);
     const diagnostic=row?.diagnostic;
-    // Only a completed failed request with a bound saved diagnostic may start a new charged operation.
-    // A valid negative verdict is not a transport error. Reservation/persistence/unknown failures stop.
-    const failedCopy=name==='request_clipmentor_copy_review'&&row?.operationId===operationId
-      &&isCopyReviewFailure(diagnostic)&&diagnostic.operationId===operationId&&diagnostic.requestsAttempted===1
-      &&['model_turn','response_parse','response_validation'].includes(diagnostic.stage);
+    // Schema errors require local recovery; unknown model outcomes do not grant another paid submission.
+    if(name==='request_clipmentor_copy_review'&&isCopyReviewFailure(diagnostic))return result;
+    const modelReceipt=kind==='observation'?record(row?.receipt):row;
+    if(modelReceipt?.model_retry_policy==='no_automatic_retry')return result;
     const transport=receipt&&transportFailure(receipt,operationId);
     let delay:number|undefined;
-    if((receipt||failedCopy)&&canRetry(operationForRetry(initial,index+1))){
+    if(receipt&&canRetry(operationForRetry(initial,index+1))){
       if(transport==='unsubmitted')delay=connectionBackoff[connectionRetries++];
-      else if((failedCopy||transport==='uncertain'||retryableGatewayStatus(receipt?.upstream_http_status))&&chargedRetries<chargedRetryLimit)
+      else if((transport==='uncertain'||retryableGatewayStatus(receipt?.upstream_http_status))&&chargedRetries<chargedRetryLimit)
         delay=connectionBackoff[Math.min(chargedRetries++,connectionBackoff.length-1)];
     }
     if(delay===undefined)return index&&row?{...row,gateway_operation_ids:operationIds}:result;
