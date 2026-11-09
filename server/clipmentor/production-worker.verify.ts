@@ -1,12 +1,28 @@
+import './native-execution.verify';
+import './production-format.verify';
 import './production-source-evidence.verify';
 import assert from 'node:assert/strict';
-import {productionPreviewFacts,productionAuthorTaskData,productionStageToolAllowed,loadProductionAuthorGuidance} from './production-worker';
+import {productionPreviewFacts,productionAuthorTaskData,productionStageToolAllowed,loadProductionAuthorGuidance,executionMappingDiagnostic,productionGatewayDecisionArtifact} from './production-worker';
+import {isValidAgentArtifactRecord} from '../../src/persist/agentRuntimeCodec';
+import {sha256Text} from '../../src/persist/agentRuntimeStore';
 import {projectDoc} from '../external-agent/offline-runtime.verify-fixtures';
 import {makeDraft} from '../../src/editor/store';
 import {checkTransitionManifest} from '../../src/clipmentor/transition-check';
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
 import {productionAuthorSelfCheckSource,checkProductionAuthorBlueprint} from './production-author-self-check';
 import {createProductionPreparation} from './production-readiness';
+import {isBoundCanvasReflow,assertCanvasReflowPreservation} from './production-worker';
+import {digestValue} from '../agent-runs/store-values';
+const recoveryArtifact=productionGatewayDecisionArtifact({taskId:'fixture',projectId:'fixture',stage:'blueprint',
+ input:{budget:{observation:3}}} as import('./production-task').ProductionTask,'v3-fixture','observation',
+ {operation_id:'a24963be-10e4-4738-83f8-b15d03f8bc78',action:'retry_charged',reason:'部分上传，保留次数'},2);
+assert.equal(isValidAgentArtifactRecord(recoveryArtifact,'fixture',recoveryArtifact.artifactId),true,
+ 'real worker recovery evidence must satisfy the canonical persisted-artifact codec');
+assert.equal(await sha256Text(recoveryArtifact.body),recoveryArtifact.bodySha256);
+assert.equal(isValidAgentArtifactRecord({...recoveryArtifact,artifactId:'g_'+'a'.repeat(24)},'fixture','g_'+'a'.repeat(24)),false,
+ 'the previously emitted 26-character ID really is rejected');
+assert(executionMappingDiagnostic(new Error('Actual sequence mapping incomplete: [{"code":"delivery_ending_card_not_preserved:existing_partner"}]')));
+for(const error of [new Error('Current review no longer authorizes editing'),new Error('execution_media_changed:source'),new Error('Tool failed'),{},'Actual sequence mapping incomplete: []'])assert.equal(executionMappingDiagnostic(error),undefined);
 for(const stage of ['analysis','blueprint','audio','edit'] as const){
  const files:string[]=[];
  const guidance=await loadProductionAuthorGuidance(stage,async file=>{files.push(file);return `fixture:${file}`;});
@@ -87,6 +103,30 @@ assert.match(panelPlanning.deliveryRequirements!.instructions,/默认 layout=\{k
 assert.match(panelPlanning.deliveryRequirements!.instructions,/原海报整图等比适配，不自制替代卡/);
 assert.match(panelPlanning.deliveryRequirements!.instructions,/只有本项目原话明确要求分裁时/);
 assert.match(panelPlanning.deliveryRequirements!.instructions,/参照只比较构图，不作为上屏素材或本项目业绩事实/);
+// The actual task-message entry must reject a wrong canvas before preparing a handoff.
+const wrongCanvas=structuredClone(checkDoc);wrongCanvas.timelines[0].width=1920;wrongCanvas.timelines[0].height=1080;
+const formatTask={...task,input:{...task.input,panelDelivery:{productAssetId:'p',salesAssetId:'s',ctaAssetId:'c'}}} as typeof task;
+await assert.rejects(productionAuthorTaskData(formatTask,wrongCanvas),/clipmentor_output_canvas_mismatch/);
+await productionAuthorTaskData(task,wrongCanvas); // Generic editor tasks are not forced into the panel's product format.
+const boundReflow={...formatTask,projectRevision:'exact-old',repairContext:{canvas_reflow:{project_revision:'exact-old',project_digest:digestValue(wrongCanvas),target_width:720,target_height:1280}}};
+assert(isBoundCanvasReflow(boundReflow,wrongCanvas));
+await productionAuthorTaskData(boundReflow,wrongCanvas);
+for(const bad of [{...boundReflow,stage:'export'},{...boundReflow,projectRevision:'other'},{...boundReflow,repairContext:{canvas_reflow:{...boundReflow.repairContext.canvas_reflow,target_width:1280}}}])
+ assert.equal(isBoundCanvasReflow(bad as typeof task,wrongCanvas),false);
+assert.equal(isBoundCanvasReflow(boundReflow,{...wrongCanvas,activeTimelineId:'other'}),false);
+const geometry=structuredClone(wrongCanvas);geometry.timelines[0].width=720;geometry.timelines[0].height=1280;
+assertCanvasReflowPreservation(wrongCanvas,geometry);
+for(const bad of [(()=>{const d=structuredClone(geometry);d.assets[0].src='/different';return d;})(),
+ (()=>{const d=structuredClone(geometry);d.clipMentorAnalysis!.revision++;return d;})()])assert.throws(()=>assertCanvasReflowPreservation(wrongCanvas,bad));
+const reflowItems=projectDoc();reflowItems.timelines[0].items=[{id:'t',kind:'text',startFrame:0,durationInFrames:30,track:'track-v1',props:{text:'Frozen copy',fontSize:32}},
+ {id:'a',kind:'audio',startFrame:0,durationInFrames:30,track:'track-a',src:'/voice.mp3',volume:1}] as never;
+const newGeometry=structuredClone(reflowItems);newGeometry.timelines[0].width=720;newGeometry.timelines[0].height=1280;
+newGeometry.timelines[0].items[0].props!.fontSize=40;newGeometry.timelines[0].items[0].props!.paddingX=60;
+assertCanvasReflowPreservation(reflowItems,newGeometry);
+for(const edit of [(d:typeof newGeometry)=>{d.timelines[0].items[0].props!.text='Rewritten';},
+ (d:typeof newGeometry)=>{d.timelines[0].items[1].volume=0;},(d:typeof newGeometry)=>{d.timelines[0].items[0].startFrame++;}]){
+ const invalid=structuredClone(newGeometry);edit(invalid);assert.throws(()=>assertCanvasReflowPreservation(reflowItems,invalid));
+}
 console.log('production worker actual message: two saved plans, subject digests and complete picture/audio instructions survive serialization; draft stage remains separate; no provider requests');
 
 for(const name of ['revise_clipmentor_analysis','submit_voice','observe_clipmentor_source_video'])assert.equal(productionStageToolAllowed('edit',name),false);
@@ -324,3 +364,11 @@ const effectsFixture={effects:{ok:{kind:'observation',status:'completed',operati
 assert.deepEqual(completedSourceEvidenceOperations(effectsFixture),['ok']);
 assert.deepEqual(completedSourceEvidenceOperations({...effectsFixture,sourceEvidenceRecoveryOperation:'explicit'}),['ok','explicit']);
 assert.equal(effectsFixture.effects.bad.result.status,400,'failed effects remain unchanged');
+
+const {persistProductionGatewayDecision}=await import('./production-worker');
+const decisionBodies=new Map<string,any>();let decisionWrites=0;
+const decisionDeps={store:async(r:any)=>{if(decisionBodies.has(r.artifactId))return false;decisionBodies.set(r.artifactId,structuredClone(r));decisionWrites++;return true;},load:async(_p:string,id:string)=>decisionBodies.get(id)??null};
+await persistProductionGatewayDecision(recoveryArtifact,decisionDeps);await persistProductionGatewayDecision({...recoveryArtifact,createdAt:recoveryArtifact.createdAt+1},decisionDeps);
+assert.equal(decisionWrites,1);await assert.rejects(persistProductionGatewayDecision({...recoveryArtifact,runId:'another'},decisionDeps),/not_saved/);
+await assert.rejects(persistProductionGatewayDecision({...recoveryArtifact,body:'changed'},decisionDeps),/not_saved/);
+console.log('PASS repeated immutable gateway decision is idempotent; changed content/owner still refuse');

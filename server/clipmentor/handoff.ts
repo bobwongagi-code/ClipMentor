@@ -7,7 +7,7 @@ import {getStoredEntry,withSerializedProjectStore} from '../plugins/project-stor
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {createProductionPreparation} from './production-readiness';
-import {assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaApproved} from './visual-done-criteria';
+import {assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved} from './visual-done-criteria';
 import {storeAgentArtifact,loadAgentArtifact} from '../../src/persist/agentRuntimeStore';
 import {digestValue} from '../agent-runs/store-values';
 import {getRun,recoverServerRun,flushRunPersistence,type ServerRun} from '../agent-runs/store';
@@ -25,7 +25,7 @@ export async function assertHandoffSubject(policy:HandoffPolicy,doc:ProjectDoc):
  if(policy.brief.phase==='execution'){
   if(!doc.clipMentorAnalysis||checkSourceBreakdown(doc).status!=='structurally_ready')throw new Error('handoff_blueprint_incomplete');
   const prepared=await createProductionPreparation(doc),packet=prepared.rawPacket;
-  assertVisualCriteriaPlan(visual,packet.delivery_sections);
+  assertVisualCriteriaPlan(visual,packet.delivery_sections,packet.units.map(u=>u.unit_id),doc.activeTimelineId);
   if(!packet.units.length||packet.units.some(u=>!u.picture_plan?.execution_plan))throw new Error('handoff_picture_plan_required');
   const subject=prepared.reviewed.subject,b=policy.brief.blueprint;
   if(!b||b.revision!==subject.revision||b.digest!==subject.digest)throw new Error('handoff_blueprint_changed');
@@ -34,7 +34,7 @@ export async function assertHandoffSubject(policy:HandoffPolicy,doc:ProjectDoc):
 function assertVisualApproval(policy:HandoffPolicy,doc:ProjectDoc){
  if(policy.brief.phase!=='execution')return;
  const criteria=boundVisualCriteria(policy),receipt=doc.clipMentorAnalysis?.production_copy_review;
- if(criteria&&!visualCriteriaApproved(criteria,receipt))
+ if(criteria&&!visualCriteriaPlanApproved(criteria,receipt))
   throw Error('handoff_visual_criteria_review_missing_or_stale');
 }
 export async function readHandoffPolicy(projectId:string):Promise<HandoffPolicy|null>{

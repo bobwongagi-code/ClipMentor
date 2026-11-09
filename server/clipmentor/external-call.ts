@@ -182,25 +182,37 @@ export async function summarizeExternalCalls(directory:string) {
 }
 
 /** Read one saved response by its original request ID. No reservation, execution or approval. */
-export async function readSavedExternalResponse(directory:string,requestId:string):Promise<unknown|undefined>{
+export async function readSavedExternalResponse(directory:string,requestId:string,limits?:{maxBytes:number;maxRecords:number}):Promise<unknown|undefined>{
   const dir=join(directory,'external-calls');let found:unknown,matched=false;
-  const alias=await readFile(join(dir,`request-${hash(requestId)}.json`),'utf8').catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
+  if(limits&&(!Number.isSafeInteger(limits.maxBytes)||limits.maxBytes<1||!Number.isSafeInteger(limits.maxRecords)||limits.maxRecords<1))throw Error('external_read_limit_invalid');
+  const read=async(file:string)=>{
+    if(!limits)return readFile(file,'utf8');
+    const handle=await open(file,'r');
+    try{const info=await handle.stat();if(!info.isFile()||info.size>limits.maxBytes)throw Error('external_saved_result_oversized');
+      const bytes=Buffer.alloc(Math.min(info.size+1,limits.maxBytes+1));let total=0;
+      while(total<bytes.length){const n=await handle.read(bytes,total,bytes.length-total,null);if(!n.bytesRead)break;total+=n.bytesRead;}
+      if(total>limits.maxBytes||total>info.size)throw Error('external_saved_result_oversized');return bytes.subarray(0,total).toString('utf8');
+    }finally{await handle.close();}
+  };
+  const alias=await read(join(dir,`request-${hash(requestId)}.json`)).catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
   if(alias!==undefined){
     const binding=JSON.parse(alias);
     if(binding.version!==1||binding.request_id!==requestId||!/^[a-f0-9]{64}$/.test(binding.input_sha256))throw Error('external_saved_result_invalid');
-    const row=JSON.parse(await readFile(join(dir,`${binding.input_sha256}.json`),'utf8'));
-    const raw=await readFile(join(dir,`${binding.input_sha256}.response`),'utf8').catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
+    const row=JSON.parse(await read(join(dir,`${binding.input_sha256}.json`)));
+    const raw=await read(join(dir,`${binding.input_sha256}.response`)).catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
     if(raw===undefined)return undefined;
     if(row.version!==1||row.input_sha256!==binding.input_sha256)throw Error('external_saved_result_invalid');
     return decodeEnvelope(raw,binding.input_sha256,row.response_sha256);
   }
 
-  for(const name of await readdir(dir).catch(e=>{if(e.code==='ENOENT')return [];throw e;})){
+  const names=await readdir(dir).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
+  if(limits&&names.length>limits.maxRecords)throw Error('external_saved_records_overflow');
+  for(const name of names){
     if(!/^[a-f0-9]{64}\.json$/.test(name))continue;
-    let row;try{row=JSON.parse(await readFile(join(dir,name),'utf8'));}catch{continue;}
+    let row;try{row=JSON.parse(await read(join(dir,name)));}catch{continue;}
     if(!row||row.request_id!==requestId)continue;
     if(matched)throw Error('external_saved_identity_ambiguous');matched=true;
-    const raw=await readFile(join(dir,name.replace('.json','.response')),'utf8').catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
+    const raw=await read(join(dir,name.replace('.json','.response'))).catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
     if(raw===undefined)continue;
     if(row.version!==1||row.input_sha256!==name.slice(0,-5))throw Error('external_saved_result_invalid');
     found=decodeEnvelope(raw,row.input_sha256,row.response_sha256);

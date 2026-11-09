@@ -16,6 +16,7 @@ import { executeOfflineTool } from '../../server/external-agent/offline-executor
 import { bindCopyProductionReview, checkCopyProduction, copyReviewSubject, copyTeachingPacketFromDoc, buildCopyTeachingReviewRequest, clipMentorProductionBlock, type TeachingEnvelope } from './production-gate';
 import teachingRegression from './fixtures/copy-teaching-blind-v2-20261019.json';
 import regression from './fixtures/source-breakdown-v1r1.json';
+import savedProjects from './fixtures/production-saved-projects-20261028.json';
 
 let networkCalls = 0;
 globalThis.fetch = (async () => { networkCalls++; throw new Error('Unexpected network'); }) as typeof fetch;
@@ -78,6 +79,28 @@ for (const scope of [null, [], {kind:'full_source'}, {kind:'local_ranges',source
 assert(isClipMentorAnalysis(base.clipMentorAnalysis));
 assert.equal(checkSourceBreakdown(base).status, 'structurally_ready');
 assert.equal(checkSourceBreakdown(base, true).status, 'structurally_ready');
+const emptyLegacyGaps=structuredClone(base);
+for(const item of emptyLegacyGaps.timelines[0].items)item.gapCapsMs={};
+assert.equal(checkSourceBreakdown(emptyLegacyGaps,true).status,'structurally_ready','legacy placement accepts empty gap maps');
+for(const id of ['original','explanation']){
+ const changed=structuredClone(emptyLegacyGaps);changed.timelines[0].items.find(i=>i.id===id)!.gapCapsMs={0:100};
+ assert(checkSourceBreakdown(changed,true).issues.some(i=>i.code==='nonlinear_source_not_inspected'&&i.id===id),'legacy placement still rejects actual gaps: '+id);
+}
+for(const fixture of savedProjects.cases){
+ const doc=structuredClone(fixture.doc) as unknown as ProjectDoc;
+ assert.deepEqual(checkSourceBreakdown(doc,true).issues,[],fixture.case_id+' saved positive control');
+ const initial=JSON.stringify(doc);
+ for(const timeline of doc.timelines)for(const item of timeline.items.filter(i=>i.kind==='video'))item.gapCapsMs={};
+ assert.deepEqual(checkSourceBreakdown(doc,true).issues,[],fixture.case_id+' saved structured plan accepts empty maps');
+ const sourceItems=doc.timelines.find(t=>t.id===doc.activeTimelineId)!.items.filter(i=>i.kind==='video'&&i.sourceAssetId===doc.clipMentorAnalysis!.source.asset_id);
+ assert(sourceItems.length>0);
+ for(const item of sourceItems){
+  item.gapCapsMs={0:100};
+  assert(checkSourceBreakdown(doc,true).issues.some(i=>i.code==='nonlinear_source_not_inspected'&&i.id===item.id),fixture.case_id+' saved plan rejects actual gap: '+item.id);
+  item.gapCapsMs={};
+ }
+ assert.equal(JSON.stringify(fixture.doc),initial,'saved fixture remains immutable');
+}
 
 // A primary teaching point may use two selected source windows without playing
 // the intervening gap. The copy range is their envelope, not a continuous clip.

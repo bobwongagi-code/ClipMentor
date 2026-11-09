@@ -5,16 +5,19 @@ description: Use when checking whether agent edits are reflected in the OpenChat
 
 # Verification
 
-Use the lowest verification level that proves the requested result:
+Choose evidence for the requested object, not an unexplained pass level:
 
-| Level | Required evidence |
+| Check object | Required evidence |
 |---|---|
-| L0 | Static checks such as the focused verification script, `npx tsc --noEmit`, tests, and build. |
-| L1 | A real Agent run against the editor at `localhost:5199`, followed by structural and rendered evidence. |
-| L2 | The packaged desktop app completing the user scenario, including human visual review where automation is insufficient. |
+| Code or tool contract | Focused local tests, type checks and applicable build; include failure cases and actual runtime entry where behavior changes. |
+| Editor behavior | Exercise the affected editor/tool path, then read saved structure and inspect actual composed output. An authorized real Agent run adds behavioral evidence; a mock or direct-tool test is not that run. |
+| Packaged desktop behavior | Exercise the packaged app when packaging or desktop-only behavior is the subject. A development page does not prove installed-app behavior. |
 
-Runtime behavior changes require L0 + L1. Release and desktop-only changes also
-require L2 when the packaged app is the behavior under test.
+Older engineering records may call these L0/L1/L2. ClipMentor’s teaching L1/L2 means selected-point coverage/unit continuity, not editor or desktop testing. In a report name the object and method instead of saying only “L1 passed”.
+
+Record results in the existing task/check record as **automated verification**, **AI assessment**, **human confirmation** or **unverified**, each with the output version, evidence and covered scope. These may coexist: extracted frames or a code test do not imply human listening, continuous viewing or teaching approval. Recheck the affected evidence after its bound output changes; reuse unchanged valid evidence.
+
+Local mocks and saved artifacts are appropriate for deterministic checks. This skill does not authorize another model call, ASR, synthesis, production render or human approval step. If the required real scenario exceeds the task’s authorization, record it as unverified; do not downgrade the agreed method or spend a new call to make the report green.
 
 Prefer two signals:
 
@@ -44,8 +47,7 @@ blocked until the asset has bytes available to the renderer. Source-frame
 inspection via `view_asset_frames` still works as long as the asset's bytes are
 on disk (`/media/uploads/`).
 
-If both visual proof paths are blocked, ask the user to inspect the OpenChatCut
-editor directly and note the blocker explicitly.
+If a visual proof path is blocked, inspect its saved failure and repair the local preparation or use an existing valid artifact within the task’s scope. If evidence still cannot be obtained, report the specific unverified result. Do not turn a technical diagnostic into a business-user choice or silently replace a required representative video with still frames.
 
 Useful checks:
 
@@ -54,7 +56,7 @@ Useful checks:
 - After visual overlay or MG on any timeline media: `view_timeline_frames({ "frames": [30, 45, 75] })`, then look at the returned frames.
 - For user-requested source selection or visual moment picking: sample stills with `view_asset_frames` and inspect them. Use that only to choose source files, moments, and rough trims. Build the visible edit as OpenChatCut timeline items. Do not treat raw source inspection as timeline verification or as permission to produce the edited video elsewhere.
 - For source-frame inspection: call `view_asset_frames({"assetId":"...","sourceTimesMs":[...]})` after `read_project({"view":"assets"})` confirms the asset id/type. Prefer this over asking the user to reattach the file.
-- For local-only visual verification: upload/register cloud-readable media before relying on connector visual proof.
+- For disk-backed media, the local renderer can read `/media/uploads/`; wait for upload completion when bytes are still a placeholder. Only a genuinely remote execution path requires remotely accessible media.
 - For no-source validation: confirm the tool manifest exposed the parameters you used, then record the visible proof in the trace log.
 
 When talking about seconds, verify the fps from `read_project` or use adapter tools that resolve fps internally.
@@ -65,8 +67,7 @@ Do not treat a command-line JSON response alone as sufficient when the user asks
 
 ## Real Agent transcript check
 
-After every L1 Agent run, inspect the complete chat record before reporting
-success:
+When a real Agent/editor scenario has been run, inspect the complete chat record before reporting success:
 
 1. Read the final assistant response and every tool row created by the run.
 2. Expand failed or warning rows and record the exact error.
@@ -86,4 +87,4 @@ If verification fails, classify the gap before changing tools:
 - `read_project` did not expose enough state
 - editor authorization did not complete
 - media/transcription pipeline failed
-- cloud render/editor observation was blocked
+- local/remote renderer or editor observation was blocked

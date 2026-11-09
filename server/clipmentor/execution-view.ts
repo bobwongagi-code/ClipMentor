@@ -6,6 +6,7 @@ import {handoffAssetsOf} from '../../shared/clipmentor-handoff';
 import {matchMeasuredNarration,createProductionPreparation} from './production-readiness';
 import {digestValue} from '../agent-runs/store-values';
 import {createSpeechAnchorReader} from './word-anchors';
+import {NATIVE_TEXT_STYLE_VERSION,NATIVE_TEXT_PROPS} from '../../shared/native-text-style';
 
 /** Current operational facts for the EXECUTOR. This must never replace the independent-review projection. */
 export async function currentExecutionView(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){
@@ -53,7 +54,8 @@ async function executionView(doc:ProjectDoc,prepared:Awaited<ReturnType<typeof c
   native_timeline:{id:t.id,fps:t.fps,width:t.width,height:t.height,item_ids:t.items.map(i=>i.id)},
   authority:'current_execution_facts_not_review_approval',
   history_lookup:{tool:'read_clipmentor_analysis',scope:'current_copy',note:'Read history or actual timeline only when a specific conflict requires it; never reselect an old candidate.'},
-  unresolved_policy:'Prose, estimated/reference timing and unknown evidence are not executable parameters. Return located conflicts; do not invent source windows or redesign frozen decisions.'};
+  unresolved_policy:'Prose, estimated/reference timing and unknown evidence are not executable parameters. Return located conflicts; do not invent source windows or redesign frozen decisions.',
+  native_text:{renderer:NATIVE_TEXT_STYLE_VERSION,supported_props:NATIVE_TEXT_PROPS,evidence_scope:'capability_only_verify_actual_rendered_pixels'}};
  return {...value,view_digest:digestValue(value)};
 }
 /** Located findings plus the ORIGINAL unit context; no suggested replacement answer. */

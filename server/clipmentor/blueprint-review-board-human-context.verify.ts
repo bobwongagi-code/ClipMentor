@@ -29,9 +29,13 @@ try{
   const newContact=ending(doc);newContact.section_id='new_contact';
   const partner=clone(ending(materials[1]));partner.section_id='existing_partner';
   const storySource=doc.clipMentorAnalysis!.source;
+  const sourceAsset=doc.assets.find(a=>a.id===storySource.asset_id)!;
+  doc.clipMentorAnalysis!.evidence.push({evidence_id:'doc-visible',kind:'visible_action',text:'A product is shown.',source_range_seconds:[0,storySource.duration_seconds],source_ids:[],supporting_evidence_ids:[],status:'fixture',observation_method:'fixture',call_status:'unknown'});
+  sourceAsset.props={...sourceAsset.props,clipmentorCreatorStoryboard:{source_sha256:storySource.sourceContentHash,rows:[{source_range_seconds:[0,storySource.duration_seconds],source_frames:[0],shot_ms:'Dia menunjukkan produk.',information_ms:'Paparan produk dalam video asal.',visible_evidence_ids:['doc-visible'],claim_evidence_ids:[]}]}};
+  const docHash=(await import('./creator-storyboard-document')).creatorDocumentHashFromAssets(doc);
   const hash='a'.repeat(64),storyId=`clipmentor-storyboard-${hash}`,storySrc=`/media/uploads/${storyId}.jpg`;
   doc.assets.push({id:storyId,name:'Original storyboard',kind:'image',src:storySrc,sourceContentHash:hash,
-   width:960,height:632,durationInFrames:1,props:{clipmentorStoryboardSource:storySource.asset_id,clipmentorStoryboardHash:storySource.sourceContentHash,clipmentorStoryboardTimes:panelStoryboardTimes(doc)}});
+   width:960,height:632,durationInFrames:1,props:{clipmentorStoryboardSource:storySource.asset_id,clipmentorStoryboardHash:storySource.sourceContentHash,clipmentorStoryboardDocument:2,clipmentorCreatorDocumentHash:docHash,clipmentorStoryboardTimes:panelStoryboardTimes(doc)}});
   partner.picture={asset_id:storyId,src:storySrc,sha256:hash,description:'Storyboard from the current video'};
   const evidence=doc.clipMentorAnalysis!.evidence.find(e=>e.kind==='operator_supplied'&&e.source_ids.includes(newContact.picture.asset_id))!;
   assert(evidence);

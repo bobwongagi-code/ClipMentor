@@ -10,7 +10,7 @@ import {makeDraft} from '../../src/editor/store';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import type {AgentContext} from '../../src/agent/context';
-import type {MediaAsset} from '../../src/editor/types';
+import type {MediaAsset,ProjectDoc} from '../../src/editor/types';
 import {executeOfflineTool} from '../external-agent/offline-executor';
 import {DEFAULT_PERSISTENCE,type OfflineEditPersistence} from '../external-agent/offline-runtime-support';
 import {isProjectConnected} from '../external-agent/broker';
@@ -26,6 +26,7 @@ import {resolveUploadFile,uploadDir} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
 import {extractOneFrame} from '../plugins/extract-frames';
 import {copyReviewDependencies,reviewClipMentorCopy} from './copy-review';
+import {exportJobResultName} from '../plugins/export-runtime';
 import {apiCopyReviewDependencies,type ReviewApiConfig} from './copy-review-api';
 
 export interface HeadlessOptions {
@@ -34,6 +35,7 @@ export interface HeadlessOptions {
  retryGateway?:boolean;
  voice?:{provider:string;voiceId:string};signal?:AbortSignal;
  finalFeedback?:Record<string,unknown>;
+ assertCanvas?:(doc:ProjectDoc)=>void;
  effect<T>(kind:'review'|'observation'|'tts'|'render'|'preview_review',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
  persistence?:OfflineEditPersistence;browserConnected?:(id:string)=>boolean;fetch?:typeof fetch;
 }
@@ -116,7 +118,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  const validate=()=>withLease(renew);
  async function commitDraft(){return withLease(async()=>{
   await renew();const doc=migrateProjectDoc(engine.getDoc());if(!doc)throw new Error('Invalid saved project');
-  if(revisionOf(doc)!==revision){assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
+  if(revisionOf(doc)!==revision){options.assertCanvas?.(doc);assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
    if(result.status!=='applied'||!result.revision)throw new Error(`Project commit ${result.status}`);revision=result.revision;ownership=result.ownership??{...ownership,baseRevision:revision};
   }
   committed=doc;engine=makeDraft(doc);sync();return {saved:true,revision,projectId:options.projectId};
@@ -126,7 +128,19 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   options.signal?.throwIfAborted();
   if(!/^[a-zA-Z0-9_-]+$/.test(id))throw new Error('Render ID required');
   const response=await local(`/export/job/${id}`),result=await response.json();
-  options.signal?.throwIfAborted();if(!response.ok)throw new Error('Render read failed');if(result.id!==id)throw new Error('Render binding mismatch');return result;
+  options.signal?.throwIfAborted();if(!response.ok)throw new Error('Render read failed');if(result.id!==id)throw new Error('Render binding mismatch');
+  if(['completed','succeeded'].includes(result.status)&&typeof result.result?.path==='string'
+   &&result.result.path.startsWith('/media/uploads/openchatcut-export-job-')){
+   const temporary=exportJobResultName(result.result.path,String(result.result.assetId??''));
+   if(!temporary)throw Error('Preview publication source binding mismatch');
+   const publishedResponse=await local(`/export/job/${id}/promote`,{method:'POST'});
+   options.signal?.throwIfAborted();if(!publishedResponse.ok)throw Error('Preview publication failed; saved render retained');
+   const published=await publishedResponse.json();
+   if(published.assetId!==result.result.assetId||published.path!==`/media/uploads/${temporary.replace('openchatcut-export-job-','openchatcut-derived-')}`)
+    throw Error('Preview publication binding mismatch');
+   return {...result,result:{...result.result,...published}};
+  }
+  return result;
  }
  const execute=(name:string,args:Record<string,unknown>,callId:string)=>exclusive(()=>executeOperation(name,args,callId));
  async function executeOperation(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>{
@@ -163,6 +177,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
    return options.effect('tts',callId,id=>obtainVoice(id),id=>obtainVoice(id,true));
    }
    if(name==='submit_render_job'){
+    options.assertCanvas?.(before);
     if(revisionOf(before)!==revision)throw new Error('export_requires_committed_project');
     const result=await options.effect('render',callId,async(operationId)=>{
      const response=await local('/export/job',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...args,operationId,format:'video',state:ctx.getState(),project:committed,timelineId:committed.activeTimelineId})});

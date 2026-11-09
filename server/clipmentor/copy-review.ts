@@ -25,7 +25,7 @@ const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const sha = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const digest = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
 import {deliveryLayoutStages,renderDeliveryLayoutFrames} from './delivery-layout-frames';
-import {assertVisualCriteriaPlan,boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria} from './visual-done-criteria';
+import {assertVisualCriteriaPlan,plannedVisualCriteria,boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria} from './visual-done-criteria';
 export interface ReviewFrame { unit_id: string; phase: 'context' | 'original' | 'explanation' | 'delivery' | 'reference'; source_seconds: number; asset_id?:string; delivery_view?:'supplied_full'|'planned_crop'|'planned_composition'; deliveryStage?:string; crop?:FrameCrop; source_uses?:Array<{unit_id:string;phase: 'context'|'original'|'explanation'}>; base64: string }
 export function reviewFrameLabel(frame: ReviewFrame): string {
   if(frame.source_uses)return `${frame.source_uses.map(use=>`${use.unit_id}/${use.phase}`).join('; ')}; source ${frame.source_seconds}s; same source pixels, all listed uses retained`;
@@ -84,7 +84,7 @@ function parseRequest(v: unknown): CopyReviewRequest {
 }
 
 /** Fixed source sampling: evidence on both sides, no author-selected review answers. */
-function samples(request: CopyReviewRequest) {
+export function reviewSourceSamples(request: CopyReviewRequest) {
   const frames: Array<Omit<ReviewFrame, 'base64'|'phase'>&{phase:'context'|'original'|'explanation'}> = [];
   const contextSeen = new Set<number>();
   for (const unit of request.packet.units) for (const [start, end] of unit.source_context?.source_ranges ?? []) {
@@ -124,7 +124,8 @@ function samples(request: CopyReviewRequest) {
       }
     }
   }
-  if (!frames.length || frames.length > 48) throw new Error('Review requires 1–48 source samples; do not silently truncate evidence');
+  // Enforce the wire image cap after packing identical pixels, retaining every use.
+  if (!frames.length) throw new Error('Review requires source samples; do not silently truncate evidence');
   return frames;
 }
 
@@ -238,8 +239,9 @@ type ResponseContractRevalidation = {
 async function revalidateResponseContract(request: CopyReviewRequest, deps: CopyReviewDependencies,
   annotation: ResponseContractRevalidation, original: string, prior: Row): Promise<CopyReviewResult> {
   const fingerprint = digest((deps.runtime ? JSON.stringify(deps.runtime) : METHOD) + JSON.stringify(request));
-  const criteria=await deps.visualCriteria?.(request.projectId);
-  assertVisualCriteriaPlan(criteria,request.packet.delivery_sections);
+  const allCriteria=await deps.visualCriteria?.(request.projectId);
+  assertVisualCriteriaPlan(allCriteria,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
+  const criteria=plannedVisualCriteria(allCriteria);
   if (prior.fingerprint !== fingerprint || prior.status !== 'failed' || prior.requests_attempted !== 1
     || !isCopyReviewFailure(prior.diagnostic) || prior.diagnostic.code !== 'response_receipt_invalid'
     || prior.diagnostic.operationId !== request.operationId || prior.diagnostic.requestsAttempted !== 1
@@ -270,7 +272,7 @@ async function revalidateResponseContract(request: CopyReviewRequest, deps: Copy
     // New failures retain the actual sent image accounting. Legacy operations
     // never gain a cropped image retroactively through offline revalidation.
     inspection: prior.image_inspection ? structuredClone(prior.image_inspection) as CopyReviewResult['inspection']
-      : {scope:'copy_and_planned_picture_only', sampled_frames:samples(request).length+(request.packet.delivery_sections?.length??0),
+      : {scope:'copy_and_planned_picture_only', sampled_frames:reviewSourceSamples(request).length+(request.packet.delivery_sections?.length??0),
         continuous_viewing:false, listening:false, input_policy:COPY_REVIEW_INPUT_POLICY}};
   const record = {method:RESPONSE_CONTRACT_REVALIDATION, operationId:request.operationId, fingerprint,
     originalLedgerSha256:annotation.originalLedgerSha256, annotation, revalidated_at:at,
@@ -379,8 +381,9 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   // must not relabel a historical consumed attempt as a fresh zero-attempt error.
   const prior = await previous();
   if(readOnly){if(prior)return prior;throw failure('operation_unavailable',0,request.operationId);}
-  const criteria=await deps.visualCriteria?.(request.projectId);
-  assertVisualCriteriaPlan(criteria,request.packet.delivery_sections);
+  const allCriteria=await deps.visualCriteria?.(request.projectId);
+  assertVisualCriteriaPlan(allCriteria,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
+  const criteria=plannedVisualCriteria(allCriteria);
   if(prior&&prior.receipt.visual_criteria_digest!==criteria?.digest)throw failure('operation_unavailable',1,request.operationId);
   if (!prior && request.packet.units.some(u => u.source_context?.scope !== 'frozen_task_scope')) throw failure('source_review_scope_missing', 0, request.operationId);
   let file: string | null;
@@ -389,8 +392,8 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     if (!file || await deps.hash(file) !== request.source.hash) throw new Error();
   } catch { throw failure('source_unavailable_or_changed', prior ? 1 : 0, request.operationId); }
   if (prior) return prior;
-  let positions: ReturnType<typeof samples>;
-  try { positions = samples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
+  let positions: ReturnType<typeof reviewSourceSamples>;
+  try { positions = reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
   const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria);
   try { await mkdir(deps.directory, { recursive: true, mode: 0o700 }); } catch { throw failure('review_storage_failed', 0, request.operationId); }
   try { await writeFile(ledger, JSON.stringify({ fingerprint, status: 'preparing', requests_attempted: 0 }), { flag: 'wx', mode: 0o600 }); }

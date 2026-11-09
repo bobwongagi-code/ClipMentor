@@ -150,6 +150,38 @@ try{
    try{assert.equal((await e.readExport(submitted.renderId)).status,'completed');assert.equal(submits,2);}finally{await other.close();}
   }finally{await e.close();}
  });
+ await test('completed preview is durable before task publication and survives temporary export cleanup',async()=>{
+  const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');
+  const {promoteExportResult,cleanupStaleExportFiles}=await import('../plugins/export-runtime');
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'clipmentor-preview-publish-'));
+  const id='00000000-0000-4000-8000-000000000009',name=`openchatcut-export-job-${id}.mp4`;
+  const result={assetId:id,path:`/media/uploads/${name}`,sizeBytes:5,durationSeconds:1};let promotes=0,gets=0;
+  const p=new MemoryPersistence(base()),e=await openHeadlessEditor(options(p,{fetch:async(url,init)=>{
+   if(init?.method==='POST'){promotes++;assert.equal(new URL(String(url)).pathname,'/export/job/fixture-operation/promote');return Response.json(await promoteExportResult(result,directory));}
+   gets++;return Response.json({id:'fixture-operation',status:'succeeded',result});
+  }}));
+  try{await fs.writeFile(path.join(directory,name),'video');const read=await e.readExport('fixture-operation');
+   assert.equal(read.result.path,`/media/uploads/openchatcut-derived-${id}.mp4`,'must not publish a one-hour temporary URL');
+   assert.equal(promotes,1);assert.equal(gets,1);assert.equal(p.commitCount,0,'publishing media does not edit the project');
+   const old=new Date(Date.now()-7200000);await fs.utimes(path.join(directory,name),old,old);
+   await cleanupStaleExportFiles(directory);await assert.rejects(fs.stat(path.join(directory,name)));
+   assert.equal(await fs.readFile(path.join(directory,read.result.path.split('/').at(-1)),'utf8'),'video');
+  }finally{await e.close();await fs.rm(directory,{recursive:true,force:true});}
+ });
+ await test('preview promotion refuses failure and foreign identity without another render or project write',async()=>{
+  for(const state of ['failed-promotion','wrong-id','wrong-path','running','already-durable']){
+   const p=new MemoryPersistence(base());let posts=0;
+   const id='00000000-0000-4000-8000-000000000009',source=`/media/uploads/openchatcut-export-job-${id}.mp4`,target=`/media/uploads/openchatcut-derived-${id}.mp4`;
+   const e=await openHeadlessEditor(options(p,{fetch:async(_url,init)=>{
+    if(init?.method==='POST'){posts++;return Response.json({assetId:state==='wrong-id'?'foreign':id,path:state==='wrong-path'?'/media/uploads/foreign.mp4':target},{status:state==='failed-promotion'?500:200});}
+    return Response.json({id:'fixture-operation',status:state==='running'?'running':'completed',result:{assetId:id,path:state==='already-durable'?target:source}});
+   }}));
+   try{if(['running','already-durable'].includes(state)){await e.readExport('fixture-operation');assert.equal(posts,0);}
+    else {await assert.rejects(e.readExport('fixture-operation'),/publication|promotion/i);assert.equal(posts,1);}
+    assert.equal(p.commitCount,0);
+   }finally{await e.close();}
+  }
+ });
  await test('render recovery queries the original ID only and refuses missing or mismatched jobs',async()=>{
   for(const state of ['completed','missing','wrong','no-binding','stale-binding']){
    const p=new MemoryPersistence(base());let posts=0,gets=0;

@@ -1,15 +1,15 @@
 ---
 name: storyboard-shot-breakdown
-description: Break down each shot and turn the analysis into a storyboard reference. Use when the user wants shot-by-shot film analysis, director logic, cinematography breakdown, or a storyboard-style reference from a video.
+description: Analyze shots for explicitly requested director logic or cinematography interpretation. For ClipMentor’s faithful creator-facing original-video Storyboard PDF or internal blueprint review board, load clipmentor instead.
 ---
 
 # Storyboard Shot Breakdown
 
-Use this skill to analyze a video shot by shot and produce a storyboard-style reference that explains the director's visual decisions.
+Use this skill for interpretive shot analysis. For a ClipMentor original-video Storyboard or blueprint review board, call `load_skill(name="clipmentor")` and follow that artifact’s workflow. Do not substitute director commentary, a reference collage or generated artwork for its factual PDF; a separate director analysis is optional only when requested.
 
 ## Core Philosophy
 
-Do not merely describe what is visible. Deduce why each visual choice was made.
+Separate observed composition, action and timing from interpretations of their effect. Offer a plausible visual rationale where supported; do not present inferred intent, focal length or psychology as an observed fact.
 
 Analyze each shot across five director-decision dimensions:
 
@@ -35,7 +35,7 @@ Analyze each shot across five director-decision dimensions:
 
 ## Internal Reasoning
 
-Use a counterfactual test: if the conventional alternative were used, what emotion or information would be lost? The answer is usually the director's motive.
+Use a counterfactual test: if the conventional alternative were used, what emotion or information would be lost? The answer suggests a possible effect, not evidence of the director's motive.
 
 Use this reasoning to improve the analysis, but do not output the counterfactual test as a separate section unless the user asks.
 

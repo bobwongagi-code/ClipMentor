@@ -240,6 +240,7 @@ export async function kvWriteAgentRuntime(
 ): Promise<ProjectStoreMutationResponse> {
   await ready();
   const remote = !injectedBackend && canSync();
+  if(request.entryPreconditions&&!injectedBackend&&!remote)throw Error('Guarded runtime write requires the server store');
   const result = injectedBackend
     ? await injectedBackend.writeAgentRuntime(request)
     : remote

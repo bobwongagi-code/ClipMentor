@@ -2,7 +2,10 @@ import {outputProductionBudget} from './production-budget';
 import {digestValue} from '../agent-runs/store-values';
 import {withSerializedProjectStore} from '../plugins/project-store';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
-import {copyReviewSubject,copyTeachingPacketFromDoc} from '../../src/clipmentor/production-gate';
+import {copyReviewSubject,copyTeachingPacketFromDoc,checkCopyProduction} from '../../src/clipmentor/production-gate';
+import {storeAgentArtifact} from '../../src/persist/agentRuntimeStore';
+import {createHash,randomUUID} from 'node:crypto';
+import {runProjectMigrations} from '../../src/persist/migrations';
 import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
 import {productionFeedbackAnchor} from './production-feedback';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -61,7 +64,7 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  if(selectedRequirements){
   const ids=new Set(deliverySectionsFromDoc(doc).map(s=>s.section_id));
   selectedRequirements.brief.projectId=projectId;
-  selectedRequirements.brief.doneCriteria=selectedRequirements.brief.doneCriteria.filter(c=>typeof c==='string'||ids.has(c.sectionId));
+  selectedRequirements.brief.doneCriteria=selectedRequirements.brief.doneCriteria.filter(c=>typeof c==='string'||c.layout==='native_composition'||ids.has(c.sectionId));
   selectedRequirements.digest=digestValue({templateVersion:HANDOFF_TEMPLATE_VERSION,brief:selectedRequirements.brief,assetBindings:selectedRequirements.assetBindings});
  }
  await withSerializedProjectStore(async store=>{
@@ -167,6 +170,41 @@ export async function sharedProductionDocument(first:ProjectDoc,next:ProjectDoc)
  return {doc,endFrame,digest};
 }
 
+/** A waiting, untouched variant follows the producer's current common plan;
+ * its own previously chosen ending is retained byte-for-byte. This grants no
+ * review permission. The caller archives the old waiting document before save. */
+export async function alignUnstartedSharedBlueprint(first:ProjectDoc,next:ProjectDoc){
+ if(next.timelines.some(t=>t.items.length)||digestValue(first.clipMentorAnalysis?.source)!==digestValue(next.clipMentorAnalysis?.source))
+  throw Error('shared_rebase_requires_untouched_same_source');
+ const own=deliverySectionsFromDoc(next).filter(s=>s.kind==='creator_invitation');
+ if(own.length!==1||!first.clipMentorAnalysis)throw Error('shared_rebase_ending_missing');
+ const doc=structuredClone(next),analysis=structuredClone(first.clipMentorAnalysis);
+ delete analysis.production_copy_review;
+ let replacements=0;
+ for(const unit of analysis.blueprint){
+  const ir=(unit as unknown as {internal_review?:Record<string,unknown>}).internal_review;
+  const plan=ir?.[String(ir.current_picture_plan)] as {delivery_sections?:DeliverySection[]}|undefined;
+  if(Array.isArray(plan?.delivery_sections))plan.delivery_sections=plan.delivery_sections.flatMap((s:DeliverySection)=>s.kind==='creator_invitation'
+   ?(++replacements===1?[structuredClone(own[0])]:[]):[s]);
+ }
+ if(replacements!==1)throw Error('shared_rebase_ending_owner_ambiguous');
+ for(const id of own[0].evidence_ids){
+  const original=next.clipMentorAnalysis?.evidence.find(e=>e.evidence_id===id),current=analysis.evidence.find(e=>e.evidence_id===id);
+  if(!original||current&&digestValue(current)!==digestValue(original))throw Error('shared_rebase_ending_fact_conflict');
+  if(!current)analysis.evidence.push(structuredClone(original));
+ }
+ analysis.revision=Math.max(analysis.revision,next.clipMentorAnalysis?.revision??0)+1;doc.clipMentorAnalysis=analysis;
+ for(const asset of first.assets){const old=doc.assets.find(a=>a.id===asset.id);
+  if(old&&digestValue(old)!==digestValue(asset))throw Error('shared_asset_changed:'+asset.id);
+  if(!old)doc.assets.push(structuredClone(asset));
+ }
+ const [a,b]=await Promise.all([copyTeachingPacketFromDoc(first),copyTeachingPacketFromDoc(doc)]);
+ if(digestValue({...a,delivery_sections:[]})!==digestValue({...b,delivery_sections:[]})
+  ||digestValue(a.delivery_sections?.find(s=>s.kind==='performance_opening'))!==digestValue(b.delivery_sections?.find(s=>s.kind==='performance_opening'))
+  ||digestValue(deliverySectionsFromDoc(doc).filter(s=>s.kind==='creator_invitation'))!==digestValue(own))throw Error('shared_rebase_not_exact');
+ return doc;
+}
+
 /** Returns false while the first output is unfinished; no model or media request is made. */
 export async function prepareSharedProduction(task:ProductionTask){
  if(await upgradeContinuationBrief(task))await productionTaskStore.save(task);
@@ -178,16 +216,39 @@ export async function prepareSharedProduction(task:ProductionTask){
  const [source,next]=await Promise.all([loadOfflineStoredProject(first.projectId),loadOfflineStoredProject(task.projectId)]);
  if(!source||!next)throw Error('shared_output_missing');
  await productionFeedbackAnchor(first,source.doc);
- const prepared=await sharedProductionDocument(source.doc,next.doc);
+ let prepared:Awaited<ReturnType<typeof sharedProductionDocument>>,rebased=false;
+ try{prepared=await sharedProductionDocument(source.doc,next.doc);}catch(error){
+  if(!(error instanceof Error)||!['shared_body_blueprint_changed','shared_opening_blueprint_changed'].includes(error.message))throw error;
+  if(!task.input.humanBlueprintReview||!first.input.humanBlueprintReview||task.status!=='queued'||Object.values(task.attempts).some(n=>n!==0)||Object.keys(task.effects).length
+   ||next.revision!==task.projectRevision||!(await checkCopyProduction(source.doc,'clipmentor')).allowed)
+   throw Error('shared_rebase_not_authorized_for_started_or_unreviewed_output');
+  const current=await copyReviewSubject(source.doc);
+  if((first.completed.edit?.artifact.executionReport as {blueprint?:{digest?:string}}|undefined)?.blueprint?.digest!==current.digest)
+   throw Error('shared_rebase_producer_execution_not_bound');
+  const aligned=await alignUnstartedSharedBlueprint(source.doc,next.doc);
+  prepared=await sharedProductionDocument(source.doc,aligned);
+  const body=JSON.stringify({type:'clipmentor-shared-blueprint-rebase/v1',sourceProjectId:first.projectId,sourceTaskId:first.taskId,
+   sourceRevision:source.revision,sourceSubject:current,previousRevision:next.revision,previousProject:next.doc});
+  if(!await storeAgentArtifact({version:1,artifactId:'p_'+randomUUID().replaceAll('-','').slice(0,18),projectId:task.projectId,runId:task.taskId,
+   kind:'checkpoint-source',toolName:'clipmentor-shared-blueprint-rebase',body,bodySha256:createHash('sha256').update(body).digest('hex'),
+   originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false}))throw Error('shared_rebase_archive_failed');
+  rebased=true;
+ }
  // Timelines and added reusable assets cannot change the human-confirmed content subject.
- if((await copyReviewSubject(prepared.doc)).digest!==task.blueprintApproval?.digest)throw Error('shared_confirmed_blueprint_changed');
+ if(!rebased&&(await copyReviewSubject(prepared.doc)).digest!==task.blueprintApproval?.digest)throw Error('shared_confirmed_blueprint_changed');
  await withSerializedProjectStore(async store=>{
   const current=await store.readEntry('project:'+task.projectId);
-  if(!current.found||digestValue(current.value)!==digestValue(next.doc))throw Error('shared_output_changed_during_preparation');
+  const producer=await store.readEntry('project:'+first.projectId);
+  const producerDoc=producer.found?runProjectMigrations(producer.value)?.doc:null;
+  const currentDoc=current.found?runProjectMigrations(current.value)?.doc:null;
+  if(!producerDoc||digestValue(producerDoc)!==digestValue(source.doc))throw Error('shared_producer_changed_during_preparation');
+  if(!currentDoc||digestValue(currentDoc)!==digestValue(next.doc))throw Error('shared_output_changed_during_preparation');
   await store.writeEntry('project:'+task.projectId,prepared.doc);
  });
  const saved=await loadOfflineStoredProject(task.projectId);if(!saved)throw Error('shared_output_missing');
  task.projectRevision=saved.revision;task.sharedProduction={...shared,prepared:true,endFrame:prepared.endFrame,digest:prepared.digest};
+ if(rebased)task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,sharedFromProject:first.projectId,
+  sharedFromTask:first.taskId,sharedSourceRevision:source.revision,ownEndingPreserved:true,formalReviewRequired:true}};
  task.input.budget.model=Math.max(0,first.input.budget.model-first.attempts.model);
  task.input.budget.tts=Math.max(0,first.input.budget.tts-first.attempts.tts);
  if(task.input.budget.routine){

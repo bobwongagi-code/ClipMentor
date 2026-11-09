@@ -24,6 +24,8 @@ provider and voice before calling `submit_voice`.
 
 ## TTS (Text-to-Speech)
 
+For ClipMentor production, call `load_skill(name="clipmentor")` and use the current reviewed execution handoff, inherited provider/voice and task budget. Reuse matching existing audio before synthesis. Its group-level picture-capacity check takes precedence over the generic fixed-window suggestions in `references/video-sync.md`: do not reopen approved copy, invent precise pre-TTS cuts, audition a different voice, change speed, loop or hold footage merely to fit a short window. Read actual audio duration and saved word anchors, then resolve an unsupported allocation through the designated planner within the existing task. This is not permission for another synthesis or review.
+
 If the current request has an existing visual target and the user wants
 narration, voiceover, dubbing, or replacement speech for that target, read
 [references/video-sync.md](references/video-sync.md) before drafting new

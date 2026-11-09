@@ -55,9 +55,12 @@ function uploadNameFromSrc(src: string): string | null {
   return isSafeUploadName(m[1]) ? m[1] : null;
 }
 
-function run(cmd: string, args: string[], timeoutMs: number): Promise<void> {
+function run(cmd: string, args: string[], timeoutMs: number, signal?:AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawnMediaProcess(cmd, [...ffmpegThreadArgs(), ...args], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const abort=()=>{child.kill('SIGKILL');reject(signal?.reason??new Error('Frame extraction cancelled'));};
+    signal?.addEventListener('abort',abort,{once:true});
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
@@ -69,10 +72,12 @@ function run(cmd: string, args: string[], timeoutMs: number): Promise<void> {
     });
     child.on('error', (err) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort',abort);
       reject(err);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort',abort);
       if (code === 0) resolve();
       else reject(new Error(`${cmd} exit ${code}: ${stderr.slice(-400)}`));
     });
@@ -189,7 +194,8 @@ export function frameSeekArgs(timeMs: number): string[] {
 }
 
 export interface FrameCrop { left: number; top: number; right: number; bottom: number }
-export async function extractOneFrame(input: string, timeMs: number, outPath: string, individual = false, crop?: FrameCrop): Promise<void> {
+export async function extractOneFrame(input: string, timeMs: number, outPath: string, individual = false, crop?: FrameCrop, signal?:AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   if (crop && (Object.keys(crop).length !== 4 || !['left', 'top', 'right', 'bottom'].every(k =>
     typeof crop[k as keyof FrameCrop] === 'number' && Number.isFinite(crop[k as keyof FrameCrop])
     && crop[k as keyof FrameCrop] >= 0 && crop[k as keyof FrameCrop] < 1)
@@ -208,7 +214,7 @@ export async function extractOneFrame(input: string, timeMs: number, outPath: st
     '-frames:v', '1',
     '-q:v', '4',
     outPath,
-  ], FFMPEG_TIMEOUT_MS);
+  ], FFMPEG_TIMEOUT_MS,signal);
 }
 
 export function extractFramesPlugin(): Plugin {

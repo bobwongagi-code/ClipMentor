@@ -60,7 +60,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
   void work.catch(error=>console.error('ClipMentor production worker failed',task.taskId,error));
  };
  const isActive=(id:string,projectId:string)=>active.has(id)||productionExecutionActive(projectId,id);
- const panel=createProductionPanel(launch,isActive);
+ const panel=createProductionPanel(launch,isActive,controls);
  return {name:'clipmentor-production-task',configureServer(server){
   let startup:Promise<void>|undefined;
   const recoverOnListen=()=>{
@@ -108,7 +108,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     const origin=`http://127.0.0.1:${port}`;
     const params=new URLSearchParams(query);
     await startup;
-    if(/^panel(?:_board|_video|_download|_reference)?$/.test(params.get('view')??'')){
+    if(/^panel(?:_board|_video|_download|_reference|_attachment)?$/.test(params.get('view')??'')){
      panelRequest=true;
      await panel(params.get('projectId')??'',origin,params,req,res,()=>json(req));return;
     }
@@ -130,7 +130,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
      if(input.authorBackend!==undefined||input.reviewerBackend!==undefined||input.panelDelivery!==undefined)throw new Error('Panel production configuration is available only from the configured panel');
      const task=await createProductionTask(input);launch(task);send(202,{taskId:task.taskId,projectId:task.projectId,status:'queued'});return;
     }
-    controlId=`${String(body.projectId)}:${String(body.taskId)}`;
+    controlId=String(body.projectId);
     if(controls.has(controlId)){controlId=undefined;throw new Error('Task control request already pending');}
     controls.add(controlId);
     const task=await productionTaskStore.load(String(body.projectId),String(body.taskId));

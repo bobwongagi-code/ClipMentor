@@ -14,6 +14,7 @@ import { ffprobeBin } from '../media-binaries';
 import { isSafeUploadName, resolveUploadFile, uploadDir } from '../media-dir';
 import { streamUploadToFile } from '../plugins/upload-stream';
 import { sha256File } from '../../shared/node-content-hash';
+import { CLIPMENTOR_OUTPUT_CANVAS } from './production-format';
 
 const maxRequestBytes = 64 * 1024 * 1024;
 const slots = ['source', 'product', 'sales', 'cta'] as const;
@@ -160,10 +161,15 @@ export function createMaterialIntakeHandler() {
       // Keep only files referenced by the commit. Retry/backfill staging copies
       // of already-saved assets stay eligible for cleanup.
       retained = added.map(asset => join(directory, asset.src.split('/').at(-1)!));
+      const ownedDoc = ownership.doc;
       commitUncertain = true;
       const result = await commitOfflineStoredProject({
         projectId, expectedRevision: ownership.revision, ownership: ownership.claim,
-        doc: { ...ownership.doc, assets: next }, canCommit: () => !isProjectConnected(projectId),
+        // Only the first empty upload initializes the product canvas. An identical
+        // retry/backfill never silently resizes a previously saved project.
+        doc: { ...ownedDoc, assets: next, ...(!current.length?{timelines:ownedDoc.timelines.map(t=>
+          t.id===ownedDoc.activeTimelineId?{...t,...CLIPMENTOR_OUTPUT_CANVAS}:t)}:{}) },
+        canCommit: () => !isProjectConnected(projectId),
       });
       if (result.status !== 'applied') {
         commitUncertain = false;

@@ -1,4 +1,5 @@
-import type { AgentRunLeaseState } from '../../shared/project-store-transport';
+import type { AgentRunLeaseState,ProjectStoreRequest } from '../../shared/project-store-transport';
+type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {
   kvWriteAgentRuntime,
   kvDel,
@@ -82,7 +83,7 @@ function withProjectLock<T>(projectId: string, work: () => Promise<T>): Promise<
 function notify(projectId: string): void {
   for (const listener of listeners.get(projectId) ?? []) listener();
 }
-async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T]): Promise<{ result: T; previous: AgentRuntimeSidecar; next: AgentRuntimeSidecar }> {
+async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T], entryPreconditions?:EntryPreconditions): Promise<{ result: T; previous: AgentRuntimeSidecar; next: AgentRuntimeSidecar }> {
   const sessionGeneration = await agentSessionWriteGeneration(projectId);
   const key = runtimeKey(projectId, sessionGeneration);
   // Primary writer is this process (serialized by enqueue/withStoreLock).
@@ -104,7 +105,7 @@ async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSi
       operation: 'agent-runtime-write',
       key,
       expectedRevision: raw === undefined ? null : previous.revision,
-      value: next,
+      value: next,...(entryPreconditions?{entryPreconditions}:{}),
     });
     if (canonical.accepted) {
       return { result, previous, next: normalizeSidecar(projectId, canonical.value) };
@@ -230,7 +231,7 @@ export async function releaseAgentRunLease(
   if (result.authoritative) notify(projectId);
   return result.accepted;
 }
-export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<boolean> {
+export async function storeAgentArtifact(record: AgentArtifactRecord,entryPreconditions?:EntryPreconditions): Promise<boolean> {
   requireProjectId(record.projectId);
   if (!ARTIFACT_ID.test(record.artifactId) || record.originalBytes > MAX_ARTIFACT_BYTES
       || !isValidArtifactRecord(record, record.projectId, record.artifactId)
@@ -258,7 +259,7 @@ export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<b
         const runs = current.runs.map((run) => run.runId === record.runId
           ? { ...run, artifactIds: [...new Set([...run.artifactIds, record.artifactId])] } : run);
         return [{ ...current, runs, artifacts: [...current.artifacts, index] }, true];
-      });
+      },entryPreconditions);
       if (!mutation.result || !mutation.next.artifacts.some((item) => item.artifactId === record.artifactId)) await kvDel(key);
       const retained = new Set(mutation.next.artifacts.map((item) => item.artifactId));
       await Promise.all(mutation.previous.artifacts

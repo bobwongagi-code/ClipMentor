@@ -15,12 +15,17 @@ import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { readJson } from '../agent-runs/request';
-import { PREVIEW_REVIEW_ENDPOINT, interpretPreviewResponse, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput } from '../clipmentor/preview-review';
+import { PREVIEW_REVIEW_ENDPOINT, previewBoundaryRevalidation, interpretPreviewResponse, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput } from '../clipmentor/preview-review';
 import { checkPreviewTimelineObservations, previewReviewWindows } from '../clipmentor/preview-timeline-check';
 import { boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria } from '../clipmentor/visual-done-criteria';
 import { productionReviewRequirements } from '../clipmentor/production-task';
 import { copyReviewDependencies } from '../clipmentor/copy-review';
+import {previewVisualEvidence,visualEvidenceFailure,type VisualEvidenceIO} from '../clipmentor/preview-visual-evidence';
+import {extractOneFrame} from './extract-frames';
+import {sourceFrameSeekMs} from '../../shared/source-frame-seek';
 
+// Native composition evidence is metadata, not media bytes; retain a bounded envelope.
+const PREVIEW_REQUEST_BYTES = 2 * 1024 * 1024;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const project = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(v);
@@ -35,10 +40,15 @@ export interface PreviewBridgeDependencies {
   resolve: (name: string) => string | null;
   run: (args: string[], signal?: AbortSignal) => Promise<void>;
   visualCriteria?(projectId:string):Promise<BoundVisualCriteria|undefined>;
+  visualEvidenceIO?:VisualEvidenceIO;
 }
 function dependencies(): PreviewBridgeDependencies {
   return { directory: join(runtimeProfile().rootDir, 'clipmentor-preview-reviews'), resolve: resolveUploadFile,
     async visualCriteria(projectId){return boundVisualCriteria(await productionReviewRequirements(projectId));},
+    visualEvidenceIO:{hash:sha256File,async frame(file,seconds,output,signal){
+      await extractOneFrame(file,sourceFrameSeekMs(seconds*1000),output,false,undefined,signal);
+      return (await readFile(output)).toString('base64');
+    }},
     run: async (args, signal) => { await execute(process.execPath, ['--import', loader, cli, ...args],
       { signal, timeout: 660_000, maxBuffer: 64 * 1024, windowsHide: true,
         env:{...process.env,...Object.fromEntries((['ROOTIFY_GATEWAY_API_KEY','CLIPMENTOR_VIDEO_TRANSPORT','CLIPMENTOR_R2_ACCOUNT_ID','CLIPMENTOR_R2_BUCKET','CLIPMENTOR_R2_API_TOKEN','PROXY_URL','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_BUCKET','R2_ENABLED'] as const)
@@ -89,8 +99,16 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     let manifestBinding = 'missing';
     let manifestSha256: string | null = null;
     let evaluated: ReturnType<typeof evaluatePreviewTeachingJudgment> | null = null;
+    let roundingRevalidation:ReturnType<typeof previewBoundaryRevalidation>=null;
     if (!result) blockers.push('review_not_completed');
     else {
+      // A frozen locator lets current reads reject changed bytes without starting image work.
+      // Legacy receipts without it remain readable under their original evidence contract.
+      if(binding.src!==undefined){try{
+        const name=typeof binding.src==='string'&&/^\/media\/uploads\/[^/?#]+\.mp4$/.test(binding.src)?binding.src.slice('/media/uploads/'.length):'';
+        const file=isSafeUploadName(name)?deps.resolve(name):null;
+        if(!file||(await stat(file)).size>70_000_000||await sha256File(file)!==binding.videoSha256)throw Error();
+      }catch{blockers.push('preview_media_unavailable_or_changed');}}
       try {
         const input = validatePreviewReviewInput(JSON.parse(await readFile(join(directory, 'input.json'), 'utf8')));
         if (digest(input) !== binding.inputSha256) throw new Error('Input binding');
@@ -98,7 +116,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
           || JSON.stringify(parsePreviewTeachingJudgment(result.raw_public_judgment)) !== JSON.stringify(result.judgment)) throw new Error('Raw receipt binding');
         evaluated = evaluatePreviewTeachingJudgment(result.judgment, input);
         blockers.push(...evaluated.issues);
-        if (result.status !== 'pass') blockers.push('saved_review_not_passed');
+        roundingRevalidation=previewBoundaryRevalidation(result,input);
+        if (result.status !== 'pass'&&!roundingRevalidation) blockers.push('saved_review_not_passed');
         let manifest: unknown;
         if (typeof binding.executionManifestSha256 === 'string') {
           manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
@@ -124,7 +143,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       && manifestBinding === 'frozen_at_request' && blockers.length === 0;
     const rawUnits = object(result?.judgment) && Array.isArray(result.judgment.continuity) ? result.judgment.continuity : [];
     const effectiveReview = { status: canUse ? 'pass' : 'review_required', can_use_as_pass: canUse,
-      blockers: [...new Set(blockers)], manifest_binding: manifestBinding, manifest_sha256: manifestSha256,
+      blockers: [...new Set(blockers)], ...(roundingRevalidation?{contract_revalidation:roundingRevalidation}:{}), manifest_binding: manifestBinding, manifest_sha256: manifestSha256,
       unit_results: (evaluated?.unit_results ?? []).map(u => {
         const original = rawUnits.find((r: unknown) => object(r) && r.unit_id === u.unit_id);
         return { unit_id: u.unit_id, model_narrative: u.model_narrative,
@@ -142,12 +161,34 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       scheduled_audio_gaps: u.scheduled_audio_gaps, issues: u.issues,
     })) };
     const ledger = await readFile(join(directory, `${body.operationId}.operation.json`), 'utf8').then(JSON.parse).catch(() => null);
+    let visualComparison:unknown;
+    // Local evidence uses frozen inputs, never a current author-selected substitute.
+    // Failed extraction does not alter or manufacture an independent verdict.
+    if(result){try{
+      const input=validatePreviewReviewInput(JSON.parse(await readFile(join(directory,'input.json'),'utf8')));
+      if(input.visual_criteria?.length){
+        if(body.action!=='read'||body.includeVisualEvidence!==true){
+          visualComparison={status:'deferred',scope:'sampled_export_reference_comparison',full_film_accepted:false,
+            next:{action:'read',operationId,includeVisualEvidence:true}};
+        }else{
+        if(digest(input)!==binding.inputSha256||typeof binding.executionManifestSha256!=='string')throw Error('visual_comparison_binding_missing');
+        const manifest=JSON.parse(await readFile(manifestFile,'utf8'));
+        if(digest(manifest)!==binding.executionManifestSha256)throw Error('visual_comparison_manifest_changed');
+        if(binding.src===undefined)throw Error('visual_comparison_binding_missing');
+        const name=typeof binding.src==='string'&&/^\/media\/uploads\/[^/?#]+\.mp4$/.test(binding.src)?binding.src.slice('/media/uploads/'.length):'';
+        const file=isSafeUploadName(name)?deps.resolve(name):null;
+        if(!file||!deps.visualEvidenceIO)throw Error('visual_comparison_local_reader_unavailable');
+        visualComparison=await previewVisualEvidence(body.projectId as string,file,binding.videoSha256,input,manifest,deps.visualEvidenceIO,undefined,signal);
+        }
+      }
+    }catch(error){visualComparison=visualEvidenceFailure(error);}}
     const gatewayFailure=ledger?.status==='failed'&&typeof ledger.error==='string'
       ? /^Preview review HTTP ([0-9]{3}); attempt consumed, no automatic retry$/.exec(ledger.error) : null;
     const attempted = ledger?.requests_attempted === 0 ? 0 : 1;
     const failed = !result && ledger?.status === 'failed' && [0,1].includes(ledger.requests_attempted);
     const diagnostic = failed ? safeSourceTransportDiagnostic(ledger.transport_diagnostic,'',operationId) : undefined;
     return { operationId: body.operationId, projectId: body.projectId, videoSha256: binding.videoSha256,
+      ...(visualComparison?{visual_comparison:visualComparison}:{}),
       ...(binding.visualCriteriaDigest?{visualCriteriaDigest:binding.visualCriteriaDigest}:{}),
       ...(failed?{receipt_persisted:true}:{}), ...(diagnostic?{transport_diagnostic:diagnostic}:{}),
       status: result ? 'completed' : ledger?.status ?? 'reserved',...(locallyRecovered?{local_response_recovery:true,original_operation_status:ledger?.status}:{}),
@@ -155,7 +196,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       requestsAttempted: attempted, model_retry_policy:ledger?.model_retry_policy, requestsSent: 0, full_film_accepted: false, scope: 'rendered_preview_continuous_review' };
   };
   if (body.action === 'read') {
-    if (Object.keys(body).some(k => !['action','projectId','operationId','videoSha256','executionManifest'].includes(k))) throw new Error('Invalid receipt read');
+    if (Object.keys(body).some(k => !['action','projectId','operationId','videoSha256','executionManifest','includeVisualEvidence'].includes(k))
+      ||body.includeVisualEvidence!==undefined&&typeof body.includeVisualEvidence!=='boolean') throw new Error('Invalid receipt read');
     return read();
   }
   if (Object.keys(body).some(k => !['action','projectId','operationId','maxRequests','src','videoSha256','input','executionManifest'].includes(k))
@@ -167,13 +209,16 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   if(criteria){
     if(body.executionManifest===undefined)throw Error('Visual criteria require saved preview windows');
     const frames=await visualReferenceFrames(criteria,{...copyReviewDependencies(),resolve:deps.resolve});
+    const originalUnits=[...input.units];
     input.visual_criteria=frames.map(({criterion,base64})=>{
-      const window=input.units.find(u=>u.unit_id==='delivery/'+criterion.sectionId)?.output_range_seconds;
+      const all=criterion.layout==='native_composition'&&criterion.sectionId===criteria.timelineId;
+      if(all&&(!object(body.executionManifest)||body.executionManifest.timeline_id!==criteria.timelineId))throw Error('Visual criterion timeline missing from preview');
+      const targets=all?originalUnits.filter(u=>!u.unit_id.startsWith('delivery/')):originalUnits.filter(u=>u.unit_id===(criterion.layout==='native_composition'?criterion.sectionId:'delivery/'+criterion.sectionId));
       const point_id='delivery/criterion/'+criterion.id;
-      if(!window||input.points.some(p=>p.point_id===point_id)||input.units.some(u=>u.unit_id===point_id))throw Error('Visual criterion section missing from preview');
+      if(!targets.length||targets.some(u=>!u.output_range_seconds)||input.points.some(p=>p.point_id===point_id)||input.units.some(u=>u.unit_id===point_id))throw Error('Visual criterion section missing from preview');
       input.points.push({point_id,teaching_goal_zh:criterion.question,product_relevance:'用户交付要求'});
-      input.units.push({unit_id:point_id,point_ids:[point_id],output_range_seconds:window});
-      return {point_id,quote:criterion.quote,question:criterion.question,fileName:criterion.reference.fileName,seconds:criterion.reference.seconds,base64};
+      for(const [index,target]of targets.entries())input.units.push({unit_id:all?point_id+'/'+index:point_id,point_ids:[point_id],output_range_seconds:target.output_range_seconds});
+      return {point_id,quote:criterion.quote,question:criterion.question,pictureStage:criterion.pictureStage,fileName:criterion.reference.fileName,seconds:criterion.reference.seconds,base64};
     });
   }
   const manifestHash = body.executionManifest === undefined ? undefined : digest(body.executionManifest);
@@ -189,7 +234,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const fingerprint = digest({ src: body.src, videoSha256: body.videoSha256, input,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) });
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  try { await writeFile(bindingFile, JSON.stringify({ projectId: body.projectId, operationId: body.operationId,
+  try { await writeFile(bindingFile, JSON.stringify({ projectId: body.projectId, operationId: body.operationId,src:body.src,
     fingerprint, videoSha256: body.videoSha256, inputSha256: prepared.input_sha256,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) }), { flag: 'wx', mode: 0o600 }); }
   catch (error) {
@@ -230,21 +275,29 @@ export function clipMentorPreviewReviewPlugin(deps?: PreviewBridgeDependencies):
       const abort = new AbortController();
       const close = () => { if (!res.writableEnded) abort.abort(); };
       res.on('close', close);
+      let heartbeat:ReturnType<typeof setInterval>|undefined;
+      const waitingNotice=()=>{
+        if(heartbeat)return;
+        headers(200);res.write('\n');
+        heartbeat=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write('\n');},20_000);heartbeat.unref();
+      };
       try {
-        const body=await readJson(req,256*1024),original=deps??dependencies();
+        const body=await readJson(req,PREVIEW_REQUEST_BYTES),original=deps??dependencies();
         // Start only after bridge preflight/reservation, at the existing single
         // run boundary. JSON permits whitespace before the terminal receipt.
         // This keeps the local fetch alive without a second provider request.
         const waiting={...original,run:async(args:string[],signal?:AbortSignal)=>{
-          headers(200);res.write('\n');
-          const heartbeat=setInterval(()=>{if(!res.destroyed&&!res.writableEnded)res.write('\n');},20_000);
-          heartbeat.unref();
-          try{await original.run(args,signal);}finally{clearInterval(heartbeat);}
-        }};
+          waitingNotice();await original.run(args,signal);
+        },...(original.visualEvidenceIO?{visualEvidenceIO:{...original.visualEvidenceIO,frame:async(file:string,seconds:number,output:string,signal?:AbortSignal)=>{
+          waitingNotice();return original.visualEvidenceIO!.frame(file,seconds,output,signal);
+        }}}:{})};
         send(200,await previewBridge(body,waiting,abort.signal));
       }
-      catch { send(400,{error:'Preview review unavailable or invalid; retain operationId, no retry. No credential or local path is returned.'}); }
-      finally { res.off('close',close); }
+      catch (error) {
+        if(error instanceof Error&&error.message==='request body too large')send(413,{error:'Preview evidence exceeds the bounded request limit; no model request sent.',requestsAttempted:0});
+        else send(400,{error:'Preview review unavailable or invalid; retain operationId, no retry. No credential or local path is returned.'});
+      }
+      finally { if(heartbeat)clearInterval(heartbeat);res.off('close',close); }
     });
   } };
 }

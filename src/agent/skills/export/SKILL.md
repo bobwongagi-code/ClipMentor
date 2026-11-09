@@ -5,12 +5,12 @@ description: Use when a OpenChatCut video editing or creation workflow needs exp
 
 # Export
 
-Use OpenChatCut's export tools for delivery. An export request should call `submit_export` (or `submit_render_job` for async), then use `track_export` for status and final delivery when the result is not returned immediately.
+Use OpenChatCut's export tools for delivery. Reuse a saved export or active render bound to the same saved timeline revision, range and export options before submitting. `submit_export` can finish in-call; `submit_render_job` returns an asynchronous job. Use `track_export` only for an actual returned or saved async job, not merely because a synchronous path is absent. Export is technical completion, not film acceptance.
 
 Default policy:
 
 - Prefer `submit_export` when the user asks to export/share/finalize the OpenChatCut timeline.
-- Keep originals local by default during editing. Upload originals only when a cloud export/proof needs remote assets and the user has not forbidden upload.
+- Keep disk-backed originals local; this build renders from `/media/uploads/`. A remote connector may need an authorized accessible source, but do not upload solely because a file is local.
 - Do not wrap sandbox `ffmpeg` work as a OpenChatCut tool. Use sandbox `ffmpeg` for full video processing only when the user explicitly asks for a standalone local-file operation outside a OpenChatCut editing workflow. For OpenChatCut editing tasks, do not produce a pre-edited or flattened local render as the primary review/final deliverable; use OpenChatCut export.
 
 ## Durable Export
@@ -33,7 +33,7 @@ Follow the actual return shape. `submit_export` is the synchronous export tool: 
 
 `submit_render_job` is the asynchronous alternative and returns a durable `renderId`; use `track_export` only for that returned job, or a genuinely recorded asynchronous export. `read_export_history` may legitimately be empty after a synchronous browser download; an empty queue does not prove that export failed.
 
-After getting each `downloadUrl`:
+After getting each `downloadUrl`, expose the existing guarded download link through the current product UI. When the host has download/filesystem access and a local file is requested:
 
 - Resolve the user's Downloads folder: `~/Downloads` on macOS/Linux, or `%USERPROFILE%\Downloads` on Windows.
 - Before triggering any agent/browser download, check the Downloads folder for fresh Chrome download artifacts from the last few minutes that match the expected export name, extension, or render/download URL basename. Include both completed files and in-progress `.crdownload` files.
@@ -42,11 +42,11 @@ After getting each `downloadUrl`:
 - If only older files exist, treat them as collisions, not as the current export.
 - Do not overwrite an existing file; choose a safe numbered filename such as `name (1).mp4` when needed.
 - Always download the finished export file into the Downloads folder, not a temp/workspace directory.
-- Always show the downloaded video inline in chat. If there are multiple exported videos, download all of them and show every preview, not just the first.
+- Show each requested video preview through the supported product/chat surface. If the host cannot inspect Downloads, report the returned download link/name without claiming a local file was opened.
 
-If the project contains local-only assets, upload/register cloud-readable replacements before rendering, or use the Local CLI Export path when the user wants to stay local.
+Disk-backed local assets are renderable without cloud mirroring or a separate CLI path. If bytes are still uploading, wait for the existing upload; if bytes are missing, use the recovery steps below.
 
-Report the returned `renderId` when present. The job is also visible in the editor's top-right export queue, including progress and cancellation. Use `saveToMediaPool:true` when the user asks to retain the result in My Media or when the active workflow explicitly defaults to automatic materialization, such as `livestream-to-clips`; otherwise the default remains a normal downloadable export. For long videos, call `track_export` once with `action:"wait"` and `timeoutSeconds:20`. If it returns `waitExpired:true`, report that the render continues in the background and end the turn. Check it later with `action:"status"`; repeated waits only hold the Agent turn open. Do not start another export for the same timeline while this render is active.
+Report the returned `renderId` when present. The job is also visible in the editor's top-right export queue, including progress and cancellation. Use `saveToMediaPool:true` when the user asks to retain the result in My Media or when the active workflow explicitly defaults to automatic materialization, such as `livestream-to-clips`; otherwise the default remains a normal downloadable export. For long videos, call `track_export` once with `action:"wait"` and `timeoutSeconds:20`. If it returns `waitExpired:true`, keep its renderId and report the existing render as running, not failed. In an autonomous production task, let its saved continuation resume status reads; do not pause for a business-user retry choice. In an interactive session, the user may leave and later check the same job with `action:"status"`. Do not start another export for the same timeline while this render is active.
 
 Use `track_export` when the user asks about export/render status, or when the current turn genuinely needs to wait for a submitted video/audio render. Completed connector exports return `downloadUrl`; for every completed entry, download the file to Downloads using the collision-safe rules above and show it inline in chat:
 
@@ -109,8 +109,9 @@ All rendering is local: `submit_export` / `submit_render_job` drive the local re
 
 If a render fails because an asset's bytes are missing (placeholder never relinked, file deleted from disk):
 
-1. Ask the user to re-link the asset in 我的素材 (离线素材横幅) or re-import the file.
-2. For URL-sourced media, re-run `download_media` to restore bytes, then resubmit.
+1. Read the saved render/error and exact missing asset binding. Check whether its original local bytes, pending upload or authorized original URL can be recovered through the existing import/relink tools; do not start another render to diagnose missing input.
+2. Restore that asset identity and verify bytes before considering a new render. Reuse any completed render; an unknown result is not a confirmed failure or permission to resubmit. Preserve production budgets.
+3. Request material only if the original source cannot be recovered. Do not ask business users to choose a renderer, provider or retry strategy.
 
 Do not tell the user they need to understand HTML-in-Canvas, Remotion, or storage internals unless debugging. Explain at product level:
 
@@ -120,10 +121,4 @@ Do not tell the user they need to understand HTML-in-Canvas, Remotion, or storag
 
 ## Result Trace
 
-For `submit_export`, record:
-
-- `renderId`
-- timeline/range/resolution/codec/fps
-- that the user can download from the editor render-jobs panel
-
-Record uploaded asset IDs and any fallback tried when cloud export was blocked by local-only assets.
+Record the actual returned file name, current timeline/range, dimensions/codec/fps and usable delivery link/path. Include `renderId` and queue status only when an async job exists. Preserve source/output identity and any local recovery performed. A successful tool response or file path does not prove readability, continuous viewing, Malay suitability or final user acceptance; record those checks separately under the active workflow.

@@ -1,12 +1,12 @@
 import {labelTranslationsShape} from '../../clipmentor/author-translations';
 export { CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS, CLIPMENTOR_ANALYSIS_TOOL_NAMES } from './schemas/clipmentor-analysis-tools';
 import type { AgentContext } from '../context';
-import type { ProjectDoc } from '../../editor/types';
 import { checkAnalysisHandoff, invalidateChangedReviews, isAnalysisActor, isClipMentorAnalysis, pointDigest } from '../../clipmentor/analysis';
 import teashellHistorical from '../../clipmentor/fixtures/teashell-historical.json';
 import { importTeashellAnalysis } from '../../clipmentor/import-teashell';
 import {importNativeBlueprint,BlueprintImportError} from '../../clipmentor/import-blueprint';
 import { transcribeClipMentorAsset } from '../../clipmentor/transcribe-source';
+import { readClipMentorSourceAsr } from '../../clipmentor/read-source-asr';
 import { observeClipMentorSource } from '../../clipmentor/observe-source';
 import { requestSourceVideo, readSourceVideo } from '../../clipmentor/request-source-video';
 import { editClipMentorPreview } from '../../clipmentor/preview-edit';
@@ -14,7 +14,7 @@ import { requestPreviewReview } from '../../clipmentor/request-preview-review';
 import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-review';
 import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmentor/append-findings';
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview } from '../../clipmentor/production-gate';
-import { checkSourceBreakdown, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
+import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
 import {deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
 import {readClipMentorStoryboard} from '../../clipmentor/read-storyboard';
@@ -23,17 +23,6 @@ import {renderClipMentorReviewBoard} from '../../clipmentor/render-review-board'
 type Args = Record<string, unknown>;
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
-// An incomplete current copy must remain repairable. Baseline/source errors still block preparation;
-// the strict production/review gate always checks all issues, including incomplete copy/plan issues.
-function copyPreparationReady(doc: ProjectDoc): boolean {
-  return checkSourceBreakdown(doc).issues.every((i) => [
-    'copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch',
-    'picture_plan_phase_mode_invalid', 'picture_plan_phase_range_invalid', 'picture_plan_phase_original_missing',
-    'picture_plan_phase_line_invalid', 'picture_plan_group_explanation_missing',
-    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'delivery_sections_invalid',
-  ].includes(i.code));
-}
-
 export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: AgentContext): Promise<unknown> {
   if(name==='render_clipmentor_review_board')return renderClipMentorReviewBoard(ctx,args.view);
   if (name === 'edit_clipmentor_preview') return editClipMentorPreview(args, ctx);
@@ -46,6 +35,8 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
   const doc = ctx.getDoc();
   if (name === 'read_clipmentor_analysis') {
     const view = args.view ?? 'full';
+    if(view==='source_asr')return readClipMentorSourceAsr(args,ctx);
+    if(args.operationId!==undefined||args.assetId!==undefined)return {error:'operationId/assetId require the source_asr view'};
     if(view==='storyboard'){
       if(['reviewPart','copyPart','packetOffset','packetLimit','packetDigest','evidenceIds'].some(key=>args[key]!==undefined))return{error:'storyboard does not accept copy/review/evidence paging arguments'};
       return readClipMentorStoryboard(args,ctx);

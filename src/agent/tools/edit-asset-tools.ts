@@ -72,7 +72,9 @@ export async function execEditAssetTool(name: string, args: Args, ctx: AgentCont
   if (name !== 'edit_asset') return { error: `unknown tool ${name}` };
   const id = strArg(args.assetId);
   if (!id) return { error: 'edit_asset requires assetId' };
-  const asset = ctx.getDoc().assets.find((a) => a.id === id || a.id.startsWith(id));
+  const assets=ctx.getDoc().assets,exact=assets.find(a=>a.id===id),matches=exact?[exact]:assets.filter(a=>a.id.startsWith(id));
+  if(matches.length>1)return {error:`ambiguous asset prefix ${id}; use a full assetId`};
+  const asset = matches[0];
   if (!asset) return { error: `no asset ${id}` };
 
   const action = String(args.action ?? '');

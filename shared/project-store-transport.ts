@@ -42,6 +42,7 @@ export type ProjectStoreRequest =
   | { operation: 'purge-project'; projectId: string }
   | {
     operation: 'agent-runtime-write';
+    entryPreconditions?: Array<{key:string;digest:string|null}>;
     key: string;
     expectedRevision: number | null;
     value: unknown;

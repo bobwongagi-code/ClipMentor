@@ -129,6 +129,7 @@ function run(
 export interface ProbeMeta {
   width: number;
   height: number;
+  sampleAspectRatio?: string;
   duration: number;
   videoCodec: string;
   audioCodec: string;
@@ -248,6 +249,7 @@ export async function probeVideo(path: string, signal?: AbortSignal): Promise<Pr
   return {
     width,
     height,
+    ...(typeof video.sample_aspect_ratio==='string'?{sampleAspectRatio:video.sample_aspect_ratio}:{}),
     duration,
     videoCodec: String(video.codec_name || ''),
     audioCodec: String(audio?.codec_name || ''),

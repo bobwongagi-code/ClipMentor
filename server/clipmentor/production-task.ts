@@ -1,5 +1,11 @@
 import {compactProductionTaskHistory} from './production-task-history';
 import type {ProjectDoc} from '../../src/editor/types';
+import type {ProjectStoreRequest} from '../../shared/project-store-transport';
+import {getStoredEntry} from '../plugins/project-store';
+import {runProjectMigrations} from '../../src/persist/migrations';
+import {revisionOf} from '../../src/agent/external-edit-session';
+import {digestValue} from '../agent-runs/store-values';
+type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {randomUUID,createHash} from 'node:crypto';
 import {storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
 import {createRun,flushRunPersistence,setRunStatus,pushRunEvent,recoverServerRun} from '../agent-runs/store';
@@ -9,6 +15,11 @@ import {confirmedUnsubmittedGateway} from './production-recovery';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ReviewApiConfig} from './copy-review-api';
 import type {HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {assertFinalPreviewEvidence} from './production-preview-facts';
+import {productionDeliverables} from './production-deliverables';
+import {sha256File} from '../../shared/node-content-hash';
+import {verifyProductionOutput} from './production-format';
+import {resolveUploadFile,isSafeUploadName} from '../media-dir';
 
 /** Keep independent findings through intermediate author/structure repairs, never overwrite them with a self-check. */
 export function productionRepairContext(previous:Record<string,unknown>|undefined,artifact:Record<string,unknown>){
@@ -27,6 +38,7 @@ export interface ProductionInput {
  author:ReviewApiConfig;reviewer:ReviewApiConfig;
  voice?:{provider:string;voiceId:string};
  humanBlueprintReview?:true;
+ gatewayRecovery?:'bounded'|'none';
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
   bookends?:'layered-v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
@@ -42,21 +54,21 @@ export interface ProductionTask {
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
- visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[]};
+ visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
  createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
 }
-export interface TaskStore {save(task:ProductionTask):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
+export interface TaskStore {save(task:ProductionTask,entryPreconditions?:EntryPreconditions):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
 export const productionTaskStore:TaskStore={
- async save(task){
+ async save(task,entryPreconditions){
   for(let batch=0;batch<64&&await compactProductionTaskHistory(task.projectId,task.taskId);batch++){ /* bounded, lossless compaction to the existing low-water mark */ }
   task.updatedAt=Math.max(Date.now(),task.updatedAt+1);task.sequence++;
   const body=JSON.stringify({type:'clipmentor-production-task/v1',task});
   const ok=await storeAgentArtifact({version:1,artifactId:`p_${randomUUID().replaceAll('-','').slice(0,18)}`,projectId:task.projectId,runId:task.taskId,
    kind:'checkpoint-source',toolName:'clipmentor-production-task',body,bodySha256:createHash('sha256').update(body).digest('hex'),
-   originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:task.updatedAt,redacted:false,binaryOmitted:false});
+   originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:task.updatedAt,redacted:false,binaryOmitted:false},entryPreconditions);
   if(!ok)throw new Error('Production checkpoint could not be persisted');
  },
  async load(projectId,id){
@@ -221,6 +233,7 @@ export function cancelActiveProductionTask(projectId:string,id:string){
 }
 export function validateProductionInput(v:ProductionInput){
  if(!v||!/^[A-Za-z0-9_-]{1,160}$/.test(v.projectId)||!v.sourceAssetId||!v.product?.name?.trim()||typeof v.brief!=='string'||!v.brief.trim()||v.brief.length>32000)throw new Error('Invalid production input');
+ if(v.gatewayRecovery!==undefined&&!['bounded','none'].includes(v.gatewayRecovery))throw Error('Invalid gateway recovery policy');
  for(const config of [v.author,v.reviewer])if(!config?.model?.trim()||!LLM_PROVIDER_PRESETS.some(p=>p.id===config.provider)||!['responses','chat'].includes(config.apiMode))throw new Error('Explicit API author/reviewer configuration required');
  if(v.panelDelivery){
   const {productAssetId,productAssetHash,salesAssetId,ctaAssetId,ctaAssetHash}=v.panelDelivery;
@@ -245,8 +258,14 @@ export function validateProductionInput(v:ProductionInput){
  if(v.budget.preview_review!==undefined&&(!Number.isSafeInteger(v.budget.preview_review)||v.budget.preview_review<0||v.budget.preview_review>1000))throw new Error('Invalid preview_review budget');
  for(const kind of ['model','review','observation','tts','render'] as const)if(!Number.isSafeInteger(v.budget[kind])||v.budget[kind]<0||v.budget[kind]>1000)throw new Error(`Invalid ${kind} budget`);
 }
-export async function createProductionTask(input:ProductionInput,store=productionTaskStore):Promise<ProductionTask>{
+/** New batches freeze recovery authority once; a resumed old task never infers it from spare calls. */
+export function freezeProductionInput(input:ProductionInput):ProductionInput{
  validateProductionInput(input);
+ return {...structuredClone(input),gatewayRecovery:input.gatewayRecovery
+  ??(input.budget.routine&&!input.panelDelivery?.audience?'bounded':'none')};
+}
+export async function createProductionTask(input:ProductionInput,store=productionTaskStore):Promise<ProductionTask>{
+ input=freezeProductionInput(input);
  const run=createRun({projectId:input.projectId,sessionGeneration:await currentAgentSessionGeneration(input.projectId),backend:input.authorBackend??'api',provider:input.author.provider,model:input.author.model,askOnly:false});
  await flushRunPersistence(run);
  const now=Date.now(),task:ProductionTask={version:1,taskId:run.id,projectId:input.projectId,input:structuredClone(input),stage:'analysis',status:'queued',createdAt:now,updatedAt:now,sequence:0,
@@ -432,21 +451,46 @@ export async function productionFeedback(task:ProductionTask,feedback:unknown,st
  await store.save(next);Object.assign(task,next);return task;
 }
 export async function acceptProductionTask(task:ProductionTask,languageConfirmed:boolean,store=productionTaskStore,
- visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown}){
+ visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown;wholePreviewConfirmed?:unknown}){
  if(task.status!=='awaiting_review'||languageConfirmed!==true)throw new Error('Final reviewer must confirm Malay delivery suitability');
+ const next=structuredClone(task);let entryPreconditions:EntryPreconditions;
+ if(task.input.panelDelivery){
+  const saved=await loadOfflineStoredProject(task.projectId),src=task.completed.self_check?.artifact.preview;
+  const name=typeof src==='string'&&src.startsWith('/media/uploads/')?src.slice('/media/uploads/'.length):'';
+  const file=isSafeUploadName(name)?resolveUploadFile(name):null;
+  if(!saved||!file)throw Error('final_output_evidence_missing_or_stale');
+  await verifyProductionOutput(file);
+  const projectEntry=await getStoredEntry('project:'+task.projectId),normalized=projectEntry.found?runProjectMigrations(projectEntry.value)?.doc:null;
+  if(!normalized||revisionOf(normalized)!==saved.revision)throw Error('final_output_evidence_missing_or_stale');
+  entryPreconditions=[{key:'project:'+task.projectId,digest:digestValue(projectEntry.value)}];
+  assertFinalPreviewEvidence(task,saved.revision,await sha256File(file));
+  await productionDeliverables(saved.doc);
+ }
  const {readHandoffPolicy}=await import('./handoff');
  const {boundVisualCriteria}=await import('./visual-done-criteria');
- const criteria=boundVisualCriteria(await readHandoffPolicy(task.projectId)??task.blueprintApproval?.requirements??null);
+ const policy=await readHandoffPolicy(task.projectId);
+ const requirements=policy??task.blueprintApproval?.requirements??null;
+ if(entryPreconditions){
+  const entry=await getStoredEntry('clipmentor-handoff:'+task.projectId);
+  if((entry.found?digestValue(entry.value):null)!==(policy?digestValue(policy):null))throw Error('final_requirements_changed');
+  entryPreconditions.push({key:'clipmentor-handoff:'+task.projectId,digest:entry.found?digestValue(entry.value):null});
+  if(requirements){
+   const digest=digestValue(requirements.brief.doneCriteria),checked=task.completed.self_check?.artifact.requirementsDigest;
+   if(task.completed.copy_review?.artifact.requirementsDigest!==digest||checked!==undefined&&checked!==digest)throw Error('final_requirements_changed');
+  }
+ }
+ const criteria=boundVisualCriteria(requirements);
+ const confirmed=visual?.wholePreviewConfirmed===true?criteria?.entries.map(({criterion})=>criterion.id):visual?.confirmed;
  if(task.completed.self_check?.artifact.visualCriteriaDigest!==criteria?.digest
-  ||criteria&&(visual?.digest!==criteria.digest||!Array.isArray(visual.confirmed)
-   ||visual.confirmed.length!==criteria.entries.length||!criteria.entries.every(({criterion})=>(visual.confirmed as unknown[]).includes(criterion.id))))
+  ||criteria&&(visual?.digest!==criteria.digest||!Array.isArray(confirmed)
+   ||confirmed.length!==criteria.entries.length||!criteria.entries.every(({criterion})=>confirmed.includes(criterion.id))))
   throw Error('请对照成片逐项核对画面要求');
  if(criteria){
   const renderId=task.completed.export?.artifact.renderId;
   if(typeof renderId!=='string'||!renderId||visual?.renderId!==renderId)throw Error('请核对当前成片版本');
-  task.visualAcceptance={criteriaDigest:criteria.digest,renderId,confirmedIds:criteria.entries.map(({criterion})=>criterion.id)};
+  next.visualAcceptance={criteriaDigest:criteria.digest,renderId,confirmedIds:visual?.wholePreviewConfirmed===true?[]:criteria.entries.map(({criterion})=>criterion.id),...(visual?.wholePreviewConfirmed===true?{scope:'whole_preview' as const}:{})};
  }
- task.status='completed';await store.save(task);return task;
+ next.status='completed';await store.save(next,entryPreconditions);Object.assign(task,next);return task;
 }
 
 export async function cancelProductionTask(task:ProductionTask,store=productionTaskStore){

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {once} from 'node:events';
 import {createMiniConnect} from '../../desktop/mini-connect';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import sharp from 'sharp';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -72,11 +74,104 @@ try{
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
  await setStoredEntry(`project:${panelTask.projectId}`,projectDoc());
  const {default:boardFixture}=await import('../clipmentor/fixtures/blueprint-review-board-20261031.json');
- const {createBlueprintContinuation,createBlueprintContinuations,selectProductionAudience,sharedProductionDocument,commonProductionDigest,assertSharedProduction,prepareSharedProduction,queueBlueprintContinuations,continuationBrief,upgradeContinuationBrief}=await import('../clipmentor/production-continuation');
+ const {createBlueprintContinuation,createBlueprintContinuations,selectProductionAudience,sharedProductionDocument,alignUnstartedSharedBlueprint,commonProductionDigest,assertSharedProduction,prepareSharedProduction,queueBlueprintContinuations,continuationBrief,upgradeContinuationBrief}=await import('../clipmentor/production-continuation');
  const {deliverySectionsFromDoc}=await import('../../src/clipmentor/delivery-bindings');
  const {checkCopyProduction}=await import('../../src/clipmentor/production-gate');
  const full=structuredClone(boardFixture.cases.newBinding) as unknown as import('../../src/editor/types').ProjectDoc;
  const partnerDoc=structuredClone(boardFixture.cases.existingBinding) as unknown as import('../../src/editor/types').ProjectDoc;
+ // A declared downloadable output must cross the real HTTP route with exact bytes.
+ const deliveryDoc=structuredClone(partnerDoc),deliverySection=deliverySectionsFromDoc(deliveryDoc).find(s=>s.kind==='creator_invitation')!;
+ const png=await sharp({create:{width:4,height:4,channels:3,background:'#123456'}}).png().toBuffer();
+ const media=(await import('../media-dir')).uploadDir();await mkdir(media,{recursive:true});
+ const {execFileSync}=await import('node:child_process');const {ffmpegBin}=await import('../media-binaries');
+ const sourceId=deliveryDoc.clipMentorAnalysis!.source.asset_id;
+ const original=deliveryDoc.assets.find(a=>a.id===sourceId)!;
+ original.src='/media/uploads/fixture-original.mp4';
+ execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=90x160:r=1','-t',String(deliveryDoc.clipMentorAnalysis!.source.duration_seconds),'-c:v','libx264','-pix_fmt','yuv420p',join(media,'fixture-original.mp4')]);
+ original.sourceContentHash=createHash('sha256').update(await readFile(join(media,'fixture-original.mp4'))).digest('hex');
+ deliveryDoc.clipMentorAnalysis!.source.sourceContentHash=original.sourceContentHash;
+ const duration=deliveryDoc.clipMentorAnalysis!.source.duration_seconds;
+ deliveryDoc.clipMentorAnalysis!.evidence.push({evidence_id:'fixture-original-claim',kind:'original_claim',text:'Ini contoh suara asal.',source_ids:[sourceId],supporting_evidence_ids:[],status:'candidate',source_range_seconds:[0,duration]});
+ const breakdown=deliveryDoc.clipMentorAnalysis!.source_breakdown!;
+ breakdown.segments=[{segment_id:'original',source_range_seconds:[0,duration],claim_evidence_ids:['fixture-original-claim'],visible_evidence_ids:[],interpretation_evidence_ids:[],unknowns:[]}];
+ breakdown.units.forEach(u=>{u.original_segment_ids=['original'];u.original_source_ranges=[[0,duration]];});
+ await (await import('../clipmentor/creator-storyboard.verify-fixtures')).writeStoryboardFixtureReceipt(deliveryDoc,directory);
+ const pngHash=createHash('sha256').update(png).digest('hex'),ref=(id:string)=>({asset_id:id,src:`/media/uploads/${id}.png`,sha256:pngHash});
+ const attachment=ref('fixture-attachment');deliverySection.section_id='existing_partner';
+ const deliveryIR=(deliveryDoc.clipMentorAnalysis!.blueprint[0] as unknown as {internal_review:Record<string,unknown>}).internal_review;
+ const deliveryRows=deliverySectionsFromDoc(deliveryDoc);deliveryRows[deliveryRows.findIndex(s=>s.kind==='creator_invitation')]=deliverySection;
+ (deliveryIR[String(deliveryIR.current_picture_plan)] as {delivery_sections:unknown}).delivery_sections=deliveryRows;
+ delete deliverySection.picture.crop;
+ deliverySection.picture.layout={kind:'product_storyboard',product:ref('fixture-product'),storyboard:ref('fixture-board'),attachment};
+ deliveryDoc.assets.find(a=>a.id===deliverySection.picture.asset_id)!.width=720;
+ deliveryDoc.assets.find(a=>a.id===deliverySection.picture.asset_id)!.height=1280;
+ for(const id of ['fixture-product','fixture-board','fixture-attachment'])deliveryDoc.assets.push({id,name:id+'.png',kind:'image',src:ref(id).src,sourceContentHash:pngHash,width:4,height:4,durationInFrames:1,props:{clipmentorStoryboardSource:deliveryDoc.clipMentorAnalysis!.source.asset_id,clipmentorStoryboardHash:deliveryDoc.clipMentorAnalysis!.source.sourceContentHash}});
+ await writeFile(join(media,'fixture-attachment.png'),png);await writeFile(join(media,'fixture-preview.mp4'),'synthetic identity only');
+ await setStoredEntry('project:'+panelTask.projectId,deliveryDoc);
+ const deliverySaved=(await loadOfflineStoredProject(panelTask.projectId))!;
+ panelTask.status='awaiting_review';panelTask.projectRevision=deliverySaved.revision;
+ panelTask.completed.export={at:1,artifact:{revision:deliverySaved.revision,renderId:'delivery-fixture',path:'/media/uploads/fixture-preview.mp4'}};
+ panelTask.completed.self_check={at:2,artifact:{preview:'/media/uploads/fixture-preview.mp4'}};await productionTaskStore.save(panelTask);
+ const download=(assetId='fixture-attachment',renderId='delivery-fixture',authorized=true)=>fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view:'panel_attachment',projectId:panelTask.projectId,assetId,renderId})}`,{headers:authorized?{Origin:origin,'Sec-Fetch-Site':'same-origin'}:{}});
+ assert.equal((await download(undefined,undefined,false)).status,403);
+ const delivered=await download();assert.equal(delivered.status,200);assert.match(delivered.headers.get('content-disposition')! ,/attachment/);assert.equal(delivered.headers.get('content-type'),'application/pdf');assert.equal(Buffer.from(await delivered.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+ assert.equal((await panelGet()).task.attachments[0].assetId,'fixture-attachment');
+ assert.equal((await download('fixture-product')).status,409,'pool assets are not automatically deliverables');
+ assert.equal((await download(undefined,'old-render')).status,409,'old export links cannot serve current attachments');
+ await writeFile(join(media,'fixture-attachment.png'),'changed');assert.equal((await download()).status,409);assert.equal((await panelGet()).task.deliveryUnavailable,true);
+ await writeFile(join(media,'fixture-attachment.png'),png);
+ const newer=structuredClone(deliveryDoc);newer.name='changed project';await setStoredEntry('project:'+panelTask.projectId,newer);assert.equal((await download()).status,409);
+ assert.deepEqual(await readFile(join(media,'fixture-attachment.png')),png,'delivery never rewrites source files');
+ // Exercise final acceptance itself, with a synthetic portrait MP4 and fake local review evidence.
+ execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=720x1280:r=10','-frames:v','1','-c:v','libx264','-pix_fmt','yuv420p',join(media,'fixture-preview.mp4')]);
+ await setStoredEntry('project:'+panelTask.projectId,deliveryDoc);panelTask.projectRevision=(await loadOfflineStoredProject(panelTask.projectId))!.revision;
+ panelTask.completed.export!.artifact.revision=panelTask.projectRevision;
+ panelTask.input.panelDelivery={productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:pngHash};await productionTaskStore.save(panelTask);
+ const acceptFixture=()=>post({action:'accept',projectId:panelTask.projectId,taskId:panelTask.taskId,malayDeliveryConfirmed:true});
+ assert.equal((await acceptFixture()).status,409,'export alone and a checked language box cannot certify actual inspection');
+ const videoSha=createHash('sha256').update(await readFile(join(media,'fixture-preview.mp4'))).digest('hex');
+ panelTask.completed.self_check!.artifact.receipt={projectId:panelTask.projectId,videoSha256:videoSha,status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}};
+ await productionTaskStore.save(panelTask);
+ await rm(join(media,'fixture-attachment.png'));assert.equal((await acceptFixture()).status,409,'review success cannot replace the missing promised attachment');
+ await writeFile(join(media,'fixture-attachment.png'),png);assert.equal((await acceptFixture()).status,200,'fully bound local positive control remains deliverable');
+ assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).status,'completed');
+ const finalVideo=await fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view:'panel_download',projectId:panelTask.projectId,renderId:'delivery-fixture'})}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+ assert.equal(finalVideo.status,200);assert.match(finalVideo.headers.get('content-disposition')!,/filename\*=UTF-8''/);assert.deepEqual(Buffer.from(await finalVideo.arrayBuffer()),await readFile(join(media,'fixture-preview.mp4')),'confirmed download contains actual saved MP4 bytes');
+ delete panelTask.input.panelDelivery; // Complete requirement identity and atomic publication use the real canonical store.
+ const requirementProject='required-final-fixture';await setStoredEntry('project:'+requirementProject,deliveryDoc);
+ const required=await createProductionTask({...panelTask.input,projectId:requirementProject,panelDelivery:{productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:'f'.repeat(64)}});
+ required.status='awaiting_review';required.projectRevision=(await loadOfflineStoredProject(requirementProject))!.revision;required.completed=structuredClone(panelTask.completed);required.completed.export!.artifact.revision=required.projectRevision;
+ (required.completed.self_check!.artifact.receipt as Record<string,unknown>).projectId=requirementProject;
+ const requirementApi=await import('../clipmentor/handoff'),{digestValue:requirementHash}=await import('../agent-runs/store-values');
+ const requirementBrief={version:1,briefId:'final-requirements',revision:1,mode:'autonomous',phase:'planning',planner:'builtin_agent',executor:'builtin_agent',projectId:requirementProject,timelineId:deliveryDoc.activeTimelineId,objective:'Actual output',doneCriteria:['Original requirement'],blueprint:null,budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}};
+ const registered=await requirementApi.registerHandoff({projectId:requirementProject,expectedProjectRevision:required.projectRevision,previousDigest:null,brief:requirementBrief});
+ required.completed.copy_review={at:1,artifact:{requirementsDigest:requirementHash(requirementBrief.doneCriteria)}};required.completed.self_check!.artifact.requirementsDigest=requirementHash(requirementBrief.doneCriteria);await productionTaskStore.save(required);
+ const changedBrief={...requirementBrief,revision:2,doneCriteria:['Original requirement','先导出代表视频并连续观看，不可用截图替代']};
+ await requirementApi.registerHandoff({projectId:requirementProject,expectedProjectRevision:required.projectRevision,previousDigest:registered.digest,brief:changedBrief});
+ const {acceptProductionTask}=await import('../clipmentor/production-task');
+ await assert.rejects(acceptProductionTask(required,true),/final_requirements_changed/,'new text requirements cannot inherit old visual approval');
+ assert.equal(required.status,'awaiting_review');
+ required.completed.copy_review!.artifact.requirementsDigest=requirementHash(changedBrief.doneCriteria);required.completed.self_check!.artifact.requirementsDigest=requirementHash(changedBrief.doneCriteria);await productionTaskStore.save(required);
+ const {loadAgentRuntimeSidecar}=await import('../../src/persist/agentRuntimeStore');const beforeRace=(await loadAgentRuntimeSidecar(requirementProject)).artifacts.length;
+ const racingStore={...productionTaskStore,save:async(next:typeof required,conditions?:Parameters<typeof productionTaskStore.save>[1])=>{await setStoredEntry('project:'+requirementProject,newer);await productionTaskStore.save(next,conditions);}};
+ await assert.rejects(acceptProductionTask(required,true,racingStore),/precondition_changed/,'a commit during evidence inspection cannot publish completed');
+ assert.equal(required.status,'awaiting_review','failed acceptance does not mutate caller state');assert.equal((await productionTaskStore.load(requirementProject,required.taskId)).status,'awaiting_review');assert.equal((await loadAgentRuntimeSidecar(requirementProject)).artifacts.length,beforeRace,'failed completion body is not indexed');
+ await setStoredEntry('project:'+requirementProject,deliveryDoc);
+ const originalControlLoad=productionTaskStore.load;let controlEntered!:()=>void,controlRelease!:()=>void,holdControl=true;
+ const enteredControl=new Promise<void>(r=>{controlEntered=r;}),releaseControl=new Promise<void>(r=>{controlRelease=r;});
+ productionTaskStore.load=async(project,id)=>{if(project===requirementProject&&holdControl){holdControl=false;controlEntered();await releaseControl;}return originalControlLoad(project,id);};
+ const pendingAccept=post({action:'accept',projectId:requirementProject,taskId:required.taskId,malayDeliveryConfirmed:true});await enteredControl;
+ const errorLog=console.error;const controlErrors:string[]=[];console.error=(...args)=>{controlErrors.push(args.map(String).join(' '));};
+ try{
+  const competing=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${requirementProject}`,{method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'accept',renderId:'delivery-fixture',languageConfirmed:true})});
+  assert.equal(competing.status,409);assert(controlErrors.some(e=>e.includes('该工程正在处理上一次操作')),'panel and API must share the same project control boundary');
+ }finally{console.error=errorLog;productionTaskStore.load=originalControlLoad;controlRelease();}
+ assert.equal((await pendingAccept).status,200);assert.equal((await originalControlLoad(requirementProject,required.taskId)).status,'completed');
+
+
+ panelTask.status='awaiting_blueprint';panelTask.completed={};await productionTaskStore.save(panelTask);
+ await setStoredEntry('project:'+panelTask.projectId,projectDoc());
+ console.log('actual attachment route: exact bytes, declared scope, origin, stale render/revision and changed bytes; no external calls');
  const allSections=deliverySectionsFromDoc(full),partnerSection=deliverySectionsFromDoc(partnerDoc).find(s=>s.kind==='creator_invitation')!;
  allSections.find(s=>s.kind==='creator_invitation')!.section_id='new_contact';partnerSection.section_id='existing_partner';allSections.push(partnerSection);
  for(const asset of partnerDoc.assets)if(!full.assets.some(a=>a.id===asset.id))full.assets.push(asset);
@@ -120,7 +215,7 @@ try{
   projectId:panelTask.projectId,timelineId:full.activeTimelineId,objective:'Use saved source',blueprint:null,
   doneCriteria:['Keep the supplied words and pictures',...(['new_contact','existing_partner'] as const).map(sectionId=>({id:sectionId,sectionId,
    quote:'Use the supplied reference',question:'Is the correct supplied picture visible?',pictureStage:'完整招商卡',layout:'recruitment_card',pictureSha256:suppliedScope.ctaAssetHash,
-   reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}}))],
+   reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}})),{id:'body-style',sectionId:full.clipMentorAnalysis!.blueprint[0].unit_id,quote:'保留本项目认可的原片标识',question:'实际原片标识是否一致？',pictureStage:'原片',layout:'native_composition',reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}}],
   budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}}});
  const variantRequirements=await variantHandoff.readHandoffPolicy(panelTask.projectId);
  // Crash immediately after the first durable child checkpoint; it must already be a non-runnable bound continuation.
@@ -142,7 +237,7 @@ try{
  assert.equal(confirmationParent.attempts.review,8);assert.equal(confirmationParent.error,'original HTTP 502');
  const {productionReviewRequirements}=await import('../clipmentor/production-task');
  const inherited=await productionReviewRequirements(output.projectId);
- assert.deepEqual(inherited!.brief.doneCriteria.filter(c=>typeof c!=='string').map(c=>c.sectionId),['existing_partner']);
+ assert.deepEqual(inherited!.brief.doneCriteria.filter(c=>typeof c!=='string').map(c=>c.sectionId),['existing_partner',full.clipMentorAnalysis!.blueprint[0].unit_id]);
  assert.equal(inherited!.brief.doneCriteria[0],'Keep the supplied words and pictures');
  await (await import('./project-store')).withSerializedProjectStore(store=>store.removeEntry(variantHandoff.handoffKey(panelTask.projectId)));
  const outputDoc=(await loadOfflineStoredProject(output.projectId))!.doc;
@@ -198,6 +293,26 @@ try{
  assert.throws(()=>commonProductionDigest(cross,100),/crosses_ending/);
  const changedCopy=structuredClone(secondDoc);(changedCopy.clipMentorAnalysis!.blueprint[0].internal_review as Record<string,any>)[String(changedCopy.clipMentorAnalysis!.blueprint[0].internal_review!.current_script_candidate)].lines[0].narration_ms+=' changed';
  await assert.rejects(sharedProductionDocument(firstDoc,changedCopy),/shared_body_blueprint_changed/);
+ // The untouched second output follows the latest producer plan; its own
+ // ending survives and no producer receipt is copied as its approval.
+ const updatedProducer=structuredClone(firstDoc),updatedIR=(updatedProducer.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+ const active=updatedIR[updatedIR.current_picture_plan];
+ active.composition={...(typeof active.composition==='object'?active.composition:{}),detail:'Updated producer picture allocation; synthetic test only'};
+ const preAlign=JSON.stringify(secondDoc),ownEnding=deliverySectionsFromDoc(secondDoc).filter(s=>s.kind==='creator_invitation');
+ await assert.rejects(sharedProductionDocument(updatedProducer,secondDoc),/shared_body_blueprint_changed/);
+ const aligned=await alignUnstartedSharedBlueprint(updatedProducer,secondDoc);
+ assert.deepEqual(deliverySectionsFromDoc(aligned).filter(s=>s.kind==='creator_invitation'),ownEnding);
+ assert.equal(aligned.clipMentorAnalysis!.production_copy_review,undefined,'no independent approval is inherited');
+ assert.equal(JSON.stringify(secondDoc),preAlign,'candidate alignment never writes the waiting input');
+ await sharedProductionDocument(updatedProducer,aligned);
+ const started=structuredClone(secondDoc);started.timelines[0].items.push(structuredClone(timeline.items[0]));
+ await assert.rejects(alignUnstartedSharedBlueprint(updatedProducer,started),/untouched_same_source/);
+ const unrelated=structuredClone(secondDoc);unrelated.clipMentorAnalysis!.source.sourceContentHash='e'.repeat(64);
+ await assert.rejects(alignUnstartedSharedBlueprint(updatedProducer,unrelated),/untouched_same_source/);
+ const conflicting=structuredClone(updatedProducer),endingFact=ownEnding[0].evidence_ids[0];
+ conflicting.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===endingFact)!.text='Conflicting condition';
+ await assert.rejects(alignUnstartedSharedBlueprint(conflicting,secondDoc),/ending_fact_conflict/);
+
  const missingEnding=selectProductionAudience(full,'existing_partner');
  await assert.rejects(createBlueprintContinuations(confirmationParent,{doc:missingEnding,revision:'missing-new-ending'},variantRequirements,origin),/尚未齐备/);
 

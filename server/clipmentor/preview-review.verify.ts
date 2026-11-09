@@ -121,3 +121,58 @@ const partial = await reviewClipMentorPreview(video, input, { key: 'private-test
   body: { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: JSON.stringify(good()) }] } }] } }) });
 assert.equal(partial.status, 'review_required'); assert.ok(partial.issues.includes('incomplete_generation'));
 console.log('Preview review: input-size guards, exact inline bytes, independent receipts, teaching-vs-narrative gates, quoted-text checks, safe failures and no retries passed.');
+
+// Model observation times are display precision, never native edit boundaries.
+const roundedInput={...structuredClone(input),duration_seconds:10+2/3};
+const roundedGood=good();roundedGood.coverage[0].teaching.evidence[0].end_seconds=10.67;
+assert.equal(evaluatePreviewTeachingJudgment(roundedGood,roundedInput).status,'pass','centisecond-rounded EOF is valid observational evidence');
+const overRounded=structuredClone(roundedGood);overRounded.coverage[0].teaching.evidence[0].end_seconds=10.68;
+assert.equal(evaluatePreviewTeachingJudgment(overRounded,roundedInput).status,'review_required','real EOF overrun is still refused');
+assert.throws(()=>validatePreviewReviewInput({...roundedInput,reference_text:[{...input.reference_text[0],end_seconds:10.67}]}),'scheduled text ranges remain exact');
+const {previewBoundaryRevalidation}=await import('./preview-review.ts');
+const roundedSaved={status:'review_required',issues:['invalid_coverage_row','P1:missing_coverage'],finish_reasons:['STOP'],raw_public_judgment:JSON.stringify(roundedGood),judgment:roundedGood};
+const immutable=JSON.stringify(roundedSaved);assert(previewBoundaryRevalidation(roundedSaved,roundedInput));assert.equal(JSON.stringify(roundedSaved),immutable);
+assert.equal(previewBoundaryRevalidation({...roundedSaved,issues:['P1:unverified_quote']},roundedInput),null);
+assert.equal(previewBoundaryRevalidation({...roundedSaved,finish_reasons:['MAX_TOKENS']},roundedInput),null);
+assert.equal(previewBoundaryRevalidation({...roundedSaved,judgment:overRounded},roundedInput),null);
+const negative=structuredClone(roundedGood);negative.coverage[0].teaching.status='not_supported';assert.equal(previewBoundaryRevalidation({...roundedSaved,judgment:negative},roundedInput),null);
+assert.equal(previewBoundaryRevalidation({...roundedSaved,judgment:good()},roundedInput),null,'old negative status cannot be generally bypassed');
+console.log('EOF rounding: observations only, exact input ranges, frozen negative/quote/finish gates and immutable local revalidation passed');
+
+assert.equal(previewBoundaryRevalidation({...roundedSaved,raw_public_judgment:'{}'},roundedInput),null,'derived rounding metadata requires the original matching raw judgment');
+
+// A physical film origin has no previous frame interval; never fabricate one.
+const originInput={...structuredClone(input),units:[{...input.units[0],output_range_seconds:[0,10] as [number,number]}]};
+const originGood=good();originGood.continuity[0].relation='new_information';
+originGood.continuity[0].current=[{start_seconds:0,end_seconds:10,channel:'visual_organization',observed:'成绩片头接入清晰原片'}];
+originGood.continuity[0].previous=[{start_seconds:0,end_seconds:0,channel:'visual_organization',observed:'视频起点'}];
+assert.equal(evaluatePreviewTeachingJudgment(originGood,originInput).status,'pass');
+const noPredecessor=structuredClone(originGood);noPredecessor.continuity[0].previous=[];
+assert.equal(evaluatePreviewTeachingJudgment(noPredecessor,originInput).status,'pass','canonical empty predecessor at the physical origin');
+for(const previous of [
+ [{start_seconds:1,end_seconds:1,channel:'visual_organization',observed:'not origin'}],
+ [{start_seconds:0,end_seconds:0,channel:'narration',observed:'not frame evidence'}],
+ [{start_seconds:0,end_seconds:0,channel:'visual_organization',observed:'origin',quote:'invented'}],
+ [...originGood.continuity[0].previous,...originGood.continuity[0].previous],
+]){const bad=structuredClone(originGood);bad.continuity[0].previous=previous as ReviewReceipt[];assert.equal(evaluatePreviewTeachingJudgment(bad,originInput).status,'review_required');}
+assert.equal(evaluatePreviewTeachingJudgment(originGood,{...originInput,units:[{...originInput.units[0],output_range_seconds:[1,10]}]}).status,'review_required','later units still need a real predecessor');
+const missingOrigin=structuredClone(originGood);missingOrigin.continuity[0].current[0].start_seconds=1;
+assert.equal(evaluatePreviewTeachingJudgment(missingOrigin,originInput).status,'review_required');
+const fakeCoverage=structuredClone(originGood);fakeCoverage.coverage[0].depiction=originGood.continuity[0].previous;
+assert.equal(evaluatePreviewTeachingJudgment(fakeCoverage,originInput).status,'review_required','boundary sentinel is never depiction evidence');
+const originSaved={status:'review_required',issues:['invalid_continuity_row','U1:missing_continuity'],finish_reasons:['STOP'],raw_public_judgment:JSON.stringify(originGood),judgment:originGood};
+const originBefore=JSON.stringify(originSaved);
+assert.equal(previewBoundaryRevalidation(originSaved,originInput)?.method,'film-origin-continuity-v1');
+const emptyOriginSaved={...originSaved,issues:['U1:missing_front_back_evidence'],judgment:noPredecessor,raw_public_judgment:JSON.stringify(noPredecessor)};
+const emptyOriginBefore=JSON.stringify(emptyOriginSaved);
+assert.equal(previewBoundaryRevalidation(emptyOriginSaved,originInput)?.method,'film-origin-continuity-v1','legacy empty predecessor error is recoverable only at the actual film origin');
+assert.equal(JSON.stringify(emptyOriginSaved),emptyOriginBefore,'canonical origin recovery preserves raw judgment and original rejection');
+assert.equal(previewBoundaryRevalidation({...emptyOriginSaved,issues:['another:missing_front_back_evidence']},originInput),null,'an origin elsewhere cannot excuse missing evidence in a different unit');
+assert.equal(previewBoundaryRevalidation(emptyOriginSaved,{...originInput,units:[{...originInput.units[0],output_range_seconds:[1,10]}]}),null,'a later segment still needs predecessor evidence');
+
+assert.equal(JSON.stringify(originSaved),originBefore,'saved raw/negative result remains immutable');
+assert.equal(previewBoundaryRevalidation({...originSaved,raw_public_judgment:'{}'},originInput),null);
+assert.equal(previewBoundaryRevalidation({...originSaved,finish_reasons:['MAX_TOKENS']},originInput),null);
+const negativeOrigin=structuredClone(originGood);negativeOrigin.continuity[0].teaching.status='insufficient_evidence';
+assert.equal(previewBoundaryRevalidation({...originSaved,judgment:negativeOrigin,raw_public_judgment:JSON.stringify(negativeOrigin)},originInput),null,'no semantic result is overridden');
+console.log('Film origin: exact first-unit scope, empty/zero boundary markers, real current/teaching evidence, later-unit refusal and immutable raw-bound revalidation passed');

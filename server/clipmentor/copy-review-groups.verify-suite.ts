@@ -74,6 +74,19 @@ export async function verifyGroupedReviewReceipts({root,deps,base,request,goodRa
       hash:async(file:string)=>file===poster?section.picture.sha256:realDeps.hash(file),
       visualCriteria:async()=>criteria};
     await assert.rejects(reviewClipMentorCopy({...old,operationId:randomUUID()},visualDeps),/criterion_unresolved:cta/);
+    const {visualCriteriaPlanReceiptMatches}=await import('./visual-done-criteria'),{digestValue}=await import('../agent-runs/store-values');
+    const nativeEntry:BoundVisualCriteria['entries'][number]={...criteria.entries[0],criterion:{...criterion,id:'native-label',sectionId:visualRequest.packet.units[0].unit_id,layout:'native_composition',pictureStage:'原片',quote:'沿用原片标识。',question:'实际原片标识是否沿用？'}};
+    for(const [mixed,answer,expected]of [[false,'yes','pass'],[true,'yes','pass'],[true,'no','needs_revision']]as const){
+     const entries=mixed?[nativeEntry,criteria.entries[0]]:[nativeEntry],bound={entries,digest:digestValue(entries)},req={...visualRequest,operationId:randomUUID()};let fakeRuns=0;
+     const wireDeps={...visualDeps,visualCriteria:async()=>bound,run:async()=>{fakeRuns++;return {...structuredClone(raw),...(mixed?{visual_criteria_checks:[{id:criterion.id,answer,picture_stage:criterion.pictureStage,observation:'本方案合成画面的实际观察。'}]}:{})};}};
+     const observed=await reviewClipMentorCopy(req,wireDeps);
+     assert(visualCriteriaPlanReceiptMatches(bound,observed.receipt),'real saved receipt must pass the worker binding, including native-only and mixed');
+     assert.equal(visualCriteriaPlanReceiptMatches(bound,{...observed.receipt,visual_criteria_digest:'f'.repeat(64)}),false);
+     assert.equal(visualCriteriaPlanReceiptMatches(bound,undefined),false);
+     assert.equal(observed.receipt.verdict,expected,'negative verdict remains a content repair, never an approval');
+     assert.deepEqual((await reviewClipMentorCopy(req,wireDeps,undefined,true)).receipt,observed.receipt);assert.equal(fakeRuns,1);
+    }
+
     for(const [answer,picture_stage,expected] of [
       ['yes',criterion.pictureStage,'pass'],['no',criterion.pictureStage,'needs_revision'],
       ['yes','参照图','insufficient_evidence'],['unknown',criterion.pictureStage,'insufficient_evidence'],

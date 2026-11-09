@@ -76,3 +76,11 @@ const run = (ctx: AgentContext, args: Record<string, unknown>) => execEditAssetT
 
 // eslint-disable-next-line no-console
 console.log('edit-asset-tools.check: ok');
+
+// Full identity wins over an earlier derived prefix; ambiguous shorthand never writes.
+{
+ const source={...vid,id:'source'},derived={...vid,id:'source-poster'};const {ctx,calls}=makeCtx([derived,source],[]);
+ await run(ctx,{action:'update',assetId:'source',props:{document:'copy'}});assert.equal(calls[0].args[0],'source');
+ const before=calls.length,r=await run(ctx,{action:'update',assetId:'sou',name:'bad'}) as {error?:string};assert.match(r.error!,/ambiguous/);assert.equal(calls.length,before);
+ await run(ctx,{action:'update',assetId:'source-p',name:'unique'});assert.equal(calls.at(-1)!.args[0],'source-poster');
+}

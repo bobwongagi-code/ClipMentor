@@ -1,4 +1,5 @@
 import type { AgentContext } from '../agent/context';
+import {sha256Text} from '../persist/agentRuntimeStore';
 
 /** Agent initiates the paid review; the server keeps credentials and immutable receipts. */
 export async function requestPreviewReview(args: Record<string, unknown>, ctx: AgentContext) {
@@ -6,7 +7,8 @@ export async function requestPreviewReview(args: Record<string, unknown>, ctx: A
   if (!projectId || !ctx.getAgentRunId?.() || typeof args.action !== 'string' || !['request','read'].includes(args.action)
     || typeof args.operationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(args.operationId)
     || (args.action==='request' && args.maxRequests!==1)
-    || Object.keys(args).some(k=>!['action','operationId','maxRequests','src','videoSha256','input','executionManifest'].includes(k))) return {error:'Host context, stable operation and one-request budget required'};
+    || (args.includeVisualEvidence!==undefined&&(args.action!=='read'||typeof args.includeVisualEvidence!=='boolean'))
+    || Object.keys(args).some(k=>!['action','operationId','maxRequests','src','videoSha256','input','executionManifest','includeVisualEvidence'].includes(k))) return {error:'Host context, stable operation and one-request budget required'};
   try {
     const timeout = AbortSignal.timeout(680_000), outer = ctx.getAgentRunSignal?.();
     const response = await (ctx.hostFetch ?? fetch)('/api/clipmentor/review-preview', { method:'POST',headers:{'Content-Type':'application/json'},
@@ -17,9 +19,15 @@ export async function requestPreviewReview(args: Record<string, unknown>, ctx: A
       || receipt.scope!=='rendered_preview_continuous_review'
       || (args.action==='request' && receipt.videoSha256!==args.videoSha256)) return {error:'Invalid preview binding; no retry'};
     const gate=receipt.effective_review;
+    const recheck=gate?.contract_revalidation;
+    const revalidatedBoundary=receipt.result?.status==='review_required'&&['observation-centisecond-eof-v1','film-origin-continuity-v1'].includes(recheck?.method)
+      &&recheck.original_status===receipt.result.status&&JSON.stringify(recheck.original_issues)===JSON.stringify(receipt.result.issues)
+      &&typeof receipt.result.raw_public_judgment==='string'
+      &&recheck.raw_judgment_sha256===await sha256Text(receipt.result.raw_public_judgment);
+
     if (!gate || !['pass','review_required'].includes(gate.status) || !Array.isArray(gate.blockers)
       || typeof gate.can_use_as_pass!=='boolean' || gate.can_use_as_pass!==(gate.status==='pass') || gate.full_film_accepted!==false
-      || (gate.can_use_as_pass && (receipt.status!=='completed' || receipt.result?.status!=='pass'
+      || (gate.can_use_as_pass && (receipt.status!=='completed' || (receipt.result?.status!=='pass'&&!revalidatedBoundary)
         || gate.blockers.length!==0 || gate.manifest_binding!=='frozen_at_request' || receipt.timeline_check?.status!=='no_detected_conflict'))) {
       return {error:'Preview evidence gate missing or inconsistent; review required, no retry',can_use_as_pass:false};
     }

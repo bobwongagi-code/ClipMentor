@@ -4,6 +4,20 @@
 
 开始观察与内容判断前读 [analysis-method.md](analysis-method.md)，执行“购买关注 → 待解问题 → 针对性观察 → 表达关系 → 逐组反证自审”。本文件负责工具与证据格式，不能只照字段填动作清单就算完成分析。
 
+## Source operations and recovery
+
+For a new source, `transcribe_clipmentor_source` uses the approved Singapore Fun-ASR transcription-only route and server-managed credentials. Supply the exact asset ID, stable UUID v4 operationId and applicable maxRequests allowance. Each chunk request, including failure, consumes budget; do not retry automatically or create a new ID to evade it. It initializes a transcript-bearing analysis draft only: no product extraction, observations, point approvals, captions or timeline edits. Read `read_clipmentor_analysis` afterward and report partial/failed chunks, overlap/range conflicts and unverified listening. Existing analysis is not overwritten; tests use an isolated project. Credentials are not read from another repository.
+
+For ASR recovery before or after analysis exists, use `read_clipmentor_analysis(view="source_asr", assetId=<exact original>, operationId=<saved UUID>)`. This explicit read verifies the current source bytes and saved project/request identity, reuses a valid saved result or locally reparses its retained raw response, and sends zero provider requests. It does not import text or approve listening/production. Missing, reserved/unknown, stale, malformed or legacy records without a verifiable identity remain explicit; none permits a new submission. Read an already applied transcript with the ordinary analysis view. Never use `transcribe_clipmentor_source` as a speculative status query.
+
+Read saved historical evidence before planning or revision. `revise_clipmentor_analysis` can import the portable Teashell development pack or revise a record by ID, retaining its source status. `review_clipmentor_analysis` records only a concrete operator instruction to confirm/request revision; a declared identity is not authenticated human approval and cannot satisfy the production copy-review gate. These tools modify analysis, not timelines. Handoff readiness proves structural accounting and recorded confirmations, not autonomous quality or film acceptance.
+
+### Continuous source observation
+
+Use `observe_clipmentor_source_video` only within the applicable task authorization, with the saved current revision, stable operationId and maxRequests=1. Without an `observationTask`, initial understanding sends the complete hash-bound original MP4 with audio. A predeclared local `observationTask` selects related units and context before dispatch; the server prepares a continuous stream-copy excerpt where possible, records parent/submitted hashes, actual range and source-clock mapping, and retains current source windows, selected lines and picture plans. Read `observation_material` and `input_media.full_original_video` to distinguish media actually sent from question scope. Do not shrink after failure, replace continuous evidence with frames, call an excerpt full-source viewing or claim the main Agent directly watched it.
+
+The request excludes historical observations and self-evaluation. Read its concrete action/endpoint findings and limitations. Provider-submitted or delivery-unknown attempts remain spent; the author does not resubmit. Host recovery follows only the [frozen recovery policy](review-boundaries.md#ownership-and-authorization), including explicit no-retry limits; confirmed zero-submission preparation failures remain distinct from provider effects. `read_clipmentor_source_video` recovers an existing operation, including saved failure diagnostics or explicitly saved offline revalidation, with zero model requests. Revalidation retains the original failed status/ledger; it does not turn recovery into a new approval. The 10ms observation tolerance records rounding notices only, never revised raw timestamps or verified cuts. Source observation cannot establish the unassembled original-to-narration handoff, real narration sync, captions or complete-film acceptance.
+
 ## Source breakdown contract
 
 剪辑前先拆清原片表达，再写口播；不要求物理切成许多文件。按完整动作/比较/信息任务划分窗口，长短由内容决定。短动作必要时补看密集采样，单帧不当成连续观看。原话不清就留未知，不用观察补造台词。原片分段、讲解单元和最终剪切点可以不同，不机械一镜一句或套固定栅格。

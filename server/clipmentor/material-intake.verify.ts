@@ -20,8 +20,9 @@ try {
   await setStoredEntry('projects', [{ id, name: 'Intake regression', updatedAt: 1 }]);
   await setStoredEntry(`project:${id}`, {
     version: 3, assets: [], mediaFolders: [], activeTimelineId: 'timeline',
-    timelines: [{ id: 'timeline', name: 'Sequence', order: 0, fps: 30, width: 576, height: 1024,
-      items: [], selectedId: null, trackOrder: ['track_v1'], tracks: { track_v1: { kind: 'video' } } }],
+    timelines: [{ id: 'timeline', name: 'Sequence', order: 0, fps: 30, width: 1920, height: 1080,
+      items: [], selectedId: null, trackOrder: ['track_v1'], tracks: { track_v1: { kind: 'video' } } },
+      { id: 'other', name: 'Untouched', order: 1, fps: 30, width: 1920, height: 1080, items: [], selectedId: null }],
   });
   const videoPath = join(root, 'fixture.mp4'), imagePath = join(root, 'fixture.png');
   execFileSync(ffmpegBin(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=s=32x48',
@@ -62,6 +63,8 @@ try {
   assert.equal((await submit(body(video, '销量图.png', cta, 'CTA.jpg'))).status, 409);
   assert.equal((await submit(body(video, '销量图.png', image))).status, 409);
   assert.equal((await loadOfflineStoredProject(id))?.doc.assets.length, 0);
+  assert.deepEqual((await loadOfflineStoredProject(id))?.doc.timelines.map(t=>[t.width,t.height]),[[1920,1080],[1920,1080]],
+    'failed uploads leave both media and canvas unchanged');
   const good = await submit(body());
   const receipt = await good.json();
   assert.equal(good.status, 200, JSON.stringify(receipt));
@@ -71,6 +74,9 @@ try {
   assert.deepEqual(saved?.doc.assets.map(a => [a.id, a.name, a.sourceContentHash]),
     receipt.assets.map((a: { id: string; name: string; sourceContentHash: string }) => [a.id, a.name, a.sourceContentHash]));
   assert.equal(saved?.doc.timelines[0]?.items.length, 0);
+  assert.deepEqual([saved?.doc.timelines[0]?.width,saved?.doc.timelines[0]?.height],[720,1280],'fresh upload must replace the generic landscape canvas before planning');
+  assert.deepEqual([saved?.doc.assets[0]?.width,saved?.doc.assets[0]?.height],[32,48],'source metadata is not the output canvas');
+  assert.deepEqual([saved?.doc.timelines[1]?.width,saved?.doc.timelines[1]?.height],[1920,1080],'unrelated empty timelines are not reformatted');
   const { claimBrowserProjectOwnership, releaseProjectEditOwnership } = await import('../external-agent/project-edit-ownership');
   const browser = await claimBrowserProjectOwnership(id, 'fixture-editor', receipt.revision);
   assert.equal(browser.status, 'claimed');
@@ -112,6 +118,81 @@ try {
     assert.match(missing.error,/Exact video\/image/);assert.equal(frameRequests,1);
     assert.equal((await loadOfflineStoredProject(id))?.revision,backfillReceipt.revision);
   }finally{await editor.close();}
+  // Exercise the real stage entry on a persisted legacy landscape project:
+  // refuse before analysis initialization, author/model work or paid effects.
+  const wrong=structuredClone((await loadOfflineStoredProject(id))!.doc);
+  wrong.timelines[0].width=1920;wrong.timelines[0].height=1080;
+  await setStoredEntry(`project:${id}`,wrong);
+  const wrongSaved=(await loadOfflineStoredProject(id))!;
+  const {productionStageWorker}=await import('./production-worker');
+  let effects=0;
+  for(const stage of ['blueprint','audio','edit','export','self_check'] as const){
+    const task={projectId:id,taskId:'format-regression',projectRevision:wrongSaved.revision,stage,
+      input:{sourceAssetId:wrong.assets[0].id,author:{origin},reviewer:{provider:'openai',model:'fixture',origin},panelDelivery:{}}};
+    await assert.rejects(productionStageWorker(task as never,{signal:new AbortController().signal,
+      effect:async()=>{effects++;throw Error('Provider effects forbidden');}} as never),/clipmentor_output_canvas_mismatch/);
+  }
+  assert.equal(effects,0);
+  assert.equal((await loadOfflineStoredProject(id))?.revision,wrongSaved.revision,'format refusal does not silently migrate saved work');
+  // Legacy review-ready/completed tasks never revisit the worker. Exercise the
+  // existing acceptance and panel media entry points with actual local files.
+  const {createProductionTask,productionTaskStore,acceptProductionTask}=await import('./production-task');
+  const {createProductionPanel}=await import('./production-panel');
+  for(const [name,size] of [['legacy-wrong','32x18'],['legacy-portrait','18x32']])
+    execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-f','lavfi','-i',`color=s=${size}:d=0.1`,
+      '-c:v','libx264','-pix_fmt','yuv420p',join(uploadDir(),name+'.mp4')]);
+  const legacy=await createProductionTask({projectId:id,sourceAssetId:wrong.assets[0].id,product:{name:'Fixture'},brief:'fixture',
+    author:{provider:'openai',model:'fixture',origin,apiMode:'responses'},reviewer:{provider:'openai',model:'fixture',origin,apiMode:'responses'},
+    budget:{model:1,review:1,observation:1,tts:0,render:1,preview_review:1,maxElapsedMs:100000,maxRepairs:1},humanBlueprintReview:true,
+    panelDelivery:{productAssetId:'p',productAssetHash:'a'.repeat(64),salesAssetId:'s',ctaAssetId:'c',ctaAssetHash:'b'.repeat(64)}});
+  legacy.stage='self_check';legacy.status='awaiting_review';legacy.completed.export={at:1,artifact:{renderId:'legacy-render'}};
+  legacy.completed.self_check={at:1,artifact:{preview:'/media/uploads/legacy-wrong.mp4'}};
+  const panel=createProductionPanel(()=>{throw Error('Must not launch');},()=>false);
+  const panelServer=createServer((req,res)=>{const q=new URL(req.url!,'http://localhost').searchParams;
+    void panel(id,origin,q,req,res,async()=>({})).catch(error=>{res.statusCode=409;res.end(JSON.stringify({error:String(error)}));});});
+  panelServer.listen(0,'127.0.0.1');await once(panelServer,'listening');
+  const pa=panelServer.address();assert(pa&&typeof pa!=='string');const panelOrigin=`http://127.0.0.1:${pa.port}`;
+  try{
+    const leaks:string[]=[];let acceptedWrites=0;
+    const accepting=structuredClone(legacy),beforeAccept=JSON.stringify(accepting);
+    try{await acceptProductionTask(accepting,true,{save:async()=>{acceptedWrites++;}} as never);leaks.push('legacy acceptance');}
+    catch(error){assert.match(String(error),/clipmentor_output_canvas_mismatch/);}
+    assert.equal(JSON.stringify(accepting),beforeAccept,'failed acceptance must not mutate state or confirmations');
+    for(const status of ['awaiting_review','completed'] as const){
+      legacy.status=status;await productionTaskStore.save(legacy);
+      const beforeRead=JSON.stringify(await productionTaskStore.load(id,legacy.taskId));
+      for(const view of ['panel','panel_video',...(status==='completed'?['panel_download']:[])]){
+        const response=await fetch(`${panelOrigin}/?view=${view}&renderId=legacy-render`);
+        if(response.status!==409)leaks.push(`${status}:${view}`);
+        await response.arrayBuffer();
+      }
+      assert.equal(JSON.stringify(await productionTaskStore.load(id,legacy.taskId)),beforeRead,'refusing legacy delivery does not rewrite historical results or budgets');
+    }
+    assert.deepEqual(leaks,[],'legacy outputs cannot bypass the worker-only guard');assert.equal(acceptedWrites,0);
+    legacy.status='awaiting_review';legacy.completed.self_check.artifact.preview='/media/uploads/legacy-portrait.mp4';
+    await productionTaskStore.save(legacy);
+    const requestStart=performance.now();
+    const panelStatus=await fetch(`${panelOrigin}/?view=panel`);assert.equal(panelStatus.status,200);await panelStatus.arrayBuffer();
+    const readable=await fetch(`${panelOrigin}/?view=panel_video&renderId=legacy-render`);
+    assert.equal(readable.status,200);assert((await readable.arrayBuffer()).byteLength>0);
+    const range=await fetch(`${panelOrigin}/?view=panel_video&renderId=legacy-render`,{headers:{Range:'bytes=0-31'}});
+    assert.equal(range.status,206);assert.equal((await range.arrayBuffer()).byteLength,32);
+    console.log(`legacy preview guard: valid status/video/Range in ${(performance.now()-requestStart).toFixed(1)}ms total; zero model/render effects`);
+    await assert.rejects(acceptProductionTask(legacy,true,{save:async()=>{acceptedWrites++;}} as never),
+      /final_output_evidence_missing_or_stale/,'valid portrait pixels alone cannot replace a bound continuous-review receipt');
+    const {sha256File}=await import('../../shared/node-content-hash');
+    const preview='/media/uploads/legacy-portrait.mp4';
+    legacy.projectRevision=wrongSaved.revision;
+    legacy.completed.export!.artifact={renderId:'legacy-render',revision:wrongSaved.revision,path:preview};
+    legacy.completed.self_check!.artifact.receipt={projectId:id,videoSha256:await sha256File(join(uploadDir(),'legacy-portrait.mp4')),
+      status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,
+      effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},
+      timeline_check:{status:'no_detected_conflict'}};
+    await acceptProductionTask(legacy,true,{save:async()=>{acceptedWrites++;}} as never);
+    assert.equal(legacy.status,'completed');assert.equal(acceptedWrites,1);await productionTaskStore.save(legacy);
+    const downloadable=await fetch(`${panelOrigin}/?view=panel_download&renderId=legacy-render`);
+    assert.equal(downloadable.status,200);assert((await downloadable.arrayBuffer()).byteLength>0);
+  }finally{await new Promise<void>(resolve=>panelServer.close(()=>resolve()));}
   console.log('material intake verified: origin, missing/corrupt files, save/readback, identical retry, non-overwrite, cleanup');
 } finally {
   if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
