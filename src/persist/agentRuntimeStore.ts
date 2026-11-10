@@ -319,7 +319,7 @@ export async function archiveAgentArtifacts(record:AgentArtifactRecord, expected
  if(!expected.length||new Set(expected.map(e=>e.artifactId)).size!==expected.length
   ||record.toolName!=='clipmentor-production-task-history'||record.kind!=='checkpoint-source'
   ||expected.some(e=>e.projectId!==record.projectId||e.runId!==record.runId||e.kind!=='checkpoint-source'
-   ||!['clipmentor-production-task','clipmentor-production-task-history'].includes(e.toolName??''))
+   ||!['clipmentor-production-task','clipmentor-production-task-history','clipmentor-gateway-recovery'].includes(e.toolName??''))
   ||record.originalBytes>MAX_ARTIFACT_BYTES||!isValidArtifactRecord(record,record.projectId,record.artifactId)
   ||new TextEncoder().encode(record.body).byteLength!==record.originalBytes||await sha256Text(record.body)!==record.bodySha256)return false;
  return enqueue(record.projectId,()=>withProjectLock(record.projectId,async()=>{

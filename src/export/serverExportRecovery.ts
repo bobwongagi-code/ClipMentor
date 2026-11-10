@@ -249,6 +249,17 @@ async function updateRemoteDeliveryLease(
     ...(claim ? { leaseToken: claim.leaseToken } : {}),
     ...(action === 'claim' || action === 'renew' ? { leaseMs: DELIVERY_LEASE_MS } : {}),
   }));
+  if (action === 'release' && response.accepted) {
+    await mutateLocalRecord(renderId, (local) => {
+      const active = local?.deliveryClaim;
+      // A delayed acknowledgement for A must not clear a newer local owner B.
+      if (!local || active?.ownerInstanceId !== deliveryOwnerId || active.leaseToken !== claim?.leaseToken) {
+        return { result: undefined };
+      }
+      const { deliveryClaim: _claim, ...released } = local;
+      return { result: undefined, next: { ...released, updatedAt: Date.now() } };
+    });
+  }
   return response.accepted && response.lease ? response.lease : null;
 }
 

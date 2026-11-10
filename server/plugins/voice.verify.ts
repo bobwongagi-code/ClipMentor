@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import './voice-parameter-coverage.verify.ts';
+import './voice-parameter-coverage.verify-suite.ts';
 import { minimaxVoiceBody, minimaxVoiceResult } from './voice-providers.ts';
 import { validateVoiceRequest } from './voice.ts';
 import { generateAiVoice } from './voice-ai-sdk.ts';

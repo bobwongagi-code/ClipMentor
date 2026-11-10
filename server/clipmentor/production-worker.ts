@@ -1,3 +1,4 @@
+import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
 import {blockedProductionDecision,productionAuthorDecision,productionRecoveryProgress,repairableBlueprintIssue,type RecoveryRoute} from './production-decisions';
 import {productionCapacityFacts,pictureRepairWriteError} from './production-capacity-repair';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
@@ -47,15 +48,23 @@ export function productionGatewayDecisionArtifact(task:ProductionTask,revision:s
   kind:'checkpoint-source' as const,toolName:'clipmentor-gateway-recovery',body,bodySha256:sha,
   originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false};
 }
-/** Re-reading an immutable recovery decision is not a second write or a new request. */
+/** Re-reading a live or losslessly archived decision is not another write.
+ * Diagnostics retain the existing quota; they cannot crowd out task checkpoints. */
 export async function persistProductionGatewayDecision(record:ReturnType<typeof productionGatewayDecisionArtifact>,
- deps={store:storeAgentArtifact,load:loadAgentArtifact}){
+ deps:{store:typeof storeAgentArtifact;load:typeof loadAgentArtifact;archived?:typeof findArchivedProductionGatewayDecision;compact?:typeof compactProductionTaskHistory}=
+ {store:storeAgentArtifact,load:loadAgentArtifact,archived:findArchivedProductionGatewayDecision,compact:compactProductionTaskHistory}){
+ let envelope;try{envelope=JSON.parse(record.body);}catch{throw Error('gateway_recovery_decision_not_saved');}
+ if(envelope?.type!=='clipmentor-gateway-recovery/v1'||envelope.taskId!==record.runId)throw Error('gateway_recovery_decision_not_saved');
+ const matches=(existing:Awaited<ReturnType<typeof loadAgentArtifact>>)=>!!existing&&existing.projectId===record.projectId&&existing.runId===record.runId&&existing.kind===record.kind
+  &&existing.toolName===record.toolName&&existing.bodySha256===record.bodySha256&&existing.body===record.body
+  &&existing.originalBytes===record.originalBytes&&existing.originalChars===record.originalChars
+  &&existing.redacted===record.redacted&&existing.binaryOmitted===record.binaryOmitted;
+ const existing=await deps.load(record.projectId,record.artifactId)??await deps.archived?.(record);
+ if(existing){if(!matches(existing))throw Error('gateway_recovery_decision_not_saved');return;}
+ if(deps.compact)for(let batch=0;batch<64&&await deps.compact(record.projectId,record.runId);batch++){ /* existing lossless low-water mark */ }
  if(await deps.store(record))return;
- const existing=await deps.load(record.projectId,record.artifactId);
- if(!existing||existing.projectId!==record.projectId||existing.runId!==record.runId||existing.kind!==record.kind
-  ||existing.toolName!==record.toolName||existing.bodySha256!==record.bodySha256||existing.body!==record.body
-  ||existing.originalBytes!==record.originalBytes||existing.originalChars!==record.originalChars
-  ||existing.redacted!==record.redacted||existing.binaryOmitted!==record.binaryOmitted)throw Error('gateway_recovery_decision_not_saved');
+ const saved=await deps.load(record.projectId,record.artifactId)??await deps.archived?.(record);
+ if(!matches(saved??null))throw Error('gateway_recovery_decision_not_saved');
 }
 import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,type StageWorker,type ProductionTask} from './production-task';
 

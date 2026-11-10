@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {configureSharedKvBackend} from '../../src/persist/sharedKv';
-import {agentArtifactKey,createAgentRun,loadAgentRuntimeSidecar,storeAgentArtifact,type AgentArtifactRecord} from '../../src/persist/agentRuntimeStore';
+import {agentArtifactKey,agentRuntimeKey,createAgentRun,loadAgentRuntimeSidecar,storeAgentArtifact,type AgentArtifactRecord} from '../../src/persist/agentRuntimeStore';
 import type {ProductionTask} from './production-task';
 import {compactProductionTaskHistory} from './production-task-history';
 
@@ -15,8 +15,9 @@ process.env.OPENCHATCUT_DATA_DIR=directory;
 const {productionTaskStore,latestPanelProductionTask,reconcileLegacyTechnicalRecoveries}=await import('./production-task');
 const {runtimeProfile}=await import('../runtime-profile');assert.equal(runtimeProfile().rootDir,directory);
 const entries=new Map<string,unknown>();
+let afterRead:((key:string)=>Promise<void>)|undefined;
 configureSharedKvBackend({
- get:async<T>(key:string)=>structuredClone(entries.get(key)) as T,
+ get:async<T>(key:string)=>{const captured=structuredClone(entries.get(key)) as T;await afterRead?.(key);return captured;},
  set:async(key,value)=>{entries.set(key,structuredClone(value));},
  delete:async key=>{entries.delete(key);},keys:async()=>[...entries.keys()],
  writeAgentRuntime:async input=>{entries.set(input.key,structuredClone(input.value));return {accepted:true,found:true,value:input.value};},
@@ -83,6 +84,48 @@ try{
   await createAgentRun({version:1,projectId:task.projectId,runId:newer.taskId,status:'running',askOnly:false,userInputPreview:'offline',userInputDigest:'b'.repeat(64),createdAt:1,updatedAt:1,artifactIds:[],checkpointIds:[],proposalIds:[],events:[]});
   await publish(newer,JSON.stringify({type:'clipmentor-production-task/v1',task:newer}),timestamp);
   assert.equal((await latestPanelProductionTask(task.projectId))?.taskId,newer.taskId);
+ });
+ for(const compact of [false,true])await check(`older imported equal-time checkpoint cannot restore spent attempts (compact=${compact})`,async()=>{
+  const {task}=await seed(),timestamp=task.updatedAt+100,stale=await loadAgentRuntimeSidecar(task.projectId);
+  const newer={...structuredClone(task),sequence:20};
+  await publish(task,JSON.stringify({type:'clipmentor-production-task/v1',task:newer}),timestamp);
+  const oldTask={...structuredClone(task),sequence:19,status:'queued' as const,effects:{},attempts:{...task.attempts,observation:0}};
+  const old=await publish(task,JSON.stringify({type:'clipmentor-production-task/v1',task:oldTask}),timestamp);
+  // Exercise the real generic merge reducer: an old imported sidecar appends a
+  // previously unseen artifact; index order is not task publication order.
+  const {mergeAgentSidecar}=await import('../plugins/project-store-entries');
+  const {body:_body,version:_version,...index}=old;
+  const live=await loadAgentRuntimeSidecar(task.projectId),key=agentRuntimeKey(task.projectId,live.sessionGeneration??'legacy');
+  const withoutOld={...live,artifacts:live.artifacts.filter(a=>a.artifactId!==old.artifactId),runs:live.runs.map(r=>({...r,artifactIds:r.artifactIds.filter(id=>id!==old.artifactId)}))};
+  const merged=mergeAgentSidecar(key,withoutOld,{...stale,artifacts:[index],runs:stale.runs.map(r=>({...r,artifactIds:[old.artifactId]}))},true);
+  assert(merged.accepted);entries.set(key,merged.value);
+  if(compact){for(let i=0;i<189;i++)await publish(task,'other evidence',1,'other-evidence');assert(await compactProductionTaskHistory(task.projectId,task.taskId));}
+  const loaded=await productionTaskStore.load(task.projectId,task.taskId);
+  assert.equal(loaded.sequence,20);assert.equal(loaded.attempts.observation,1);assert.deepEqual(loaded.effects,newer.effects);
+ });
+ for(const sameTime of [false,true])await check(`concurrent compaction keeps published checkpoint reads usable (sameTime=${sameTime})`,async()=>{
+  const {task}=await seed(),timestamp=task.updatedAt+100;
+  for(const sequence of [10,11,12])await publish(task,JSON.stringify({type:'clipmentor-production-task/v1',task:{...task,sequence}}),timestamp+(sequence===12&&!sameTime?1:0));
+  for(let i=0;i<187;i++)await publish(task,'unrelated evidence',1,'other-evidence');
+  const read=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),sidecar=await loadAgentRuntimeSidecar(task.projectId),key=agentRuntimeKey(task.projectId,sidecar.sessionGeneration??'legacy');
+  afterRead=async k=>{if(k===key){afterRead=undefined;read.resolve();await release.promise;}};
+  const loading=productionTaskStore.load(task.projectId,task.taskId);await read.promise;
+  try{assert(await compactProductionTaskHistory(task.projectId,task.taskId));}finally{release.resolve();afterRead=undefined;}
+  assert.equal((await loading).sequence,12);
+ });
+ await check('checkpoint archive lookup follows a concurrent lossless rearchive',async()=>{
+  const {task,body}=await seed(),timestamp=task.updatedAt+100;
+  for(const sequence of [10,11,12])await publish(task,JSON.stringify({type:'clipmentor-production-task/v1',task:{...task,sequence}}),timestamp);
+  const {brotliCompressSync}=await import('node:zlib'),historical={...body,artifactId:'p_historical'},raw=JSON.stringify([historical]);
+  const packed=JSON.stringify({type:'clipmentor-production-history/brotli-v1',sha256:createHash('sha256').update(raw).digest('hex'),count:1,data:brotliCompressSync(raw).toString('base64')});
+  const h0=await publish(task,packed,1,'clipmentor-production-task-history');
+  for(let i=0;i<186;i++)await publish(task,'other evidence',1,'other-evidence');
+  const sidecar=await loadAgentRuntimeSidecar(task.projectId),key=agentRuntimeKey(task.projectId,sidecar.sessionGeneration??'legacy'),h0Key=agentArtifactKey(task.projectId,h0.artifactId,sidecar.sessionGeneration??'legacy');let injections=0;
+  afterRead=async k=>{if(k!==key)return;afterRead=undefined;assert(await compactProductionTaskHistory(task.projectId,task.taskId));
+   await publish(task,'extra evidence',1,'other-evidence');await publish(task,'extra evidence',1,'other-evidence');
+   afterRead=async path=>{if(path!==h0Key)return;afterRead=undefined;assert(await compactProductionTaskHistory(task.projectId,task.taskId));injections++;};
+  };
+  try{assert.equal((await productionTaskStore.load(task.projectId,task.taskId)).sequence,12);assert.equal(injections,1,'actual old archive read was intercepted');}finally{afterRead=undefined;}
  });
  await check('compaction keeps the two latest publications when their timestamps tie',async()=>{
   const {task}=await seed(),timestamp=task.updatedAt+100;

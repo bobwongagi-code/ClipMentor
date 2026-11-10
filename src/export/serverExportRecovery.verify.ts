@@ -349,6 +349,90 @@ async function verifyStandaloneStageParity(): Promise<void> {
   const saved = await readLocalRecord(id);
   await assert.rejects(markServerExportDeliveryAmbiguous(id, claim), /恢复阶段/, 'A late error must not rewind an already committed delivery');
   assert.deepEqual(await readLocalRecord(id), saved);
+  await releaseServerExportDelivery(id, claim);
+  assert.equal((await readLocalRecord(id))?.deliveryClaim, undefined, 'Standalone release still clears its own claim');
+  const reboundId = 'local-release-reclaim';
+  await persistServerExportJob(record(reboundId, 'local-project'));
+  await markServerExportOutputReady(reboundId);
+  const first = await claimServerExportDelivery(reboundId); assert(first);
+  await rebindServerExportJob(reboundId, { type: 'downloads', label: 'first' }, 'first.mp4', first);
+  await releaseServerExportDelivery(reboundId, first);
+  const second = await claimServerExportDelivery(reboundId); assert(second);
+  assert.notEqual(second.leaseToken, first.leaseToken);
+  assert.equal((await rebindServerExportJob(reboundId, { type: 'downloads', label: 'second' }, 'second.mp4', second)).targetPath, 'second.mp4');
+}
+
+async function verifyRemoteReleaseMirrors(serverStore: Record<string, unknown>): Promise<void> {
+  const desktop = (globalThis as any).window.openChatCutDesktop;
+  const transport = desktop.projectStore;
+  const handle = (physical: string) => ({ kind: 'file' as const, name: 'out.mp4', physical,
+    queryPermission: async () => 'granted' as const, requestPermission: async () => 'granted' as const,
+    createWritable: async () => ({ write: async () => undefined, close: async () => undefined }) });
+  const prepare = async (id: string) => {
+    await persistServerExportJob(record(id, id, { type: 'browser-file', label: 'out.mp4', handle: handle('initial/out.mp4') }));
+    await markServerExportOutputReady(id);
+    const claim = await claimServerExportDelivery(id); assert(claim);
+    await rebindServerExportJob(id, { type: 'browser-file', label: 'out.mp4', handle: handle('A/out.mp4') }, 'out.mp4', claim);
+    return claim;
+  };
+
+  const id = 'release-reclaim';
+  const first = await prepare(id), before = (await readLocalRecord(id))!;
+  await releaseServerExportDelivery(id, first);
+  const { deliveryClaim: _claim, updatedAt: _at, ...expected } = before;
+  const { updatedAt: _releasedAt, ...released } = (await readLocalRecord(id))!;
+  assert.deepEqual(released, expected, 'An acknowledged release removes only its cached claim');
+  const second = await claimServerExportDelivery(id); assert(second);
+  assert.notEqual(second.leaseToken, first.leaseToken);
+  const secondHandle = handle('B/out.mp4');
+  const rebound = await rebindServerExportJob(id, { type: 'browser-file', label: 'out.mp4', handle: secondHandle }, 'out.mp4', second);
+  assert.equal(rebound.destination.type === 'browser-file' && rebound.destination.handle, secondHandle,
+    'A released lease must not block the next explicit destination selection');
+  await releaseServerExportDelivery(id, second);
+
+  for (const failure of ['rejected', 'unavailable']) {
+    const failedId = `release-${failure}`, claim = await prepare(failedId), saved = await readLocalRecord(failedId);
+    let observed = false;
+    desktop.projectStore = (request: FakeProjectStoreRequest) => {
+      if (request.renderId === failedId && request.action === 'release') {
+        observed = true;
+        if (failure === 'unavailable') return Promise.reject(new Error('release unavailable'));
+        return Promise.resolve({ accepted: false, found: true, value: serverStore[`export-recovery:${failedId}`] });
+      }
+      return transport(request);
+    };
+    try {
+      if (failure === 'unavailable') await assert.rejects(releaseServerExportDelivery(failedId, claim), /release unavailable/);
+      else await releaseServerExportDelivery(failedId, claim);
+      assert(observed, 'The intended release must reach its refusal/failure');
+      assert.deepEqual(await readLocalRecord(failedId), saved, 'An unconfirmed release cannot clear local authority');
+    } finally { desktop.projectStore = transport; }
+    await releaseServerExportDelivery(failedId, claim);
+  }
+
+  const lateId = 'release-late-ack', firstClaim = await prepare(lateId);
+  const entered = Promise.withResolvers<void>(), releaseReply = Promise.withResolvers<void>();
+  let hold = true;
+  desktop.projectStore = async (request: FakeProjectStoreRequest) => {
+    const response = await transport(request);
+    if (request.renderId === lateId && request.action === 'release' && hold) {
+      hold = false; entered.resolve(); await releaseReply.promise;
+    }
+    return response;
+  };
+  const lateRelease = releaseServerExportDelivery(lateId, firstClaim);
+  try {
+    await entered.promise;
+    const nextClaim = await claimServerExportDelivery(lateId); assert(nextClaim);
+    assert.notEqual(nextClaim.leaseToken, firstClaim.leaseToken);
+    await listServerExportJobs(lateId);
+    await rebindServerExportJob(lateId, { type: 'browser-file', label: 'out.mp4', handle: handle('new-owner/out.mp4') }, 'out.mp4', nextClaim);
+    const newer = await readLocalRecord(lateId);
+    releaseReply.resolve(); await lateRelease;
+    assert.deepEqual(await readLocalRecord(lateId), newer, 'A late A release acknowledgement cannot clear or rewrite B');
+    assert.equal((serverStore[`export-recovery:${lateId}`] as PersistedServerExportJob).deliveryClaim?.leaseToken, nextClaim.leaseToken);
+    await releaseServerExportDelivery(lateId, nextClaim);
+  } finally { releaseReply.resolve(); await lateRelease.catch(() => undefined); desktop.projectStore = transport; }
 }
 
 async function main(): Promise<void> {
@@ -360,6 +444,7 @@ async function main(): Promise<void> {
   await verifyDurableDeliveryLeaseExclusion();
   await verifyLateRecoveryTransitions();
   await verifyTransitionMatrix();
+  await verifyRemoteReleaseMirrors(serverStore);
 
   // Browser handle authority is always kept in IndexedDB, while the remote
   // stage is JSON-safe and is joined to that handle after a refresh.

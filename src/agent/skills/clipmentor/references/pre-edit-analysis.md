@@ -81,7 +81,7 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 画面承载方案用局部操作保存，不能为它重传整条含历史的blueprint：`revise_clipmentor_analysis {action:"set_picture_plan",id:"U-02",expectedRevision,actor,reason,record:{plan_id:"picture_plan_自定新ID",script_candidate_id:"当前current_script_candidate值",plan:{作者自己的画面承载方案},line_guidance:"指向同一当前稿、正式原声范围及新画面方案的交接说明"}}`。同一ID不可覆盖，旧方案保留；代码绑定源素材与当前稿，只存candidate/pending，生产false，旧批准失效。`current_copy`窄读取同时返回`picture_plan_id`和`picture_plan`，保存后据此回读。这里的方案仍需核对画面作用与实际声长，不是已执行的时间线，也不填placement来凑通过。
 
-`read_clipmentor_analysis` 返回 `breakdown_check` 和 `breakdown_timeline_check`。计划变更使既有制作审核摘要过期；还原旧内容也不会恢复旧批准。正常剪辑期间允许存在尚未搭完的画面，但内置/离线Agent的制作入口在提交导出前会核实际范围。不匹配、没有placement、来源变化均不放行。当前只自动核同帧时钟下的直接视频实例；嵌套、复杂文字驱动裁切、静帧/合成布局或帧时钟不明需保留待核，不为过检查强行改成顺播视频。这不是连续视听检查，也没有接管手动UI导出按钮。
+`read_clipmentor_analysis` 返回 `breakdown_check` 和 `breakdown_timeline_check`。计划变更使既有制作审核摘要过期；还原旧内容也不会恢复旧批准。正常剪辑期间允许存在尚未搭完的画面，但内置/离线Agent的制作入口在提交导出前会核实际范围。核对可使用已登记placement、已审production_rows，或从冻结阶段选材与实测音频实例推导的native映射；不要求执行者为合法原生实例补写placement。直接视频与带原片来源绑定的静帧按实际覆盖核对；范围不匹配、无法推出有效映射、来源变化仍不放行。嵌套、复杂文字驱动裁切、未绑定来源的静帧或帧时钟不明保留待核，不为过检查强行改成顺播视频。这不是连续视听检查，也没有接管手动UI导出按钮。
 
 先读 `read_clipmentor_analysis` 和源素材。原片转写不必逐字核清才继续：能读清的保留为机器候选，听不清的留未知，相关结论不采用未知信息。用户提供的文字另存为用户来源，不能反填为机器听清或人工逐字审核通过。局部未知不阻塞全片视觉观察；写出它具体限制哪条结论，不要求同事补技术表。
 
