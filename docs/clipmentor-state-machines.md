@@ -4,7 +4,7 @@
 
 ## 事实源与完成含义
 
-- `ProductionTask` 及持久运行检查点是制作控制依据。派发时的内存快照不能覆盖执行所有者读到的新检查点。返修要同时保存目标阶段及失效的后续检查点。
+- `ProductionTask` 及持久运行检查点是制作控制依据。派发时的内存快照不能覆盖执行所有者读到的新检查点。返修要同时保存目标阶段及失效的后续检查点。已登记的最新检查点不可读、正文与索引不符或协议身份错误时，不能退回旧检查点。等时间戳按索引中的发布先后排序，读取与历史压缩共用同一实现。
 - 外部调用台账与 raw 文件是“已发出／已收到”的依据。源观察、独立审核及 ASR 的本地回读可接续已保存 raw，不重新发送；缺失、错配、损坏或结果未知仍不算成功。原失败、预算和审核原判不因此重置。
 - 共享主体的本地准备许可绑定前后工程字节、生产者、原审核与共用主体。仅允许完成相同的部分提交；遇到后续编辑拒绝。当前任务的额度仍是唯一授权来源，许可不复制额度。片尾仍独立，正式审核仍必须通过。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
@@ -17,6 +17,7 @@
 | --- | --- | --- |
 | 阶段回退、取消及旧派发快照 | `server/clipmentor/production-task.verify.ts`、`server/plugins/clipmentor-production.verify.ts` | 重启跳过返修；取消被等待状态吞掉；重复执行已完成阶段 |
 | 共享主体分步提交、人审并发 | `server/plugins/clipmentor-production.verify.ts` | 工程已提交但检查点保存失败；晚反馈擦除共享标记；晚准备覆盖成片确认；真实内容漂移与仅选择变化 |
+| 检查点读入与压缩 | `server/clipmentor/production-checkpoint.verify.ts` | 最新正文丢失/损坏不能退回较少次数；等时间戳保留最近发布；旧历史不可伪造 technical epoch |
 | 产物 body/index 发布 | `src/persist/agentRuntimeStore.verify.ts` | 发布已生效但确认丢失；同步/异步 observer 抛错；清理失败 |
 | 交接预算与绑定发布 | `server/clipmentor/handoff-publication.verify.ts` | 部分写入隐藏预算消耗；不同 payload 复用同一运行绑定 |
 | raw 与 ASR 分块冷恢复 | `server/clipmentor/saved-model-response-recovery.verify.ts`、`server/plugins/clipmentor-funasr.verify.ts` | 真实子进程中断；只恢复已有块；错来源、损坏和缺结果不补调 |
@@ -62,7 +63,7 @@
 | SM21 | Process execution ownership and cancellation | 本轮修补 | `server/clipmentor/production-task.ts` |
 | SM22 | Dispatch, restart and sibling wakeup | 本轮修补 | `server/plugins/clipmentor-production.ts` |
 | SM23 | Per-project control exclusion | 保留现有 | `server/clipmentor/production-panel.ts` |
-| SM24 | Interrupted checkpoint arbitration | 保留现有 | `server/clipmentor/production-task.ts` |
+| SM24 | Interrupted checkpoint arbitration | 本轮修补 | `server/clipmentor/production-task.ts` |
 | SM25 | History compaction publication | 本轮修补 | `server/clipmentor/production-task-history.ts` |
 | SM26 | Narrow canvas-reflow repair exception | 保留现有 | `server/clipmentor/production-worker.ts` |
 | SM27 | Provider/settings preflight cache | 低风险保留 | `server/clipmentor/production-panel.ts` |

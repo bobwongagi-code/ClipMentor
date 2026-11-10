@@ -1,4 +1,4 @@
-import {compactProductionTaskHistory} from './production-task-history';
+import {compactProductionTaskHistory,newestProductionCheckpoints} from './production-task-history';
 import {productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProjectStoreRequest} from '../../shared/project-store-transport';
@@ -8,7 +8,7 @@ import {revisionOf} from '../../src/agent/external-edit-session';
 import {digestValue} from '../agent-runs/store-values';
 type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {randomUUID,createHash} from 'node:crypto';
-import {agentRuntimeKey,appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
+import {agentRuntimeKey,appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar,type AgentArtifactRecord,type AgentArtifactIndexEntry} from '../../src/persist/agentRuntimeStore';
 import {createRun,flushRunPersistence,setRunStatus,pushRunEvent,recoverServerRun} from '../agent-runs/store';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {LLM_PROVIDER_PRESETS} from '../../shared/llm-providers';
@@ -63,6 +63,16 @@ export interface ProductionTask {
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
 }
 export interface TaskStore {save(task:ProductionTask,entryPreconditions?:EntryPreconditions):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
+function decodePublishedProductionCheckpoint(artifact:AgentArtifactRecord|null,index:AgentArtifactIndexEntry,projectId:string,id:string):ProductionTask{
+ if(!artifact)throw new Error('production_checkpoint_unavailable');
+ const {body,version:_version,...published}=artifact;
+ if(digestValue(published)!==digestValue(index))throw new Error('production_checkpoint_index_mismatch');
+ let value;
+ try{value=JSON.parse(body);}catch{throw new Error('production_checkpoint_invalid');}
+ if(value?.type!=='clipmentor-production-task/v1'||!value.task||value.task.version!==1
+  ||value.task.taskId!==id||value.task.projectId!==projectId)throw new Error('production_checkpoint_invalid');
+ return value.task;
+}
 export const productionTaskStore:TaskStore={
  async save(task,entryPreconditions){
   for(let batch=0;batch<64&&await compactProductionTaskHistory(task.projectId,task.taskId);batch++){ /* bounded, lossless compaction to the existing low-water mark */ }
@@ -75,11 +85,13 @@ export const productionTaskStore:TaskStore={
  },
  async load(projectId,id){
   const sidecar=await loadAgentRuntimeSidecar(projectId);
-  const records=sidecar.artifacts.filter(a=>a.runId===id&&a.toolName==='clipmentor-production-task').sort((a,b)=>b.createdAt-a.createdAt);
+  const records=newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.runId===id&&a.toolName==='clipmentor-production-task'));
   let latest:ProductionTask|undefined;
-  for(const record of records){const artifact=await loadAgentArtifact(projectId,record.artifactId);if(!artifact)continue;
-   const value=JSON.parse(artifact.body);if(value.type!=='clipmentor-production-task/v1'||value.task.taskId!==id||value.task.projectId!==projectId)continue;
-   const candidate=value.task as ProductionTask;
+  for(const record of records){
+   const artifact=await loadAgentArtifact(projectId,record.artifactId);
+   // An indexed-but-unreadable checkpoint is unknown, not permission to roll
+   // counters, submitted operations or human decisions back to an older body.
+   const candidate=decodePublishedProductionCheckpoint(artifact,record,projectId,id);
    if(!latest){
     if(!isInterruptedReviewCheckpoint(candidate))return candidate;
     latest=candidate;
@@ -97,7 +109,7 @@ export const productionTaskStore:TaskStore={
 };
 export async function latestPanelProductionTask(projectId:string){
  const sidecar=await loadAgentRuntimeSidecar(projectId);
- const ids=[...new Set(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task').sort((a,b)=>b.createdAt-a.createdAt).map(a=>a.runId))];
+ const ids=[...new Set(newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task')).map(a=>a.runId))];
  for(const id of ids){const task=await productionTaskStore.load(projectId,id);if(task.input.humanBlueprintReview)return task;}
 }
 /** Host-owned requirements for a confirmed output variant, never an execution-role policy. */
@@ -216,8 +228,7 @@ export async function reconcileLegacyTechnicalRecoveries(task:ProductionTask){
   if(record.runId!==task.taskId||record.toolName!=='clipmentor-production-task')continue;
   const artifact=await loadAgentArtifact(task.projectId,record.artifactId);
   if(!artifact)continue;
-  const value=JSON.parse(artifact.body);
-  if(value.type==='clipmentor-production-task/v1'&&value.task)history.push(value.task);
+  history.push(decodePublishedProductionCheckpoint(artifact,record,task.projectId,task.taskId));
  }
  const epochs=legacyTechnicalRecoveryEpochs(history,task);
  if(epochs.length)task.technicalRecoveryEpochs=[...new Set([...(task.technicalRecoveryEpochs??[]),...epochs])].sort((a,b)=>a-b);

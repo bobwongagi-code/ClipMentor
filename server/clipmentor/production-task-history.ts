@@ -2,6 +2,11 @@ import {gunzipSync,brotliCompressSync,brotliDecompressSync,constants} from 'node
 import {randomUUID,createHash} from 'node:crypto';
 import {archiveAgentArtifacts,loadAgentArtifact,loadAgentRuntimeSidecar,type AgentArtifactRecord} from '../../src/persist/agentRuntimeStore';
 const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
+/** The durable index appends publications. Preserve that order when timestamps
+ * tie, both for current reads and for the checkpoints compaction keeps live. */
+export function newestProductionCheckpoints<T extends {createdAt:number}>(records:readonly T[]):T[]{
+ return [...records].reverse().sort((a,b)=>b.createdAt-a.createdAt);
+}
 export function unpackProductionHistory(record:AgentArtifactRecord,maxOutputLength=256*1024*1024):AgentArtifactRecord[]{
  const envelope=JSON.parse(record.body);
  if(!['clipmentor-production-history/gzip-v1','clipmentor-production-history/brotli-v1'].includes(envelope.type))throw Error('Invalid history archive');
@@ -17,7 +22,7 @@ export async function compactProductionTaskHistory(projectId:string,runId:string
  if(!Number.isSafeInteger(maxExpandedBytes)||maxExpandedBytes<1||maxExpandedBytes>128*1024*1024)throw Error('Invalid history compaction bound');
  const sidecar=await loadAgentRuntimeSidecar(projectId);
  if(sidecar.artifacts.length<192&&sidecar.artifacts.reduce((n,a)=>n+a.originalBytes,0)<48*1024*1024)return false;
- const current=sidecar.artifacts.filter(a=>a.runId===runId&&a.toolName==='clipmentor-production-task').sort((a,b)=>b.createdAt-a.createdAt);
+ const current=newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.runId===runId&&a.toolName==='clipmentor-production-task'));
  const archives=sidecar.artifacts.filter(a=>a.runId===runId&&a.toolName==='clipmentor-production-task-history').sort((a,b)=>a.originalBytes-b.originalBytes);
  const originals:AgentArtifactRecord[]=[],records:AgentArtifactRecord[]=[];let expandedBytes=2;
  const add=async(index:typeof sidecar.artifacts[number])=>{
