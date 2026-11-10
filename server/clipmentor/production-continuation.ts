@@ -1,4 +1,5 @@
 import {outputProductionBudget} from './production-budget';
+import {productionOutputsMatch} from './production-decisions';
 import {digestValue} from '../agent-runs/store-values';
 import {withSerializedProjectStore} from '../plugins/project-store';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
@@ -113,12 +114,22 @@ export async function createBlueprintContinuations(parent:ProductionTask,source:
  return queueBlueprintContinuations(parent);
 }
 
-/** Recover the narrow gap between persisting a confirmed batch and queueing its children. */
+const outputReleaseTurns=new Map<string,Promise<void>>();
+/** One local host owns a batch release at a time, including the fresh read.
+ * The next caller re-reads after this one finishes instead of saving old children
+ * over a worker's newer checkpoint. Durable task state remains authoritative. */
 export async function queueBlueprintContinuations(parent:ProductionTask){
+ const key=`${parent.projectId}:${parent.taskId}`,previous=outputReleaseTurns.get(key);
+ let release!:()=>void;const turn=new Promise<void>(resolve=>{release=resolve;});outputReleaseTurns.set(key,turn);
+ await previous;
+ try{return await queueConfirmedOutputs(parent);}
+ finally{release();if(outputReleaseTurns.get(key)===turn)outputReleaseTurns.delete(key);}
+}
+
+/** Recover the narrow gap between persisting a confirmed batch and queueing its children. */
+async function queueConfirmedOutputs(parent:ProductionTask){
  const children=await Promise.all((parent.productionChildren??[]).map(entry=>productionTaskStore.load(entry.projectId,entry.taskId)));
- if(children.length!==2||children.map(t=>t.input.panelDelivery?.audience).sort().join(',')!=='existing_partner,new_contact'
-  ||new Set(children.map(t=>t.taskId)).size!==2
-  ||children.some(t=>t.blueprintApproval?.sourceProjectId!==parent.projectId||t.blueprintApproval.sourceTaskId!==parent.taskId))throw Error('production_outputs_binding_invalid');
+ if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
  for(const child of children)if(child.status==='awaiting_blueprint'&&child.stage==='copy_review'&&!child.completed.copy_review){
   child.status='queued';await productionTaskStore.save(child);
  }
@@ -206,18 +217,24 @@ export async function alignUnstartedSharedBlueprint(first:ProjectDoc,next:Projec
 }
 
 /** Returns false while the first output is unfinished; no model or media request is made. */
-export async function prepareSharedProduction(task:ProductionTask){
- if(await upgradeContinuationBrief(task))await productionTaskStore.save(task);
+export async function prepareSharedProduction(task:ProductionTask,signal?:AbortSignal){
+ const check=()=>signal?.throwIfAborted();check();
+ const upgraded=await upgradeContinuationBrief(task);check();
+ if(upgraded)await productionTaskStore.save(task);check();
  const shared=task.sharedProduction;if(!shared)return true;
  if(shared.prepared){const saved=await loadOfflineStoredProject(task.projectId);if(!saved)throw Error('shared_output_missing');assertSharedProduction(task,saved.doc);return true;}
  const first=await productionTaskStore.load(shared.projectId,shared.taskId);
+ check();
  if(!['awaiting_review','completed'].includes(first.status)||!first.completed.self_check)return false;
  if(task.stage!=='copy_review'||task.completed.copy_review)throw Error('shared_output_already_started');
  const [source,next]=await Promise.all([loadOfflineStoredProject(first.projectId),loadOfflineStoredProject(task.projectId)]);
+ check();
  if(!source||!next)throw Error('shared_output_missing');
  await productionFeedbackAnchor(first,source.doc);
+ check();
  let prepared:Awaited<ReturnType<typeof sharedProductionDocument>>,rebased=false;
  try{prepared=await sharedProductionDocument(source.doc,next.doc);}catch(error){
+  check();
   if(!(error instanceof Error)||!['shared_body_blueprint_changed','shared_opening_blueprint_changed'].includes(error.message))throw error;
   if(!task.input.humanBlueprintReview||!first.input.humanBlueprintReview||task.status!=='queued'||Object.values(task.attempts).some(n=>n!==0)||Object.keys(task.effects).length
    ||next.revision!==task.projectRevision||!(await checkCopyProduction(source.doc,'clipmentor')).allowed)
@@ -226,26 +243,32 @@ export async function prepareSharedProduction(task:ProductionTask){
   if((first.completed.edit?.artifact.executionReport as {blueprint?:{digest?:string}}|undefined)?.blueprint?.digest!==current.digest)
    throw Error('shared_rebase_producer_execution_not_bound');
   const aligned=await alignUnstartedSharedBlueprint(source.doc,next.doc);
+  check();
   prepared=await sharedProductionDocument(source.doc,aligned);
   const body=JSON.stringify({type:'clipmentor-shared-blueprint-rebase/v1',sourceProjectId:first.projectId,sourceTaskId:first.taskId,
    sourceRevision:source.revision,sourceSubject:current,previousRevision:next.revision,previousProject:next.doc});
-  if(!await storeAgentArtifact({version:1,artifactId:'p_'+randomUUID().replaceAll('-','').slice(0,18),projectId:task.projectId,runId:task.taskId,
+  check();if(!await storeAgentArtifact({version:1,artifactId:'p_'+randomUUID().replaceAll('-','').slice(0,18),projectId:task.projectId,runId:task.taskId,
    kind:'checkpoint-source',toolName:'clipmentor-shared-blueprint-rebase',body,bodySha256:createHash('sha256').update(body).digest('hex'),
    originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false}))throw Error('shared_rebase_archive_failed');
   rebased=true;
  }
+ check();
  // Timelines and added reusable assets cannot change the human-confirmed content subject.
  if(!rebased&&(await copyReviewSubject(prepared.doc)).digest!==task.blueprintApproval?.digest)throw Error('shared_confirmed_blueprint_changed');
  await withSerializedProjectStore(async store=>{
+  check();
   const current=await store.readEntry('project:'+task.projectId);
   const producer=await store.readEntry('project:'+first.projectId);
+  check();
   const producerDoc=producer.found?runProjectMigrations(producer.value)?.doc:null;
   const currentDoc=current.found?runProjectMigrations(current.value)?.doc:null;
   if(!producerDoc||digestValue(producerDoc)!==digestValue(source.doc))throw Error('shared_producer_changed_during_preparation');
   if(!currentDoc||digestValue(currentDoc)!==digestValue(next.doc))throw Error('shared_output_changed_during_preparation');
   await store.writeEntry('project:'+task.projectId,prepared.doc);
  });
+ check();
  const saved=await loadOfflineStoredProject(task.projectId);if(!saved)throw Error('shared_output_missing');
+ check();
  task.projectRevision=saved.revision;task.sharedProduction={...shared,prepared:true,endFrame:prepared.endFrame,digest:prepared.digest};
  if(rebased)task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,sharedFromProject:first.projectId,
   sharedFromTask:first.taskId,sharedSourceRevision:source.revision,ownEndingPreserved:true,formalReviewRequired:true}};
@@ -258,5 +281,6 @@ export async function prepareSharedProduction(task:ProductionTask){
  // Once both versions share the common cut, neither may silently diverge during a local correction.
  first.sharedProduction={projectId:task.projectId,taskId:task.taskId,prepared:true,endFrame:prepared.endFrame,digest:prepared.digest};
  await productionTaskStore.save(first);
+ check();
  await productionTaskStore.save(task);return true;
 }

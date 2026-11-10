@@ -1,4 +1,5 @@
 import {compactProductionTaskHistory} from './production-task-history';
+import {productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProjectStoreRequest} from '../../shared/project-store-transport';
 import {getStoredEntry} from '../plugins/project-store';
@@ -7,7 +8,7 @@ import {revisionOf} from '../../src/agent/external-edit-session';
 import {digestValue} from '../agent-runs/store-values';
 type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {randomUUID,createHash} from 'node:crypto';
-import {storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
+import {appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
 import {createRun,flushRunPersistence,setRunStatus,pushRunEvent,recoverServerRun} from '../agent-runs/store';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {LLM_PROVIDER_PRESETS} from '../../shared/llm-providers';
@@ -280,6 +281,13 @@ export interface StageContext {
 }
 export interface StageResult {artifact:Record<string,unknown>;repair?:'blueprint'|'edit'|'copy_review'}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
+/** Observational context in the existing bounded run log, never a checkpoint or authority.
+ * It intentionally has no serverEvent envelope: terminal transport replay stays closed. */
+export async function recordProductionDecision(task:ProductionTask,decision:ProductionDecisionDetails){
+ try{await appendAgentRunEvent(task.projectId,task.taskId,{type:'context_projected',
+  summary:JSON.stringify({productionDecision:productionDecisionEvent(task,decision)})});}
+ catch{ /* Diagnostic failure cannot authorize retry, reopen transport or discard saved production. */ }
+}
 async function withProductionExecution(task:ProductionTask,work:(controller:AbortController)=>Promise<ProductionTask>){
  const key=`${task.projectId}:${task.taskId}`;
  if(cancellations.has(key))throw new Error('Production task already running');
@@ -310,7 +318,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
  hasEffect:(kind,name)=>task.effects[effectKey(name)]?.kind===budgetKind(kind),async effect<T>(kind:EffectKind,name:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>){
   check();const id=effectKey(name);
   const old=task.effects[id];
-  if(old?.status==='completed')return structuredClone(old.result) as T;
+  const decision=productionEffectDecision(old,!!recover,remaining(kind));
+  if(decision.action!=='submit'){
+   await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
+   check();
+  }
+  if(decision.action==='reuse')return structuredClone(old!.result) as T;
   const settle=async(effect:ProductionTask['effects'][string],result:T)=>{
    const unsubmitted=confirmedUnsubmittedGateway(kind,result,effect.operationId,task.projectId);
    task.effects[id]={...effect,status:'completed',result:structuredClone(result),...(unsubmitted?{transportUnsubmitted:true as const}:{})};
@@ -318,13 +331,18 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    await store.save(task);
    return result;
   };
-  if(old&&recover)return settle(old,await recover(old.operationId));
-  if(old)throw new Error(`effect_outcome_${old.status}:${old.operationId}; read original receipt, no automatic resubmission`);
-  if(remaining(kind)<=0)throw new Error(`${kind} budget exhausted`);
+  if(decision.action==='recover'){
+   const result=await recover!(old!.operationId);check();return settle(old!,result);
+  }
+  if(decision.action==='stop'){
+   if(old)throw new Error(`effect_outcome_${old.status}:${old.operationId}; read original receipt, no automatic resubmission`);
+   throw new Error(`${kind} budget exhausted`);
+  }
   const counter=budgetKind(kind);
   const effect={kind:counter,operationId:/^[a-f0-9-]{36}$/.test(name)?name:randomUUID(),status:'reserved' as const};task.effects[id]=effect;task.attempts[counter]=(task.attempts[counter]??0)+1;await store.save(task);
+  await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,operationId:effect.operationId});
   let result:T;
-  try{result=await work(effect.operationId);check();}
+  try{check();result=await work(effect.operationId);check();}
   catch(error){task.effects[id]={...effect,status:'failed',error:String(error).slice(0,1200)};await store.save(task);throw error;}
   return settle(effect,result);
  }};
@@ -383,13 +401,28 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
 }
 /** Keep recoverable checkpoints within the same server job and ownership window. */
 export async function runProductionWithRecovery(task:ProductionTask,worker:StageWorker,
- reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore){
+ reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore,prepare?:(signal:AbortSignal)=>Promise<boolean>){
  return withProductionExecution(task,async controller=>{
   const advance=()=>advanceWithinExecution(task,worker,store,Date.now,controller);
+  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
+  const timer=setTimeout(()=>controller.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-Date.now()));
+  try{
+  if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
+  if(prepare){
+   try{
+    const checkPreparation=()=>{if(Date.now()>=deadline&&!controller.signal.aborted)controller.abort(new Error('Production deadline exceeded'));controller.signal.throwIfAborted();};
+    checkPreparation();
+    const ready=await prepare(controller.signal);
+    checkPreparation();
+    if(!ready)return task;
+   }catch(error){if(controller.signal.aborted)return advance();throw error;}
+  }
   await advance();
   while(task.status==='blocked'){
-   if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs)return advance();
-   if(task.error?.includes('checkpoint_write_failed:'))return task;
+   const from={stage:task.stage,repairs:task.repairs};
+   const stop=(reason:'cancelled_or_expired'|'checkpoint_unpersisted'|'no_verified_progress')=>recordProductionDecision(task,{scope:'recovery',action:'stop',reason,fromStage:from.stage,fromEpoch:from.repairs});
+   if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs){await stop('cancelled_or_expired');return advance();}
+   if(task.error?.includes('checkpoint_write_failed:')){await stop('checkpoint_unpersisted');return task;}
    const previousStage=task.stage,previousEpoch=task.repairs;
    try{await reconcile(task);}catch(error){
     if(controller.signal.aborted)return advance();
@@ -398,10 +431,11 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
     return controller.signal.aborted?advance():task;
    }
    if(controller.signal.aborted)return advance();
-   if(task.repairs<=previousEpoch&&PRODUCTION_STAGES.indexOf(task.stage)<=PRODUCTION_STAGES.indexOf(previousStage))return task;
+   if(!productionRecoveryProgress(task,{stage:previousStage,repairs:previousEpoch},PRODUCTION_STAGES)){await stop('no_verified_progress');return task;}
    await advance();
   }
   return task;
+  }finally{clearTimeout(timer);}
  });
 }
 export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,store=productionTaskStore){

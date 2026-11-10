@@ -71,10 +71,33 @@ await advanceProductionTask(repair,async(t)=>t.stage==='copy_review'&&!repaired?
 assert.equal(repair.repairs,1);assert.equal(repair.status,'awaiting_review');
 const cancellation=fresh();let cancelInvoked=false;
 await advanceProductionTask(cancellation,async(t,c)=>{cancelInvoked=cancelActiveProductionTask(t.projectId,t.taskId);c.signal.throwIfAborted();return {artifact:{saved:true}};},store);assert(cancelInvoked);assert.equal(cancellation.status,'cancelled');
+// Diagnostic persistence introduces an await: reservation must remain before it so
+// concurrent duplicate effect names cannot both cross the provider boundary.
+const duplicate=fresh();let duplicateSubmits=0;
+await advanceProductionTask(duplicate,async(t,c)=>{
+ if(t.stage==='analysis'){
+  const results=await Promise.allSettled([1,2].map(()=>c.effect('render','same-name',async()=>{duplicateSubmits++;return {saved:true};})));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(results.filter(r=>r.status==='rejected').length,1);
+ }
+ return {artifact:{saved:true}};
+},store);
+assert.equal(duplicateSubmits,1);assert.equal(duplicate.attempts.render,1);
 const reserved=fresh();reserved.effects['analysis:initial:0:pending']={kind:'review',operationId:'unknown-outcome',status:'reserved'};
 await advanceProductionTask(reserved,async(_t,c)=>{await c.effect('review','pending',async()=>{throw Error('must not resubmit');});return {artifact:{saved:true}};},store);assert.match(reserved.error!,/outcome_reserved/);assert.equal(reserved.attempts.review,0);
 const reconciled=fresh();reconciled.attempts.render=1;reconciled.effects['analysis:initial:0:existing']={kind:'render',operationId:'saved-render-id',status:'reserved'};
 await advanceProductionTask(reconciled,async(t,c)=>{if(t.stage==='analysis')await c.effect('render','existing',async()=>{throw Error('must not submit');},async id=>({renderId:id}));return {artifact:{saved:true}};},store);assert.equal(reconciled.status,'awaiting_review');assert.equal(reconciled.attempts.render,1);
+// A late lookup result remains external evidence, not a completed task effect
+// after the user cancels the owning production execution.
+const lookupCancelled=fresh();lookupCancelled.attempts.render=1;
+lookupCancelled.effects['analysis:initial:0:lookup']={kind:'render',operationId:'original-lookup',status:'reserved'};
+let lookupSubmits=0;
+await advanceProductionTask(lookupCancelled,async(t,c)=>{
+ await c.effect('render','lookup',async()=>{lookupSubmits++;return {};},async id=>{
+  assert.equal(id,'original-lookup');assert(cancelActiveProductionTask(t.projectId,t.taskId));return {renderId:'late-result'};
+ });return {artifact:{saved:true}};
+},store);
+assert.equal(lookupSubmits,0);assert.equal(lookupCancelled.status,'cancelled');assert.equal(lookupCancelled.effects['analysis:initial:0:lookup'].status,'reserved');assert.equal(lookupCancelled.attempts.render,1);
 const persistenceFailure=fresh();let forbiddenPaid=0;
 await advanceProductionTask(persistenceFailure,async(_t,c)=>{await c.effect('review','x',async()=>{forbiddenPaid++;return {};});return {artifact:{saved:true}};},{...store,async save(){throw Error('Injected checkpoint quota');}});assert.equal(forbiddenPaid,0);assert.equal(persistenceFailure.status,'blocked');assert.match(persistenceFailure.error!,/checkpoint_write_failed/);
 console.log('production-task: all stages, saved resume, spent/zero/deadline budgets, bounded repair, one feedback and explicit language acceptance passed; zero provider calls');

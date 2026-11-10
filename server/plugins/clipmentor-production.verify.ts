@@ -248,6 +248,36 @@ try{
  assert.deepEqual(batch.map(t=>t.taskId),replayedBatch.map(t=>t.taskId),'one confirmation always creates the same two outputs');
  assert.deepEqual(confirmationParent.productionChildren!.map(t=>t.audience),['existing_partner','new_contact']);
  assert.equal(batch[1].sharedProduction!.taskId,batch[0].taskId);
+ const reversedLabels=structuredClone(confirmationParent);
+ reversedLabels.productionChildren!.forEach(entry=>{entry.audience=entry.audience==='new_contact'?'existing_partner':'new_contact';});
+ const beforeWrongBatch=await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId)));
+ await assert.rejects(queueBlueprintContinuations(reversedLabels),/production_outputs_binding_invalid/,'audience labels must match the actual saved variant before dispatch');
+ assert.deepEqual(await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId))),beforeWrongBatch,'an invalid batch cannot partly queue or rewrite either child');
+
+ // Two releases can interleave: hold the second queued checkpoint until
+ // the first release has already returned and a worker checkpoint is saved.
+ const beforeConcurrentRelease=await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId)));
+ for(const child of beforeConcurrentRelease){child.status='awaiting_blueprint';await productionTaskStore.save(child);}
+ const normalSave=productionTaskStore.save;let queuedWrites=0,releaseSecondWrite!:()=>void;
+ const secondWriteHeld=new Promise<void>(resolve=>{releaseSecondWrite=resolve;});
+ productionTaskStore.save=async(child,conditions)=>{
+  if(child.taskId===batch[0].taskId&&child.status==='queued'&&++queuedWrites===2)await secondWriteHeld;
+  await normalSave(child,conditions);
+ };
+ let concurrentRelease:Promise<unknown>|undefined;
+ try{
+  const firstRelease=queueBlueprintContinuations(confirmationParent);concurrentRelease=queueBlueprintContinuations(confirmationParent);
+  await firstRelease;
+  const live=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+  live.status='running';live.attempts.review=1;live.effects['copy_review:initial:0:live']={kind:'review',operationId:'existing-live-operation',status:'reserved'};
+  await normalSave(live);releaseSecondWrite();await concurrentRelease;
+  const retained=await productionTaskStore.load(live.projectId,live.taskId);
+  assert.equal(retained.attempts.review,1,'a concurrent batch release cannot erase the worker counter');
+  assert.equal(retained.effects['copy_review:initial:0:live']?.operationId,'existing-live-operation','queued publication cannot erase an existing operation');
+ }finally{
+  releaseSecondWrite();if(concurrentRelease)await concurrentRelease;productionTaskStore.save=normalSave;
+ }
+ for(const before of beforeConcurrentRelease){const latest=await productionTaskStore.load(before.projectId,before.taskId);before.sequence=latest.sequence;before.updatedAt=latest.updatedAt;before.status='queued';await productionTaskStore.save(before);}
  const migrated=structuredClone(batch[0]);
  migrated.input.brief=confirmationParent.input.brief+'\n用户已确认含两种结尾的完整蓝图。本执行任务负责其中的existing_partner输出；两版共用片头、教学主体与同文配音，仅片尾不同。从独立审核接续，不重新分析原片。片尾使用独立时间线实例，片头和教学主体的实例在片尾起点前闭合，便于直接复用实际剪辑。';
  const oldAttempts=structuredClone(migrated.attempts),oldApproval=structuredClone(migrated.blueprintApproval);
@@ -333,6 +363,35 @@ try{
  batch[0].completed.self_check={at:Date.now(),artifact:{fixtureOnly:true}};
  batch[1].blueprintApproval!.digest=(await copyReviewSubject(secondDoc)).digest;
  await productionTaskStore.save(batch[0]);await productionTaskStore.save(batch[1]);
+ // Hold the follower inside shared-body preparation, then cancel through the
+ // real HTTP endpoint. Ownership must already cover this pre-worker phase.
+ const waitingBeforeCancel=structuredClone(batch[1]);
+ const originalLoad=productionTaskStore.load;
+ let preparationEntered!:()=>void,releasePreparation!:()=>void;
+ const enteredPreparation=new Promise<void>(resolve=>{preparationEntered=resolve;});
+ const heldPreparation=new Promise<void>(resolve=>{releasePreparation=resolve;});
+ let cancellationReply:{status?:string}|undefined;
+ productionTaskStore.load=async(projectId,id)=>{
+  if(projectId===batch[0].projectId&&id===batch[0].taskId){preparationEntered();await heldPreparation;}
+  return originalLoad(projectId,id);
+ };
+ try{
+  assert.equal((await post({action:'resume',projectId:batch[1].projectId,taskId:batch[1].taskId})).status,202);
+  await enteredPreparation;
+  const cancellation=await post({action:'cancel',projectId:batch[1].projectId,taskId:batch[1].taskId});
+  assert.equal(cancellation.status,202);cancellationReply=await cancellation.json();
+ }finally{releasePreparation();productionTaskStore.load=originalLoad;}
+ for(let i=0;i<200;i++){
+  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${batch[1].projectId}&taskId=${batch[1].taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+  if(!(await response.json()).executionActive)break;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ const cancelledPreparation=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+ assert.equal(cancellationReply?.status,'cancelling','shared preparation must be inside the execution cancellation window');
+ assert.equal(cancelledPreparation.status,'cancelled','a cancelled pre-worker task must not be resurrected by saved preparation');
+ assert.deepEqual(cancelledPreparation.attempts,waitingBeforeCancel.attempts);
+ assert.equal(batchSteps.filter(step=>step.startsWith('new_contact:')).length,0,'cancel before preparation completes makes no worker request');
+ await productionTaskStore.save(waitingBeforeCancel);Object.assign(batch[1],waitingBeforeCancel);
  assert.equal(await prepareSharedProduction(batch[1]),true);
  assert.equal(batch[1].sharedProduction!.prepared,true);
  assert.equal((await productionTaskStore.load(batch[0].projectId,batch[0].taskId)).sharedProduction!.digest,batch[1].sharedProduction!.digest);
@@ -341,6 +400,21 @@ try{
  assert.equal(await prepareSharedProduction(coldPrepared),true,'preparation is safe to resume after persisted readback');
  const readyFirst=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
  readyFirst.status='queued';readyFirst.stage='self_check';delete readyFirst.completed.self_check;await productionTaskStore.save(readyFirst);
+ // An automatic sibling wakeup uses the same batch binding as a user click.
+ // A corrupt label cannot dispatch the other ending or erase the saved producer.
+ const invalidWakeParent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+ invalidWakeParent.productionChildren![0].audience='new_contact';await productionTaskStore.save(invalidWakeParent);
+ assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,202);
+ for(let i=0;i<200;i++){
+  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${readyFirst.projectId}&taskId=${readyFirst.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+  if(!(await response.json()).executionActive)break;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ assert.equal((await productionTaskStore.load(readyFirst.projectId,readyFirst.taskId)).status,'awaiting_review');
+ assert.equal((await productionTaskStore.load(batch[1].projectId,batch[1].taskId)).status,'queued');
+ assert.equal(batchSteps.filter(step=>step.startsWith('new_contact:')).length,0);
+ const restoredWakeParent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+ restoredWakeParent.productionChildren=structuredClone(confirmationParent.productionChildren);await productionTaskStore.save(restoredWakeParent);
  assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,202);
  for(let i=0;i<200;i++){
   const second=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);

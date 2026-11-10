@@ -1,3 +1,4 @@
+import {blockedProductionDecision,productionAuthorDecision,productionRecoveryProgress,repairableBlueprintIssue,type RecoveryRoute} from './production-decisions';
 import {productionCapacityFacts,pictureRepairWriteError} from './production-capacity-repair';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
@@ -56,7 +57,7 @@ export async function persistProductionGatewayDecision(record:ReturnType<typeof 
   ||existing.originalBytes!==record.originalBytes||existing.originalChars!==record.originalChars
   ||existing.redacted!==record.redacted||existing.binaryOmitted!==record.binaryOmitted)throw Error('gateway_recovery_decision_not_saved');
 }
-import {recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,type StageWorker,type ProductionTask} from './production-task';
+import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,type StageWorker,type ProductionTask} from './production-task';
 
 const hostNames=new Set(['load_skill','edit_item','edit_asset','read_clipmentor_analysis','revise_clipmentor_analysis','observe_clipmentor_source',
  'observe_clipmentor_source_video','read_clipmentor_source_video','view_asset_frames','view_timeline_frames','save_clipmentor_source_frame','submit_voice']);
@@ -88,21 +89,23 @@ export async function loadProductionAuthorGuidance(stage:ProductionTask['stage']
   return body;
  }))).join('\n');
 }
-function repairableBlueprintIssue(issue:string) {
- return /^blueprint_(stage_incomplete:|execution_plan_missing$)/.test(issue)
-  || /^picture_plan_(?:shape_invalid|candidate_mismatch|phase_|group_explanation_missing|original_order_mismatch|revisits_mismatch|stage_cues_missing)/.test(issue)
-  || ['copy_scope_incomplete','copy_candidate_missing','copy_candidate_incomplete'].includes(issue);
+export async function reconcileBlockedBlueprint(task:ProductionTask){
+ const before={stage:task.stage,repairs:task.repairs};let route:RecoveryRoute|'no_matching_route'='no_matching_route';
+ try{
+  await reconcileBlockedBlueprintState(task,value=>{route=value;});
+  await recordProductionDecision(task,{scope:'recovery',action:productionRecoveryProgress(task,before,PRODUCTION_STAGES)?'resume':'stop',
+   reason:route,fromStage:before.stage,fromEpoch:before.repairs});
+ }catch(error){await recordProductionDecision(task,{scope:'recovery',action:'stop',reason:'reconciliation_failed',fromStage:before.stage,fromEpoch:before.repairs});throw error;}
 }
 
 /** Reconcile pre-fix checkpoints only when the finished author run proves the exact saved revision. */
-export async function reconcileBlockedBlueprint(task:ProductionTask){
+async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:RecoveryRoute)=>void){
  await reconcileLegacyTechnicalRecoveries(task);
+ const decision=blockedProductionDecision(task,remainingContentRepairs(task));
+ const selected=(route:RecoveryRoute)=>{if(!decision.routes.includes(route))return false;choose(route);return true;};
  // A no-op edit with measured capacity conflicts returns to internal picture planning,
  // not to the operator and not to another identical edit request.
- if(task.status==='blocked'&&task.stage==='edit'&&task.input.humanBlueprintReview
-  &&task.error?.startsWith('Error: Actual sequence mapping incomplete:')
-  &&!task.repairContext?.audio_picture_repair&&task.attempts.model<task.input.budget.model
-  &&task.attempts.review<task.input.budget.review){
+ if(selected('picture_capacity')){
   const saved=await loadOfflineStoredProject(task.projectId);
   if(saved&&saved.revision===task.projectRevision&&saved.doc.timelines.every(t=>t.items.length===0)
    &&(await checkCopyProduction(saved.doc,'clipmentor')).allowed){
@@ -118,10 +121,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
  }
 
  // A renewed batch must consume the saved negative receipt before another paid review.
- if(task.input.budget.routine&&task.status==='blocked'&&task.stage==='copy_review'
-  &&['Error: review budget exhausted','Error: 蓝图返修未改变送审内容'].includes(task.error??'')
-  &&task.attempts.review<task.input.budget.review&&task.attempts.model<task.input.budget.model
-  &&task.attempts.observation<task.input.budget.observation){
+ if(selected('review_source_observation')){
   const saved=await loadOfflineStoredProject(task.projectId);
   const repair=saved&&await currentReviewRepair(saved.doc);
   if(saved&&saved.revision===task.projectRevision&&repair?.status==='bound'){
@@ -134,8 +134,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
   }
  }
 
- if(task.input.budget.routine&&task.status==='blocked'&&task.stage==='copy_review'
-  &&task.error==='Error: 蓝图返修未改变送审内容'&&task.attempts.review<task.input.budget.review){
+ if(selected('visual_review_contract')){
   const saved=await loadOfflineStoredProject(task.projectId);
   const repair=saved&&await currentReviewRepair(saved.doc);
   if(saved?.revision===task.projectRevision&&repair?.status==='bound'
@@ -144,8 +143,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
    task.repairs++;delete task.completed.copy_review;return;
   }
  }
- if(task.status==='blocked'&&task.stage==='copy_review'&&task.error==='Error: 蓝图返修未改变送审内容'
-  &&task.blueprintApproval&&task.attempts.model<task.input.budget.model){
+ if(selected('continuation_brief')){
   const updated=structuredClone(task),saved=await loadOfflineStoredProject(task.projectId);
   if(saved&&saved.revision===task.projectRevision&&await upgradeContinuationBrief(updated)){
    const repair=await currentReviewRepair(saved.doc);
@@ -155,9 +153,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
    }
   }
  }
- if(task.input.humanBlueprintReview&&task.status==='blocked'&&task.stage==='copy_review'
-  &&!task.sourceEvidenceRecoveryOperation&&task.error?.startsWith('Error: 已用完自动返修额度')
-  &&task.repairContext?.revision===task.projectRevision&&task.attempts.model<task.input.budget.model){
+ if(selected('source_evidence_import')){
   const checks=task.repairContext?.author_self_check;
   if(Array.isArray(checks)&&checks.some(check=>check?.id==='S2'&&check.status==='fix')){
    const saved=await loadOfflineStoredProject(task.projectId);
@@ -178,8 +174,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
    }
   }
  }
- if(task.status==='blocked'&&task.stage==='copy_review'&&task.error?.startsWith('Error: 已用完自动返修额度')
-  &&task.repairContext?.revision===task.projectRevision&&task.sourceEvidenceRecoveryOperation){
+ if(selected('focused_author')){
   const snapshot=await loadOfflineStoredProject(task.projectId);
   if(snapshot&&snapshot.revision===task.projectRevision&&snapshot.doc.clipMentorAnalysis?.source.asset_id===task.input.sourceAssetId
    &&(await createProductionPreparation(snapshot.doc)).reviewed.subject.digest===task.repairContext?.blueprint_digest
@@ -198,8 +193,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
    return;
   }
  }
- if(task.status==='blocked'&&task.stage==='copy_review'&&task.error?.startsWith('Error: 已用完自动返修额度')
-  &&task.repairContext?.revision===task.projectRevision&&task.repairContext?.repair){
+ if(selected('focused_independent')){
   const snapshot=await loadOfflineStoredProject(task.projectId);
   const checked=snapshot&&await currentReviewRepair(snapshot.doc);
   if(snapshot&&snapshot.revision===task.projectRevision&&snapshot.doc.clipMentorAnalysis?.source.asset_id===task.input.sourceAssetId
@@ -208,8 +202,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
    return;
   }
  }
- if(!task.input.humanBlueprintReview||task.status!=='blocked'||task.stage!=='blueprint')return;
- if(task.error?.startsWith('Error: 已用完自动返修额度')&&task.repairContext?.revision===task.projectRevision){
+ if(selected('focused_structure')){
   const issue=task.repairContext?.blueprint_structure_issue;
   if(typeof issue!=='string')return;
   const saved=await loadOfflineStoredProject(task.projectId);
@@ -219,17 +212,9 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
   }
   return;
  }
- const failedObservation=task.error?.includes('observe_clipmentor_source_video: Source observation failed; read the saved receipt, do not retry');
- const failedSourceRead=(task.deliveryDraftRecoveryUsed===true
-  &&task.error?.includes('(read_clipmentor_source_video: Cannot read/bind saved source receipt; no model request sent).'))
-  ||(task.authorCheckContractRevision===2&&task.error?.includes('(read_clipmentor_analysis: storyboard_current_plan_unavailable).'));
- const failedDeliveryWrite=task.error?.includes('revise_clipmentor_analysis: delivery_sections_invalid');
- if(failedDeliveryWrite&&task.deliveryDraftRecoveryUsed)return;
- const failedPlanWrite=task.error?.includes('revise_clipmentor_analysis: Resolve source breakdown before saving a picture plan')||failedDeliveryWrite;
- let savedShapeIssue=task.error?.match(/^Error: (picture_plan_[^\n]+)$/)?.[1];
- if(task.error!=='Error: copy_scope_incomplete'&&!failedObservation&&!savedShapeIssue&&!failedPlanWrite&&!failedSourceRead)return;
- if((savedShapeIssue||failedPlanWrite)&&!failedDeliveryWrite&&remainingContentRepairs(task)===0)return;
- if(savedShapeIssue&&!repairableBlueprintIssue(savedShapeIssue))return;
+ if(!selected('author_checkpoint')||!decision.authorCheckpoint)return;
+ const {failedObservation,failedSourceRead,failedDeliveryWrite,failedPlanWrite}=decision.authorCheckpoint;
+ let {savedShapeIssue}=decision.authorCheckpoint;
  const analysis=task.completed.analysis;
  const prefix=`blueprint:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
  const effects=Object.entries(task.effects).filter(([key])=>key.startsWith(prefix)).map(([,effect])=>effect);
@@ -500,10 +485,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   // Only these author stages may call the API model; review/export have separate host paths.
   const prefix=`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
   if(Object.entries(task.effects).some(([id,e])=>id.startsWith(prefix)&&e.kind==='model'))throw new Error('author_stage_already_attempted; inspect saved run before explicit reconciliation, no repeat submission');
-  const pictureOnlyRepair=task.stage==='blueprint'&&!!task.repairContext?.audio_picture_repair;
-  const repairingIndependent=task.stage==='blueprint'&&!!(task.repairContext?.repair??task.repairContext?.pending_review_repair);
-  const fixingSelfCheck=task.stage==='blueprint'&&(repairingIndependent||Array.isArray(task.repairContext?.author_self_check)
-   ||/^(picture_plan_|blueprint_stage_incomplete:)/.test(String(task.repairContext?.blueprint_structure_issue??'')));
+  const authorDecision=productionAuthorDecision(task,!!reflowBaseline);
+  const {pictureOnly:pictureOnlyRepair,independent:repairingIndependent,selfCheck:fixingSelfCheck}=authorDecision;
+  await recordProductionDecision(task,{scope:'author',action:'select',reason:authorDecision.mode});
   const goal=reflowBaseline?'修复现存横版误用：先只读现有工程和已审蓝图，再用原set_aspect_ratio将活动画布设为9:16；第一笔保存起就必须满足竖版。随后逐段重新安排原生实例，不能仅裁横片或只改画布尺寸交差。保持全部现有实例ID、源窗、时间位置、原声/旁白音量、稿件、字幕原文、短标及9条音频；只调整视觉几何和排版。原片完整竖版主体、讲解参照关系、原片/讲解标识与下方实底字幕区均须在竖版清楚可读。片头仍为压暗原片铺底+成绩前景，片尾完整使用已审商品+Storyboard整卡。图片裁切参数必须在改成竖版后从现行原入口回读，不沿用横版像素换算；不修改蓝图或素材。不要新增配音/审核/观察，不自行导出。用实际组合帧检查片头、每组、片尾后保存，由宿主使用剩余渲染额度导出。':pictureOnlyRepair?'仅修复任务 audio_picture_repair 中的画面承载问题。读取现行稿、原片证据和实测音频，按整组而不是锁死单句短窗安排画面。只用 set_picture_plan 给受影响组登记新画面计划（必须沿用 current_script_candidate），保留原有交付段、结构、口播、字幕与短标文字。可读取或保存原片证据帧，不新增配音或观察。每段必须有实际信息任务，不循环、慢放或空长定格凑秒数。现行稿、音频和实测锚点随任务附带。保存后交现有审核，不自签通过。':repairingIndependent
    ? '只修独立审核回执列出的未通过项；逐项同步口播、字幕、教学重点、画面计划和证据边界。仅换候选版本、改说明或收窄口播却保留旧教学断言不算完成；补证则登记实际来源与支持关系，不把观察等同审核批准。保留原判、已通过单元、片头片尾及实际素材。旁白若在原片和明确登记的短标或关系卡之外没有独立教学损失，撤掉重复旁白和其同文字幕，保留画面承载及教学重点，回读对应计划。当前稿件和画面安排保存后交重新自检及审核。'
    : fixingSelfCheck

@@ -41,8 +41,8 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
   };
   const work=(async()=>{
    try{
-    if(!await prepareSharedProduction(task))return;
-    await runProductionWithRecovery(task,restoring?resumeWorker:worker,worker===productionStageWorker?reconcileBlockedBlueprint:async()=>{});
+    await runProductionWithRecovery(task,restoring?resumeWorker:worker,worker===productionStageWorker?reconcileBlockedBlueprint:async()=>{},
+     productionTaskStore,signal=>prepareSharedProduction(task,signal));
    }catch(error){task.status='blocked';task.error=String(error);await productionTaskStore.save(task);throw error;}
   })().finally(async()=>{
    active.delete(task.taskId);
@@ -50,8 +50,8 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    if(task.blueprintApproval&&['awaiting_review','completed'].includes(task.status)){
     const approval=task.blueprintApproval;
     const parent=await productionTaskStore.load(approval.sourceProjectId,approval.sourceTaskId);
-    for(const entry of parent.productionChildren??[]){
-     const sibling=await productionTaskStore.load(entry.projectId,entry.taskId);
+    const siblings=parent.productionChildren?.length?await queueBlueprintContinuations(parent):[];
+    for(const sibling of siblings){
      if(sibling.status==='queued'&&sibling.sharedProduction?.taskId===task.taskId&&!active.has(sibling.taskId))launch(sibling,true);
     }
    }
