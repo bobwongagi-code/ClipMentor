@@ -23,6 +23,7 @@ import {
   cleanOldJobs,
   evictTerminalJob,
   jobs,
+  isGenerationJobEvicting,
   loadPersistedJobs,
   normalizeRetentionMs,
   persistJobs,
@@ -34,7 +35,13 @@ import {
 let loadPromise: Promise<void> | undefined;
 
 export function initializeGenerationJobs(): Promise<void> {
-  if (!loadPromise) loadPromise = loadPersistedJobs().then(resumeRestoredJobs);
+  if (!loadPromise) {
+    let loaded=false;
+    const attempt=loadPersistedJobs().then(()=>{loaded=true;return resumeRestoredJobs();});
+    loadPromise=attempt;
+    // Retry only failed local hydration; never replay a failed resumer attempt.
+    void attempt.catch(()=>{if(!loaded&&loadPromise===attempt)loadPromise=undefined;});
+  }
   return loadPromise;
 }
 
@@ -98,7 +105,8 @@ function failGenerationJob(job: GenerationJob, error: unknown): void {
 }
 
 async function runGenerationJob(job: GenerationJob, task: GenerationJobTask, options: GenerationJobOptions): Promise<void> {
-  let release: (() => void) | undefined;
+  let release: (() => void) | undefined,active=true;
+  const current=()=>active&&jobs.get(job.id)===job&&job.status==='running'&&!isGenerationJobEvicting(job.id);
   try {
     release = await options.acquire?.();
     job.status = 'running';
@@ -116,10 +124,12 @@ async function runGenerationJob(job: GenerationJob, task: GenerationJobTask, opt
     const returned = await task(
       job.id,
       async (next) => {
+        if(!current())return;
         applyProgress(job, next);
         await persistJobs();
       },
       async (url, resume, resultIndex) => {
+        if(!current())return;
         job.resumeDownloadUrl = url;
         job.resumeDownload = resume;
         job.resultUrls = resultIndex === undefined
@@ -129,9 +139,10 @@ async function runGenerationJob(job: GenerationJob, task: GenerationJobTask, opt
         job.updatedAt = Date.now();
         job.timestamps.updatedAt = job.updatedAt;
         await persistJobs();
-        job.acceptance?.resolve(acceptanceOf(job));
+        if(current())job.acceptance?.resolve(acceptanceOf(job));
       },
       async (provider, providerTaskId) => {
+        if(!current())return;
         if (!providerTaskId.trim()) throw new Error(`${provider} did not return a provider task id`);
         job.provider = provider;
         job.providerTaskId = providerTaskId;
@@ -139,24 +150,26 @@ async function runGenerationJob(job: GenerationJob, task: GenerationJobTask, opt
         job.updatedAt = Date.now();
         job.timestamps.updatedAt = job.updatedAt;
         await persistJobs();
-        job.acceptance?.resolve(acceptanceOf(job));
+        if(current())job.acceptance?.resolve(acceptanceOf(job));
       },
     );
+    active=false;
     completeGenerationJob(job, returned);
     job.acceptance?.resolve(acceptanceOf(job));
   } catch (error) {
+    active=false;
     failGenerationJob(job, error);
     job.acceptance?.reject(error instanceof Error ? error : new Error(String(error)));
   } finally {
+    active=false;job.resuming=false;
     job.updatedAt = Date.now();
     job.timestamps.updatedAt = job.updatedAt;
-    release?.();
+    try{release?.();}catch{console.warn(`[generation-job] release callback failed for ${job.id}`);}
     await persistJobs().catch((error) => {
       console.warn(`[generation-job] failed to persist ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
     });
     scheduleExpiry(job);
-    options.onSettled?.(job.id);
-    job.resuming = false;
+    try{options.onSettled?.(job.id);}catch{console.warn(`[generation-job] settlement observer failed for ${job.id}`);}
   }
 }
 
@@ -166,8 +179,10 @@ export async function createGenerationJob(
   options: GenerationJobOptions = {},
 ): Promise<GenerationJobSubmission> {
   await initializeGenerationJobs();
+  const id=options.operationId?.trim()||randomUUID();
+  if(isGenerationJobEvicting(id))throw Error('generation operation cleanup in progress');
   await cleanOldJobs();
-  const id = options.operationId?.trim() || randomUUID();
+  if(isGenerationJobEvicting(id))throw Error('generation operation cleanup in progress');
   const existing = jobs.get(id);
   if (existing) return { operationId: id, jobId: id, status: 'queued' };
   const now = Date.now();
@@ -220,6 +235,7 @@ export async function waitForGenerationAcceptance(operationId: string): Promise<
 async function resumeWithRegisteredHandler(job: GenerationJob): Promise<boolean> {
   const resumer = resumers.get(resumerKey(job.toolName, job.provider));
   if (!resumer || job.resuming || !job.timestamps.acceptedAt) return false;
+  clearTimeout(job.expiryTimer);job.expiryTimer=undefined;
   job.resuming = true;
   job.status = 'queued';
   job.progress = Math.min(job.progress, 99);
@@ -271,11 +287,12 @@ export async function resumeRestoredJobs(): Promise<void> {
 
 export async function resumeGenerationJobDownload(jobId: string): Promise<boolean> {
   await initializeGenerationJobs();
+  if(isGenerationJobEvicting(jobId))return false;
   const job = jobs.get(jobId);
   if (!job || job.status !== 'failed') return false;
   if ((!job.resumeDownload || !job.pendingDownloadUrl) && await resumeWithRegisteredHandler(job)) return true;
   if (!job.resumeDownload || !job.pendingDownloadUrl) return false;
-  clearTimeout(job.expiryTimer);
+  clearTimeout(job.expiryTimer);job.expiryTimer=undefined;
   job.status = 'running';
   job.progress = 99;
   job.phase = 'downloading';

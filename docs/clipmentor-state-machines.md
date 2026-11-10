@@ -9,6 +9,7 @@
 - Agent 冷恢复的未知工具结果必须与最后的结束事件按递增编号一起落盘，不能临时插在旧结束事件前。原日志不改写，回放只以最后一个有效结束事件终止。恢复提交同时绑定会话代次及该运行的持久事件尾序号；上下文、待取消审批和恢复后缀原子发布，争用只重读，不重新派发工具。
 - 外部调用台账与 raw 文件是“已发出／已收到”的依据。源观察、独立审核及 ASR 的本地回读可接续已保存 raw，不重新发送；缺失、错配、损坏或结果未知仍不算成功。原失败、预算和审核原判不因此重置。
 - 共享主体的本地准备许可绑定前后工程字节、生产者、原审核与共用主体。仅允许完成相同的部分提交；遇到后续编辑拒绝。当前任务的额度仍是唯一授权来源，许可不复制额度。片尾仍独立，正式审核仍必须通过。
+- 生成任务初始化只恢复本地读取失败，不重跑失败的外部恢复阶段；不认识的账本协议/行或重复ID不能按空账本覆盖。执行结束关闭旧回调权限；清理在引用检查、持久删除及文件回收期间排他，同ID不能同时恢复/重用。过期定时器须同时匹配任务对象和当前timer句柄；提交失败先保留文件，后恢复记录，不能制造指向已删除结果的成功记录。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
 - 素材回执核对当前四槽的真实文件哈希，并在异步核验后重读工程版本；文件存在不等于登记内容仍有效。尚未制作的工程可用同名称、同类型、同哈希输入修复缺失或坏文件，保留资产 ID 和有效槽位；旧对象不覆盖、不删除。提交后回读不确定时保留新引用文件，后续可直接读取回执。
 - 视觉对照的原子发布结束私有清理权限：取消只清自己的工作目录，不删除共享 HTML/索引。不同文件路径可有同一内容身份，不能靠进程内去重假设没有其他读取者。缺索引的 HTML 不是有效缓存，按原哈希校验在本地重建，不重调模型。
@@ -25,6 +26,7 @@
 | 阶段回退、取消及旧派发快照 | `server/clipmentor/production-task.verify.ts`、`server/plugins/clipmentor-production.verify.ts` | 重启跳过返修；取消被等待状态吞掉；重复执行已完成阶段 |
 | 共享主体分步提交、人审并发 | `server/plugins/clipmentor-production.verify.ts` | 工程已提交但检查点保存失败；晚反馈擦除共享标记；晚准备覆盖成片确认；真实内容漂移与仅选择变化 |
 | 检查点读入与压缩 | `server/clipmentor/production-checkpoint.verify.ts` | 最新正文丢失/损坏不能退回较少次数；等时间戳保留最近发布；旧历史不可伪造 technical epoch |
+| 生成任务生命周期与清理 | `server/plugins/generation-job-state.verify.ts`（生产入口含JSON/SQLite） | 坏账本不覆盖；旧回调/旧timer不污染新任务；删除与恢复互斥；持久化失败保留文件；合法legacy正控 |
 | 运行索引多写方 | `server/plugins/project-store-agent-runtime.verify.ts`、`server/plugins/project-store-merge.verify.ts` | 旧快照不能删新证据；租约续期仍可见；同版本合入推进版本，重复与 retention 后重放不空增 |
 | 产物 body/index 发布 | `src/persist/agentRuntimeStore.verify.ts` | 发布已生效但确认丢失；同步/异步 observer 抛错；清理失败 |
 | 交接预算与绑定发布 | `server/clipmentor/handoff-publication.verify.ts` | 部分写入隐藏预算消耗；不同 payload 复用同一运行绑定 |
@@ -109,7 +111,7 @@
 | SM56 | Governed MiniMax raw-to-asset pipeline | 保留现有 | `server/plugins/voice-providers.ts` |
 | SM57 | Bound local preview-edit permit | 本轮修补 | `server/clipmentor/preview-edit.ts` |
 | SM58 | Material-intake commit/cleanup | 本轮修补 | `server/clipmentor/material-intake.ts` |
-| SM59 | Export/generation job lifecycle | 低风险保留 | `server/plugins/generation-job-lifecycle.ts` |
+| SM59 | Export/generation job lifecycle | 本轮修补 | `server/plugins/generation-job-lifecycle.ts`、`server/plugins/generation-job-store.ts` |
 | SM60 | Export temporary-to-managed publication | 本轮修补 | `server/plugins/export-runtime.ts` |
 | SM61 | Export delivery claim/reconciliation | 本轮修补 | `server/plugins/project-store-export-recovery.ts`、`src/export/serverExportRecovery.ts` |
 | SM62 | Agent upload staging ownership | 保留现有 | `server/plugins/upload-route-write.ts` |
