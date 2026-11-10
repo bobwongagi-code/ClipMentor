@@ -104,7 +104,6 @@ async function buildPreviewVisualEvidence(projectId:string,file:string,videoSha2
  }catch{/* Missing/damaged local evidence is rebuilt, never another external request. */}
  signal.throwIfAborted();
  const work=await mkdtemp(join(tmpdir(),'clipmentor-export-compare-'));
- let published=false;
  try{
   const pictures=new Map<number,{base64:string;width:number;height:number}>();
   for(const frame of plan.frames){
@@ -128,15 +127,15 @@ async function buildPreviewVisualEvidence(projectId:string,file:string,videoSha2
   await mkdir(root,{recursive:true});
   signal.throwIfAborted();
   await atomicWriteFile(path,html);
-  published=true;
   signal.throwIfAborted();
   await atomicWriteFile(metadataPath,JSON.stringify({identity,html_sha256:hash(html)}));
   signal.throwIfAborted();
   return {...result,cached:false};
- }catch(error){
-  if(signal.aborted&&published){await rm(path,{force:true});await rm(metadataPath,{force:true});}
-  throw error;
- }finally{await rm(work,{recursive:true,force:true});}
+ }finally{
+  // Atomic publication transfers files to the shared content-addressed cache.
+  // A cancelled builder only owns its private work, never another reader's files.
+  await rm(work,{recursive:true,force:true});
+ }
 }
 
 function waitForEvidence(job:SharedEvidence,signal?:AbortSignal):SharedEvidence['promise']{

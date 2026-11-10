@@ -11,6 +11,7 @@
 - 共享主体的本地准备许可绑定前后工程字节、生产者、原审核与共用主体。仅允许完成相同的部分提交；遇到后续编辑拒绝。当前任务的额度仍是唯一授权来源，许可不复制额度。片尾仍独立，正式审核仍必须通过。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
 - 素材回执核对当前四槽的真实文件哈希，并在异步核验后重读工程版本；文件存在不等于登记内容仍有效。尚未制作的工程可用同名称、同类型、同哈希输入修复缺失或坏文件，保留资产 ID 和有效槽位；旧对象不覆盖、不删除。提交后回读不确定时保留新引用文件，后续可直接读取回执。
+- 视觉对照的原子发布结束私有清理权限：取消只清自己的工作目录，不删除共享 HTML/索引。不同文件路径可有同一内容身份，不能靠进程内去重假设没有其他读取者。缺索引的 HTML 不是有效缓存，按原哈希校验在本地重建，不重调模型。
 - 局部预览准备先写本次私有临时目录，再不可覆盖地发布。相同名称不代表相同字节；并发晚到进程不能截断已发布文件。导出遇到既有文件同样比较真实字节。
 - 导出结果的目标重选只更新目的地，不重写已渲染结果的时间线、帧率等身份；已提交状态不能被旧重选、注册或错误回退。本地阶段与租约在同一 IndexedDB 事务内校验并写入，与服务端共用转换判断。远端回执只可合并匹配目标的当前本地句柄；缓存读取失败不能退用旧句柄授权。
 - 复核回执与审片板图片的消费同时绑定项目、运行、取消信号和完整规范化工程快照。请求前已取消不提交；JSON 或异步回执哈希完成后上下文已变，不暴露旧 pass 或图片。内容等值的新对象可读；短 revision 仅作原 HTTP 版本绑定，不能替代完整快照等值。原服务端回执保留，不因此重新调用。
@@ -29,6 +30,7 @@
 | raw 与 ASR 分块冷恢复 | `server/clipmentor/saved-model-response-recovery.verify.ts`、`server/plugins/clipmentor-funasr.verify.ts` | 真实子进程中断；只恢复已有块；错来源、损坏和缺结果不补调 |
 | 客户端回执/图片消费上下文 | `server/plugins/clipmentor-preview-review.verify.ts`、`server/clipmentor/storyboard.verify.ts` | 预取消零提交；JSON/真实 SHA 等待中切换；完整文档短 revision 碰撞；等值克隆及键顺序正控 |
 | 截止与晚返回 | `server/clipmentor/external-call.verify.ts` | 登记后发前已到期；非协作 transport 晚返回；未知提交不能重发 |
+| 视觉对照发布/取消 | `server/clipmentor/preview-visual-evidence.verify.ts` | 相同字节不同路径的晚取消不删赢家；HTML半提交不伪装缓存；完整提交零抽帧复用 |
 | 并发文件发布与同名异字节 | `server/clipmentor/preview-edit.verify.ts`、`server/clipmentor/native-preview-edit.verify.ts`、`server/plugins/export-runtime.verify.ts` | 同尾/异尾并发编码；晚到进程 truncate；同长错文件 |
 | 取消后的客户端应用 | `src/clipmentor/source-asr.verify.ts`、`src/clipmentor/production-gate.verify.ts`、`server/clipmentor/source-video.verify.ts` | 取消后完成 JSON/本地投影，不得应用或宣称当前 |
 | 看过的板与实际提交 | `server/plugins/clipmentor-production.verify.ts`；前端 `tests/e2e/chimera.spec.ts`、`tests/integration/production-loop.spec.ts` | 主版本不变而片尾/要求改变；旧 409 刷新晚到；旧板 token 不能借用新缓存 |
@@ -94,8 +96,8 @@
 | SM45 | Copy-review contract/scope reinterpretation | 保留现有 | `server/clipmentor/copy-review.ts` |
 | SM46 | Preview subprocess request recovery | 保留现有 | `server/plugins/clipmentor-preview-review.ts` |
 | SM47 | Preview effective approval projection | 保留现有 | `server/plugins/clipmentor-preview-review.ts` |
-| SM48 | Deferred visual comparison | 保留现有 | `server/clipmentor/preview-visual-evidence.ts` |
-| SM49 | Shared visual-evidence job | 保留现有 | `server/clipmentor/preview-visual-evidence.ts` |
+| SM48 | Deferred visual comparison | 本轮修补 | `server/clipmentor/preview-visual-evidence.ts` |
+| SM49 | Shared visual-evidence job | 本轮修补 | `server/clipmentor/preview-visual-evidence.ts` |
 | SM50 | ASR operation/chunk aggregate | 本轮修补 | `server/plugins/clipmentor-funasr.ts` |
 | SM51 | ASR saved-result readability/recovery | 本轮修补 | `server/plugins/clipmentor-funasr.ts` |
 | SM52 | R2 multipart transfer | 保留现有 | `server/clipmentor/video-media.ts` |

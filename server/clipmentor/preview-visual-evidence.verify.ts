@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,dirname,basename} from 'node:path';
+import {statSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import sharp from 'sharp';
 import {previewVisualEvidence,visualEvidenceSamples,visualEvidenceFailure,collectSavedPreviewVisualEvidence} from './preview-visual-evidence';
 
 const hash=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex');
 const root=await mkdtemp(join(tmpdir(),'clipmentor-visual-verify-'));
+const originalFetch=globalThis.fetch;let externalRequests=0;
+globalThis.fetch=async()=>{externalRequests++;throw Error('External requests forbidden in visual evidence regression');};
 try{
  const originalReceipt={status:'completed',operationId:'op',projectId:'project',videoSha256:'a'.repeat(64),full_film_accepted:false,
   result:{status:'review_required',original_judgment:'unchanged'},effective_review:{can_use_as_pass:false},visual_comparison:{status:'deferred'}};
@@ -81,6 +84,70 @@ try{
  assert('error' in ownerOutcome,'cancelled requester stops waiting');
  assert('value' in survivorOutcome&&survivorOutcome.value.status==='collected','owner cancellation must not cancel another active subscriber');
  assert.equal(ownerFrames,6,'survivor reuses rather than restarts the shared extraction');
+ // Same verified bytes at two paths make independent jobs with one artifact identity.
+ // Force cancellation at the real post-rename signal check, not during fake rendering.
+ for(const boundary of ['html','metadata']){
+  const duplicateFile=join(root,`duplicate-${boundary}.mp4`),sharedRoot=join(root,`publication-${boundary}`);
+  await writeFile(duplicateFile,bytes);
+  let release!:()=>void,enter!:()=>void,privateWork='',lateFrames=0,injections=0;
+  const held=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{enter=r;});
+  const controller=new AbortController();
+  const lateIO={...io,frame:async(_p:string,_s:number,out:string)=>{privateWork=dirname(out);if(lateFrames++===0){enter();await held;}return actual.toString('base64');}};
+  const late=previewVisualEvidence('fixture',duplicateFile,hash(bytes),input,manifest,lateIO,sharedRoot,controller.signal).then(value=>({value}),error=>({error}));
+  await entered;
+  let completedFrames=0;const winnerIO={...io,frame:async()=>{completedFrames++;return actual.toString('base64');}};
+  const winner=await previewVisualEvidence('fixture',file,hash(bytes),input,manifest,winnerIO,sharedRoot);
+  const beforeHtml=await readFile(winner.path!),beforeMeta=await readFile(winner.path!+'.json');
+  const observed=boundary==='html'?winner.path!:winner.path!+'.json',inode=statSync(observed).ino;
+  const originalThrow=AbortSignal.prototype.throwIfAborted;
+  try{
+   AbortSignal.prototype.throwIfAborted=function(this:AbortSignal){
+    if(!injections&&statSync(observed).ino!==inode){injections++;controller.abort();}
+    return originalThrow.call(this);
+   };
+   release();const outcome=await late;
+   assert('error' in outcome,'the late subscriber is cancelled, not reported collected');
+   assert.equal(injections,1,'must reach cancellation after real atomic publication');
+   // Subscriber rejection precedes builder cleanup. Wait for its own private directory
+   // to disappear before inspecting shared files, otherwise a delete could arrive later.
+   const deadline=Date.now()+5_000;
+   while(await access(privateWork).then(()=>true,()=>false)){assert(Date.now()<deadline,'late builder cleanup did not finish');await new Promise(r=>setTimeout(r,5));}
+   console.log('VISUAL_PUBLICATION',boundary,{injections,lateFrames,winnerIdentity:winner.identity});
+   assert.deepEqual(await readFile(winner.path!),beforeHtml,'cancelled late writer must not remove the completed reader HTML');
+   assert.deepEqual(await readFile(winner.path!+'.json'),beforeMeta,'cancelled late writer must not remove the completed reader index');
+   const beforeReadFrames=completedFrames;
+   const reused=await previewVisualEvidence('fixture',duplicateFile,hash(bytes),input,manifest,winnerIO,sharedRoot);
+   assert.equal(reused.cached,true,'published evidence remains locally recoverable after cancellation');
+   assert.equal(completedFrames,beforeReadFrames,'recovery must not repeat extraction');
+   assert.equal(reused.identity,winner.identity);
+  }finally{AbortSignal.prototype.throwIfAborted=originalThrow;release();controller.abort();}
+ }
+ // A cancelled first writer may leave a complete HTML without its index. It is
+ // never certified cached; only the ordinary hash-verified local rebuild recovers it.
+ for(const boundary of ['html','metadata']){
+  const destination=join(root,`orphan-${boundary}`),artifact=join(destination,basename(first.path!));
+  const observed=boundary==='html'?artifact:artifact+'.json',controller=new AbortController();
+  let privateWork='',extractions=0,injections=0;
+  const localIO={...io,frame:async(_p:string,_s:number,out:string)=>{privateWork=dirname(out);extractions++;return actual.toString('base64');}};
+  const originalThrow=AbortSignal.prototype.throwIfAborted;
+  try{
+   AbortSignal.prototype.throwIfAborted=function(this:AbortSignal){
+    if(!injections&&existsSync(observed)){injections++;controller.abort();}
+    return originalThrow.call(this);
+   };
+   const result=await previewVisualEvidence('fixture',file,hash(bytes),input,manifest,localIO,destination,controller.signal).then(value=>({value}),error=>({error}));
+   assert('error' in result);assert.equal(injections,1,'must reach the requested publication boundary');
+   const deadline=Date.now()+5_000;
+   while(await access(privateWork).then(()=>true,()=>false)){assert(Date.now()<deadline,'cancelled builder cleanup did not finish');await new Promise(r=>setTimeout(r,5));}
+   assert.equal(existsSync(artifact),true,'publication is retained despite cancelled consumption');
+   assert.equal(existsSync(artifact+'.json'),boundary==='metadata');
+   const before=extractions,recovered=await previewVisualEvidence('fixture',file,hash(bytes),input,manifest,localIO,destination);
+   assert.equal(recovered.status,'collected');assert.equal(recovered.cached,boundary==='metadata','a partial publication cannot masquerade as a verified cache hit');
+   assert.equal(extractions-before,boundary==='metadata'?0:6,'only the missing-index case needs bounded local extraction');
+   assert.equal(recovered.full_film_accepted,false);assert.equal(recovered.identity,first.identity);
+   console.log('VISUAL_ORPHAN_RECOVERY',boundary,{injections,extractions,cached:recovered.cached});
+  }finally{AbortSignal.prototype.throwIfAborted=originalThrow;controller.abort();}
+ }
  let failures=0;
  const failingIO={...io,frame:async()=>{failures++;throw Error('secret must not escape');}};
  for(let i=0;i<2;i++)await assert.rejects(previewVisualEvidence('fixture',file,hash(bytes),input,manifest,failingIO,join(root,'negative-cache')));
@@ -122,5 +189,6 @@ try{
  const textManifest={...manifest,scenes:[{kind:'composition',start_frame:0,end_frame:30,layers:[]},{kind:'composition',start_frame:30,end_frame:32,layers:[layer]},{kind:'composition',start_frame:32,end_frame:300,layers:[]}]};
  assert(visualEvidenceSamples(input,textManifest).frames.includes(30),'short-lived text missed by first/middle/last remains sampled');
  assert.deepEqual(await previewVisualEvidence('fixture',file,hash(bytes),{...input,visual_criteria:undefined},manifest,io,join(root,'none')),{status:'not_applicable',full_film_accepted:false},'legacy plans need no new reference');
+ assert.equal(externalRequests,0,'all publication and recovery checks remain offline');
  console.log('Visual comparison: actual/reference pixels, all units, native text sampling, immutable input, warm cache, stale/corrupt media, malformed/empty/failed extraction, escaping, overflow and legacy compatibility passed; zero external calls.');
-}finally{await rm(root,{recursive:true,force:true});}
+}finally{globalThis.fetch=originalFetch;await rm(root,{recursive:true,force:true});}
