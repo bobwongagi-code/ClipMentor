@@ -1,4 +1,5 @@
 import type { AgentContext } from '../agent/context';
+import {canonicalProjectJson} from '../agent/external-edit-session';
 import type { SourceVideoRequest, SourceVideoResult, SourceVideoReceipt } from '../../shared/clipmentor-source-video';
 import { observationTaskWithBoundaryContext, validateSourceVideoTask, isObservationMaterial } from '../../shared/clipmentor-source-video';
 import { copyReviewSubject, copyTeachingPacketFromDoc } from './production-gate';
@@ -8,9 +9,12 @@ export async function requestSourceVideo(args: Record<string, unknown>, ctx: Age
   if (Object.keys(args).some(k => !['operationId','maxRequests','expectedRevision','observationTask'].includes(k))
     || typeof args.operationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(args.operationId)
     || args.maxRequests !== 1) return {error:'Explicit one-request authorization and stable UUID v4 required'};
-  const doc = ctx.getDoc(), a = doc.clipMentorAnalysis, author = ctx.getAgentRunId?.(), project = ctx.getProjectId?.(), outer=ctx.getAgentRunSignal?.();
+  const liveDoc=ctx.getDoc(),author=ctx.getAgentRunId?.(),project=ctx.getProjectId?.(),outer=ctx.getAgentRunSignal?.();
   if(outer?.aborted)return {error:'Source observation cancelled before submission',requestsSent:0};
-  const current=()=>ctx.getDoc()===doc&&ctx.getProjectId?.()===project&&ctx.getAgentRunId?.()===author&&!outer?.aborted;
+  const snapshot=canonicalProjectJson(liveDoc),doc=JSON.parse(snapshot) as typeof liveDoc;
+  const a=doc.clipMentorAnalysis;let requestSignal=outer;
+  const current=()=>canonicalProjectJson(ctx.getDoc())===snapshot&&ctx.getProjectId?.()===project
+    &&ctx.getAgentRunId?.()===author&&ctx.getAgentRunSignal?.()===outer&&!requestSignal?.aborted;
   if (!a || a.revision !== args.expectedRevision || !author || !project) return {error:'Current revision and host context required'};
   const asset = doc.assets.find(x => x.id === a.source.asset_id);
   if (!asset || !a.source.sourceContentHash || asset.sourceContentHash !== a.source.sourceContentHash) return {error:'Hash-bound source required'};
@@ -24,10 +28,12 @@ export async function requestSourceVideo(args: Record<string, unknown>, ctx: Age
       ...(args.observationTask===undefined?{}:{observationTask:observationTaskWithBoundaryContext(args.observationTask,a.source.duration_seconds)})};
     if(!current()) return {error:'Project changed; no request sent',requestsSent:0};
     ctx.onToolProgress?.('3.8连续源片视听观察：一次预算，不重试，不改稿或制作');
-    const timeout=AbortSignal.timeout(660000);sent=true;
-    const response=await (ctx.hostFetch ?? fetch)('/api/clipmentor/observe-video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:outer?AbortSignal.any([outer,timeout]):timeout});
+    const timeout=AbortSignal.timeout(660000);requestSignal=outer?AbortSignal.any([outer,timeout]):timeout;
+    if(!current())return{error:'Project changed or run cancelled before dispatch; no request sent',requestsSent:0};
+    sent=true;
+    const response=await (ctx.hostFetch ?? fetch)('/api/clipmentor/observe-video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request),signal:requestSignal});
     const value=await response.json();
-    outer?.throwIfAborted();
+    requestSignal.throwIfAborted();
     const failure=value as {error?:unknown;receipt?:SourceVideoReceipt}|null;
     // A keepalive response has already sent HTTP 200. The terminal receipt,
     // not that transport status, determines whether the operation succeeded.
@@ -57,22 +63,26 @@ export async function requestSourceVideo(args: Record<string, unknown>, ctx: Age
 export async function readSourceVideo(args: Record<string, unknown>, ctx: AgentContext): Promise<unknown> {
   if (Object.keys(args).some(k => k !== 'operationId') || typeof args.operationId !== 'string'
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(args.operationId)) return {error:'Stable operation UUID required'};
-  const doc=ctx.getDoc(), projectId=ctx.getProjectId?.(),outer=ctx.getAgentRunSignal?.();
+  const liveDoc=ctx.getDoc(),projectId=ctx.getProjectId?.(),runId=ctx.getAgentRunId?.(),outer=ctx.getAgentRunSignal?.();
+  const snapshot=canonicalProjectJson(liveDoc),doc=JSON.parse(snapshot) as typeof liveDoc;
+  const current=()=>canonicalProjectJson(ctx.getDoc())===snapshot&&ctx.getProjectId?.()===projectId
+    &&ctx.getAgentRunId?.()===runId&&ctx.getAgentRunSignal?.()===outer;
   if(!projectId) return {error:'Host project required'};
   try {
     outer?.throwIfAborted();
-    const deadline=AbortSignal.timeout(10_000);
+    const deadline=AbortSignal.timeout(10_000),signal=outer?AbortSignal.any([outer,deadline]):deadline;
+    signal.throwIfAborted();
     const response=await (ctx.hostFetch ?? fetch)('/api/clipmentor/observe-video',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:'read_receipt',operationId:args.operationId,projectId}),signal:outer?AbortSignal.any([outer,deadline]):deadline});
+      body:JSON.stringify({action:'read_receipt',operationId:args.operationId,projectId}),signal});
     if(!response.ok) return {error:'Saved source receipt unavailable or not bound to this project; no model request sent',requestsSent:0};
     const receipt=await response.json() as SourceVideoReceipt;
-    outer?.throwIfAborted();
+    signal.throwIfAborted();
     if(receipt.operationId!==args.operationId || receipt.projectId!==projectId || receipt.requestsSent!==0
       || receipt.actual_handoff_verified!==false || receipt.complete_film_accepted!==false) return {error:'Invalid saved source receipt',requestsSent:0};
     const subject=await copyReviewSubject(doc).catch(()=>null);
     const a=doc.clipMentorAnalysis,asset=doc.assets.find(x=>x.id===a?.source.asset_id);
-    outer?.throwIfAborted();
-    return {ok:true,receipt,current_binding:ctx.getDoc()===doc && ctx.getProjectId?.()===projectId && subject?.digest===receipt.subject.digest && subject?.revision===receipt.subject.revision
+    signal.throwIfAborted();
+    return {ok:true,receipt,current_binding:current() && subject?.digest===receipt.subject.digest && subject?.revision===receipt.subject.revision
       && a?.source.sourceContentHash===receipt.source_hash && asset?.sourceContentHash===receipt.source_hash ? 'current':'stale',requestsSent:0,
       note:'Receipt read only. Validation means structure/time tolerance, not semantic or production approval. Original failure and raw timestamps are retained.'};
   } catch { return {error:'Cannot read/bind saved source receipt; no model request sent',requestsSent:0}; }

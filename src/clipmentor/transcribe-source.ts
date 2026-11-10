@@ -1,4 +1,5 @@
 import type { AgentContext } from '../agent/context';
+import {canonicalProjectJson} from '../agent/external-edit-session';
 import { isAnalysisActor, isClipMentorAnalysis, checkAnalysisHandoff, type ClipMentorAnalysis } from './analysis';
 import { isSourceTranscription } from '../../shared/clipmentor-asr';
 
@@ -6,7 +7,9 @@ import { isSourceTranscription } from '../../shared/clipmentor-asr';
 export async function transcribeClipMentorAsset(args: Record<string, unknown>, ctx: AgentContext): Promise<unknown> {
   const doc = ctx.getDoc(), projectId=ctx.getProjectId?.(), runId=ctx.getAgentRunId?.(), signal=ctx.getAgentRunSignal?.();
   if(signal?.aborted)return {error:'Source ASR cancelled before submission',requestsSent:0};
-  const current=()=>ctx.getDoc()===doc&&ctx.getProjectId?.()===projectId&&ctx.getAgentRunId?.()===runId&&!signal?.aborted;
+  const snapshot=canonicalProjectJson(doc);
+  const current=()=>canonicalProjectJson(ctx.getDoc())===snapshot&&ctx.getProjectId?.()===projectId
+    &&ctx.getAgentRunId?.()===runId&&ctx.getAgentRunSignal?.()===signal&&!signal?.aborted;
   if (doc.clipMentorAnalysis) return { error: 'Analysis already exists; source transcription initialization will not overwrite it' };
   if (args.expectedRevision !== 0 || !isAnalysisActor(args.actor) || typeof args.reason !== 'string' || !args.reason.trim()) return { error: 'Fresh analysis, declared actor and reason required' };
   const asset = doc.assets.find((a) => a.id === args.assetId);

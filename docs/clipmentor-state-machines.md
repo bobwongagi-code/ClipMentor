@@ -14,6 +14,7 @@
 - 视觉对照的原子发布结束私有清理权限：取消只清自己的工作目录，不删除共享 HTML/索引。不同文件路径可有同一内容身份，不能靠进程内去重假设没有其他读取者。缺索引的 HTML 不是有效缓存，按原哈希校验在本地重建，不重调模型。
 - 局部预览准备先写本次私有临时目录，再不可覆盖地发布。相同名称不代表相同字节；并发晚到进程不能截断已发布文件。导出遇到既有文件同样比较真实字节。
 - 导出结果的目标重选只更新目的地，不重写已渲染结果的时间线、帧率等身份；已提交状态不能被旧重选、注册或错误回退。本地阶段与租约在同一 IndexedDB 事务内校验并写入，与服务端共用转换判断。远端回执只可合并匹配目标的当前本地句柄；缓存读取失败不能退用旧句柄授权。
+- 源材料工具按作用区分当前性：会写稿件/分析的操作核对完整快照，ASR只读核对原片事实，历史观察可读但失配标stale。subject与packet及历史绑定必须由同一冻结输入派生；A→B→A的最终相等不能证明中途没有混包。进度回调后、付费派发前再核对运行/信号；硬截止后的非协作返回不能生效。
 - 复核回执与审片板图片的消费同时绑定项目、运行、取消信号和完整规范化工程快照。请求前已取消不提交；JSON 或异步回执哈希完成后上下文已变，不暴露旧 pass 或图片。内容等值的新对象可读；短 revision 仅作原 HTTP 版本绑定，不能替代完整快照等值。原服务端回执保留，不因此重新调用。
 - 人审页面按实际看过的板提交：主工程、兄弟片尾、任务与要求一起确定 identity。该 identity 是 HTTP 版本绑定，不能替代内容审核。取消、页面代次或上下文变化后，晚到响应不可写入当前工程或替换当前板。
 
@@ -28,6 +29,7 @@
 | 产物 body/index 发布 | `src/persist/agentRuntimeStore.verify.ts` | 发布已生效但确认丢失；同步/异步 observer 抛错；清理失败 |
 | 交接预算与绑定发布 | `server/clipmentor/handoff-publication.verify.ts` | 部分写入隐藏预算消耗；不同 payload 复用同一运行绑定 |
 | raw 与 ASR 分块冷恢复 | `server/clipmentor/saved-model-response-recovery.verify.ts`、`server/plugins/clipmentor-funasr.verify.ts` | 真实子进程中断；只恢复已有块；错来源、损坏和缺结果不补调 |
+| 源工具批量边界 | `src/clipmentor/source-context.verify.ts`（接现有生产回归） | 108例：JSON/真实SHA/回调/最终写入/三种ABA；合法克隆与只读无关改动放行 |
 | 客户端回执/图片消费上下文 | `server/plugins/clipmentor-preview-review.verify.ts`、`server/clipmentor/storyboard.verify.ts` | 预取消零提交；JSON/真实 SHA 等待中切换；完整文档短 revision 碰撞；等值克隆及键顺序正控 |
 | 截止与晚返回 | `server/clipmentor/external-call.verify.ts` | 登记后发前已到期；非协作 transport 晚返回；未知提交不能重发 |
 | 视觉对照发布/取消 | `server/clipmentor/preview-visual-evidence.verify.ts` | 相同字节不同路径的晚取消不删赢家；HTML半提交不伪装缓存；完整提交零抽帧复用 |
@@ -136,7 +138,7 @@
 | SM85 | Progress-step projection | 保留现有 | `Chimera-Prototype-Mockup/src/pages/productionPanelState.ts` |
 | SM86 | Copy result received versus applied | 本轮修补 | `src/clipmentor/request-copy-review.ts` |
 | SM87 | ASR one-shot initialization | 本轮修补 | `src/clipmentor/transcribe-source.ts` |
-| SM88 | Observation/saved-ASR read currentness | 本轮修补 | `src/clipmentor/request-source-video.ts` |
+| SM88 | Observation/saved-ASR read currentness | 本轮修补 | `src/clipmentor/request-source-video.ts`、`src/clipmentor/read-source-asr.ts` |
 | SM89 | Preview client effective-gate projection | 本轮修补 | `src/clipmentor/request-preview-review.ts` |
 | SM90 | Storyboard/artifact snapshot readers | 本轮修补 | `src/clipmentor/read-storyboard.ts` |
 | SM91 | Agent-run lifecycle/terminal settlement | 保留现有 | `server/agent-runs/store-types.ts` |
