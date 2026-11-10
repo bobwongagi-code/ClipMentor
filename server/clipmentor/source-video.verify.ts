@@ -64,7 +64,17 @@ const good=()=>({windows:input.units.flatMap(u=>u.windows.map(w=>({window_id:w.w
 const root=await mkdtemp(join(tmpdir(),'clipmentor-source-video-test-'));let calls=0;
 const key='test-only-sensitive-sentinel';
 const deps:SourceVideoDependencies={directory:root,key,resolve:()=>'/synthetic',hash:async()=>digest,audioPresent:async()=>true,size:async()=>video.length,read:async()=>video,
- post:async(body,credential,_signal,operation)=>{calls++;assert.equal(credential,key);assert.equal(operation,request.operationId);const b=JSON.parse(body);assert.deepEqual(Buffer.from(b.contents[0].parts[0].inlineData.data,'base64'),video);assert.equal(b.contents[0].parts[0].videoMetadata.fps,5);return {status:200,body:{modelVersion:'mock-returned-model',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(good())}]}}]}}}};
+ post:async(body,credential,signal,operation)=>{
+  calls++;assert.equal(credential,key);assert.equal(operation,request.operationId);assert(signal instanceof AbortSignal);
+  const b=JSON.parse(body);
+  assert.deepEqual(Object.keys(b).sort(),['contents','generationConfig']);
+  assert.deepEqual(b.generationConfig,{maxOutputTokens:16384,temperature:0,responseMimeType:'application/json'});
+  assert.equal(b.contents.length,1);assert.equal(b.contents[0].role,'user');assert.equal(b.contents[0].parts.length,2);
+  assert.deepEqual(b.contents[0].parts[0],{inlineData:{mimeType:'video/mp4',data:video.toString('base64')},videoMetadata:{fps:5}});
+  assert.equal(typeof b.contents[0].parts[1].text,'string');
+  assert(b.contents[0].parts[1].text.includes('window_id'),'Actual dispatched observation keeps the evidence contract');
+  return {status:200,body:{modelVersion:'mock-returned-model',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(good())}]}}]}};
+ }};
 try {
  // A second storage failure must not erase already captured transport facts.
  const persistDirectory=join(root,'blocked-persist'),persistBackup=persistDirectory+'.reserved';await mkdir(persistDirectory);

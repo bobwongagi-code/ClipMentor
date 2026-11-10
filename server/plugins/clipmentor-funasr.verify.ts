@@ -22,7 +22,13 @@ const deps = {
   encode: async (_file: string, start: number, end: number) => oversized && end - start > 130 ? new Uint8Array(8_000_001) : new Uint8Array([Math.round(start) % 255, 1, 2]),
   fetch: (async (_input, init) => {
     calls++; submitted.push(JSON.parse(String(init?.body)));
-    assert.equal(new Headers(init?.headers).get('Authorization'), `Bearer ${secret}`);
+    assert.equal(_input, endpoint);
+    assert.equal(init?.method, 'POST');
+    assert.equal(init?.redirect, 'error');
+    assert(init?.signal instanceof AbortSignal, 'ASR cancellation/deadline reaches dispatch');
+    assert.deepEqual(Object.fromEntries(new Headers(init?.headers)), {
+      authorization: `Bearer ${secret}`, 'content-type': 'application/json', 'x-dashscope-sse': 'disable',
+    });
     if (calls === failAt) throw new Error(`Sensitive upstream failure ${secret}`);
     return Response.json({ request_id: 'request-test', output: { sentence: { text: 'hello',
       ...(missingTimes ? {} : { words: [{ text: 'hello', begin_time: 640, end_time: 900 }] }) } } });
@@ -41,6 +47,11 @@ try {
   assert.deepEqual(result.audio, ASR_AUDIO); assert.equal(result.words[0].start_seconds, 0.64);
   assert.equal(result.requested_language, 'auto'); assert.equal(result.detected_language, null);
   assert(!('language_hints' in (submitted[0].parameters as Record<string, unknown>)));
+  assert.deepEqual(submitted[0], {
+    model: 'fun-asr-flash-2026-06-15',
+    input: { messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: 'data:audio/mp3;base64,AAEC' } }] }] },
+    parameters: { format: 'mp3', sample_rate: '16000' }, resources: [],
+  }, 'ASR wire retains exact encoded bytes and frozen model/format; local source identity/budget are not upstream parameters');
   assert.equal(result.status, 'completed');
   assert.deepEqual(await transcribeClipMentorSource(first, deps), result); assert.equal(calls, 1, 'same operation never charges again');
   const firstLedger=join(directory,`${first.operationId}.json`),savedFirst=JSON.parse(await readFile(firstLedger,'utf8'));

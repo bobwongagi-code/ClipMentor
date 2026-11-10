@@ -9,9 +9,24 @@ const directory=await mkdtemp(join(tmpdir(),'cc-external-integration-'));
 process.env.OPENCHATCUT_DATA_DIR=directory;
 const originalFetch=globalThis.fetch;
 const wav=Buffer.alloc(44+16000*2);wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(wav.length-44,40);
-let calls=0,signalSeen=false;
+let calls=0,signalSeen=false,expectRichDispatch=false,richDispatchChecked=false;
 globalThis.fetch=(async(url,init)=>{
- if(String(url)==='https://voice.invalid/v1/t2a_v2'){calls++;signalSeen=!!init?.signal;return Response.json({data:{audio:wav.toString('hex')},base_resp:{status_code:0}});}
+ if(String(url)==='https://voice.invalid/v1/t2a_v2'){
+  calls++;signalSeen=!!init?.signal;
+  if(expectRichDispatch) {
+   assert.equal(init?.method,'POST');
+   assert.equal(new Headers(init?.headers).get('authorization'),'Bearer offline-secret');
+   assert.deepEqual(JSON.parse(String(init?.body)),{
+    model:'speech-2.8-hd',text:'Parameter contract.',stream:false,output_format:'hex',
+    voice_setting:{voice_id:'Malay_female_1_v1',speed:1.1,vol:1.2,pitch:0,emotion:'calm',text_normalization:false,latex_read:false},
+    audio_setting:{sample_rate:16000,format:'wav',channel:1},language_boost:'Malay',
+    pronunciation_dict:{tone:['nama/(na ma)']},voice_modify:{pitch:0,intensity:-10,timbre:15,sound_effects:'robotic'},
+    subtitle_enable:true,subtitle_type:'word',
+   },'Actual MiniMax dispatch must retain declared parameters, not just the body helper');
+   richDispatchChecked=true;
+  }
+  return Response.json({data:{audio:wav.toString('hex')},base_resp:{status_code:0}});
+ }
  throw Error('Unexpected outbound request in zero-network test');
 }) as typeof fetch;
 try{
@@ -32,6 +47,14 @@ try{
   const longProject='p'.repeat(160),longVoice=await post(longProject,false,'Projek panjang.');assert.equal(longVoice.status,200,'existing 160-character project IDs can synthesize');assert.equal(calls,3);
   assert.equal((await post(longProject,true,'Projek panjang.')).status,200,'existing max-length project IDs can cold-recover saved voice');assert.equal(calls,3);
   assert.equal((await post('p'.repeat(161),false,'Invalid project.')).status,400,'invalid overlong project is rejected before provider submission');assert.equal(calls,3);
+  const rich={...body,text:'Parameter contract.',speed:1.1,volume:1.2,pitch:0,emotion:'calm',textNormalization:false,latexRead:false,
+   languageBoost:'Malay',pronunciations:['nama/(na ma)'],voiceModify:{pitch:0,intensity:-10,timbre:15,effect:'robotic'},subtitleEnable:true,subtitleType:'word'};
+  const sendRich=(patch={})=>originalFetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-ClipMentor-Project':'parameter-contract'},body:JSON.stringify({...rich,...patch})});
+  expectRichDispatch=true;
+  try{assert.equal((await sendRich()).status,200);}finally{expectRichDispatch=false;}
+  assert.equal(calls,4);assert(richDispatchChecked,'Expected request must actually reach the exact wire assertion');
+  assert.equal((await sendRich({instructions:'Ignored instruction must never be billed'})).status,400);assert.equal(calls,4,'unsupported instruction rejected before dispatch');
+  assert.equal((await sendRich({emotion:'whisper'})).status,400);assert.equal(calls,4,'frozen model restriction rejected without changing model or dispatching');
   console.log('PASS actual voice HTTP route: durable raw, stable audio, scoped reuse, read-only recovery, changed text and signal');
  }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
  const {previewBridge}=await import('../plugins/clipmentor-preview-review.ts');
