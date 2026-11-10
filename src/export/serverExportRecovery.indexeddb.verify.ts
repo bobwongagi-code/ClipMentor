@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
 import { access } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { installedRenderBrowserExecutable } from '../../server/render-browser';
 import { build } from 'esbuild';
 import { openBrowser } from '@remotion/renderer';
 
 // Use the already installed product browser, never download one. A fresh browser
 // profile exercises native IndexedDB transactions across two isolated tabs.
-const platform = process.platform === 'darwin' ? 'mac' : process.platform;
-const executable = process.env.CC_BROWSER_EXECUTABLE ?? join(process.cwd(), 'node_modules/.remotion/chrome-headless-shell',
-  `${platform}-${process.arch}`, `chrome-headless-shell-${platform}-${process.arch}`, 'chrome-headless-shell');
+const executable = installedRenderBrowserExecutable();
 await access(executable);
 const bundle = await build({
   stdin: { contents: `import * as api from './src/export/serverExportRecovery.ts';

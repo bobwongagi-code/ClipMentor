@@ -10,7 +10,8 @@ const directory=await mkdtemp(join(tmpdir(),'creator-storyboard-test-'));
 process.env.OPENCHATCUT_DATA_DIR=directory;
 const {creatorStoryboard}=await import('./creator-storyboard');
 const {validateCreatorDocument,assertCreatorDocumentEdit,saveCreatorStoryboardDocument,loadCreatorStoryboardDocument}=await import('./creator-storyboard-document');
-const {assertCreatorDocumentPdf,renderCreatorDocument,creatorDocumentBrowserExecutable}=await import('./creator-storyboard-pdf');
+const {assertCreatorDocumentPdf,renderCreatorDocument}=await import('./creator-storyboard-pdf');
+const {installedRenderBrowserExecutable}=await import('../render-browser');
 const {createPanelStoryboard,panelStoryboardAsset,preparePanelStoryboardForAuthor}=await import('./production-panel-delivery');
 const {deliveryFileName,attachmentDisposition}=await import('./delivery-filename');
 const {uploadDir}=await import('../media-dir');
@@ -25,11 +26,11 @@ try{
    ['win32','x64','win64','chrome-headless-shell.exe'],['darwin','arm64','mac-arm64','chrome-headless-shell'],['darwin','x64','mac-x64','chrome-headless-shell'],
   ] as const){
    os.platform=()=>platform;os.arch=()=>arch;
-   assert(creatorDocumentBrowserExecutable().endsWith(join(folder,`chrome-headless-shell-${folder}`,executable)),`${platform}/${arch} uses the installed engine's mapping`);
+   assert(installedRenderBrowserExecutable().endsWith(join(folder,`chrome-headless-shell-${folder}`,executable)),`${platform}/${arch} uses the installed engine's mapping`);
   }
  }finally{os.platform=oldPlatform;os.arch=oldArch;if(previousBrowser!==undefined)process.env.CC_BROWSER_EXECUTABLE=previousBrowser;}
 
- try{process.env.CC_BROWSER_EXECUTABLE=missingBrowserPath;assert.equal(creatorDocumentBrowserExecutable(),missingBrowserPath);
+ try{process.env.CC_BROWSER_EXECUTABLE=missingBrowserPath;assert.equal(installedRenderBrowserExecutable(),missingBrowserPath);
   await assert.rejects(renderCreatorDocument('<html></html>',new AbortController().signal),/ENOENT/);
  }finally{if(previousBrowser===undefined)delete process.env.CC_BROWSER_EXECUTABLE;else process.env.CC_BROWSER_EXECUTABLE=previousBrowser;}
  const cancelled=new AbortController();cancelled.abort();await assert.rejects(renderCreatorDocument('<html></html>',cancelled.signal),/abort/i);
