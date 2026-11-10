@@ -38,6 +38,7 @@ import {
   type AgentArtifactRecord,
   type AgentCheckpointRecord,
   type AgentRunEvent,
+  type AgentRunContext,
   type AgentRunRecord,
   type AgentRunStatus,
   type AgentRuntimeSidecar,
@@ -191,17 +192,41 @@ export async function updateAgentRunLease(
   if (result.authoritative) notify(projectId);
   return result.lease;
 }
-export function appendAgentRunEvent(projectId: string, runId: string, event: Omit<AgentRunEvent, 'eventId' | 'projectId' | 'runId' | 'sequence' | 'createdAt'>): Promise<AgentRunEvent> {
-  const eventId = crypto.randomUUID();
+type NewAgentRunEvent = Omit<AgentRunEvent, 'eventId' | 'projectId' | 'runId' | 'sequence' | 'createdAt'>;
+export class AgentRunEventConflictError extends Error {
+  readonly reason: 'generation' | 'sequence';
+  constructor(reason: 'generation' | 'sequence') { super(`Agent run event ${reason} changed`); this.reason = reason; }
+}
+interface RunRecoveryBinding {
+  sessionGeneration: string;
+  expectedSequence: number;
+  context: AgentRunContext;
+}
+
+
+/** Publish a recovery suffix in one existing store mutation, without per-event fsync/CAS. */
+export function appendAgentRunEvents(projectId: string, runId: string, events: readonly NewAgentRunEvent[], recovery?: RunRecoveryBinding): Promise<AgentRunEvent[]> {
+  if (!events.length && !recovery) return Promise.resolve([]);
+  const pending = events.map(event => ({ ...event, eventId: crypto.randomUUID() }));
   return mutate(projectId, (current) => {
+    if (recovery && (current.sessionGeneration ?? 'legacy') !== recovery.sessionGeneration) throw new AgentRunEventConflictError('generation');
     const run = current.runs.find((item) => item.runId === runId);
     if (!run) throw new Error(`Agent run not found: ${runId}`);
-    const next: AgentRunEvent = { ...event, eventId, projectId, runId, sequence: (run.events.at(-1)?.sequence ?? 0) + 1, createdAt: Date.now() };
+    const start = run.events.at(-1)?.sequence ?? 0, now = Date.now();
+    if (recovery && start !== recovery.expectedSequence) throw new AgentRunEventConflictError('sequence');
+    const next = pending.map((event, index) => ({ ...event, projectId, runId, sequence: start + index + 1, createdAt: now }));
     const runs = current.runs.map((item) => item.runId === runId
-      ? { ...item, updatedAt: next.createdAt, events: [...item.events, next] } : item);
-    return [{ ...current, runs }, next];
+      ? { ...item, ...(recovery && !terminal(item.status) ? { context: recovery.context } : {}), updatedAt: next.at(-1)?.createdAt ?? item.updatedAt, events: [...item.events, ...next] } : item);
+    const approvals = recovery ? current.approvals.map(a => a.runId === runId && a.status === 'pending'
+      ? { ...a, status: 'cancelled' as const, decidedAt: now } : a) : current.approvals;
+    return [{ ...current, runs, approvals }, next];
   });
 }
+
+export async function appendAgentRunEvent(projectId: string, runId: string, event: NewAgentRunEvent): Promise<AgentRunEvent> {
+  return (await appendAgentRunEvents(projectId, runId, [event]))[0];
+}
+
 export function upsertAgentApproval(record: AgentApprovalRecord): Promise<void> {
   return mutate(record.projectId, (current) => {
     const existing = current.approvals.find((item) => item.approvalId === record.approvalId);

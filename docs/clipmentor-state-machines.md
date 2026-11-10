@@ -6,6 +6,7 @@
 
 - `ProductionTask` 及持久运行检查点是制作控制依据。派发时的内存快照不能覆盖执行所有者读到的新检查点。返修要同时保存目标阶段及失效的后续检查点。已登记的最新检查点不可读、正文与索引不符或协议身份错误时，不能退回旧检查点。等时间戳按索引中的发布先后排序，读取与历史压缩共用同一实现。
 - 运行索引的排队写入不代表读取版本仍然有效。普通写入必须匹配 `expectedRevision` 并推进一次；set/merge 合入有效变化也推进版本，无变化重放不推进。竞争后仅由现有本地重读接续，不授予外部重试。
+- Agent 冷恢复的未知工具结果必须与最后的结束事件按递增编号一起落盘，不能临时插在旧结束事件前。原日志不改写，回放只以最后一个有效结束事件终止。恢复提交同时绑定会话代次及该运行的持久事件尾序号；上下文、待取消审批和恢复后缀原子发布，争用只重读，不重新派发工具。
 - 外部调用台账与 raw 文件是“已发出／已收到”的依据。源观察、独立审核及 ASR 的本地回读可接续已保存 raw，不重新发送；缺失、错配、损坏或结果未知仍不算成功。原失败、预算和审核原判不因此重置。
 - 共享主体的本地准备许可绑定前后工程字节、生产者、原审核与共用主体。仅允许完成相同的部分提交；遇到后续编辑拒绝。当前任务的额度仍是唯一授权来源，许可不复制额度。片尾仍独立，正式审核仍必须通过。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
@@ -136,7 +137,7 @@
 | SM90 | Storyboard/artifact snapshot readers | 保留现有 | `src/clipmentor/read-storyboard.ts` |
 | SM91 | Agent-run lifecycle/terminal settlement | 保留现有 | `server/agent-runs/store-types.ts` |
 | SM92 | Tool claim/result settlement | 保留现有 | `server/agent-runs/store-tools.ts` |
-| SM93 | Cold Agent-run/event recovery | 保留现有 | `server/agent-runs/store-recovery.ts` |
+| SM93 | Cold Agent-run/event recovery | 本轮修补 | `server/agent-runs/store-recovery.ts`、`src/persist/agentRuntimeStore.ts` |
 | SM94 | Project edit ownership lease | 保留现有 | `server/external-agent/project-edit-ownership.ts` |
 | SM95 | Agent-run ownership lease | 本轮修补 | `server/plugins/project-store-agent-runtime.ts` |
 | SM96 | Headless draft/commit transaction | 保留现有 | `server/clipmentor/headless-editor.ts` |

@@ -333,6 +333,26 @@ try {
   assert.equal((await postVisual('tool-result', { ...visualBinding, result: visual })).status, 200);
   assert.deepEqual(await visualDelivered, visual, 'clear image payload above 1 MiB reaches the tool consumer unchanged');
 
+  const { run: coldRun, capability: coldCapability } = createRunWithCapability({ projectId: 'project-cold-tool-sse', sessionGeneration: 'legacy', provider: 'deepseek', model: 'test' });
+  pushRunEvent(coldRun, 'server-tool-request', { toolCallId: 'cold-call', name: 'read_timeline', argsDigest: 'cold-digest' });
+  await setRunStatus(coldRun, 'failed');
+  const savedDoneId = coldRun.events.at(-1)!.id;
+  await flushServerRunPersistence(coldRun);
+  const durableBefore = (await loadAgentRuntimeSidecar(coldRun.projectId)).runs.find(r => r.runId === coldRun.id)!;
+  resetServerRunStoreForTest();
+  const coldHeaders = { 'X-OpenChatCut-Run-Capability': coldCapability };
+  const cold = await readSse(`/api/agent-runs/${coldRun.id}/events?projectId=${coldRun.projectId}&after=0`, coldHeaders);
+  assert.equal(cold.events.at(-1)?.type, 'done', 'Real SSE must deliver terminal after interruption closure instead of skipping a lower done ID');
+  assert(cold.events.every((event, index, all) => index === 0 || event.id > all[index - 1].id));
+  const unknown = cold.events.find(e => e.type === 'server-tool-result')!;
+  assert(unknown); assert.deepEqual((unknown.data as any).outcome, { kind: 'outcome_unknown', operationId: 'cold-call' });
+  const coldTail = await readSse(`/api/agent-runs/${coldRun.id}/events?projectId=${coldRun.projectId}&after=${unknown.id}`, coldHeaders);
+  assert.deepEqual(coldTail.events.map(e => e.type), ['done'], 'Reconnect after the closure still receives completion');
+  resetServerRunStoreForTest();
+  const coldAgain = await readSse(`/api/agent-runs/${coldRun.id}/events?projectId=${coldRun.projectId}&after=${savedDoneId}`, coldHeaders);
+  assert.deepEqual(coldAgain.events, cold.events.filter(e => e.id > savedDoneId), 'Second restart retains exactly the same durable suffix');
+  const durableAfter = (await loadAgentRuntimeSidecar(coldRun.projectId)).runs.find(r => r.runId === coldRun.id)!;
+  for (const event of durableBefore.events) assert.deepEqual(durableAfter.events.find(e => e.eventId === event.eventId), event, 'Existing event bytes and IDs are immutable');
   const { run: capRun, capability: capCapability } = createRunWithCapability({ id: '22222222-2222-4222-8222-222222222222', projectId: 'project-cap', sessionGeneration: 'legacy', provider: 'deepseek', model: 'test' });
   for (let index = 0; index < MAX_SERVER_RUN_EVENTS * 4 + 2; index += 1) {
     pushRunEvent(capRun, 'tool-request', {

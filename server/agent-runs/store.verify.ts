@@ -24,12 +24,15 @@ import {
 import {
   loadAgentArtifact,
   loadAgentRuntimeSidecar,
+  appendAgentRunEvent,
   resetAgentRuntimeStoreMemory,
 } from '../../src/persist/agentRuntimeStore.ts';
 import {
   currentAgentSessionGeneration,
   rotateAgentSessionGeneration,
 } from '../../src/persist/agentSessionGeneration.ts';
+import { runtimeEvent } from './store-values.ts';
+import { recoverServerRun as recoverWithRegistry } from './store-recovery.ts';
 import { resetSharedKvMemory } from '../../src/persist/sharedKv.ts';
 async function sha256(text: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -152,8 +155,8 @@ assert.equal(interruptedRecord?.status, 'running');
 assert.equal(interruptedRecord?.context?.transportStatus, 'failed');
 assert.equal(interruptedRecord?.context?.transportError, recoveredInterrupted?.error);
 resetServerRunStoreForTest();
-// A tool request whose result never arrived gets an in-memory closer on
-// recovery so inspectors see a complete pairing.
+// A missing tool result gets a durable unknown outcome before the recovery
+// terminal event, so repeated cold reads preserve the append-only cursor.
 const danglingTool = run('server-run-dangling-tool-recovery');
 await setRunStatus(danglingTool, 'running');
 pushRunEvent(danglingTool, 'tool-request', {
@@ -176,11 +179,23 @@ assert.deepEqual(
   danglingResults[0]?.data,
   {
     toolCallId: 'call-dangling',
+    outcome: { kind: 'outcome_unknown', operationId: 'call-dangling' },
     toolName: 'read_timeline',
     argsDigest: 'digest-dangling',
     error: 'The agent run was interrupted before this tool returned a result.',
   },
 );
+assert(recoveredDangling);
+assert(recoveredDangling.events.every((event, index, all) => index === 0 || event.id > all[index - 1].id),
+  'Recovered tool closure and terminal events must have strictly increasing replay cursors');
+assert.equal(recoveredDangling.eventCursor, Math.max(...recoveredDangling.events.map(e => e.id)));
+assert.equal(recoveredDangling.events.at(-1)?.type, 'done');
+const danglingDurable = (await loadAgentRuntimeSidecar(danglingTool.projectId)).runs.find(r => r.runId === danglingTool.id)!;
+assert(danglingDurable.events.some(e => e.type === 'tool_outcome' && e.toolCallId === 'call-dangling'), 'An interruption outcome survives another cold restart');
+const replayBeforeRestart = JSON.stringify(recoveredDangling.events);
+resetServerRunStoreForTest();
+assert.equal(JSON.stringify((await recoverServerRun(danglingTool.projectId, danglingTool.id))?.events), replayBeforeRestart,
+  'Cold recovery never regenerates synthetic IDs or repeats completion events');
 resetServerRunStoreForTest();
 
 const terminalStatusOnly = run('server-run-status-only-recovery');
@@ -201,6 +216,50 @@ assert.equal(
 );
 assert.equal(recoveredStatusOnly?.error, null);
 assert.equal(recoveredStatusOnly?.events.at(-1)?.type, 'done');
+
+// A previous durable terminal judgment is immutable; recovery only describes
+// the missing tool outcome and publishes a new, ordered transport suffix.
+for (const status of ['completed', 'cancelled'] as const) {
+  const old = run(`server-run-durable-${status}-tool`);
+  pushRunEvent(old, 'server-tool-request', { toolCallId: 'missing', toolName: 'read_timeline', argsDigest: 'missing-digest' });
+  await setRunStatus(old, status); await flushServerRunPersistence(old);
+  const before = (await loadAgentRuntimeSidecar(old.projectId)).runs.find(r => r.runId === old.id)!;
+  resetServerRunStoreForTest();
+  const restored = await recoverServerRun(old.projectId, old.id); assert(restored);
+  assert.equal(restored.status, status);
+  assert.equal(restored.events.filter(e => e.type === 'done').length, 1, 'Replay exposes the last terminal after the unknown result');
+  assert(restored.events.every((event, index, all) => index === 0 || event.id > all[index - 1].id));
+  const after = (await loadAgentRuntimeSidecar(old.projectId)).runs.find(r => r.runId === old.id)!;
+  for (const event of before.events) assert.deepEqual(after.events.find(e => e.eventId === event.eventId), event);
+  const outcome = after.events.find(e => e.type === 'tool_outcome')!;
+  assert.equal(outcome.outcome?.kind, 'outcome_unknown', 'An absent result is not a proven tool failure');
+  const stable = JSON.stringify(after);
+  resetServerRunStoreForTest(); await recoverServerRun(old.projectId, old.id);
+  assert.equal(JSON.stringify((await loadAgentRuntimeSidecar(old.projectId)).runs.find(r => r.runId === old.id)), stable);
+}
+
+const partial = run('server-run-partial-recovery-suffix');
+for (const call of ['known-unknown', 'still-missing']) pushRunEvent(partial, 'server-tool-request', { toolCallId: call, name: 'read_timeline', argsDigest: call });
+await setRunStatus(partial, 'failed'); await flushServerRunPersistence(partial);
+await appendAgentRunEvent(partial.projectId, partial.id, runtimeEvent({ id: partial.eventCursor + 1, type: 'server-tool-result', at: Date.now(),
+  data: { toolCallId: 'known-unknown', outcome: { kind: 'outcome_unknown', operationId: 'known-unknown' }, error: 'Interruption recorded before restart' } }));
+resetServerRunStoreForTest();
+const partialRecovered = await recoverServerRun(partial.projectId, partial.id); assert(partialRecovered);
+assert.deepEqual(partialRecovered.events.filter(e => e.type === 'server-tool-result').map(e => (e.data as any).toolCallId), ['known-unknown', 'still-missing']);
+assert.equal(partialRecovered.events.at(-1)?.type, 'done');
+assert(partialRecovered.events.every((event, index, all) => index === 0 || event.id > all[index - 1].id));
+
+const contested = run('server-run-independent-cold-readers');
+pushRunEvent(contested, 'server-tool-request', { toolCallId: 'one-outcome', name: 'read_timeline', argsDigest: 'one' });
+await setRunStatus(contested, 'failed'); await flushServerRunPersistence(contested);
+resetServerRunStoreForTest();
+const registry = () => ({ runs: new Map(), recovery: new Map(), evictRun: () => {}, pruneRuns: () => {} });
+const contestedReads = await Promise.all([recoverWithRegistry(registry(), contested.projectId, contested.id), recoverWithRegistry(registry(), contested.projectId, contested.id)]);
+assert(contestedReads.every(Boolean));
+assert.deepEqual(contestedReads[0]?.events, contestedReads[1]?.events, 'Independent registries converge on one durable suffix after a local conflict');
+const contestedRecord = (await loadAgentRuntimeSidecar(contested.projectId)).runs.find(r => r.runId === contested.id)!;
+assert.equal(contestedRecord.events.filter(e => e.type === 'tool_outcome').length, 1, 'One interrupted request has one durable unknown outcome across independent readers');
+assert(contestedReads[0]!.events.every((event, index, all) => index === 0 || event.id > all[index - 1].id));
 
 
 // Long runs roll off oldest non-critical events instead of dying on the cap.
