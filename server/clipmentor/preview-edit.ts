@@ -1,4 +1,5 @@
-import {readFile,writeFile,mkdir,stat} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,mkdtemp,open,stat,link,rm} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
 import {join,dirname} from 'node:path';
 import {isSafeUploadName} from '../media-dir';
 import {execFile} from 'node:child_process';
@@ -6,6 +7,7 @@ import {promisify} from 'node:util';
 import {sha256File} from '../../shared/node-content-hash';
 import {buildPreviewRevision,previewDocDigest,PREVIEW_EDIT_SCOPE,type PreviewEditPlan,type NativeComparisonEdit} from '../../src/clipmentor/preview-edit';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
+import {atomicWriteFile,syncDirectory} from '../plugins/project-store-durable';
 
 /** Host installs this bounded authorization from the user's explicit local-preview instruction.
  * No Agent/API operation can create or expand a permit. It never writes an approval. */
@@ -49,6 +51,39 @@ function upload(src:string,deps:PreviewEditDeps) {
   const path=deps.resolve(src.slice(prefix.length)); if(!path) throw new Error('Upload missing'); return path;
 }
 async function readJson(path:string) {return JSON.parse(await readFile(path,'utf8'));}
+/** Publish complete bytes without replacing an earlier winner. Exact orphaned
+ * material from a crash is reusable; different bytes still require local repair. */
+async function publishExactPreviewFile(path:string,body:string):Promise<string> {
+  const staging=`${path}.${randomUUID()}.tmp`;
+  try {
+    await atomicWriteFile(staging,body);
+    try {await link(staging,path);await syncDirectory(dirname(path));return body;}
+    catch(error) {
+      if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;
+      const winner=await readFile(path,'utf8');
+      if(winner!==body)throw Error('Prepared preview content mismatch; repair locally');
+      return winner;
+    }
+  } finally {await rm(staging,{force:true});}
+}
+async function publishPrepared<T>(directory:string,value:T):Promise<T> {
+  return JSON.parse(await publishExactPreviewFile(join(directory,'prepared.json'),JSON.stringify(value))) as T;
+}
+/** Encoders write only private attempt files. Publish after successful completion,
+ * preserving a concurrent winner even when this attempt later fails. */
+async function publishStagedPreviewMaterial(staging:string,path:string):Promise<void> {
+  const info=await stat(staging);
+  if(!info.isFile()||info.size<=0)throw Error('Prepared preview material is empty');
+  const handle=await open(staging,'r');
+  try {await handle.sync();} finally {await handle.close();}
+  try {await link(staging,path);}
+  catch(error) {
+    if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;
+    if((await stat(path)).size!==info.size||await sha256File(path)!==await sha256File(staging))
+      throw Error('Prepared preview content mismatch; repair locally');
+  }
+  await syncDirectory(dirname(path));
+}
 function asset(id:string,src:string,name:string,kind:'video'|'image',p:PreviewEditPermit,hash:string):MediaAsset {
   return {id,src,name,kind,width:p.baseline.width,height:p.baseline.height,
     durationInFrames:p.baseline.totalFrames,sourceContentHash:hash};
@@ -125,17 +160,23 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
   }
   if(p.kind==='sniff_merge') return {...receipt,...await prepareSniffMerge(p,doc,deps,dir,baseline,source)};
   if(p.kind==='native_comparison') return {...receipt,...await prepareNativeComparison(p,doc,deps,dir)};
-  const prefix=`preview-edit-${p.operationId}`;
+  // Different permitted tail choices must not share writable outputs: a caller
+  // losing prepared.json publication cannot overwrite the winning material.
+  const prefix=`preview-edit-${p.operationId}-${Number(body.tailFrame)}`;
   const names=[`${prefix}-relation.png`,`${prefix}-tail.png`,`${prefix}-label.svg`];
   const output=names.map(n=>{const f=(deps.output??deps.resolve)(n);if(!f)throw new Error('Output path unavailable');return f;});
   await mkdir(dirname(output[0]!),{recursive:true});
+  const staging=await mkdtemp(join(dirname(output[0]!),'.preview-prepare-'));
+  const generated=names.map(name=>join(staging,name));
+  try {
   await deps.execute(['-hide_banner','-loglevel','error','-y','-i',baseline,'-vf',
     `select=eq(n\\,${p.relation.referenceFrame}),drawbox=x=0:y=960:w=iw:h=320:color=0xf7f8fa:t=fill`,
-    '-frames:v','1',output[0]!]);
+    '-frames:v','1',generated[0]!]);
   await deps.execute(['-hide_banner','-loglevel','error','-y','-i',source,'-vf',
     `select=eq(n\\,${Number(body.tailFrame)}),scale=540:960,pad=720:1280:90:0:color=0xf7f8fa`,
-    '-frames:v','1',output[1]!]);
-  await writeFile(output[2]!,`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><rect x="24" y="22" width="290" height="52" rx="12" fill="#ffd300"/><text x="40" y="58" font-family="Arial" font-size="30" fill="#1c2026">Ulasan semula</text></svg>`);
+    '-frames:v','1',generated[1]!]);
+  await writeFile(generated[2]!,`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><rect x="24" y="22" width="290" height="52" rx="12" fill="#ffd300"/><text x="40" y="58" font-family="Arial" font-size="30" fill="#1c2026">Ulasan semula</text></svg>`);
+  for(const [index,path] of generated.entries())await publishStagedPreviewMaterial(path,output[index]!);
   const assets=await Promise.all(names.map(async(n,i)=>asset(`${prefix}-${i}`,`/media/uploads/${n}`,
     ['延续已批准关系画面','原声末端真实尾态','回看讲解短标'][i]!,'image',p,await sha256File(output[i]!))));
   const plan:PreviewEditPlan={operationId:p.operationId,projectId:p.projectId,
@@ -143,8 +184,8 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
     patches:[p.relation,p.tail,p.label].map((s,i)=>({asset:assets[i]!,startFrame:s.startFrame,endFrame:s.endFrame,name:assets[i]!.name}))};
   const prepared={plan,tailFrame:body.tailFrame,preparedProjectSha256:await previewDocDigest(buildPreviewRevision(doc,plan))};
   await mkdir(dir,{recursive:true});
-  await writeFile(join(dir,'prepared.json'),JSON.stringify(prepared),{flag:'wx',mode:0o600});
-  return {...receipt,...prepared};
+  return {...receipt,...await publishPrepared(dir,prepared)};
+  } finally {await rm(staging,{recursive:true,force:true});}
 }
 
 async function prepareNativeComparison(p:NativeComparisonPermit,doc:ProjectDoc,deps:PreviewEditDeps,dir:string) {
@@ -169,11 +210,10 @@ async function prepareNativeComparison(p:NativeComparisonPermit,doc:ProjectDoc,d
     return `<path d="M ${a.x1} ${a.y1} L ${a.x2} ${a.y2} M ${x} ${y} L ${a.x2} ${a.y2} L ${xx} ${yy}"/>`;
   }).join('');
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${t.width}" height="${t.height}" viewBox="0 0 ${t.width} ${t.height}"><g fill="none" stroke-linejoin="round" stroke-linecap="round"><g stroke="#111111" stroke-width="10">${shapes}${lines}</g><g stroke="#FFD83D" stroke-width="5">${shapes}${lines}</g></g></svg>`;
-  await mkdir(dirname(path),{recursive:true});await writeFile(path,svg,{flag:'wx',mode:0o600});
+  await mkdir(dirname(path),{recursive:true});await publishExactPreviewFile(path,svg);
   annotation.sourceContentHash=await sha256File(path);
   const prepared={plan,preparedProjectSha256:await previewDocDigest(buildPreviewRevision(doc,plan))};
-  await writeFile(join(dir,'prepared.json'),JSON.stringify(prepared),{flag:'wx',mode:0o600});
-  return prepared;
+  return publishPrepared(dir,prepared);
 }
 
 /** Reuses exact mixed audio and subtitle pixels. Only the host-approved sentence is removed.
@@ -182,16 +222,20 @@ async function prepareSniffMerge(p:SniffMergePermit,doc:ProjectDoc,deps:PreviewE
   const prefix=`preview-edit-${p.operationId}`;
   const paths=['caption.png','sniff.mp4','mix.wav'].map(s=>{const name=`${prefix}-${s}`;const path=(deps.output??deps.resolve)(name);if(!path)throw new Error('Output unavailable');return {name,path};});
   await mkdir(dirname(paths[0]!.path),{recursive:true});
+  const staging=await mkdtemp(join(dirname(paths[0]!.path),'.preview-prepare-'));
+  const generated=paths.map(({name})=>join(staging,name));
+  try {
   const [a,b]=p.removeFrames,[x,y]=p.removeAudioSeconds,total=p.baseline.totalFrames-(b-a);
   await deps.execute(['-hide_banner','-loglevel','error','-y','-i',baseline,'-vf',
-    `select=eq(n\\,${p.captionReferenceFrame}),crop=720:320:0:960`,'-frames:v','1',paths[0]!.path]);
+    `select=eq(n\\,${p.captionReferenceFrame}),crop=720:320:0:960`,'-frames:v','1',generated[0]!]);
   await deps.execute(['-hide_banner','-loglevel','error','-y','-ss',String(p.sourceStartFrame/p.source.fps),'-i',source,
-    '-loop','1','-i',paths[0]!.path,'-filter_complex',
+    '-loop','1','-i',generated[0]!,'-filter_complex',
     `[0:v]fps=30,scale=540:960,pad=720:1280:90:0:color=0xf7f8fa,setsar=1[base];[base][1:v]overlay=0:960:enable=lt(n\\,${p.captionFrames}):shortest=1,format=yuv420p[v]`,
-    '-map','[v]','-an','-frames:v',String(p.pictureFrames),'-c:v','libx264','-preset','fast','-crf','18','-threads','2',paths[1]!.path]);
+    '-map','[v]','-an','-frames:v',String(p.pictureFrames),'-c:v','libx264','-preset','fast','-crf','18','-threads','2',generated[1]!]);
   await deps.execute(['-hide_banner','-loglevel','error','-y','-i',baseline,'-filter_complex',
     `[0:a]asplit=2[head][tail];[head]atrim=end=${x},asetpts=PTS-STARTPTS[a];[tail]atrim=start=${y},asetpts=PTS-STARTPTS[b];[a][b]concat=n=2:v=0:a=1,atrim=end=${total/p.baseline.fps}[out]`,
-    '-map','[out]','-c:a','pcm_s16le',paths[2]!.path]);
+    '-map','[out]','-c:a','pcm_s16le',generated[2]!]);
+  for(const [index,path] of generated.entries())await publishStagedPreviewMaterial(path,paths[index]!.path);
   const base=asset(`${prefix}-base`,p.baseline.src,'锁定前版预览基线','video',p,p.baseline.sha256);
   const video={...asset(`${prefix}-sniff`,`/media/uploads/${paths[1]!.name}`,'近鼻连续画面及复用气味字幕','video',p,await sha256File(paths[1]!.path)),durationInFrames:p.pictureFrames};
   const audio:MediaAsset={id:`${prefix}-audio`,name:'原混音精简，仅去掉动作复述',kind:'audio',src:`/media/uploads/${paths[2]!.name}`,durationInFrames:total,sourceContentHash:await sha256File(paths[2]!.path)};
@@ -199,6 +243,6 @@ async function prepareSniffMerge(p:SniffMergePermit,doc:ProjectDoc,deps:PreviewE
     baseSegments:[{startFrame:0,durationInFrames:a,srcInFrame:0},{startFrame:a,durationInFrames:p.baseline.totalFrames-b,srcInFrame:b}],
     patches:[{asset:video,startFrame:a,endFrame:a+p.pictureFrames,name:video.name}],audio};
   const prepared={plan,preparedProjectSha256:await previewDocDigest(buildPreviewRevision(doc,plan))};
-  await writeFile(join(dir,'prepared.json'),JSON.stringify(prepared),{flag:'wx',mode:0o600});
-  return prepared;
+  return publishPrepared(dir,prepared);
+  } finally {await rm(staging,{recursive:true,force:true});}
 }

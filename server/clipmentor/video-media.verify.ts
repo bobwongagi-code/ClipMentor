@@ -156,7 +156,9 @@ try {
    phase:'gateway_request',source_hash:sha256,subject:request.subject,actual_handoff_verified:false,complete_film_accepted:false,
    upstream_http_status:504,model_retry_policy:'no_automatic_retry'};
   const result=await recoverProductionGateway('observe_clipmentor_source_video',{operationId:op},'project',()=>true,async()=>{posts++;return {receipt};},async()=>{},2);
-  assert.equal(posts,1);assert.deepEqual(result,{receipt},'retain original failed receipt without a new paid operation');
+  assert.equal(posts,1);assert.deepEqual(result.receipt,receipt,'retain original failed receipt without a new paid operation');
+  assert.deepEqual(result.gateway_recovery_decisions,[{operation_id:op,action:'stop',reason:'model_retry_disabled_by_transport_contract'}],
+   'the existing host decision explains the stop without rewriting the model receipt');
   const noPost={...receipt,requestsAttempted:0,requestsSent:0,phase:'prepare'};
   assert.equal(confirmedUnsubmittedGateway('observation',{body:{receipt:noPost}},op,'project'),true);
   assert.equal(confirmedUnsubmittedGateway('observation',{body:{receipt:{...noPost,projectId:'foreign'}}},op,'project'),false);

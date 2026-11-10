@@ -52,6 +52,19 @@ try{
  assert.equal(readback.blueprintReadiness.complete_film_accepted,false,'a completed mocked task cannot certify a missing project');
  assert.equal((await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:false})).status,409);
  const accepted=await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:true});assert.equal(accepted.status,200,JSON.stringify(await accepted.json()));
+ // A saved queue/start snapshot may be stale by the time it is dispatched.
+ // Re-read under the execution owner so it cannot resurrect a completed run.
+ const lateSnapshot=structuredClone(running),readCurrentTask=productionTaskStore.load;
+ let staleReadOnce=true;const stepsBeforeStaleLaunch=steps.length;
+ productionTaskStore.load=async(project,id)=>{if(project===input.projectId&&id===created.taskId&&staleReadOnce){staleReadOnce=false;return structuredClone(lateSnapshot);}return readCurrentTask(project,id);};
+ try{assert.equal((await post({action:'resume',projectId:input.projectId,taskId:created.taskId})).status,202);}finally{productionTaskStore.load=readCurrentTask;}
+ for(let i=0;i<200;i++){
+  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${input.projectId}&taskId=${created.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+  if(!(await response.json()).executionActive)break;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ assert.equal(steps.length,stepsBeforeStaleLaunch,'a stale dispatch snapshot must not execute completed stages again');
+ assert.equal((await productionTaskStore.load(input.projectId,created.taskId)).status,'completed','stale dispatch cannot revoke final acceptance');
  const panelTask=await createProductionTask({...input,author:{...input.author,origin},reviewer:{...input.reviewer,origin},humanBlueprintReview:true} as Parameters<typeof createProductionTask>[0]);
  const panelGet=async()=>await (await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}})).json();
  for(const [error,reason] of [
@@ -350,7 +363,7 @@ try{
  // dependency preparation and automatic second-output dispatch through the service.
  const {copyTeachingPacketFromDoc,copyReviewSubject}=await import('../../src/clipmentor/production-gate');
  const {productionPreviewFacts,previewFactsDigest}=await import('../clipmentor/production-preview-facts');
- const {feedbackProjectDigest}=await import('../clipmentor/production-feedback');
+ const {feedbackProjectDigest,productionFeedbackAnchor}=await import('../clipmentor/production-feedback');
  for(const doc of [firstDoc,secondDoc])doc.clipMentorAnalysis!.source_breakdown!.units.forEach((u,i)=>{
   u.placement={timeline_id:doc.activeTimelineId,original_frames:[i*15,i*15+5],explanation_frames:[i*15+5,i*15+15]};
  });
@@ -392,7 +405,81 @@ try{
  assert.deepEqual(cancelledPreparation.attempts,waitingBeforeCancel.attempts);
  assert.equal(batchSteps.filter(step=>step.startsWith('new_contact:')).length,0,'cancel before preparation completes makes no worker request');
  await productionTaskStore.save(waitingBeforeCancel);Object.assign(batch[1],waitingBeforeCancel);
- assert.equal(await prepareSharedProduction(batch[1]),true);
+ // Reverse ordering: a feedback clone is already waiting to save when the
+ // follower publishes the producer marker. The later intent must retain it.
+ const reverseBeforeProducer=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+ const reverseBeforeFollower=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+ const reverseBeforeDoc=(await loadOfflineStoredProject(batch[1].projectId))!.doc;
+ const reverseProducerDoc=(await loadOfflineStoredProject(batch[0].projectId))!.doc;
+ const {productionFeedback}=await import('../clipmentor/production-task');
+ const reverseAnchor=await productionFeedbackAnchor(reverseBeforeProducer,reverseProducerDoc);
+ let feedbackSaveEntered!:()=>void,releaseFeedbackSave!:()=>void,feedbackHeld=false;
+ const feedbackSaveWait=new Promise<void>(resolve=>{feedbackSaveEntered=resolve;}),feedbackSaveRelease=new Promise<void>(resolve=>{releaseFeedbackSave=resolve;});
+ const feedbackOriginalSave=productionTaskStore.save;
+ const reverseFeedback=productionFeedback(structuredClone(reverseBeforeProducer),{kind:'content',text:'只核片尾说明',preview:reverseAnchor.preview,unit_ids:[],item_ids:[]},
+  {...productionTaskStore,async save(t,conditions){if(!feedbackHeld){feedbackHeld=true;feedbackSaveEntered();await feedbackSaveRelease;}await feedbackOriginalSave(t,conditions);}},reverseProducerDoc);
+ try{await feedbackSaveWait;await prepareSharedProduction(batch[1]);releaseFeedbackSave();await reverseFeedback;}
+ finally{releaseFeedbackSave();await reverseFeedback.catch(()=>undefined);}
+ const reverseSaved=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+ assert.equal(reverseSaved.sharedProduction?.prepared,true,'a late feedback control must keep the newly published shared-body protection');
+ assert.equal(reverseSaved.feedbackUsed,true);assert.equal(reverseSaved.stage,'blueprint');
+ for(const before of [reverseBeforeProducer,reverseBeforeFollower]){const now=await productionTaskStore.load(before.projectId,before.taskId);before.sequence=now.sequence;before.updatedAt=now.updatedAt;await productionTaskStore.save(before);}
+ await setStoredEntry('project:'+batch[1].projectId,reverseBeforeDoc);Object.assign(batch[1],structuredClone(reverseBeforeFollower));
+ // Feedback has always ignored editor-only selection. Preserve that semantic
+ // binding even if selection moves after capture or during the guarded save.
+ for(const contentChange of [false,true]){
+  const selectionTask=await productionTaskStore.load(batch[0].projectId,batch[0].taskId),selectionDoc=(await loadOfflineStoredProject(batch[0].projectId))!.doc;
+  const selectionAnchor=await productionFeedbackAnchor(selectionTask,selectionDoc),changedSelection=structuredClone(selectionDoc);
+  changedSelection.timelines[0].selectedId=changedSelection.timelines[0].items[0].id;changedSelection.timelines[0].selectedIds=[changedSelection.timelines[0].items[0].id];
+  if(contentChange)(changedSelection.timelines[0].items[0] as any).volume=0.2;
+  else assert.deepEqual((await productionFeedbackAnchor(selectionTask,changedSelection)).preview,selectionAnchor.preview);
+  let changedOnce=false;
+  const feedbackPromise=productionFeedback(structuredClone(selectionTask),{kind:'content',text:'保留原片头',preview:selectionAnchor.preview,unit_ids:[],item_ids:[]},
+   {...productionTaskStore,async save(t,conditions){if(!changedOnce){changedOnce=true;await setStoredEntry('project:'+selectionTask.projectId,changedSelection);}await productionTaskStore.save(t,conditions);}},selectionDoc);
+  if(contentChange){await assert.rejects(feedbackPromise,/precondition_changed/);assert.equal((await productionTaskStore.load(selectionTask.projectId,selectionTask.taskId)).feedbackUsed,false);}
+  else{await feedbackPromise;assert.equal((await productionTaskStore.load(selectionTask.projectId,selectionTask.taskId)).feedbackUsed,true);}
+  const latestSelectionTask=await productionTaskStore.load(selectionTask.projectId,selectionTask.taskId);
+  selectionTask.sequence=latestSelectionTask.sequence;selectionTask.updatedAt=latestSelectionTask.updatedAt;
+  await setStoredEntry('project:'+selectionTask.projectId,selectionDoc);await productionTaskStore.save(selectionTask);
+ }
+ // A human acceptance may arrive while shared preparation publishes its
+ // reciprocal marker. Only that marker may be merged, never an older status.
+ const sharedBeforeTask=structuredClone(batch[1]),sharedBeforeDoc=structuredClone(secondDoc);
+ const sharedNormalSave=productionTaskStore.save;
+ let producerMarkerEntered!:()=>void,releaseProducerMarker!:()=>void,heldOnce=false;
+ const producerMarkerWait=new Promise<void>(resolve=>{producerMarkerEntered=resolve;}),producerMarkerRelease=new Promise<void>(resolve=>{releaseProducerMarker=resolve;});
+ productionTaskStore.save=async(t,conditions)=>{
+  if(t.taskId===batch[0].taskId&&t.sharedProduction?.prepared&&!heldOnce){heldOnce=true;producerMarkerEntered();await producerMarkerRelease;}
+  await sharedNormalSave(t,conditions);
+ };
+ const mergingPreparation=prepareSharedProduction(batch[1]);
+ try{
+  await producerMarkerWait;
+  const acceptedDuringPreparation=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+  acceptedDuringPreparation.status='completed';acceptedDuringPreparation.visualAcceptance={criteriaDigest:'human-checked',renderId:'synthetic-first-export',confirmedIds:['original'],scope:'whole_preview'};
+  await sharedNormalSave(acceptedDuringPreparation);releaseProducerMarker();await mergingPreparation;
+ }finally{releaseProducerMarker();await mergingPreparation.catch(()=>undefined);productionTaskStore.save=sharedNormalSave;}
+ const acceptedShared=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+ assert.equal(acceptedShared.status,'completed','shared preparation cannot undo a concurrently saved human acceptance');
+ assert.equal(acceptedShared.visualAcceptance?.criteriaDigest,'human-checked');
+ acceptedShared.status='awaiting_review';delete acceptedShared.visualAcceptance;await productionTaskStore.save(acceptedShared);
+ // Crash after committing the shared project but before its final task checkpoint.
+ const resetShared=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+ sharedBeforeTask.sequence=resetShared.sequence;sharedBeforeTask.updatedAt=resetShared.updatedAt;
+ await setStoredEntry('project:'+batch[1].projectId,sharedBeforeDoc);await productionTaskStore.save(sharedBeforeTask);Object.assign(batch[1],structuredClone(sharedBeforeTask));
+ let crashOnce=true;
+ productionTaskStore.save=async(t,conditions)=>{if(t.taskId===batch[1].taskId&&t.sharedProduction?.prepared&&crashOnce){crashOnce=false;throw Error('fixture crash after shared project commit');}await sharedNormalSave(t,conditions);};
+ try{await assert.rejects(prepareSharedProduction(batch[1]),/fixture crash/);}finally{productionTaskStore.save=sharedNormalSave;}
+ const sharedCommitted=(await loadOfflineStoredProject(batch[1].projectId))!.doc;
+ const coldShared=await productionTaskStore.load(batch[1].projectId,batch[1].taskId),spentBeforeShared=structuredClone(coldShared.attempts);
+ const editedShared=structuredClone(sharedCommitted);(editedShared.timelines[0].items[0] as any).volume=0.25;
+ await setStoredEntry('project:'+batch[1].projectId,editedShared);
+ await assert.rejects(prepareSharedProduction(coldShared),/shared_output_changed_during_preparation/,'recovery cannot overwrite an edit made after the partial commit');
+ assert.deepEqual((await loadOfflineStoredProject(batch[1].projectId))!.doc,editedShared);
+ await setStoredEntry('project:'+batch[1].projectId,sharedCommitted);
+ assert.equal(await prepareSharedProduction(coldShared),true,'a matching committed preparation recovers without a model call or a guessed timeline');
+ assert.deepEqual(coldShared.attempts,spentBeforeShared);Object.assign(batch[1],coldShared);
+
  assert.equal(batch[1].sharedProduction!.prepared,true);
  assert.equal((await productionTaskStore.load(batch[0].projectId,batch[0].taskId)).sharedProduction!.digest,batch[1].sharedProduction!.digest);
  assert.equal((await checkCopyProduction((await loadOfflineStoredProject(batch[1].projectId))!.doc,'clipmentor')).allowed,false,'copying saved common editing cannot create formal review permission');
@@ -430,11 +517,11 @@ try{
  await setStoredEntry(`project:${panelTask.projectId}`,projectDoc());
  panelTask.projectRevision=(await loadOfflineStoredProject(panelTask.projectId))!.revision;
  await productionTaskStore.save(panelTask);
- const boardAction=(revision:string)=>fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${panelTask.projectId}`,{
-  method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'approve_blueprint',revision}),
+ const boardAction=async(revision:string,boardIdentity?:string)=>fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${panelTask.projectId}`,{
+  method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'approve_blueprint',revision,boardIdentity:boardIdentity??(await panelGet()).task.boardIdentity}),
  });
  const unregistered=await boardAction(panelTask.projectRevision);
- assert.equal(unregistered.status,409);assert.equal((await unregistered.json()).reason,'review_board_reload');
+ assert.equal(unregistered.status,409);assert.equal((await unregistered.json()).reason,'review_board_changed','a request without a viewed board identity cannot be replayed');
  const stale=await boardAction('stale-board');assert.equal(stale.status,409);assert.notEqual((await stale.json()).reason,'review_board_reload');
  assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).sequence,panelTask.sequence,'both rejections must precede any write');
  const {default:savedBlueprints}=await import('../../src/clipmentor/fixtures/production-saved-projects-20261028.json');
@@ -469,10 +556,19 @@ try{
  panelTask.projectRevision=currentDraft.revision;
  panelTask.completed.copy_review={at:Date.now(),artifact:{requirementsDigest:digestValue(brief.doneCriteria)}};
  await productionTaskStore.save(panelTask);
- assert.equal((await panelGet()).task.canApproveBlueprint,true,'matching original requirements retain the ordinary confirmation path');
+ const previouslyViewed=(await panelGet()).task;
+ assert.match(previouslyViewed.boardIdentity,/^[a-f0-9]{64}$/,'the HTTP board has an opaque binding');
+ assert.equal(previouslyViewed.canApproveBlueprint,true,'matching original requirements retain the ordinary confirmation path');
  await registerHandoff({projectId:panelTask.projectId,expectedProjectRevision:currentDraft.revision,previousDigest:bound.digest,
   brief:{...brief,revision:2,doneCriteria:['Use original CTA and retain the comparison hook']}});
- assert.equal((await panelGet()).task.canApproveBlueprint,false,'changing only a plain-text requirement invalidates prior confirmation readiness');
+ const changedRequirements=(await panelGet()).task;
+ assert.equal(changedRequirements.blueprintRevision,previouslyViewed.blueprintRevision);
+ assert.notEqual(changedRequirements.boardIdentity,previouslyViewed.boardIdentity,'same project revision with changed review requirements is a different board');
+ assert.equal(changedRequirements.canApproveBlueprint,false,'changing only a plain-text requirement invalidates prior confirmation readiness');
+ const oldBoard=await boardAction(currentDraft.revision,previouslyViewed.boardIdentity);
+ assert.equal(oldBoard.status,409);assert.equal((await oldBoard.json()).reason,'review_board_changed','old viewed identity cannot be rebound to a newer cache');
+ const unseen=await boardAction(currentDraft.revision,changedRequirements.boardIdentity);
+ assert.equal(unseen.status,409);assert.equal((await unseen.json()).reason,'review_board_reload','only the exact same subject can rebuild a missing cache');
  assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).completed.copy_review?.artifact.requirementsDigest,digestValue(brief.doneCriteria),
   'stale approval is preserved as history, never rewritten to match new requirements');
  await withSerializedProjectStore(store=>store.removeEntry(handoffKey(panelTask.projectId)));

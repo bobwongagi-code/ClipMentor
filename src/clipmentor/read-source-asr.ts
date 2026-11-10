@@ -14,11 +14,13 @@ export async function readClipMentorSourceAsr(args:Record<string,unknown>,ctx:Ag
  const initial=binding();
  try{
   const deadline=AbortSignal.timeout(10_000),outer=ctx.getAgentRunSignal?.();
+  outer?.throwIfAborted();
   const response=await(ctx.hostFetch??fetch)('/api/clipmentor/transcribe-source',{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({action:'read',operationId:args.operationId,projectId,src:asset.src,expectedSourceHash:asset.sourceContentHash}),
    signal:outer?AbortSignal.any([outer,deadline]):deadline});
   if(!response.ok)return {error:'Saved ASR unavailable; no provider request sent',requestsSent:0};
   const value:unknown=await response.json();
+  outer?.throwIfAborted();
   if(!isSourceAsrRead(value)||value.operationId!==args.operationId||value.source_hash!==asset.sourceContentHash)
    return {error:'Invalid saved ASR response; no provider request sent',requestsSent:0};
   if(ctx.getDoc()!==doc||binding()!==initial)return {error:'Project/source changed during saved ASR read; result not current',requestsSent:0};

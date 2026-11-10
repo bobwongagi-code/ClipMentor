@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { transcribeClipMentorSource, parseFunAsrResponse, clipMentorFunAsrPlugin } from './clipmentor-funasr.ts';
 import { ASR_AUDIO, isSourceTranscription, planAsrChunks, stitchAsrChunks, type AsrChunk } from '../../shared/clipmentor-asr.ts';
 import { keyStatus, seedKeystore } from '../keystore.ts';
+import { verifyAsrCrashRecovery } from './clipmentor-funasr-crash.verify-suite.ts';
 
 const directory = await mkdtemp(join(tmpdir(), 'cc-funasr-verify-'));
 const secret = 'test-secret-never-echo';
@@ -29,6 +30,7 @@ const deps = {
 };
 const args = () => ({ src: '/media/uploads/master.mp4', expectedSourceHash: hash, language: 'auto', operationId: randomUUID(), maxRequests: 10 });
 try {
+  await verifyAsrCrashRecovery(directory);
   assert.equal(parseFunAsrResponse({ output: { sentence: { words: [
     { text: 'hello', begin_time: 0, end_time: 200 }, { text: ' ', begin_time: 200, end_time: 250 },
   ] } } }, 0).words.length, 1, 'provider whitespace separators are not spoken words');

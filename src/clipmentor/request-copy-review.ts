@@ -11,7 +11,9 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
     || args.maxRequests !== 1) return { error: 'A stable UUID v4 and explicitly authorized maxRequests=1 are required; no verdict input is accepted' };
   const doc = ctx.getDoc();
   const analysis = doc.clipMentorAnalysis;
-  const author = ctx.getAgentRunId?.(), project = ctx.getProjectId?.();
+  const author = ctx.getAgentRunId?.(), project = ctx.getProjectId?.(), cancellation=ctx.getAgentRunSignal?.();
+  if(cancellation?.aborted)return {error:'Independent review cancelled before submission',requestsSent:0};
+  const current=()=>ctx.getDoc()===doc&&ctx.getProjectId?.()===project&&ctx.getAgentRunId?.()===author&&!cancellation?.aborted;
   if (!analysis || analysis.revision !== args.expectedRevision || !author || !project) return { error: 'Current revision and host project/run context required' };
   const asset = doc.assets.find((a) => a.id === analysis.source.asset_id);
   if (!asset || !analysis.source.sourceContentHash || asset.sourceContentHash !== analysis.source.sourceContentHash) return { error: 'Hash-bound original source required' };
@@ -23,9 +25,9 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
     const input: CopyReviewRequest = { operationId: args.operationId, maxRequests: 1, projectId: project, authorRunId: author,
       source: { src: asset.src, hash: analysis.source.sourceContentHash, fps: analysis.source.fps, duration: analysis.source.duration_seconds },
       subject: { revision: subject.revision, digest: subject.digest, units: subject.units.map(({ unit_id, candidate_id }) => ({ unit_id, candidate_id })) }, packet };
-    if (ctx.getDoc() !== doc) return { error: 'Project changed before review; no request sent' };
+    if (!current()) return { error: 'Project changed or run cancelled before review; no request sent' };
     ctx.onToolProgress?.('独立审核当前文案与画面计划；未进行配音或剪辑');
-    const timeout = AbortSignal.timeout(660_000), cancellation = ctx.getAgentRunSignal?.();
+    const timeout = AbortSignal.timeout(660_000);
     requestSent = true;
     const response = await (ctx.hostFetch ?? fetch)('/api/clipmentor/review-copy', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input), signal: cancellation ? AbortSignal.any([timeout, cancellation]) : timeout });
@@ -41,12 +43,12 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
     const result = await response.json() as CopyReviewResult;
     if (result.operationId !== args.operationId || !isCopyProductionReview(result.receipt)
       || result.receipt.author_run_id !== author || result.receipt.reviewer_run_id !== `clipmentor-review:${args.operationId}`) return { error: 'Invalid independent review response; no project write' };
-    if (ctx.getDoc() !== doc) return { error: 'Project changed during review; result retained by operationId, no stale approval applied' };
+    if (!current()) return { error: 'Project changed or run cancelled during review; result retained by operationId, no stale approval applied' };
     const receipt = await bindCopyProductionReview(doc, result.receipt);
-    if (ctx.getDoc() !== doc) return { error: 'Project changed during binding; no stale approval applied' };
+    if (!current()) return { error: 'Project changed or run cancelled during binding; no stale approval applied' };
     const next = { ...doc, clipMentorAnalysis: { ...analysis, production_copy_review: receipt } };
     const gate = await checkCopyProduction(next, ctx.getCreativeMode());
-    if (ctx.getDoc() !== doc) return { error: 'Project changed before saving review; no result applied' };
+    if (!current()) return { error: 'Project changed or run cancelled before saving review; no result applied' };
     ctx.commands.applyDoc(next);
     return { ok: true, operationId: result.operationId, requestsAttempted: result.requestsAttempted,
       cached: result.cached === true, requestsSent: result.cached ? 0 : result.requestsAttempted,

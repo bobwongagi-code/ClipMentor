@@ -136,6 +136,9 @@ export async function externalCall<T,R=T>(o:CallOptions<T,R>):Promise<R> {
       const saving=persist(current=>current.response_sha256?current:{...current,status:reason||failure==='transport_unknown'?'unknown':'failed',failure,recovery:externalRecovery(failure),
         ended_at:new Date().toISOString(),elapsed_ms:stopElapsed??Date.now()-Date.parse(current.started_at)});
       if(reason)void saving.catch(()=>undefined);else await saving;
+      // An already-expired boundary can abort before work starts; its immediate
+      // AbortError may win Promise.race. Preserve the authoritative stop reason.
+      if(reason)throw new ExternalCallError(`external_${reason}`,failure,file);
       throw error instanceof ExternalCallError||o.preserveErrors?error:new ExternalCallError('external_request_failed',failure,file);
     }finally{clearTimeout(timer);o.signal?.removeEventListener('abort',onAbort);}
   }

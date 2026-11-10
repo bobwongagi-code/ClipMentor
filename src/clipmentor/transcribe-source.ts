@@ -4,7 +4,9 @@ import { isSourceTranscription } from '../../shared/clipmentor-asr';
 
 /** Asset-only ASR. No clip placement, caption edits, model-written claims or automatic approvals. */
 export async function transcribeClipMentorAsset(args: Record<string, unknown>, ctx: AgentContext): Promise<unknown> {
-  const doc = ctx.getDoc();
+  const doc = ctx.getDoc(), projectId=ctx.getProjectId?.(), runId=ctx.getAgentRunId?.(), signal=ctx.getAgentRunSignal?.();
+  if(signal?.aborted)return {error:'Source ASR cancelled before submission',requestsSent:0};
+  const current=()=>ctx.getDoc()===doc&&ctx.getProjectId?.()===projectId&&ctx.getAgentRunId?.()===runId&&!signal?.aborted;
   if (doc.clipMentorAnalysis) return { error: 'Analysis already exists; source transcription initialization will not overwrite it' };
   if (args.expectedRevision !== 0 || !isAnalysisActor(args.actor) || typeof args.reason !== 'string' || !args.reason.trim()) return { error: 'Fresh analysis, declared actor and reason required' };
   const asset = doc.assets.find((a) => a.id === args.assetId);
@@ -13,7 +15,7 @@ export async function transcribeClipMentorAsset(args: Record<string, unknown>, c
   try {
     const response = await (ctx.hostFetch ?? fetch)('/api/clipmentor/transcribe-source', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ src: asset.src, expectedSourceHash: asset.sourceContentHash, sourceSize: asset.sourceSize,
-        language: args.language ?? 'auto', operationId: args.operationId, maxRequests: args.maxRequests, projectId:ctx.getProjectId?.() }) });
+        language: args.language ?? 'auto', operationId: args.operationId, maxRequests: args.maxRequests, projectId }),signal });
     if (!response.ok) return { error: `Source ASR request was not completed (HTTP ${response.status}); do not automatically retry. Keep the operationId to inspect/recover its result.` };
     result = await response.json();
   } catch {
@@ -22,7 +24,7 @@ export async function transcribeClipMentorAsset(args: Record<string, unknown>, c
   if (!isSourceTranscription(result) || result.operation_id !== args.operationId
     || (asset.sourceContentHash && result.source_hash !== asset.sourceContentHash)) return { error: 'Invalid or mismatched ASR result; no analysis written' };
   if (result.issues.includes('source_changed_during_transcription')) return { error: 'Source bytes changed during transcription; retained server result is stale and was not applied' };
-  if (ctx.getDoc() !== doc) return { error: 'Project changed during ASR; result retained server-side under operationId, not applied. Do not start a new paid operation.' };
+  if (!current()) return { error: 'Project changed or run cancelled during ASR; result retained server-side under operationId, not applied. Do not start a new paid operation.' };
   const now = Date.now();
   const analysis: ClipMentorAnalysis = {
     schema_version: 1, analysis_id: `source-asr:${result.operation_id}`, revision: 1,
@@ -37,7 +39,7 @@ export async function transcribeClipMentorAsset(args: Record<string, unknown>, c
   if (!isClipMentorAnalysis(analysis)) return { error: 'ASR analysis schema rejected; no project write' };
   const next = { ...doc, assets: doc.assets.map((a) => a.id === asset.id ? { ...a, sourceContentHash: result.source_hash } : a), clipMentorAnalysis: analysis };
   const handoff = await checkAnalysisHandoff(next);
-  if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; no stale result applied' };
+  if (!current()) return { error: 'Project changed or run cancelled during analysis write; no stale result applied' };
   ctx.commands.applyDoc(next);
   return { ok: true, revision: 1, operationId: result.operation_id, status: result.status, requestsAttempted: result.requests_attempted,
     wordCount: result.words.length, chunks: result.chunks.length, conflicts: result.conflicts, issues: result.issues,

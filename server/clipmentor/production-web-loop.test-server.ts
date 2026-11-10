@@ -98,6 +98,18 @@ const server=createServer(async(req,res)=>{try{
   const upstream=httpRequest({hostname:'127.0.0.1',port:5173,path:req.url,method:'GET'},response=>{res.writeHead(response.statusCode??502,response.headers);response.pipe(res);});
   upstream.on('error',error=>{res.statusCode=502;res.end(String(error));});upstream.end();return;
  }
+ if(url.pathname==='/api/clipmentor/fixture-requirements'){
+  assert.equal(req.method,'POST');let text='';for await(const chunk of req)text+=chunk;
+  const {enabled}=JSON.parse(text),{registerHandoff,handoffKey}=await import('./handoff');
+  if(enabled){
+   const saved=(await loadOfflineStoredProject(project))!;
+   await registerHandoff({projectId:project,expectedProjectRevision:saved.revision,previousDigest:null,brief:{version:1,briefId:'board-identity-fixture',revision:1,
+    mode:'autonomous',phase:'planning',planner:'builtin_agent',executor:'builtin_agent',projectId:project,timelineId:saved.doc.activeTimelineId,
+    objective:'Local HTTP board identity test',doneCriteria:['Changed fixture requirement'],blueprint:null,
+    budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}}});
+  }else{const {withSerializedProjectStore}=await import('../plugins/project-store');await withSerializedProjectStore(store=>store.removeEntry(handoffKey(project)));}
+  res.setHeader('content-type','application/json');res.end(JSON.stringify({fixtureOnly:true}));return;
+ }
  if(url.pathname==='/audit'){res.setHeader('content-type','application/json');res.end(JSON.stringify({project,root,providerCalls,fakeReviewerCalls,actions,workerEvents}));return;}
  if(url.pathname==='/api/clipmentor/intake'){assert.equal(req.method,'GET');res.setHeader('content-type','application/json');res.end(JSON.stringify({receipt:{projectId:project,assets:['source.mp4','product.png','sales.png','cta.png'].map((name,i)=>({id:String(i),name}))}}));return;}
  assert.equal(url.pathname,'/api/clipmentor/production');

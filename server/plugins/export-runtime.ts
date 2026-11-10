@@ -22,6 +22,7 @@ import {
   type UpdateGenerationJob,
 } from './generation-jobs.ts';
 import { TaskLimiter, type ReleaseTaskPermit } from '../task-limiter.ts';
+import { sha256File } from '../../shared/node-content-hash.ts';
 
 const DEFAULT_MAX_ACTIVE_EXPORTS = 1;
 const MAX_ACTIVE_EXPORTS = 4;
@@ -101,6 +102,12 @@ export async function promoteExportResult<T extends PromotableExportResult>(
   }
   const publishedInfo = await stat(destination);
   if (publishedInfo.size !== sourceInfo.size) throw new Error('promoted export size mismatch');
+  // An existing path may be a prior copy or corrupt media of the same length.
+  // Hardlinks already share bytes; copies must prove the exact rendered content.
+  if ((publishedInfo.dev !== sourceInfo.dev || publishedInfo.ino !== sourceInfo.ino)
+    && await sha256File(destination) !== await sha256File(source)) {
+    throw new Error('promoted export content mismatch');
+  }
   return {
     ...result,
     path: `/media/uploads/${publishedName}`,

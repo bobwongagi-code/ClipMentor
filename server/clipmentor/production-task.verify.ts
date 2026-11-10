@@ -69,6 +69,19 @@ const empty=fresh();await advanceProductionTask(empty,async()=>({artifact:{}}),s
 const repair=fresh();let repaired=false;
 await advanceProductionTask(repair,async(t)=>t.stage==='copy_review'&&!repaired?(repaired=true,{artifact:{},repair:'blueprint'}):{artifact:{saved:true}},store);
 assert.equal(repair.repairs,1);assert.equal(repair.status,'awaiting_review');
+// The persisted rewind itself must restart at its target after a process loss.
+for(const [from,target] of [['copy_review','blueprint'],['self_check','edit']] as const){
+ const rewinding=fresh();rewinding.stage=from;
+ for(const stage of PRODUCTION_STAGES.slice(0,PRODUCTION_STAGES.indexOf(from)))rewinding.completed[stage]={at:1,artifact:{saved:true}};
+ let rewindCheckpoint:ProductionTask|undefined;
+ await advanceProductionTask(rewinding,async t=>t.repairs===0?{artifact:{issue:'fixture negative'},repair:target}:{artifact:{saved:true}},
+  {...store,async save(t){if(t.repairs===1&&!rewindCheckpoint)rewindCheckpoint=structuredClone(t);}});
+ assert(rewindCheckpoint);assert.equal(rewindCheckpoint.stage,target,'rewind target and invalidation must be in the same durable checkpoint');
+ assert(!rewindCheckpoint.completed[target]);
+ const coldVisited:string[]=[];
+ await advanceProductionTask(structuredClone(rewindCheckpoint),async t=>{coldVisited.push(t.stage);return{artifact:{saved:true}};},store);
+ assert.equal(coldVisited[0],target,'a cold resume must execute the repair before later review/export');
+}
 const cancellation=fresh();let cancelInvoked=false;
 await advanceProductionTask(cancellation,async(t,c)=>{cancelInvoked=cancelActiveProductionTask(t.projectId,t.taskId);c.signal.throwIfAborted();return {artifact:{saved:true}};},store);assert(cancelInvoked);assert.equal(cancellation.status,'cancelled');
 // Diagnostic persistence introduces an await: reservation must remain before it so
@@ -314,6 +327,17 @@ console.log('Focused blueprint continuation: only new or strictly shrinking know
 
 
 const {runProductionWithRecovery}=await import('./production-task');
+for(const waiting of ['awaiting_review','awaiting_blueprint'] as const){
+ const freshened=fresh();let workerVisits=0;
+ await runProductionWithRecovery(freshened,async()=>{workerVisits++;return{artifact:{saved:true}};},async()=>{},store,async()=>{
+  freshened.status=waiting;
+  assert(cancelActiveProductionTask(freshened.projectId,freshened.taskId));
+  return true;
+ });
+ assert.equal(freshened.status,'cancelled','a refreshed waiting snapshot cannot swallow cancellation of its preparation owner');
+ assert.equal((await store.load(freshened.projectId,freshened.taskId)).status,'cancelled');
+ assert.equal(workerVisits,0);assert.deepEqual(freshened.attempts,fresh().attempts);
+}
 const background=fresh();
 let restorations=0;
 await runProductionWithRecovery(background,async t=>{

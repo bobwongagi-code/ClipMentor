@@ -8,7 +8,7 @@ import {revisionOf} from '../../src/agent/external-edit-session';
 import {digestValue} from '../agent-runs/store-values';
 type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {randomUUID,createHash} from 'node:crypto';
-import {appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
+import {agentRuntimeKey,appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
 import {createRun,flushRunPersistence,setRunStatus,pushRunEvent,recoverServerRun} from '../agent-runs/store';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {LLM_PROVIDER_PRESETS} from '../../shared/llm-providers';
@@ -18,6 +18,7 @@ import type {ReviewApiConfig} from './copy-review-api';
 import type {HandoffPolicy} from '../../shared/clipmentor-handoff';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {productionDeliverables} from './production-deliverables';
+import {feedbackProjectDigest} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
 import {verifyProductionOutput} from './production-format';
 import {resolveUploadFile,isSafeUploadName} from '../media-dir';
@@ -300,7 +301,8 @@ export async function advanceProductionTask(task:ProductionTask,worker:StageWork
  return withProductionExecution(task,controller=>advanceWithinExecution(task,worker,store,now,controller));
 }
 async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,store:TaskStore,now:()=>number,abort:AbortController){
- if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
+ if(['completed','cancelled'].includes(task.status)
+  ||['awaiting_blueprint','awaiting_review'].includes(task.status)&&!abort.signal.aborted)return task;
  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
  const timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-now()));
  const check=()=>{abort.signal.throwIfAborted();if(now()>=deadline)throw new Error('Production deadline exceeded');};
@@ -368,7 +370,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      const detail=selfCheck??result.artifact.blueprint_structure_issue;
      throw new Error(`已用完自动返修额度${typeof detail==='string'?`。未解决：${detail.slice(0,360)}`:''}`);
     }
-    task.repairs++;index=PRODUCTION_STAGES.indexOf(result.repair);
+    task.repairs++;task.stage=result.repair;index=PRODUCTION_STAGES.indexOf(result.repair);
     for(const stage of PRODUCTION_STAGES.slice(index))delete task.completed[stage];
     await store.save(task);continue;
    }
@@ -473,6 +475,46 @@ export async function savePendingBlueprintFeedback(task:ProductionTask,revision:
  await store.save(next);Object.assign(task,next);
 }
 
+/** Control intents keep the preview they were based on, but may merge a
+ * concurrently published immutable shared-body marker. Never overwrite another
+ * worker's effects, counters, feedback or acceptance with an old control clone. */
+async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc){
+ const subject=(task:ProductionTask)=>{const {updatedAt:_at,sequence:_sequence,sharedProduction:_shared,...rest}=task;return digestValue(rest);};
+ let contention:unknown=new Error('agent_runtime_precondition_changed');
+ for(let attempt=0;attempt<3;attempt++){
+  const key=agentRuntimeKey(base.projectId,await currentAgentSessionGeneration(base.projectId)),entry=await getStoredEntry(key);
+  if(!entry.found){await store.save(next,guards);return;}
+  const current=await productionTaskStore.load(base.projectId,base.taskId);
+  if(subject(current)!==subject(base))throw Error('production_control_subject_changed');
+  const a=base.sharedProduction,b=current.sharedProduction;
+  if(a&&b&&(a.projectId!==b.projectId||a.taskId!==b.taskId||a.prepared&&b.prepared&&(a.endFrame!==b.endFrame||a.digest!==b.digest)))throw Error('shared_producer_binding_changed');
+  const marker=b?.prepared?b:a?.prepared?a:b??a;
+  if(marker)next.sharedProduction=structuredClone(marker);
+  const conditions=[...(guards??[]),{key,digest:digestValue(entry.value)}];
+  if(expectedDoc){
+   const project=await getStoredEntry('project:'+base.projectId),doc=project.found?runProjectMigrations(project.value)?.doc:null;
+   if(!doc||feedbackProjectDigest(doc)!==feedbackProjectDigest(expectedDoc))throw Error('feedback_project_changed');
+   conditions.push({key:'project:'+base.projectId,digest:digestValue(project.value)});
+  }
+  next.sequence=current.sequence;next.updatedAt=current.updatedAt;
+  try{await store.save(next,conditions);return;}
+  catch(error){
+   if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;
+   // Only a runtime checkpoint contest can be merged. Changed project or
+   // requirements guards still reject the original control immediately.
+   for(const guard of conditions.filter(guard=>guard.key!==key)){
+    const current=await getStoredEntry(guard.key);
+    if((current.found?digestValue(current.value):null)!==guard.digest){
+     const doc=expectedDoc&&guard.key==='project:'+base.projectId&&current.found?runProjectMigrations(current.value)?.doc:null;
+     if(!doc||feedbackProjectDigest(doc)!==feedbackProjectDigest(expectedDoc!))throw error;
+    }
+   }
+   contention=error;
+  }
+ }
+ throw contention;
+}
+
 export async function productionFeedback(task:ProductionTask,feedback:unknown,store=productionTaskStore,doc?:ProjectDoc){
  if(task.status!=='awaiting_review'||task.feedbackUsed)throw new Error('One consolidated local feedback is allowed after preview');
  if(!doc)throw new Error('feedback_saved_project_required');
@@ -482,7 +524,7 @@ export async function productionFeedback(task:ProductionTask,feedback:unknown,st
  next.feedback=bound.text;next.feedbackUsed=true;next.repairContext={final_feedback:bound};
  next.stage=bound.kind==='execution'?'edit':'blueprint';next.status='queued';next.projectRevision=bound.saved_revision;
  for(const stage of PRODUCTION_STAGES.slice(PRODUCTION_STAGES.indexOf(next.stage)))delete next.completed[stage];
- await store.save(next);Object.assign(task,next);return task;
+ await saveProductionControl(task,next,store,undefined,doc);Object.assign(task,next);return task;
 }
 export async function acceptProductionTask(task:ProductionTask,languageConfirmed:boolean,store=productionTaskStore,
  visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown;wholePreviewConfirmed?:unknown}){
@@ -524,7 +566,7 @@ export async function acceptProductionTask(task:ProductionTask,languageConfirmed
   if(typeof renderId!=='string'||!renderId||visual?.renderId!==renderId)throw Error('请核对当前成片版本');
   next.visualAcceptance={criteriaDigest:criteria.digest,renderId,confirmedIds:visual?.wholePreviewConfirmed===true?[]:criteria.entries.map(({criterion})=>criterion.id),...(visual?.wholePreviewConfirmed===true?{scope:'whole_preview' as const}:{})};
  }
- next.status='completed';await store.save(next,entryPreconditions);Object.assign(task,next);return task;
+ next.status='completed';await saveProductionControl(task,next,store,entryPreconditions);Object.assign(task,next);return task;
 }
 
 export async function cancelProductionTask(task:ProductionTask,store=productionTaskStore){

@@ -103,7 +103,14 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     duration_seconds: metadata.duration, fps: metadata.fps, audio: ASR_AUDIO,
     status: 'failed', requests_attempted: 0, chunks: [], words: [], conflicts: [], issues: [],
   };
-  const save = () => atomicWriteFile(ledger, JSON.stringify({ fingerprint, identity, result }));
+  const save = (status?: 'prepared' | 'request_reserved', final = false) => {
+    // The complete plan and every consumed chunk survive a process crash. An
+    // attempted chunk stays failed/unknown until a retained response proves it.
+    const snapshot = structuredClone(result);
+    if (!final && snapshot.chunks.length) settleAsr(snapshot, metadata.duration);
+    return atomicWriteFile(ledger, JSON.stringify({ fingerprint, identity,
+      ...(status ? { status, requests_attempted: snapshot.requests_attempted } : {}), result: snapshot }));
+  };
   const temporary = await mkdtemp(join(deps.directory, 'audio-'));
   try {
     const ranges = planAsrChunks(metadata.duration);
@@ -128,12 +135,15 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     }
     if (encoded.length > request.maxRequests) throw new Error('Planned chunks exceed the explicitly supplied request budget; no provider request sent');
     if (await deps.hash(file) !== sourceHash) throw new Error('Source changed during extraction');
+    await save('prepared');
     for (let i = 0; i < result.chunks.length; i++) {
       signal?.throwIfAborted();
       const chunk = result.chunks[i];
       result.requests_attempted++;
       // Reserve before network I/O: timeouts and crashes count as attempts too.
-      await atomicWriteFile(ledger, JSON.stringify({ fingerprint, identity, status: 'request_reserved', requests_attempted: result.requests_attempted }));
+      chunk.status = 'failed'; chunk.error = 'provider_request_failed_or_invalid_timestamps'; chunk.failure_stage = 'network';
+      result.issues.push(`${chunk.chunk_id}:provider_request_failed_or_invalid_timestamps`);
+      await save('request_reserved');
       let stage: 'network' | 'http' | 'json' | 'timestamps' = 'network';
       try {
         const response = await externalFetch({directory:deps.directory,kind:'asr',purpose:'fun-asr-chunk-v1',
@@ -151,14 +161,16 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
         chunk.words = parsed.words; chunk.detected_language = parsed.language; chunk.request_id = parsed.requestId;
         chunk.separator_entries_skipped = parsed.separators;
         chunk.status = 'completed';
+        delete chunk.error; delete chunk.failure_stage;
+        result.issues = result.issues.filter(issue => issue !== `${chunk.chunk_id}:provider_request_failed_or_invalid_timestamps`);
       } catch (error) {
         if(error instanceof ExternalHttpError){chunk.http_status=error.status;stage='http';}
         // Never expose upstream bodies, request headers, audio or credential-bearing exceptions.
         chunk.status = 'failed'; chunk.error = 'provider_request_failed_or_invalid_timestamps';
         chunk.failure_stage = stage;
-        result.issues.push(`${chunk.chunk_id}:provider_request_failed_or_invalid_timestamps`);
         break;
       }
+      await save();
     }
     if (await deps.hash(file) !== sourceHash) result.issues.push('source_changed_during_transcription');
     settleAsr(result,metadata.duration);
@@ -166,7 +178,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     result.issues.push('extraction_budget_or_operation_failed');
     result.status = result.chunks.some((c) => c.status === 'completed') ? 'partial' : 'failed';
   } finally {
-    await save();
+    await save(undefined, true);
     await rm(temporary, { recursive: true, force: true });
   }
   return result;
@@ -183,6 +195,8 @@ function processOutput(binary: string, args: string[]): Promise<string> {
   });
 }
 function settleAsr(result:SourceTranscription,duration:number){
+    result.issues=result.issues.filter(issue=>!['overlap_conflict','source_time_out_of_bounds','detected_language_disagreement'].includes(issue)
+      && !/^chunk-[1-9][0-9]*:word_outside_chunk$/.test(issue));
     Object.assign(result, stitchAsrChunks(result.chunks));
     if (result.conflicts.length) result.issues.push('overlap_conflict');
     for (const chunk of result.chunks) {

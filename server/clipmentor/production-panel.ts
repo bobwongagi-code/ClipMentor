@@ -112,7 +112,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     }
     return preflight.result;
   };
-  const boards = new Map<string,{ revision:string; criteriaDigest?:string; requirementsDigest?:string; siblingRevision?:string; assertUnchanged?:()=>Promise<void>; file:Promise<string> }>();
+  const boards = new Map<string,{ identity:string; revision:string; criteriaDigest?:string; requirementsDigest?:string; siblingRevision?:string; assertUnchanged?:()=>Promise<void>; file:Promise<string> }>();
   const handler=async (projectId:string, origin:string, query:URLSearchParams, req:IncomingMessage, res:ServerResponse, readBody:()=>Promise<Record<string,unknown>>):Promise<void> => {
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(projectId)) throw new Error('制作工程无效');
     const task = await currentPanelTask(projectId);
@@ -163,6 +163,18 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     const policy=task?await productionReviewRequirements(projectId):null;
     const criteria=boundVisualCriteria(policy);
     const requirementsDigest=policy?digestValue(policy.brief.doneCriteria):undefined;
+    // This identity belongs to the HTTP review surface, never to the authored blueprint.
+    const boardSubject=async(revision:string,currentTask=task,currentPolicy=policy)=>{
+      const parent=currentTask?.blueprintApproval?await productionTaskStore.load(currentTask.blueprintApproval.sourceProjectId,currentTask.blueprintApproval.sourceTaskId):undefined;
+      const siblingEntry=currentTask?.input.panelDelivery?.audience==='existing_partner'
+        ?parent?.productionChildren?.find(entry=>entry.audience==='new_contact'):undefined;
+      const sibling=siblingEntry?await loadOfflineStoredProject(siblingEntry.projectId):undefined;
+      const identity=digestValue({version:1,projectId,taskId:currentTask?.taskId,revision,
+        criteriaDigest:boundVisualCriteria(currentPolicy)?.digest,
+        requirementsDigest:currentPolicy?digestValue(currentPolicy.brief.doneCriteria):undefined,
+        siblingProjectId:siblingEntry?.projectId,siblingRevision:sibling?.revision,siblingMissing:!!siblingEntry&&!sibling});
+      return {identity,siblingEntry,sibling,siblingRevision:sibling?.revision};
+    };
     if (req.method === 'GET') {
       const deliveryOutputs=async()=>{
         if(!task||!previewFile(task)||query.get('renderId')!==task.completed.export?.artifact.renderId)throw Error('这个预览已过期或文件缺失');
@@ -185,14 +197,12 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if (!revision || (await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
         // A shared-body task owns the current teaching plan; its sibling owns only
         // the other ending. Join read-only presentation, never execution documents.
-        const parent = task.blueprintApproval ? await productionTaskStore.load(task.blueprintApproval.sourceProjectId,task.blueprintApproval.sourceTaskId) : undefined;
-        const siblingEntry = task.input.panelDelivery?.audience==='existing_partner'
-          ? parent?.productionChildren?.find(entry=>entry.audience==='new_contact') : undefined;
-        const sibling = siblingEntry ? await loadOfflineStoredProject(siblingEntry.projectId) : undefined;
+        const subject=await boardSubject(revision);
+        const {identity,siblingEntry,sibling,siblingRevision}=subject;
         if(siblingEntry&&!sibling)throw Error('新建联片尾工程缺失');
-        const siblingRevision = sibling?.revision;
+        if(query.has('boardIdentity')&&query.get('boardIdentity')!==identity)throw Error('审片板已变化，请刷新');
         let board = boards.get(projectId);
-        if (board?.revision !== revision||board.criteriaDigest!==criteria?.digest||board.requirementsDigest!==requirementsDigest||board.siblingRevision!==siblingRevision) {
+        if (board?.identity !== identity) {
           const file = (async () => {
             const input = await loadReviewBoardInput(projectId);
             if(sibling){
@@ -207,19 +217,22 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
               };
             }
             const cached=boards.get(projectId);
-            if(cached?.revision===revision&&cached.siblingRevision===siblingRevision)cached.assertUnchanged=input.assertUnchanged;
+            if(cached?.identity===identity)cached.assertUnchanged=input.assertUnchanged;
             // Raw requirements and cross-project reference frames remain internal.
             // Human product review shows this project's storyboard and actual preview.
             if ((await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
-            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel'), undefined, 'human');
-            if ((await snapshot()).revision !== revision || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
+            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel', identity), undefined, 'human');
+            if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await productionReviewRequirements(projectId))).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
             return result.artifacts[0].path;
           })();
-          board = { revision, criteriaDigest:criteria?.digest,requirementsDigest,siblingRevision,file };
+          board = { identity, revision, criteriaDigest:criteria?.digest,requirementsDigest,siblingRevision,file };
           boards.set(projectId,board);
           void file.catch(() => { if (boards.get(projectId)?.file === file) boards.delete(projectId); });
         }
         const bytes = await readFile(await board.file);
+        await board.assertUnchanged?.();
+        if((await boardSubject(revision,task,await productionReviewRequirements(projectId))).identity!==identity)throw Error('审片板已变化，请刷新');
+        res.setHeader('X-ClipMentor-Board-Identity',identity);
         res.setHeader('Content-Type','text/html; charset=utf-8');
         res.setHeader('Content-Security-Policy',"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'");
         res.setHeader('Cache-Control','no-store');
@@ -279,7 +292,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         active: running, stopReason, feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
-        ...(blueprintRevision?{blueprintRevision,canApproveBlueprint:!approvalUnavailable,
+        ...(blueprintRevision?{blueprintRevision,boardIdentity:(await boardSubject(blueprintRevision)).identity,canApproveBlueprint:!approvalUnavailable,
           canConfirmBlueprint,...(approvalUnavailable?{approvalUnavailable}:{})}:{}),
         ...(task.input.panelDelivery?{dualBlueprint:!task.input.panelDelivery.audience,
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),
@@ -354,8 +367,10 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             &&!existing.blueprintApproval&&['blocked','awaiting_blueprint'].includes(existing.status)&&['blueprint','copy_review'].includes(existing.stage);
           if(body.action==='produce_versions'&&!productionConfirmation)throw Error('当前版本尚不能开始制作');
           if ((!draftFeedback&&!productionConfirmation&&(existing.status !== 'awaiting_blueprint'||body.revision !== existing.projectRevision)) || body.revision !== saved.revision) throw new Error('蓝图版本已变化，请重新打开审片板');
+          const subject=await boardSubject(saved.revision,existing,await productionReviewRequirements(projectId));
+          if(body.boardIdentity!==subject.identity){res.statusCode=409;send({reason:'review_board_changed'});return;}
           const board = boards.get(projectId);
-          if (!board || board.revision !== body.revision || board.criteriaDigest!==criteria?.digest||board.requirementsDigest!==requirementsDigest) {
+          if (!board || board.identity!==subject.identity || board.revision !== body.revision || board.criteriaDigest!==criteria?.digest||board.requirementsDigest!==requirementsDigest) {
             res.statusCode = 409;
             send({ reason:'review_board_reload' });
             return;
@@ -365,7 +380,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const latest=await snapshot();
           const latestPolicy=await productionReviewRequirements(projectId),latestCriteria=boundVisualCriteria(latestPolicy);
           const latestRequirements=latestPolicy?digestValue(latestPolicy.brief.doneCriteria):undefined;
-          if(latest.revision!==body.revision||latestCriteria?.digest!==board.criteriaDigest||latestRequirements!==board.requirementsDigest)
+          if(latest.revision!==body.revision||(await boardSubject(latest.revision,existing,latestPolicy)).identity!==body.boardIdentity||latestCriteria?.digest!==board.criteriaDigest||latestRequirements!==board.requirementsDigest)
             throw new Error('蓝图版本已变化，请重新打开审片板');
           if(productionConfirmation){
             const children=await createBlueprintContinuations(existing,latest,latestPolicy,origin);

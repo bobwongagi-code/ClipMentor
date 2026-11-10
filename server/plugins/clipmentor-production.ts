@@ -39,10 +39,20 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     }
    }
   };
+  const localAuthorOrigin=task.input.author.origin,localReviewerOrigin=task.input.reviewer.origin;
   const work=(async()=>{
    try{
     await runProductionWithRecovery(task,restoring?resumeWorker:worker,worker===productionStageWorker?reconcileBlockedBlueprint:async()=>{},
-     productionTaskStore,signal=>prepareSharedProduction(task,signal));
+     productionTaskStore,async signal=>{
+      const latest=await productionTaskStore.load(task.projectId,task.taskId);
+      if(latest.sequence!==task.sequence||latest.updatedAt!==task.updatedAt)Object.assign(task,latest);
+      // Only the local service address is rebound; durable attempts, approvals,
+      // terminal states and saved effects win over a late dispatch snapshot.
+      task.input.author.origin=localAuthorOrigin;task.input.reviewer.origin=localReviewerOrigin;
+      signal.throwIfAborted();
+      if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return false;
+      return prepareSharedProduction(task,signal);
+     });
    }catch(error){task.status='blocked';task.error=String(error);await productionTaskStore.save(task);throw error;}
   })().finally(async()=>{
    active.delete(task.taskId);

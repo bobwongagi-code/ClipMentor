@@ -4,6 +4,7 @@ import {
   kvWriteAgentRuntime,
   kvDel,
   kvGet,
+  kvGetAuthoritative,
   kvKeys,
   kvSet,
   resetSharedKvMemory,
@@ -81,7 +82,20 @@ function withProjectLock<T>(projectId: string, work: () => Promise<T>): Promise<
   return locks ? locks.request(`openchatcut:${runtimeKey(projectId)}`, { mode: 'exclusive' }, work) : work();
 }
 function notify(projectId: string): void {
-  for (const listener of listeners.get(projectId) ?? []) listener();
+  for (const listener of listeners.get(projectId) ?? []) {
+    try {
+      const result:unknown=listener();
+      if(result&&typeof (result as PromiseLike<unknown>).then==='function')void Promise.resolve(result).catch(()=>undefined);
+    } catch { /* Observers cannot roll back a durable runtime write. */ }
+  }
+}
+/** An interrupted publication may already be indexed. Retain its immutable body
+ * whenever authoritative readback is unavailable; an unindexed orphan is safe. */
+async function discardUnpublishedArtifact(projectId:string,key:string,artifactId:string,generation:string):Promise<void>{
+  try {
+    const current=normalizeSidecar(projectId,await kvGetAuthoritative(runtimeKey(projectId,generation)));
+    if(!current.artifacts.some(item=>item.artifactId===artifactId))await kvDel(key);
+  } catch { /* Unknown publication outcome must not destroy a published body. */ }
 }
 async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T], entryPreconditions?:EntryPreconditions): Promise<{ result: T; previous: AgentRuntimeSidecar; next: AgentRuntimeSidecar }> {
   const sessionGeneration = await agentSessionWriteGeneration(projectId);
@@ -123,7 +137,7 @@ export async function mutate<T>(projectId: string, change: (current: AgentRuntim
     const retained = new Set(next.artifacts.map((item) => item.artifactId));
     const sessionGeneration = next.sessionGeneration ?? 'legacy';
     await Promise.all(previous.artifacts.filter((item) => !retained.has(item.artifactId))
-      .map((item) => kvDel(agentArtifactKey(projectId, item.artifactId, sessionGeneration))));
+      .map((item) => kvDel(agentArtifactKey(projectId, item.artifactId, sessionGeneration)).catch(()=>undefined)));
     notify(projectId);
     return result;
   }));
@@ -264,11 +278,11 @@ export async function storeAgentArtifact(record: AgentArtifactRecord,entryPrecon
       const retained = new Set(mutation.next.artifacts.map((item) => item.artifactId));
       await Promise.all(mutation.previous.artifacts
         .filter((item) => !retained.has(item.artifactId))
-        .map((item) => kvDel(agentArtifactKey(record.projectId, item.artifactId, generation))));
+        .map((item) => kvDel(agentArtifactKey(record.projectId, item.artifactId, generation)).catch(()=>undefined)));
       notify(record.projectId);
       return mutation.result;
     } catch (error) {
-      await kvDel(key);
+      await discardUnpublishedArtifact(record.projectId,key,record.artifactId,generation);
       throw error;
     }
   }));
@@ -303,7 +317,7 @@ export async function archiveAgentArtifacts(record:AgentArtifactRecord, expected
    // Cleanup is after the durable pointer swap. Failure leaves harmless duplicates.
    await Promise.all(expected.map(e=>kvDel(agentArtifactKey(record.projectId,e.artifactId,generation)).catch(()=>undefined)));
    notify(record.projectId);return true;
-  }finally{if(!committed)await kvDel(key);}
+  }finally{if(!committed)await discardUnpublishedArtifact(record.projectId,key,record.artifactId,generation);}
  }));
 }
 

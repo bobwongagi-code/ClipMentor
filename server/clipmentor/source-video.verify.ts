@@ -431,6 +431,16 @@ process.stdout.write(config.malformed?'not metrics':JSON.stringify(metrics).repl
  const keptFailure=await requestSourceVideo({operationId:randomUUID(),maxRequests:1,expectedRevision:requestDoc.clipMentorAnalysis!.revision},requestCtx) as any;
  assert.equal(keptFailure.local_http_status,200);assert.equal(keptFailure.receipt.status,'failed');
  assert(keptFailure.error);assert.equal(keptFailure.ok,undefined,'HTTP keepalive must not become source approval');
+ for(const cancel of [false,true]){
+  const controller=new AbortController();let submissions=0;
+  const lateContext={...requestCtx,getAgentRunSignal:()=>controller.signal,hostFetch:async(_url:unknown,init:any)=>{
+   submissions++;const sent=JSON.parse(init.body);if(cancel)controller.abort();
+   return Response.json({...recovered.result,operationId:sent.operationId,subject:sent.subject,source_hash:sent.source.hash,
+    input_media:{full_original_video:true},scope:'source_windows_and_planned_capacity_only',actual_handoff_verified:false,complete_film_accepted:false});
+  }} as unknown as AgentContext;
+  const late=await requestSourceVideo({operationId:randomUUID(),maxRequests:1,expectedRevision:requestDoc.clipMentorAnalysis!.revision},lateContext) as any;
+  assert.equal(submissions,1);assert.equal(late.ok,cancel?undefined:true,'cancelled source result cannot be reported current');if(cancel)assert(late.error);
+ }
  try {
   globalThis.fetch=(async(_url,init)=>{reads++;assert.equal(JSON.parse(String(init?.body)).action,'read_receipt');
    return Response.json({...recovered,subject:{...recovered.subject,revision:subject.revision,digest:subject.digest}});
@@ -451,6 +461,12 @@ process.stdout.write(config.malformed?'not metrics':JSON.stringify(metrics).repl
   assert.equal((await executeTool('read_clipmentor_source_video',{operationId:legacy.operationId},readCtx) as any).current_binding,'stale');
   activeDoc={...doc,assets:doc.assets.map(a=>({...a,sourceContentHash:'b'.repeat(64)}))};
   assert.equal((await executeTool('read_clipmentor_source_video',{operationId:legacy.operationId},readCtx) as any).current_binding,'stale');
+  const cancelledRead=new AbortController();let cancelledReads=0;
+  const lateReadContext={...readCtx,getAgentRunSignal:()=>cancelledRead.signal,hostFetch:async()=>{
+   cancelledReads++;cancelledRead.abort();return Response.json({...recovered,subject:{...recovered.subject,revision:subject.revision,digest:subject.digest}});
+  }} as unknown as AgentContext;
+  const lateRead=await executeTool('read_clipmentor_source_video',{operationId:legacy.operationId},lateReadContext) as any;
+  assert(lateRead.error);assert.equal(lateRead.ok,undefined);assert.equal(cancelledReads,1);
   assert.equal(JSON.stringify(doc),beforeDoc);assert.equal(reads,4);assert.equal(calls,beforeOfflineCalls);
  } finally {globalThis.fetch=savedFetch;}
  assert.equal(policyForTool('observe_clipmentor_source_video').effect,'irreversible_external');assert.equal(policyForTool('observe_clipmentor_source_video').recovery,'outcome_unknown');assert.equal(isExternalDraftTool('observe_clipmentor_source_video'),true);

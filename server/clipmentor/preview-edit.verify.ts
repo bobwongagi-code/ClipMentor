@@ -13,6 +13,7 @@ import {policyForTool} from '../../src/agent/execution-policy';
 import {makeDraft} from '../../src/editor/store';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {AgentContext} from '../../src/agent/context';
+import {verifyPreviewMaterialPublication} from './preview-edit-publication.verify-suite';
 const dir=await mkdtemp(join(tmpdir(),'clipmentor-preview-edit-'));
 const projectId='test-project',operationId='9eb329e2-928c-4f2b-87cf-3b22f54e72ef';
 const doc={version:1,assets:[],mediaFolders:[],activeTimelineId:'old',timelines:[{id:'old',order:0,name:'old',fps:30,width:720,height:1280,
@@ -30,6 +31,23 @@ let commands=0;
 const deps={directory:dir,resolve:(n:string)=>join(dir,n),execute:async(args:string[])=>{commands++;await writeFile(args.at(-1)!,'prepared image');}};
 const call=(action:string,extra={})=>previewEditBridge({projectId,operationId,doc,action,...extra},deps);
 try {
+ await verifyPreviewMaterialPublication(dir,doc,permit);
+ // A rejected competing tail choice must not alter the published winner's bytes.
+ const raceId='3af989d2-0d07-4774-a998-98f6ff389194',raceDir=join(dir,projectId,raceId);
+ await mkdir(raceDir,{recursive:true});
+ await writeFile(join(raceDir,'permit.json'),JSON.stringify({...permit,operationId:raceId}));
+ const tailStarted=Promise.withResolvers<void>(),releaseTail=Promise.withResolvers<void>();
+ const raceExecute=async(args:string[])=>{await writeFile(args.at(-1)!,args.join(' '));};
+ const heldExecute=async(args:string[])=>{
+   if(args.at(-1)!.endsWith('-tail.png')){tailStarted.resolve();await releaseTail.promise;}
+   await raceExecute(args);
+ };
+ const raceCall=(tailFrame:number,execute:typeof raceExecute)=>previewEditBridge({projectId,operationId:raceId,doc,action:'prepare',tailFrame},{...deps,execute});
+ const losing=raceCall(2558,heldExecute);const losingRejected=assert.rejects(losing,/content mismatch/);
+ await tailStarted.promise;
+ const winning=await raceCall(2557,raceExecute) as any;
+ releaseTail.resolve();await losingRejected;
+ await previewEditBridge({projectId,operationId:raceId,action:'check_render',doc:buildPreviewRevision(doc,winning.plan)},deps);
  // Exercise the production resolver: custom writable root, Unicode names and external references.
  const profile=resolveRuntimeProfile({}, {homeDir:join(dir,'home'),cwd:dir});
  const custom=join(dir,'custom-media');await mkdir(custom,{recursive:true});
