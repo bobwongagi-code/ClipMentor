@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,8 +14,15 @@ const { setStoredEntry } = await import('../plugins/project-store');
 const { loadOfflineStoredProject } = await import('../external-agent/offline-project-store');
 const { ffmpegBin } = await import('../media-binaries');
 const { uploadDir } = await import('../media-dir');
+const { sha256File: hashIntakeFile } = await import('../../shared/node-content-hash');
+let afterHash: (() => Promise<void>) | undefined;
+const intakeHashPaths: string[] = [];
 const id = 'intake-regression';
-const server = createServer(createMaterialIntakeHandler());
+const server = createServer(createMaterialIntakeHandler({ hashFile: async (file) => {
+  intakeHashPaths.push(file);
+  const hash = await hashIntakeFile(file), action = afterHash; afterHash = undefined;
+  await action?.(); return hash;
+} }));
 try {
   await setStoredEntry('projects', [{ id, name: 'Intake regression', updatedAt: 1 }]);
   await setStoredEntry(`project:${id}`, {
@@ -69,7 +76,7 @@ try {
   const receipt = await good.json();
   assert.equal(good.status, 200, JSON.stringify(receipt));
   assert.deepEqual(await (await read()).json(), { receipt });
-  const saved = await loadOfflineStoredProject(id);
+  let saved = await loadOfflineStoredProject(id);
   assert.equal(saved?.revision, receipt.revision);
   assert.deepEqual(saved?.doc.assets.map(a => [a.id, a.name, a.sourceContentHash]),
     receipt.assets.map((a: { id: string; name: string; sourceContentHash: string }) => [a.id, a.name, a.sourceContentHash]));
@@ -88,6 +95,92 @@ try {
   assert.equal((await loadOfflineStoredProject(id))?.revision, receipt.revision);
   assert.equal((await readdir(uploadDir())).length, 4);
   assert(saved);
+  // A saved asset pointer is not proof the bytes are still present or correct.
+  const originalIds = saved.doc.assets.map(a => a.id);
+  const productPath = join(uploadDir(), saved.doc.assets[1].src.split('/').at(-1)!);
+  await writeFile(productPath, await readFile(ctaPath));
+  assert.deepEqual(await (await read()).json(), { receipt: null }, 'Changed bytes cannot be reported as a complete saved intake');
+  const broken = (await loadOfflineStoredProject(id))!;
+  assert.equal((await submit(body(video, 'different-sales.png'))).status, 409);
+  assert.equal((await loadOfflineStoredProject(id))?.revision, broken.revision, 'Different input cannot be used to repair a missing or corrupt slot');
+  const repaired = await submit(body());
+  assert.equal(repaired.status, 200, await repaired.clone().text());
+  const repairedReceipt = await repaired.json();
+  saved = await loadOfflineStoredProject(id); assert(saved);
+  assert.deepEqual(saved.doc.assets.map(a => a.id), originalIds, 'Exact-content repair keeps asset IDs');
+  assert.notEqual(saved.doc.assets[1].src, broken.doc.assets[1].src, 'Repair publishes a private verified copy instead of overwriting old bytes');
+  for (const i of [0, 2, 3]) assert.deepEqual(saved.doc.assets[i], broken.doc.assets[i], 'Valid existing slots stay unchanged');
+  assert.deepEqual(await (await read()).json(), { receipt: repairedReceipt });
+  assert.deepEqual(await readFile(productPath), await readFile(ctaPath), 'An old corrupt object may be referenced elsewhere; repair does not delete or overwrite it');
+  await rm(productPath); // Fixture-only cleanup of the synthetic obsolete object.
+  const missingPath = join(uploadDir(), saved.doc.assets[2].src.split('/').at(-1)!);
+  await rm(missingPath);
+  assert.deepEqual(await (await read()).json(), { receipt: null });
+  const missingRepair = await submit(body()); assert.equal(missingRepair.status, 200);
+  saved = await loadOfflineStoredProject(id); assert(saved);
+  assert.deepEqual(saved.doc.assets.map(a => a.id), originalIds);
+  assert.deepEqual(await (await read()).json(), { receipt: await missingRepair.json() });
+  assert.equal((await readdir(uploadDir())).length, 4, 'Unused staged retry files are reclaimed');
+  const beforeDrift = saved;
+  afterHash = async () => {
+    const changed = structuredClone(beforeDrift.doc); changed.timelines[1].name = 'Concurrent edit';
+    await setStoredEntry(`project:${id}`, changed);
+  };
+  const staleRead = await read(); assert.equal(staleRead.status, 503, 'A receipt cannot certify the old project while its bytes are being checked');
+  assert(!('receipt' in await staleRead.json()));
+  saved = await loadOfflineStoredProject(id); assert(saved); assert.notEqual(saved.revision, beforeDrift.revision);
+  const freshRead = await (await read()).json(); assert.equal(freshRead.receipt.revision, saved.revision);
+  assert.equal((await loadOfflineStoredProject(id))?.revision, saved.revision, 'Readback does not mutate the project');
+  const beforeUnsafe = saved;
+  const oldSalesFile = join(uploadDir(), beforeUnsafe.doc.assets[2].src.split('/').at(-1)!);
+  const unsafe = structuredClone(beforeUnsafe.doc); unsafe.assets[2].src = '/media/uploads/../fixture.png';
+  await setStoredEntry(`project:${id}`, unsafe); intakeHashPaths.length = 0;
+  assert.deepEqual(await (await read()).json(), { receipt: null });
+  assert(!intakeHashPaths.includes(imagePath), 'An invalid old src must not be hashed outside the upload directory');
+  const safeRepair = await submit(body()); assert.equal(safeRepair.status, 200);
+  saved = await loadOfflineStoredProject(id); assert(saved);
+  assert.deepEqual(saved.doc.assets.map(a => a.id), originalIds);
+  assert(!saved.doc.assets[2].src.includes('..'));
+  assert.deepEqual(await readFile(imagePath), Buffer.from(await image.arrayBuffer()), 'Repair never changes the outside file');
+  await rm(oldSalesFile); // Fixture-only cleanup; the handler must not reclaim old references.
+
+  const raceOldFile = join(uploadDir(), saved.doc.assets[1].src.split('/').at(-1)!);
+  await writeFile(raceOldFile, await readFile(ctaPath));
+  const otherId = 'untouched-intake-project';
+  await setStoredEntry(`project:${otherId}`, structuredClone(saved.doc));
+  const otherBefore = (await loadOfflineStoredProject(otherId))!;
+  const gate = Promise.withResolvers<void>(); let waiting = 0;
+  const settledIntakes = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const competitors = [0, 1].map(index => {
+    let held = false;
+    const handler = createMaterialIntakeHandler({ hashFile: async (file) => {
+      const hash = await hashIntakeFile(file);
+      if (!held) { held = true; waiting++; if (waiting === 2) gate.resolve(); await gate.promise; }
+      return hash;
+    } });
+    return createServer((req, res) => { void handler(req, res).then(settledIntakes[index].resolve, settledIntakes[index].reject); });
+  });
+  try {
+    const endpoints = await Promise.all(competitors.map(async s => {
+      s.listen(0, '127.0.0.1'); await once(s, 'listening');
+      const a = s.address(); assert(a && typeof a !== 'string'); return `http://127.0.0.1:${a.port}`;
+    }));
+    const replies = await Promise.all(endpoints.map(base => fetch(`${base}/?projectId=${id}`, {
+      method: 'POST', headers: { origin: base, 'sec-fetch-site': 'same-origin' }, body: body(), signal: AbortSignal.timeout(10_000),
+    })));
+    await Promise.all(settledIntakes.map(done => done.promise));
+    assert.deepEqual(replies.map(r => r.status).sort(), [200, 409], 'Independent handlers still have exactly one winning project commit');
+    saved = await loadOfflineStoredProject(id); assert(saved);
+    for (const asset of saved.doc.assets) assert.equal(await hashIntakeFile(join(uploadDir(), asset.src.split('/').at(-1)!)), asset.sourceContentHash, 'Loser cleanup cannot remove winner files');
+    assert.deepEqual(saved.doc.assets.map(a => a.id), originalIds);
+    assert.equal((await loadOfflineStoredProject(otherId))?.revision, otherBefore.revision, 'Another project is untouched');
+    assert.deepEqual(await readFile(raceOldFile), await readFile(ctaPath), 'Even a referenced old corrupt object is untouched');
+  } finally {
+    gate.resolve();
+    await Promise.all(competitors.map(async s => { s.closeAllConnections(); if (s.listening) await new Promise<void>(r => s.close(() => r())); }));
+  }
+  await rm(raceOldFile); // Fixture-owned obsolete object only.
+  assert.equal((await readdir(uploadDir())).length, 4);
   const prior = saved.doc.assets.slice(0, 3);
   await rm(join(uploadDir(), saved.doc.assets[3]!.src.split('/').at(-1)!));
   await setStoredEntry(`project:${id}`, { ...saved.doc, assets: prior });
@@ -193,7 +286,21 @@ try {
     const downloadable=await fetch(`${panelOrigin}/?view=panel_download&renderId=legacy-render`);
     assert.equal(downloadable.status,200);assert((await downloadable.arrayBuffer()).byteLength>0);
   }finally{await new Promise<void>(resolve=>panelServer.close(()=>resolve()));}
-  console.log('material intake verified: origin, missing/corrupt files, save/readback, identical retry, non-overwrite, cleanup');
+  // Failed post-commit verification must preserve all newly referenced files.
+  const uncertainId = 'intake-post-commit-readback';
+  await setStoredEntry('projects', [{ id, name: 'Intake regression', updatedAt: 1 }, { id: uncertainId, name: 'Uncertain commit', updatedAt: 1 }]);
+  await setStoredEntry(`project:${uncertainId}`, { ...saved.doc, assets: [] });
+  const uncertainEndpoint = `${origin}/?projectId=${uncertainId}`;
+  afterHash = async () => { throw new Error('injected post-commit verification unavailable'); };
+  const uncertain = await fetch(uncertainEndpoint, { method: 'POST', headers, body: body() });
+  assert.equal(uncertain.status, 409);
+  const committed = (await loadOfflineStoredProject(uncertainId))!;
+  assert.equal(committed.doc.assets.length, 4, 'The actual commit survives a readback failure');
+  for (const asset of committed.doc.assets) assert.equal(await hashIntakeFile(join(uploadDir(), asset.src.split('/').at(-1)!)), asset.sourceContentHash);
+  const recovered = await fetch(uncertainEndpoint, { headers: { 'sec-fetch-site': 'same-origin' } });
+  assert.equal((await recovered.json()).receipt.revision, committed.revision, 'A later read recovers the saved receipt without another upload');
+  assert.equal((await loadOfflineStoredProject(uncertainId))?.revision, committed.revision);
+  console.log('material intake verified: real-byte receipts, exact-content missing/corrupt repair, stale-read refusal, post-commit preservation, origin, idempotence and cleanup');
 } finally {
   if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
   await rm(root, { recursive: true, force: true });

@@ -24,6 +24,13 @@ const probe = promisify(execFile);
 type Slot = typeof slots[number];
 const receiptAssets = (entries: MediaAsset[]) => entries.map(({ id, name, sourceContentHash }) => ({ id, name, sourceContentHash }));
 
+async function intactAsset(asset: MediaAsset, hashFile: typeof sha256File): Promise<boolean> {
+  if (!asset.src.startsWith('/media/uploads/') || !/^[a-f0-9]{64}$/.test(asset.sourceContentHash ?? '')) return false;
+  const file = resolveUploadFile(asset.src.slice('/media/uploads/'.length));
+  try { return !!file && await hashFile(file) === asset.sourceContentHash; }
+  catch { return false; }
+}
+
 async function inspect(file: string, slot: Slot, fps: number) {
   const image = slot !== 'source';
   const formats = image ? imageFormats[extname(file)]
@@ -44,7 +51,7 @@ async function inspect(file: string, slot: Slot, fps: number) {
   return { width: video.width, height: video.height, durationInFrames: image ? 5 * fps : Math.max(1, Math.round(duration * fps)) };
 }
 
-export function createMaterialIntakeHandler() {
+export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFile?: typeof sha256File } = {}) {
   let uploading = false;
   return async (req: IncomingMessage, res: ServerResponse) => {
     const send = (status: number, value: unknown) => {
@@ -70,8 +77,9 @@ export function createMaterialIntakeHandler() {
         const assets = saved.doc.assets.slice(0, slots.length);
         const complete = assets.length === slots.length && assets.every((asset, index) =>
           asset.kind === (index === 0 ? 'video' : 'image') && !!asset.sourceContentHash
-          && asset.src.startsWith('/media/uploads/') && !!resolveUploadFile(asset.src.slice('/media/uploads/'.length)),
-        ) && assets[1]?.sourceContentHash !== assets[3]?.sourceContentHash;
+        ) && assets[1]?.sourceContentHash !== assets[3]?.sourceContentHash
+          && (await Promise.all(assets.map(asset => intactAsset(asset, hashFile)))).every(Boolean);
+        if ((await loadOfflineStoredProject(projectId))?.revision !== saved.revision) throw new Error('Material snapshot changed');
         send(200, { receipt: complete ? { projectId, revision: saved.revision, assets: receiptAssets(assets) } : null });
       } catch {
         send(503, { error: '暂时无法读取已上传素材' });
@@ -140,20 +148,20 @@ export function createMaterialIntakeHandler() {
       let next = assets;
       let added = assets;
       if (current.length) {
-        const same = (current.length === slots.length - 1 || current.length === slots.length) && (await Promise.all(current.map(async (asset, index) => {
-          const path = resolveUploadFile(asset.src.replace(/^\/media\/uploads\//, ''));
-          return !!path && asset.name === assets[index]?.name && asset.kind === assets[index]?.kind
-            && asset.sourceContentHash === assets[index]?.sourceContentHash && await sha256File(path) === asset.sourceContentHash;
-        }))).every(Boolean);
+        const same = (current.length === slots.length - 1 || current.length === slots.length) && current.every((asset, index) =>
+          asset.name === assets[index]?.name && asset.kind === assets[index]?.kind
+            && /^[a-f0-9]{64}$/.test(asset.sourceContentHash ?? '') && asset.sourceContentHash === assets[index]?.sourceContentHash);
         if (!same) throw new Error('工程已有不同素材，请核对工程，现有素材未覆盖');
-        if (current.length === slots.length) {
+        const intact = await Promise.all(current.map(asset => intactAsset(asset, hashFile)));
+        if (current.length === slots.length && intact.every(Boolean)) {
           // A byte-identical resubmission reads the saved receipt without editing.
           if ((await loadOfflineStoredProject(projectId))?.revision !== initial.revision) throw new Error('工程已变化，请重新核对');
           send(200, { projectId, revision: initial.revision, assets: receiptAssets(current) });
           return;
         }
-        added = assets.slice(current.length);
-        next = [...current, ...added];
+        added = assets.filter((_asset, index) => index >= current.length || !intact[index]);
+        next = assets.map((asset, index) => index >= current.length ? asset
+          : intact[index] ? current[index] : { ...asset, id: current[index].id });
       }
       if (isProjectConnected(projectId)) throw new Error('请先关闭该工程的编辑器再上传');
       ownership = await claimOfflineProjectOwnership(projectId, randomUUID());
@@ -177,7 +185,9 @@ export function createMaterialIntakeHandler() {
       }
       const saved = await loadOfflineStoredProject(projectId);
       if (saved?.revision !== result.revision || saved?.doc.assets.length !== next.length
-        || next.some(asset => !saved?.doc.assets.some(entry => entry.id === asset.id && entry.sourceContentHash === asset.sourceContentHash))) {
+        || next.some(asset => !saved?.doc.assets.some(entry => entry.id === asset.id && entry.src === asset.src && entry.sourceContentHash === asset.sourceContentHash))
+        || !(await Promise.all(next.map(asset => intactAsset(asset, hashFile)))).every(Boolean)
+        || (await loadOfflineStoredProject(projectId))?.revision !== result.revision) {
         throw new Error('已提交，回读未核实。请查看工程素材');
       }
       send(200, { projectId, revision: saved.revision, assets: receiptAssets(next) });
