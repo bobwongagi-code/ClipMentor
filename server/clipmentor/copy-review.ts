@@ -1,4 +1,4 @@
-import {externalCall} from './external-call';
+import {externalCall,readSavedExternalResponse} from './external-call';
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
 import {deliveryReview} from '../../src/clipmentor/delivery-sections';
 import { createHash } from 'node:crypto';
@@ -25,7 +25,7 @@ const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const sha = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const digest = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
 import {deliveryLayoutStages,renderDeliveryLayoutFrames} from './delivery-layout-frames';
-import {assertVisualCriteriaPlan,boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria} from './visual-done-criteria';
+import {assertVisualCriteriaPlan,plannedVisualCriteria,boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria} from './visual-done-criteria';
 export interface ReviewFrame { unit_id: string; phase: 'context' | 'original' | 'explanation' | 'delivery' | 'reference'; source_seconds: number; asset_id?:string; delivery_view?:'supplied_full'|'planned_crop'|'planned_composition'; deliveryStage?:string; crop?:FrameCrop; source_uses?:Array<{unit_id:string;phase: 'context'|'original'|'explanation'}>; base64: string }
 export function reviewFrameLabel(frame: ReviewFrame): string {
   if(frame.source_uses)return `${frame.source_uses.map(use=>`${use.unit_id}/${use.phase}`).join('; ')}; source ${frame.source_seconds}s; same source pixels, all listed uses retained`;
@@ -84,7 +84,7 @@ function parseRequest(v: unknown): CopyReviewRequest {
 }
 
 /** Fixed source sampling: evidence on both sides, no author-selected review answers. */
-function samples(request: CopyReviewRequest) {
+export function reviewSourceSamples(request: CopyReviewRequest) {
   const frames: Array<Omit<ReviewFrame, 'base64'|'phase'>&{phase:'context'|'original'|'explanation'}> = [];
   const contextSeen = new Set<number>();
   for (const unit of request.packet.units) for (const [start, end] of unit.source_context?.source_ranges ?? []) {
@@ -124,7 +124,8 @@ function samples(request: CopyReviewRequest) {
       }
     }
   }
-  if (!frames.length || frames.length > 48) throw new Error('Review requires 1–48 source samples; do not silently truncate evidence');
+  // Enforce the wire image cap after packing identical pixels, retaining every use.
+  if (!frames.length) throw new Error('Review requires source samples; do not silently truncate evidence');
   return frames;
 }
 
@@ -238,8 +239,9 @@ type ResponseContractRevalidation = {
 async function revalidateResponseContract(request: CopyReviewRequest, deps: CopyReviewDependencies,
   annotation: ResponseContractRevalidation, original: string, prior: Row): Promise<CopyReviewResult> {
   const fingerprint = digest((deps.runtime ? JSON.stringify(deps.runtime) : METHOD) + JSON.stringify(request));
-  const criteria=await deps.visualCriteria?.(request.projectId);
-  assertVisualCriteriaPlan(criteria,request.packet.delivery_sections);
+  const allCriteria=await deps.visualCriteria?.(request.projectId);
+  assertVisualCriteriaPlan(allCriteria,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
+  const criteria=plannedVisualCriteria(allCriteria);
   if (prior.fingerprint !== fingerprint || prior.status !== 'failed' || prior.requests_attempted !== 1
     || !isCopyReviewFailure(prior.diagnostic) || prior.diagnostic.code !== 'response_receipt_invalid'
     || prior.diagnostic.operationId !== request.operationId || prior.diagnostic.requestsAttempted !== 1
@@ -270,7 +272,7 @@ async function revalidateResponseContract(request: CopyReviewRequest, deps: Copy
     // New failures retain the actual sent image accounting. Legacy operations
     // never gain a cropped image retroactively through offline revalidation.
     inspection: prior.image_inspection ? structuredClone(prior.image_inspection) as CopyReviewResult['inspection']
-      : {scope:'copy_and_planned_picture_only', sampled_frames:samples(request).length+(request.packet.delivery_sections?.length??0),
+      : {scope:'copy_and_planned_picture_only', sampled_frames:reviewSourceSamples(request).length+(request.packet.delivery_sections?.length??0),
         continuous_viewing:false, listening:false, input_policy:COPY_REVIEW_INPUT_POLICY}};
   const record = {method:RESPONSE_CONTRACT_REVALIDATION, operationId:request.operationId, fingerprint,
     originalLedgerSha256:annotation.originalLedgerSha256, annotation, revalidated_at:at,
@@ -350,6 +352,44 @@ export async function revalidateStoredCopyReview(value: unknown, deps: CopyRevie
   return result;
 }
 
+async function recoverArchivedCopyReview(request:CopyReviewRequest,fingerprint:string,prior:Row,original:string,
+  deps:CopyReviewDependencies,signal?:AbortSignal):Promise<CopyReviewResult|undefined>{
+  if(prior.requests_attempted!==1||(prior.status!=='reserved'&&!(prior.status==='failed'
+    &&isCopyReviewFailure(prior.diagnostic)&&['review_cancelled_or_timed_out','model_turn_failed','review_storage_failed'].includes(prior.diagnostic.code))))return;
+  try{
+    signal?.throwIfAborted();
+    const saved=await readSavedExternalResponse(deps.directory,request.operationId,{maxBytes:4_500_000,maxRecords:512});
+    if(saved===undefined||prior.source_hash!==request.source.hash||!object(prior.image_inspection))return;
+    const allCriteria=await deps.visualCriteria?.(request.projectId);
+    assertVisualCriteriaPlan(allCriteria,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
+    const criteria=plannedVisualCriteria(allCriteria),promptHash=digest(reviewPrompt(request,deps.runtime?.inlineFrames,criteria));
+    if(prior.prompt_sha256!==promptHash)return;
+    let raw:unknown=saved;
+    if(object(saved)&&saved.version==='copy-review-response-v1'){
+      if(saved.fingerprint!==fingerprint||saved.prompt_sha256!==promptHash
+        ||JSON.stringify(saved.inspection)!==JSON.stringify(prior.image_inspection))return;
+      raw=saved.raw_review;
+    }
+    const inspection=prior.image_inspection as unknown as CopyReviewResult['inspection'];
+    if(inspection.scope!=='copy_and_planned_picture_only'||inspection.continuous_viewing!==false||inspection.listening!==false
+      ||!Number.isSafeInteger(inspection.sampled_frames)||inspection.sampled_frames<1)return;
+    const file=deps.resolve(decodeURIComponent(request.source.src.slice('/media/uploads/'.length)));
+    if(!file||await deps.hash(file)!==request.source.hash)return;
+    for(const section of request.packet.delivery_sections??[]){
+      for(const material of [section.picture,section.voice.existing_audio].filter(Boolean)){
+        const media=material! as {src:string;sha256:string};
+        const path=deps.resolve(decodeURIComponent(media.src.slice('/media/uploads/'.length)));
+        if(!path||await deps.hash(path)!==media.sha256)return;
+      }
+    }
+    const result:CopyReviewResult={operationId:request.operationId,requestsAttempted:1,cached:true,
+      receipt:receiptFromRaw(raw,request,criteria),inspection:structuredClone(inspection)};
+    signal?.throwIfAborted();
+    if(await readFile(join(deps.directory,`${request.operationId}.json`),'utf8')!==original||await deps.hash(file)!==request.source.hash)return;
+    return result;
+  }catch{signal?.throwIfAborted();return;}
+}
+
 export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDependencies, outerSignal?: AbortSignal, readOnly=false): Promise<CopyReviewResult> {
   let request: CopyReviewRequest;
   const operationId = object(value) && typeof value.operationId === 'string'
@@ -359,9 +399,10 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   const fingerprint = digest((deps.runtime ? JSON.stringify(deps.runtime) : METHOD) + JSON.stringify(request));
   const ledger = join(deps.directory, `${request.operationId}.json`);
   const previous = async (): Promise<CopyReviewResult | undefined> => {
-    let prior: Row;
+    let prior: Row, original:string;
     try {
-      const value: unknown = JSON.parse(await readFile(ledger, 'utf8'));
+      original=await readFile(ledger,'utf8');
+      const value: unknown = JSON.parse(original);
       if (!object(value)) throw new Error();
       prior = value;
     } catch (error) {
@@ -369,6 +410,8 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
       throw failure('operation_unavailable', null, request.operationId);
     }
     if (prior.fingerprint !== fingerprint) throw failure('operation_unavailable', null, request.operationId);
+    const recovered=await recoverArchivedCopyReview(request,fingerprint,prior,original,deps,outerSignal);
+    if(recovered)return recovered;
     if (prior.status === 'failed' && isCopyReviewFailure(prior.diagnostic)
       && prior.diagnostic.operationId === request.operationId) throw new CopyReviewError(prior.diagnostic);
     if (prior.status !== 'completed') throw failure('legacy_failure_details_missing',
@@ -379,8 +422,9 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   // must not relabel a historical consumed attempt as a fresh zero-attempt error.
   const prior = await previous();
   if(readOnly){if(prior)return prior;throw failure('operation_unavailable',0,request.operationId);}
-  const criteria=await deps.visualCriteria?.(request.projectId);
-  assertVisualCriteriaPlan(criteria,request.packet.delivery_sections);
+  const allCriteria=await deps.visualCriteria?.(request.projectId);
+  assertVisualCriteriaPlan(allCriteria,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
+  const criteria=plannedVisualCriteria(allCriteria);
   if(prior&&prior.receipt.visual_criteria_digest!==criteria?.digest)throw failure('operation_unavailable',1,request.operationId);
   if (!prior && request.packet.units.some(u => u.source_context?.scope !== 'frozen_task_scope')) throw failure('source_review_scope_missing', 0, request.operationId);
   let file: string | null;
@@ -389,8 +433,8 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     if (!file || await deps.hash(file) !== request.source.hash) throw new Error();
   } catch { throw failure('source_unavailable_or_changed', prior ? 1 : 0, request.operationId); }
   if (prior) return prior;
-  let positions: ReturnType<typeof samples>;
-  try { positions = samples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
+  let positions: ReturnType<typeof reviewSourceSamples>;
+  try { positions = reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
   const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria);
   try { await mkdir(deps.directory, { recursive: true, mode: 0o700 }); } catch { throw failure('review_storage_failed', 0, request.operationId); }
   try { await writeFile(ledger, JSON.stringify({ fingerprint, status: 'preparing', requests_attempted: 0 }), { flag: 'wx', mode: 0o600 }); }
@@ -449,16 +493,20 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     stage = 'review_storage_failed';
     inspection = frameInspection(frames);
     attempts = 1;
-    await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'reserved', requests_attempted: attempts, image_inspection:inspection }));
+    await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'reserved', requests_attempted: attempts,
+      source_hash:request.source.hash,prompt_sha256:digest(prompt),image_inspection:inspection }));
     const timeout = AbortSignal.timeout(600_000);
     signal = outerSignal ? AbortSignal.any([timeout, outerSignal]) : timeout;
     signal.throwIfAborted();
     stage = 'model_turn_failed';
-    raw = await externalCall({directory:deps.directory,kind:'review',maxResponseBytes:4_500_000,purpose:'independent-copy-review-v1',requestId:request.operationId,preserveErrors:true,
+    const archived = await externalCall({directory:deps.directory,kind:'review',maxResponseBytes:4_500_000,purpose:'independent-copy-review-v1',requestId:request.operationId,preserveErrors:true,
       identity:{fingerprint,prompt_sha256:digest(prompt),inspection},signal,
-      execute:childSignal=>deps.run(prompt,frames,`clipmentor-review:${request.operationId}`,request.projectId,childSignal)});
+      execute:async childSignal=>({version:'copy-review-response-v1',fingerprint,prompt_sha256:digest(prompt),inspection,
+        raw_review:await deps.run(prompt,frames,`clipmentor-review:${request.operationId}`,request.projectId,childSignal)})});
+    raw=object(archived)&&archived.version==='copy-review-response-v1'?archived.raw_review:archived;
     rawReceived = true;
-    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'reserved',requests_attempted:attempts,image_inspection:inspection,raw_review:raw}));
+    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'reserved',requests_attempted:attempts,
+      source_hash:request.source.hash,prompt_sha256:digest(prompt),image_inspection:inspection,raw_review:raw}));
     signal.throwIfAborted();
     stage = 'source_unavailable_or_changed';
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed during review');

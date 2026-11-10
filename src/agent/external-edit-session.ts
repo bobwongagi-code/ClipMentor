@@ -58,7 +58,7 @@ export class ExternalEditSessionOutcomeError extends Error {
   }
 }
 
-function canonicalProjectJson(doc: ProjectDoc): string {
+export function canonicalProjectJson(doc: ProjectDoc): string {
   return JSON.stringify(doc, (_key, value: unknown) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
     const record = value as Record<string, unknown>;

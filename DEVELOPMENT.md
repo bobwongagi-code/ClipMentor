@@ -20,6 +20,8 @@ Existing package names, storage paths and environment variables still use `openc
 
 ## Web and Desktop Preparation
 
+The development launcher selects the profile and executes the child from the same source checkout, even when invoked from another directory. Its startup record shows the checkout, parent commit and clean/dirty state. A dirty checkout is not an exact committed version; use the reviewed source rather than manually maintaining a second active copy.
+
 At this source revision, the `predev` and `prebuild` scripts include `sync:whisper-cli`. Therefore `npm run dev` and `npm run build` may download or prepare the desktop transcription runtime. The `dev:isolated` and `dev:shared` entries do not have that Whisper hook. Check the scripts in the revision you are running rather than assuming every web command has identical preparation.
 
 Desktop development and packaging use the existing Electron and Whisper preparation paths. On macOS, source preparation can require CMake and a compiler toolchain. A prebuilt CLI supplied through `OPENCHATCUT_WHISPER_CLI` must match the target OS, architecture and required adjacent libraries.
@@ -52,6 +54,14 @@ npm run verify:clipmentor-preview-review
 ```
 
 Read the preparation notes above before running the build. These commands verify code and contracts; they do not approve a particular lesson, certify native-language quality or demonstrate reliable autonomous production.
+
+## 外部调用的等待与结果恢复
+
+Use the existing governed call records rather than resubmitting an uncertain operation. `server/clipmentor/external-call.ts` defines request classes/deadlines and persists identity, raw responses and parsed results below the active `runtimeProfile().rootDir`; ASR, source observation and copy review keep their task records in their corresponding `clipmentor-*` subdirectories. Read the recorded `deadline_at`, status and failure class; elapsed waiting alone does not prove non-delivery.
+
+`npm run report:clipmentor-calls -- [runtime-directory]` is the existing read-only, zero-network summary. It diagnoses governed calls; it does not recover a transcript or approve output. Source observations have `read_clipmentor_source_video`; previews use the existing review tool's read action. ASR uses `read_clipmentor_analysis(view="source_asr", assetId, operationId)`, including before analysis exists. The existing authenticated HTTP endpoint accepts explicit `action:"read"`; it never falls through to submission, reserves an operation, imports text or grants approval. Current source bytes and saved project/request identity must match. Legacy records without that identity remain unverifiable; pending/missing/stale/malformed records are not permission to resubmit. Only a bound saved result can use local raw-response recovery, preserving original records and consumed attempts. Do not call the submission action as a status probe.
+
+Unknown outcomes require result lookup; local parsing/format failures require local repair; configuration errors require configuration repair. Recovery preserves input identity, original judgments and consumed attempts. Confirmed zero-submission preparation recovery is distinct from a provider resubmission; a new provider request requires the current task's applicable authorization. Keep credentials/raw diagnostics internal.
 
 ## Related Projects
 

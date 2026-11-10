@@ -1,4 +1,4 @@
-import {deliverySectionsFromDoc,deliveryTimeline} from './delivery-sections';
+import {deliverySectionsFromDoc,deliveryTimeline,deliveryAudio} from './delivery-sections';
 import { isSourceReviewScope, type SourceReviewScope } from './source-alignment';
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
@@ -46,6 +46,16 @@ export interface SourceBreakdown {
 }
 
 type Row = Record<string, unknown>;
+
+/** Author preparation can repair picture/copy issues; source/reference errors still block it. */
+export function copyPreparationReady(doc: ProjectDoc): boolean {
+  return checkSourceBreakdown(doc).issues.every((i) => [
+    'copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch',
+    'picture_plan_phase_mode_invalid', 'picture_plan_phase_range_invalid', 'picture_plan_phase_original_missing',
+    'picture_plan_phase_line_invalid', 'picture_plan_group_explanation_missing',
+    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'delivery_sections_invalid',
+  ].includes(i.code));
+}
 const row = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every(text);
@@ -367,7 +377,7 @@ function checkPlannedRows(
       spans.push([start,end]);
       if(item.sourceContentHash && item.sourceContentHash!==a.source.sourceContentHash) issue('item_source_hash_mismatch',item.id);
       if ((item.playbackRate??1)!==1 || !Number.isFinite(item.srcInFrame??0) || (item.srcInFrame??0)<0
-        || item.deletedWordIdx?.length || item.transcriptPlayOrder?.length || item.silenceFrames!==undefined || item.gapCapsMs) {issue('nonlinear_source_not_inspected',item.id);continue;}
+        || item.deletedWordIdx?.length || item.transcriptPlayOrder?.length || item.silenceFrames!==undefined || Object.keys(item.gapCapsMs??{}).length) {issue('nonlinear_source_not_inspected',item.id);continue;}
       const source=sourceWindowForTimelineRange(item,start-item.startFrame,end-start);
       const expectedStart=r.source[0]*tl.fps+start-r.output[0];
       if(Math.abs(source.startFrame-expectedStart)>1 || Math.abs(source.endFrame-(expectedStart+end-start))>1) issue('timeline_plan_source_position_mismatch',`${String(r.row.row_id)}:${item.id}`);
@@ -385,10 +395,109 @@ function checkPlannedRows(
   }
 }
 
+/** Read actual native placements against the frozen phase selections. Never
+ * writes a blueprint, invents timing, or changes an independent receipt.
+ * Legacy plans with reviewed production_rows continue through their old path. */
+export function nativeExecutionMapping(doc:ProjectDoc){
+  const issues:Array<{code:string;id:string}>=[],bindings:Array<{unit_id:string;phase:string;item_id:string;source_range_seconds:[number,number];segment_ids:string[]}>=[];
+  const placements:Record<string,NonNullable<SourceBreakdown['units'][number]['placement']>>={};
+  const a=doc.clipMentorAnalysis,b=a?.source_breakdown,t=doc.timelines.find(t=>t.id===doc.activeTimelineId);
+  const fail=(code:string,id:string)=>issues.push({code,id});
+  if(!a||!b||!Array.isArray(a.blueprint)||!isSourceBreakdown(b)||!t||t.fps!==a.source.fps)return {issues,bindings,placements};
+  const visible=(i:typeof t.items[number])=>!t.tracks?.[i.track]?.hidden&&i.transform?.opacity!==0;
+  const source=doc.assets.find(v=>v.id===a.source.asset_id);
+  let offset=0;
+  try{const opening=deliverySectionsFromDoc(doc).find(s=>s.kind==='performance_opening');if(opening)offset=deliveryAudio(doc,opening).frames;}catch{fail('native_mapping_delivery_audio_invalid','delivery');}
+  const unitLines=new Map<string,Array<{id:string;text:string;item:typeof t.items[number]}>>();
+  for(const unit of a.blueprint){
+    if(b.units.find(u=>u.unit_id===unit.unit_id)?.placement)continue;
+    const ir=(unit as unknown as Row).internal_review;if(!row(ir))continue;
+    const plan=ir[String(ir.current_picture_plan)],candidate=ir[String(ir.current_script_candidate)];
+    if(executableRows(plan)!==undefined||!row(plan)||!Array.isArray(plan.phases)||!plan.phases.some(p=>row(p)&&p.mode==='explanation'))continue;
+    const selected:Array<{id:string;text:string;item:typeof t.items[number]}>=[];
+    for(const line of row(candidate)&&Array.isArray(candidate.lines)?candidate.lines.filter(row):[]){
+      const assets=doc.assets.filter(v=>v.kind==='audio'&&row(v.props?.generation)&&v.props.generation.text===line.narration_ms);
+      const matches=t.items.filter(i=>i.kind==='audio'&&visible(i)&&assets.some(v=>v.id===i.sourceAssetId&&v.src===i.src));
+      if(matches.length!==1){fail('native_mapping_narration_missing_or_ambiguous',String(line.id));continue;}
+      const item=matches[0],asset=assets.find(v=>v.id===item.sourceAssetId)!;
+      if((item.srcInFrame??0)!==0||(item.playbackRate??1)!==1||item.durationInFrames!==asset.durationInFrames
+        ||t.tracks?.[item.track]?.muted||(item.volume??1)<=0)fail('native_mapping_narration_modified',String(line.id));
+      selected.push({id:String(line.id),text:String(line.narration_ms),item});
+    }
+    unitLines.set(unit.unit_id,selected);
+  }
+  const allVoices=[...unitLines.values()].flat().map(v=>[v.item.startFrame,v.item.startFrame+v.item.durationInFrames] as [number,number]);
+  for(let i=1;i<allVoices.length;i++)if(allVoices[i][0]<allVoices[i-1][1])fail('native_mapping_narration_order_or_overlap','analysis');
+  const overlaps=(x:[number,number],y:[number,number])=>x[0]<y[1]&&x[1]>y[0];
+  for(const u of b.units){
+    if(!unitLines.has(u.unit_id))continue;
+    const unit=a.blueprint.find(v=>v.unit_id===u.unit_id)!;
+    const ir=(unit as unknown as Row).internal_review as Row,plan=ir[String(ir.current_picture_plan)] as Row,candidate=ir[String(ir.current_script_candidate)] as Row;
+    const lines=unitLines.get(u.unit_id)!,originals:Array<[number,number]>=[];
+    for(const range of originalPlaybackRanges(b,u)){
+      const wanted:[number,number]=[Math.round(range[0]*t.fps),Math.round(range[1]*t.fps)],found:Array<{source:[number,number];output:[number,number]}>=[];
+      for(const item of t.items){
+        if(item.kind!=='video'||!visible(item)||item.sourceAssetId!==a.source.asset_id||item.src!==source?.src
+          ||item.startFrame<offset||allVoices.some(v=>overlaps(v,[item.startFrame,item.startFrame+item.durationInFrames])))continue;
+        if((item.playbackRate??1)!==1||item.deletedWordIdx?.length||item.transcriptPlayOrder?.length||item.silenceFrames!==undefined||Object.keys(item.gapCapsMs??{}).length){fail('nonlinear_source_not_inspected',item.id);continue;}
+        const start=Math.max(wanted[0],item.srcInFrame??0),end=Math.min(wanted[1],(item.srcInFrame??0)+item.durationInFrames);
+        if(end<=start)continue;
+        if(t.tracks?.[item.track]?.muted||(item.volume??1)<=0)fail('native_mapping_original_audio_missing',item.id);
+        if(item.sourceContentHash&&item.sourceContentHash!==a.source.sourceContentHash)fail('item_source_hash_mismatch',item.id);
+        const output:[number,number]=[item.startFrame+start-(item.srcInFrame??0),item.startFrame+end-(item.srcInFrame??0)];
+        found.push({source:[start,end],output});
+        bindings.push({unit_id:u.unit_id,phase:'original',item_id:item.id,source_range_seconds:[start/t.fps,end/t.fps],segment_ids:u.original_segment_ids});
+      }
+      found.sort((x,y)=>x.output[0]-y.output[0]);
+      if(!found.length||found[0].source[0]!==wanted[0]||found.at(-1)!.source[1]!==wanted[1]
+        ||found.some((v,i)=>i>0&&(v.source[0]!==found[i-1].source[1]||v.output[0]!==found[i-1].output[1])))fail('native_mapping_original_incomplete_or_repeated',u.unit_id);
+      if(found.length)originals.push([found[0].output[0],found.at(-1)!.output[1]]);
+    }
+    for(const [index,line] of lines.entries()){
+      const window:[number,number]=[line.item.startFrame,line.item.startFrame+line.item.durationInFrames];
+      if(index&&lines[index-1].item.startFrame+lines[index-1].item.durationInFrames>window[0])fail('native_mapping_narration_order_or_overlap',line.id);
+      const raw=(candidate.lines as Row[]).find(v=>v.id===line.id)!,bound=copyLineSourceBinding(b,u,raw,plan);
+      const ranges=bound?[...bound.evidence_source_ranges,...bound.context_source_ranges].map(r=>r.source_range_seconds):[];
+      const spans:Array<[number,number]>=[];
+      for(const item of t.items){
+        const output:[number,number]=[Math.max(window[0],item.startFrame),Math.min(window[1],item.startFrame+item.durationInFrames)];
+        if(!visible(item)||output[1]<=output[0])continue;
+        const asset=doc.assets.find(v=>v.id===item.sourceAssetId);
+        if(item.kind==='video'&&item.sourceAssetId===a.source.asset_id){
+          if(item.src!==source?.src||(item.playbackRate??1)!==1||item.deletedWordIdx?.length||item.transcriptPlayOrder?.length||item.silenceFrames!==undefined||Object.keys(item.gapCapsMs??{}).length){fail('nonlinear_source_not_inspected',item.id);continue;}
+          const used=sourceWindowForTimelineRange(item,output[0]-item.startFrame,output[1]-output[0]);
+          const r:[number,number]=[used.startFrame/t.fps,used.endFrame/t.fps];
+          if(!rangesCover(ranges.filter(r=>r[1]>r[0]),r,1/t.fps+1e-6))fail('native_mapping_picture_outside_frozen_selection',line.id+':'+item.id);
+          if(item.sourceContentHash&&item.sourceContentHash!==a.source.sourceContentHash)fail('item_source_hash_mismatch',item.id);
+          spans.push(output);bindings.push({unit_id:u.unit_id,phase:'explanation',item_id:item.id,source_range_seconds:r,segment_ids:u.explanation_segment_ids});
+        }else if(item.kind==='image'&&asset?.props?.sourceAssetId===a.source.asset_id){
+          const seconds=asset.props.sourceSeconds;
+          if(item.src!==asset.src||!asset.sourceContentHash||asset.props.sourceHash!==a.source.sourceContentHash
+            ||typeof seconds!=='number'||!ranges.some(r=>seconds>=r[0]&&seconds<r[1]+(r[0]===r[1]?1e-7:0))){fail('native_mapping_reference_unbound',line.id+':'+item.id);continue;}
+          spans.push(output);bindings.push({unit_id:u.unit_id,phase:'explanation',item_id:item.id,source_range_seconds:[seconds,seconds],segment_ids:u.explanation_segment_ids});
+        }
+      }
+      if(!rangesCover(spans,window,0))fail('native_mapping_picture_missing',line.id);
+    }
+    const phases=(plan.phases as Row[]),groups=phases.reduce<Array<{original:number;lines:string[]}>>((out,p)=>{
+      if(p.mode==='original')out.push({original:out.length,lines:[]});else if(p.mode==='explanation')out.at(-1)?.lines.push(String(p.line_id));return out;
+    },[]);
+    for(const [index,g] of groups.entries()){
+      const first=lines.find(l=>l.id===g.lines[0]),last=lines.find(l=>l.id===g.lines.at(-1));
+      if(!originals[index]||!first||!last||originals[index][1]>first.item.startFrame
+        ||originals[index+1]&&last.item.startFrame+last.item.durationInFrames>originals[index+1][0])fail('unit_output_order_invalid',u.unit_id);
+    }
+    if(originals.length&&lines.length)placements[u.unit_id]={timeline_id:t.id,original_frames:[originals[0][0],originals.at(-1)![1]],explanation_frames:[lines[0].item.startFrame,lines.at(-1)!.item.startFrame+lines.at(-1)!.item.durationInFrames]};
+  }
+  return {issues,bindings,placements};
+}
+
 export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
   const issues: Array<{ code: string; id: string }> = [];
   let deliveryOffset=0;
-  try{const sections=deliverySectionsFromDoc(doc);if(checkTimeline){const delivery=deliveryTimeline(doc,sections);deliveryOffset=delivery.offset;for(const code of delivery.issues)issues.push({code,id:'delivery'});}}catch(e){issues.push({code:e instanceof Error?e.message:'delivery_sections_invalid',id:'delivery'});}
+  const native=checkTimeline?nativeExecutionMapping(doc):undefined;
+  if(native)issues.push(...native.issues);
+  try{const sections=deliverySectionsFromDoc(doc);if(checkTimeline){const delivery=deliveryTimeline(doc,sections,native?.placements);deliveryOffset=delivery.offset;for(const code of delivery.issues)issues.push({code,id:'delivery'});}}catch(e){issues.push({code:e instanceof Error?e.message:'delivery_sections_invalid',id:'delivery'});}
   const bindings: Array<{ unit_id: string; phase: string; item_id: string; source_range_seconds: [number, number]; segment_ids: string[] }> = [];
   const issue = (code: string, id: string) => issues.push({ code, id });
   const a = doc.clipMentorAnalysis;
@@ -504,6 +613,9 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
       checkPlannedRows(doc,b,u,candidate,activePlan,executable,issue,bindings,deliveryOffset);
       continue;
     }
+    if(native?.placements[u.unit_id]||native?.issues.some(i=>i.id===u.unit_id||row(candidate)&&Array.isArray(candidate.lines)&&candidate.lines.some(l=>row(l)&&String(i.id).startsWith(String(l.id))))){
+      bindings.push(...native.bindings.filter(v=>v.unit_id===u.unit_id));continue;
+    }
     const placement = u.placement;
     const tl = doc.timelines.find((t) => t.id === placement?.timeline_id);
     if (!placement || !tl) { issue('unit_placement_missing', u.unit_id); continue; }
@@ -524,7 +636,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
         if (!sameSource) continue;
         if (item.sourceContentHash && item.sourceContentHash !== a.source.sourceContentHash) issue('item_source_hash_mismatch', item.id);
         if (!Number.isFinite(item.playbackRate ?? 1) || (item.playbackRate ?? 1) <= 0 || !Number.isFinite(item.srcInFrame ?? 0) || (item.srcInFrame ?? 0) < 0) { issue('item_source_timing_invalid', item.id); continue; }
-        if (item.deletedWordIdx?.length || item.transcriptPlayOrder?.length || item.silenceFrames !== undefined || item.gapCapsMs) { issue('nonlinear_source_not_inspected', item.id); continue; }
+        if (item.deletedWordIdx?.length || item.transcriptPlayOrder?.length || item.silenceFrames !== undefined || Object.keys(item.gapCapsMs??{}).length) { issue('nonlinear_source_not_inspected', item.id); continue; }
         const start = Math.max(window[0], item.startFrame), end = Math.min(window[1], item.startFrame + item.durationInFrames);
         const source = sourceWindowForTimelineRange(item, start - item.startFrame, end - start);
         // The editor's media source offsets use its frame clock; do not divide by the output-export FPS.

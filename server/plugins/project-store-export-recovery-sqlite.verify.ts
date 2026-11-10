@@ -113,6 +113,24 @@ async function runParent(): Promise<void> {
     assert.deepEqual(settled.map((result) => result.error), [undefined, undefined]);
     assert.equal(settled.filter((result) => result.accepted).length, 1,
       'two independent SQLite processes must accept exactly one recovery owner');
+    const db = new DatabaseSync(join(home, '.openchatcut', 'project-store-v1.sqlite3'));
+    try {
+      const read = () => JSON.parse((db.prepare('SELECT v FROM kv WHERE k=?').get(key) as { v: string }).v);
+      const mutate = (input: ExportRecoveryLeaseInput) => {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const result = executeImmediateExportRecoveryMutation({ readEntry: () => ({ found: true, value: read() }),
+            writeEntry: (_key, value) => { db.prepare('UPDATE kv SET v=? WHERE k=?').run(JSON.stringify(value), key); } }, input, 10_001);
+          db.exec('COMMIT'); return result;
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+      };
+      const ready = read(), lease = ready.deliveryClaim;
+      const owned = { operation: 'export-recovery-lease' as const, key, renderId, ownerInstanceId: lease.ownerInstanceId, leaseToken: lease.leaseToken };
+      assert.equal(mutate({ ...owned, action: 'commit' }).accepted, true);
+      const committed = JSON.stringify(read());
+      assert.equal(mutate({ ...owned, action: 'rebind', value: { ...ready, targetPath: 'late.mp4', destination: { type: 'downloads', label: 'late' } } }).accepted, false);
+      assert.equal(JSON.stringify(read()), committed, 'A late rebind cannot rewind the persisted SQLite committed result');
+    } finally { db.close(); }
     console.log('✓ export recovery SQLite BEGIN IMMEDIATE race accepted exactly one owner');
   } finally {
     const exits = children.map((child) => (

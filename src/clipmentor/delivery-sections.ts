@@ -70,7 +70,7 @@ export function deliveryPictureBindings(doc:ProjectDoc,sections?:DeliverySection
   catch(e){return{status:'unavailable' as const,section_id:s.section_id,reason:e instanceof Error?e.message:'delivery_crop_invalid'};}
  });}catch(e){return[{status:'unavailable' as const,reason:e instanceof Error?e.message:'delivery_crop_invalid'}];}
 }
-export function deliveryTimeline(doc:ProjectDoc,sections=deliverySectionsFromDoc(doc)){
+export function deliveryTimeline(doc:ProjectDoc,sections=deliverySectionsFromDoc(doc),nativePlacements?:Record<string,{explanation_frames:[number,number]}>){
  const timeline=doc.timelines.find(t=>t.id===doc.activeTimelineId);const issues:string[]=[];
  if(!sections.length)return{offset:0,issues};
  if(sections.filter(s=>s.kind==='creator_invitation').length>1)return{offset:0,issues:['delivery_timeline_requires_one_audience']};
@@ -78,7 +78,14 @@ export function deliveryTimeline(doc:ProjectDoc,sections=deliverySectionsFromDoc
  const opening=sections.find(s=>s.kind==='performance_opening');let offset=0;
  try{if(opening)offset=deliveryAudio(doc,opening).frames;}catch(e){issues.push(String(e));}
  let middleEnd=0;
- for(const u of doc.clipMentorAnalysis?.blueprint??[]){const i=(u as unknown as Row).internal_review;if(!row(i))continue;const p=i[String(i.current_picture_plan)];try{const d=row(p)&&row(p.composition)&&typeof p.composition.detail==='string'?JSON.parse(p.composition.detail):null;for(const r of d?.production_rows??[])middleEnd=Math.max(middleEnd,Number(r.output_frames_reference?.[1])||0);}catch{issues.push('delivery_middle_rows_invalid');}}
+ for(const u of doc.clipMentorAnalysis?.blueprint??[]){
+  const actual=nativePlacements?.[u.unit_id];
+  if(actual){middleEnd=Math.max(middleEnd,actual.explanation_frames[1]-offset);continue;}
+  const i=(u as unknown as Row).internal_review;if(!row(i))continue;const p=i[String(i.current_picture_plan)];
+  try{const d=row(p)&&row(p.composition)&&typeof p.composition.detail==='string'?JSON.parse(p.composition.detail):null;
+   for(const r of d?.production_rows??[])middleEnd=Math.max(middleEnd,Number(r.output_frames_reference?.[1])||0);
+  }catch{issues.push('delivery_middle_rows_invalid');}
+ }
  for(const s of sections){
   try{const a=deliveryAudio(doc,s),start=s.kind==='performance_opening'?0:offset+middleEnd,end=start+a.frames;
    const visible=(i:typeof timeline.items[number])=>!timeline.tracks?.[i.track]?.hidden&&i.transform?.opacity!==0;
@@ -148,7 +155,7 @@ export function deliveryTimeline(doc:ProjectDoc,sections=deliverySectionsFromDoc
     const source=timeline.items.find(i=>i.kind==='video'&&visible(i)&&i.sourceAssetId===layout.source.asset_id&&i.src===layout.source.src
      &&i.startFrame===start&&endOf(i)===end&&(i.playbackRate??1)===1&&(i.srcInFrame??0)>=Math.round(layout.range[0]*timeline.fps)
      &&(i.srcInFrame??0)+i.durationInFrames<=Math.round(layout.range[1]*timeline.fps));
-    const matte=source&&timeline.items.find(i=>i.kind==='solid'&&visible(i)&&i.startFrame===start&&endOf(i)===end
+    const matte=source&&timeline.items.find(i=>i.kind==='solid'&&visible(i)&&i.startFrame===start&&endOf(i)<=end&&endOf(i)>start
      &&['#000','#000000','black'].includes(String(i.props?.color).toLowerCase())
      &&Math.abs((i.transform?.opacity??1)-layout.shade)<0.01&&tracks.indexOf(i.track)<tracks.indexOf(source.track)
      &&!(i.transform?.x||i.transform?.y||i.transform?.rotation||i.transform?.crop)
@@ -159,8 +166,10 @@ export function deliveryTimeline(doc:ProjectDoc,sections=deliverySectionsFromDoc
      const ranges=pictures.filter(i=>matte&&tracks.indexOf(i.track)<tracks.indexOf(matte.track)&&matchesCrop(i,null)
       &&typeof i.width==='number'&&typeof i.height==='number'&&visibleBounds(i,renderedVisualFrameRect(timeline,{width:i.width,height:i.height},'contain')))
       .map(i=>[i.startFrame,endOf(i)] as [number,number]);
-     if(!s.picture.display||required[0][0]!==start||required.at(-1)![1]>=end
-      ||!deliveryRangesCovered(required,ranges)||!deliveryRangesCovered(ranges,required)||ranges.length!==pictures.length)
+     const expected=s.picture.display?required:matte?[[start,endOf(matte)] as [number,number]]:[];
+     if(!expected.length||expected[0][0]!==start||expected.at(-1)![1]>=end
+      ||!deliveryRangesCovered(expected,ranges)||!deliveryRangesCovered(ranges,expected)||ranges.length!==pictures.length
+      ||matte&&!deliveryRangesCovered(expected,[[start,endOf(matte)]]))
       issues.push('delivery_opening_sales_layer_or_exit_missing');
     }else if(pictures.length)issues.push('delivery_opening_unplanned_product_picture');
     continue;

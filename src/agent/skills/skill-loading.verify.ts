@@ -3,6 +3,7 @@ import { readFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { posix } from 'node:path';
 import { createServer, build } from 'vite';
 import type { CustomSkill } from '../../persist/skillStore';
 import type { SkillFile } from './plugin-skills';
@@ -127,9 +128,45 @@ try {
     }
   }
 
-  const clipMentor = pluginFiles.PLUGIN_SKILLS.find(skill => skill.slug === 'clipmentor')!;
-  assert(clipMentor.body.includes('Review responsibilities and priority'));
-  assert(clipMentor.body.includes('teaching first → measured audio/picture fit → continuous preview acceptance'));
+  // Verify routed resources through the real loader, rather than requiring
+  // detailed instructions to remain duplicated in the entrypoint.
+  const affectedSkills = ['clipmentor', 'storyboard-shot-breakdown', 'transcription',
+    'verification', 'skill-creator', 'export', 'voice', 'known-errors'];
+  for (const slug of affectedSkills) {
+    const skill = pluginFiles.PLUGIN_SKILLS.find(skill => skill.slug === slug)!;
+    assert(skill, `missing ${slug}`);
+    for (const file of ['SKILL.md', ...skill.files.filter(file => file.endsWith('.md'))]) {
+      // Browser tools return the parsed root instructions; support resources
+      // remain raw. The production filesystem reader is checked separately.
+      const expected = file === 'SKILL.md' ? skill.body
+        : await readFile(new URL(`./${slug}/${file}`, import.meta.url), 'utf8');
+      let text = '', offset: number | null = 0;
+      while (offset !== null) {
+        const page = loader.execPluginSkillTool('load_skill', { name: slug, file, offset, limit: 997 }) as {
+          contents: Record<string, string>; nextOffset: number | null;
+        };
+        assert.equal(typeof page.contents?.[file], 'string', `${slug}/${file} must load`);
+        text += page.contents[file];
+        assert(page.nextOffset === null || page.nextOffset > offset, 'paging must advance');
+        offset = page.nextOffset;
+      }
+      assert.equal(text, expected, `${slug}/${file}: real paged reads retain every character`);
+      for (const match of text.matchAll(/\]\(([^)\s]+\.md)(?:#[^)]*)?\)/g)) {
+        if (/^[a-z]+:/i.test(match[1])) continue;
+        const target = posix.normalize(posix.join(posix.dirname(file), match[1]));
+        assert(!target.startsWith('../'), `${slug}/${file} cannot route outside its own skill`);
+        assert(['SKILL.md', ...skill.files].includes(target), `missing route ${slug}/${target}`);
+      }
+    }
+  }
+  for (const args of [
+    { name: 'clipmentor', file: 'references/not-installed.md', offset: 0 },
+    { name: 'clipmentor', file: '../SKILL.md', offset: 0 },
+    { name: 'not-installed' },
+  ]) {
+    const refused = loader.execPluginSkillTool('load_skill', args) as { error?: string; contents?: unknown };
+    assert(refused.error && !refused.contents, 'missing or unsafe resources cannot masquerade as loaded instructions');
+  }
 
   // Targeted distribution smoke: compile the real Vite skill glob and read
   // the built module from an isolated directory without source-tree lookup.
@@ -143,10 +180,13 @@ try {
     const built = await import(pathToFileURL(join(dist, 'skills.mjs')).href);
     const installed = built.getPluginSkill('clipmentor');
     assert(installed);
-    assert.equal(built.readPluginSkillFile('clipmentor'), clipMentor.body, 'root access returns parsed instructions');
-    for (const file of ['SKILL.md', ...clipMentor.files]) {
-      assert.equal(built.readPluginSkillFile('clipmentor', file),
-        await readFile(new URL(`./clipmentor/${file}`, import.meta.url), 'utf8'));
+    for (const slug of affectedSkills) {
+      const source = pluginFiles.PLUGIN_SKILLS.find(skill => skill.slug === slug)!;
+      assert.equal(built.readPluginSkillFile(slug), source.body, 'root access returns parsed instructions');
+      for (const file of ['SKILL.md', ...source.files]) {
+        assert.equal(built.readPluginSkillFile(slug, file),
+          await readFile(new URL(`./${slug}/${file}`, import.meta.url), 'utf8'));
+      }
     }
     assert(!installed.files.some((file: string) => file.includes('fixtures/') || file.includes('production/')));
     assert(!installed.files.some((file: string) => /__pycache__|\.py[co]$|(^|\/)\.DS_Store$|\.log$/.test(file)), 'no cache or local-log resources in the skill package');

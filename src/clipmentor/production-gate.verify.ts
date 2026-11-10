@@ -649,3 +649,25 @@ for (const packet of blindRegression.blind_input.cases) {
 }
 assert.equal(networkCalls, 0, 'all dispatcher, revision and blind replay checks stayed offline');
 console.log('Production gate: runtime guards, V1 history, V2 per-point review, positive controls and blind regression verified. No network or production-project edits.');
+
+// A paid result may arrive after its owning run has stopped. Keep the receipt
+// server-side; the client must neither bind it into the draft nor resubmit it.
+{
+ const {requestClipMentorCopyReview}=await import('./request-copy-review');
+ const {default:projects}=await import('./fixtures/production-saved-projects-20261028.json');
+ const template=projects.cases[0].doc as unknown as ProjectDoc;
+ for(const cancel of [false,true]){
+  const draft=makeDraft(structuredClone(template)),controller=new AbortController();
+  const operationId=crypto.randomUUID();let submits=0;
+  const receipt=structuredClone(template.clipMentorAnalysis!.production_copy_review!);
+  receipt.reviewer_run_id=`clipmentor-review:${operationId}`;
+  const ctx={...draft,getCreativeMode:()=> 'clipmentor',getProjectId:()=> 'copy-cancel-fixture',
+   getAgentRunId:()=>receipt.author_run_id,getAgentRunSignal:()=>controller.signal,templates:[],audio:[],
+   hostFetch:async()=>{submits++;if(cancel)controller.abort();return Response.json({operationId,requestsAttempted:1,receipt});}} as unknown as AgentContext;
+  const before=draft.getDoc();
+  const value=await requestClipMentorCopyReview({operationId,maxRequests:1,expectedRevision:before.clipMentorAnalysis!.revision},ctx) as {ok?:boolean;error?:string};
+  assert.equal(submits,1,'one stable operation only');
+  if(cancel){assert(value.error,'cancelled late copy review must not apply');assert.equal(draft.getDoc(),before);}
+  else {assert.equal(value.ok,true,value.error);assert.notEqual(draft.getDoc(),before,'positive control must actually bind the receipt');}
+ }
+}

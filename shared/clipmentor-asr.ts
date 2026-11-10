@@ -98,3 +98,30 @@ export function stitchAsrChunks(chunks: AsrChunk[]): Pick<SourceTranscription, '
   }
   return { words: retained.flat().sort((a, b) => a.start_seconds - b.start_seconds), conflicts };
 }
+
+/** Saved ASR inspection only; never a new submission, analysis import or approval. */
+export interface SourceAsrRead {
+  operationId:string;
+  source_hash:string;
+  state:'completed'|'partial'|'failed'|'missing'|'pending_or_unknown'|'unverifiable'|'invalid'|'stale'|'unavailable';
+  requestsSent:0;
+  requestsAttempted:number|null;
+  original_status:SourceTranscription['status']|null;
+  recovered_from_raw:boolean;
+  result?:SourceTranscription;
+  project_mutated:false;
+  production_approved:false;
+  listeningVerified:false;
+}
+export function isSourceAsrRead(v:unknown):v is SourceAsrRead {
+  if(!obj(v)||typeof v.operationId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(v.operationId)
+   ||!hash(v.source_hash)||!['completed','partial','failed','missing','pending_or_unknown','unverifiable','invalid','stale','unavailable'].includes(String(v.state))
+   ||v.requestsSent!==0||!(v.requestsAttempted===null||(Number.isSafeInteger(v.requestsAttempted)&&Number(v.requestsAttempted)>=0))
+   ||!(v.original_status===null||['completed','partial','failed'].includes(String(v.original_status)))||typeof v.recovered_from_raw!=='boolean'
+   ||v.project_mutated!==false||v.production_approved!==false||v.listeningVerified!==false)return false;
+  const available=['completed','partial','failed'].includes(String(v.state));
+  if(!available)return v.result===undefined&&v.recovered_from_raw===false;
+  return isSourceTranscription(v.result)&&v.result.operation_id===v.operationId&&v.result.source_hash===v.source_hash
+   &&v.result.status===v.state&&v.result.requests_attempted===v.requestsAttempted&&v.original_status!==null
+   &&(v.recovered_from_raw||v.original_status===v.state);
+}

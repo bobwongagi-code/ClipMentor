@@ -154,7 +154,7 @@ export default defineConfig(({ mode }) => {
       // Pre-transform the editor entry graph at startup so the first tab
       // (and chat hydration) renders without a multi-second compile stall.
       warmup: {
-        clientFiles: ['/src/main.tsx'],
+        clientFiles: ['./src/main.tsx'],
       },
       fs: {
         // Worktrees may symlink node_modules to the primary checkout. Keep

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,readdir,writeFile,mkdir,rm} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
+import {existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {externalCall,externalFailure,externalRecovery,ExternalHttpError,readExternalCapability,recordExternalCapability,summarizeExternalCalls,readSavedExternalResponse} from './external-call.ts';
 import {externalFetch} from './external-fetch.ts';
@@ -15,9 +16,21 @@ try{
  const bad={...base,purpose:'parse-recovery',consume:()=>{throw Error('parse failed');}};
  await assert.rejects(externalCall(bad),/parse failed/);const before=calls;
  assert.deepEqual(await externalCall({...bad,consume:(v)=>v}),{answer:'raw'});assert.equal(calls,before);pass('parse failure preserves raw result for local repair');
+ // Force expiry after the durable reservation, before execute starts. This
+ // must have the same deadline identity as an asynchronously interrupted call.
+ const expiry={...base,purpose:'deadline-before-execute',timeoutMs:100};
+ const expiryHash=createHash('sha256').update(JSON.stringify({version:1,kind:expiry.kind,purpose:expiry.purpose,identity:expiry.identity})).digest('hex');
+ const expiryFile=join(directory,'external-calls',expiryHash+'.json'),realNow=Date.now,start=realNow(),expiryCalls=calls;
+ Date.now=()=>existsSync(expiryFile)?start+1000:start;
+ try{await assert.rejects(externalCall(expiry),e=>(e as {code:string;classification:string}).code==='external_deadline'&&(e as {classification:string}).classification==='deadline_unknown');}
+ finally{Date.now=realNow;}
+ assert.equal(calls,expiryCalls);pass('expiry during reservation keeps deadline identity and sends no provider request');
  let release!:(v:{answer:string})=>void;
- const hanging={...base,purpose:'unknown',timeoutMs:12,execute:async(signal:AbortSignal)=>{calls++;return await new Promise<{answer:string}>(r=>{release=r;signal.addEventListener('abort',()=>{});});}};
- await assert.rejects(externalCall(hanging),/external_deadline/);const count=calls;
+ // Keep reservation IO out of this separate late-response case; the case above
+ // already tests expiry during reservation, where execute must not run.
+ const hangingNow=Date.now,hangingStart=hangingNow();Date.now=()=>hangingStart;
+ const hanging={...base,purpose:'unknown',timeoutMs:12,execute:async(signal:AbortSignal)=>{Date.now=hangingNow;calls++;return await new Promise<{answer:string}>(r=>{release=r;signal.addEventListener('abort',()=>{});});}};
+ try{await assert.rejects(externalCall(hanging),/external_deadline/);}finally{Date.now=hangingNow;}const count=calls;
  await assert.rejects(externalCall(hanging),/pending_or_unknown/);assert.equal(calls,count);pass('deadline bounds non-cooperative transport; unknown is never submitted again');
  release({answer:'late'});await new Promise(r=>setTimeout(r,30));
  assert.deepEqual(await externalCall(hanging),{answer:'late'});assert.equal(calls,count);pass('late reply is archived and can be explicitly read without a new request');

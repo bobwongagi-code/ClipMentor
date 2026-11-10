@@ -27,7 +27,7 @@ export interface PreviewReviewInput {
   points: PreviewFocus[];
   units: Array<{ unit_id: string; point_ids: string[]; output_range_seconds?: [number, number] }>;
   reference_text: PreviewReferenceText[];
-  visual_criteria?: Array<{point_id:string;quote:string;question:string;fileName:string;seconds:number;base64:string}>;
+  visual_criteria?: Array<{point_id:string;quote:string;question:string;pictureStage?:string;fileName:string;seconds:number;base64:string}>;
 }
 export interface ReviewReceipt {
   start_seconds: number;
@@ -59,9 +59,10 @@ const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v ===
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const hash = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
 const normalize = (v: string) => v.normalize('NFKC').toLowerCase().replace(/[\p{P}\s]+/gu, '');
-const range = (v: Record<string, unknown>, duration: number) => typeof v.start_seconds === 'number'
+const range = (v: Record<string, unknown>, duration: number, observation=false) => typeof v.start_seconds === 'number'
   && typeof v.end_seconds === 'number' && Number.isFinite(v.start_seconds) && Number.isFinite(v.end_seconds)
-  && v.start_seconds >= 0 && v.end_seconds > v.start_seconds && v.end_seconds <= duration;
+  && v.start_seconds >= 0 && v.start_seconds < duration && v.end_seconds > v.start_seconds
+  && v.end_seconds <= (observation ? Math.max(duration,Number(duration.toFixed(2))) : duration);
 
 export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
   if (!object(value) || typeof value.duration_seconds !== 'number' || !Number.isFinite(value.duration_seconds)
@@ -89,7 +90,7 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
   const visual=value.visual_criteria;
   if(visual!==undefined&&(!Array.isArray(visual)||!visual.length||visual.length>4||new Set(visual.map(v=>object(v)?v.point_id:null)).size!==visual.length
     ||!visual.every(v=>object(v)&&typeof v.point_id==='string'&&v.point_id.startsWith('delivery/criterion/')&&ids.has(v.point_id)
-      &&text(v.quote)&&v.quote.length<=1000&&text(v.question)&&v.question.length<=300&&text(v.fileName)&&v.fileName.length<=240
+      &&(v.pictureStage===undefined||text(v.pictureStage)&&v.pictureStage.length<=80)&&text(v.quote)&&v.quote.length<=1000&&text(v.question)&&v.question.length<=300&&text(v.fileName)&&v.fileName.length<=240
       &&typeof v.seconds==='number'&&Number.isFinite(v.seconds)&&v.seconds>=0&&text(v.base64)&&v.base64.length<=1_500_000&&/^[A-Za-z0-9+/]+={0,2}$/.test(v.base64))))
     throw Error('Invalid preview visual criteria');
   return { duration_seconds: value.duration_seconds,
@@ -97,7 +98,7 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
     units: value.units.map((u) => ({ unit_id: u.unit_id, point_ids: [...u.point_ids], ...(u.output_range_seconds === undefined ? {} : { output_range_seconds: [...u.output_range_seconds] as [number, number] }) })),
     reference_text: value.reference_text.map((r) => ({ channel: r.channel, start_seconds: r.start_seconds,
       end_seconds: r.end_seconds, text: r.text })),
-    ...(Array.isArray(visual)?{visual_criteria:visual.map(v=>({point_id:v.point_id,quote:v.quote,question:v.question,fileName:v.fileName,seconds:v.seconds,base64:v.base64}))}:{}) };
+    ...(Array.isArray(visual)?{visual_criteria:visual.map(v=>({point_id:v.point_id,quote:v.quote,question:v.question,...(v.pictureStage===undefined?{}:{pictureStage:v.pictureStage}),fileName:v.fileName,seconds:v.seconds,base64:v.base64}))}:{}) };
 }
 
 export function assertExternalVideoUrlSize(bytes: number): void {
@@ -109,16 +110,17 @@ export function assertExternalVideoUrlSize(bytes: number): void {
 function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: PreviewReviewInput) {
   const clean = validatePreviewReviewInput(input);
   const {visual_criteria:criteria,...material}=clean;
+  const visualInstruction=criteria?.some(c=>c.pictureStage!==undefined)?'用实际导出视频指定pictureStage的画面回答问题；同一point的多个单元逐个核对，每段给定位在本单元窗口内的视觉证据，不能以一组代全部，缺该阶段填insufficient_evidence。参照图仅用于对比。':'用实际导出视频的本段画面回答每个问题，参照图仅用于对比。';
   const instruction = `你是独立视听复核员，面向创作者学习产品表达的教学预览。正常顺序看完视频，只按视频和下列学习目标评审，不改稿，不猜作者意图，不强行找问题。
 分别判断动作是否出现、教学作用是否传达，以及叙事承接和教学承接。顺序可理解不等于为什么值得学已经传达；可以回顾，也可以由清晰的画面组织承担解释，不强制每点一句旁白或固定回看用语。原片有动作不自动完成教学解释。目标是表达方式，不是产品功效认证。
-每个supported判断给实际预览时间及证据。口播/短标引用原句；画面组织说明具体对象、阶段和组合如何表达对应价值，不只写“清楚、自然、方便”。不要把目标清单里的意义冒充视频已经说出的意义。听不清留未知。reference_text是工程文字依据，不是逐词听审结果。没有充分依据用insufficient_evidence，不用推测补全。允许不同项目有不同结论，不计算成片总分。
-只返回JSON，结构如下。所有时间是本次预览从0开始的秒数。coverage恰好包含每个point_id一次；continuity恰好包含每个units里的unit_id一次，保留对应point_ids，不把所有单元泛称一组。
+每个supported判断给实际预览时间及证据。口播/短标引用原句；画面组织说明具体对象、阶段和组合如何表达对应价值，不只写“清楚、自然、方便”。不要把目标清单里的意义冒充视频已经说出的意义。听不清留未知。reference_text是工程文字依据，不是逐词听审结果。narration或annotation证据必须独立填写quote字段，引用对应时间、对应channel的reference_text原句，不能只在observed中加引号。若没有可核的文字依据，用visual_organization描述实际可见对象和布局，不能把画面描述标作无quote的annotation。没有充分依据用insufficient_evidence，不用推测补全。允许不同项目有不同结论，不计算成片总分。
+只返回JSON，结构如下。所有时间是本次预览从0开始的秒数。对于output_range_seconds起点为0的片头单元，previous填空数组，不能虚构前置画面；current及正向判断仍须给实际区间和证据。其他单元必须有前后画面证据。coverage恰好包含每个point_id一次；continuity恰好包含每个units里的unit_id一次，保留对应point_ids，不把所有单元泛称一组。
 {"coverage":[{"point_id":"目标ID","depiction":[证据],"teaching":判断}],"continuity":[{"unit_id":"单元或衔接ID","point_ids":["相关目标ID"],"previous":[证据],"current":[证据],"relation":"continuation或recap或new_information","narrative":判断,"teaching":判断}]}
 判断={"status":"supported或not_supported或insufficient_evidence","reasoning":"实际依据及限制","evidence":[证据]}
 证据={"start_seconds":0,"end_seconds":1,"channel":"original或narration或annotation或visual_organization","observed":"实际观察","quote":"仅口播或文字时引用；视觉组织可不填"}
 学习目标和工程文字：\n${JSON.stringify(material)}${clean.points.some(p=>p.point_id.startsWith('delivery/'))
- ?'\n以 delivery/ 开头的是交付验收。根据实际导出像素和口播判断所列要求，逐项给时间证据；teaching 字段在这里填交付效果，无需教学知识。coverage 的正向结论至少给一条与本段相交的 visual_organization 证据。片头可用本段和相邻画面核承接。'
- :''}${criteria?'\n用户原话、问题和参照另附。用实际导出视频的本段画面回答每个问题，参照图仅用于对比。无法在实际导出中定位时填 insufficient_evidence。':''}`;
+ ?'\n以 delivery/ 开头的是交付验收。根据实际导出像素和口播判断所列要求，逐项给时间证据；teaching 字段在这里填交付效果，无需教学知识。coverage 的每项正向结论（包括 delivery/criterion/ 项）都必须在自己的teaching.evidence中给至少一条与本段相交的visual_organization证据；口播提问标准也要另附实际画面证据，不能只给narration或借用其他coverage行。片头可用本段和相邻画面核承接。'
+ :''}${criteria?'\n用户原话、问题和参照另附。'+visualInstruction+'无法在实际导出中定位时填 insufficient_evidence。':''}`;
   const shell = { contents: [{ role: 'user', parts: [
     part, { text: instruction },
   ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json' } };
@@ -144,9 +146,21 @@ export function buildPreviewReviewRequest(video: VideoInput, input: PreviewRevie
     media_transfer: media.receipt };
 }
 
+/** The first physical segment has no predecessor. This boundary marker is not frame evidence. */
+function filmOriginPrevious(row:Record<string,unknown>,input:PreviewReviewInput){
+  const unit=input.units.find(u=>u.unit_id===row.unit_id);
+  if(unit?.output_range_seconds?.[0]!==0||!Array.isArray(row.current)
+    ||!row.current.some(e=>object(e)&&e.start_seconds===0&&typeof e.end_seconds==='number'&&e.end_seconds>0)
+    ||!Array.isArray(row.previous))return false;
+  if(!row.previous.length)return true;
+  const p=row.previous[0];
+  return row.previous.length===1&&object(p)&&p.start_seconds===0&&p.end_seconds===0
+    &&p.channel==='visual_organization'&&text(p.observed)&&(p.quote===undefined||p.quote==='');
+}
+
 export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewReviewInput) {
   const issues: string[] = [];
-  const receipt = (v: unknown): v is ReviewReceipt => object(v) && range(v, input.duration_seconds)
+  const receipt = (v: unknown): v is ReviewReceipt => object(v) && range(v, input.duration_seconds,true)
     && (typeof v.channel === 'string' && ['original', 'narration', 'annotation', 'visual_organization'].includes(v.channel))
     && text(v.observed) && (v.quote === undefined || text(v.quote) || (v.quote === '' && ['original','visual_organization'].includes(String(v.channel))));
   const receipts = (v: unknown): v is ReviewReceipt[] => Array.isArray(v) && v.every(receipt);
@@ -177,8 +191,9 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
     covered.add(row.point_id);
     positive(row.teaching, true, row.point_id);
     if(row.point_id.startsWith('delivery/')&&row.teaching.status==='supported'){
-      const window=input.units.find(unit=>unit.unit_id===row.point_id)?.output_range_seconds;
-      if(!window||!row.teaching.evidence.some(e=>e.channel==='visual_organization'&&e.start_seconds<window[1]&&e.end_seconds>window[0]))
+      const pointId=row.point_id,teaching=row.teaching,localized=input.visual_criteria?.some(c=>c.point_id===pointId&&c.pictureStage!==undefined);
+      const windows=input.units.filter(unit=>unit.point_ids.includes(pointId)).map(unit=>unit.output_range_seconds);
+      if(!windows.length||windows.some(window=>!window||!teaching.evidence.some(e=>e.channel==='visual_organization'&&(localized?e.start_seconds>=window[0]&&e.end_seconds<=window[1]:e.start_seconds<window[1]&&e.end_seconds>window[0]))))
         issues.push(`${row.point_id}:delivery_visual_evidence_missing_in_section`);
     }
   }
@@ -188,13 +203,18 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
   for (const row of value.continuity) {
     if (!object(row) || !text(row.unit_id) || units.has(row.unit_id) || !input.units.some((u) => u.unit_id === row.unit_id) || !Array.isArray(row.point_ids)
       || !row.point_ids.length || !row.point_ids.every((id) => input.points.some((p) => p.point_id === id))
-      || !receipts(row.previous) || !receipts(row.current)
+      || !Array.isArray(row.previous) || (!receipts(row.previous)&&!filmOriginPrevious(row,input)) || !receipts(row.current)
       || !(typeof row.relation === 'string' && ['continuation', 'recap', 'new_information'].includes(row.relation))
       || !finding(row.narrative) || !finding(row.teaching)) { issues.push('invalid_continuity_row'); continue; }
     units.add(row.unit_id);
     const expected = input.units.find((u) => u.unit_id === row.unit_id)!;
+    const window=expected.output_range_seconds;
+    if(window&&input.visual_criteria?.some(c=>c.pictureStage!==undefined&&expected.point_ids.includes(c.point_id))&&row.teaching.status==='supported'){
+      const located=(e:ReviewReceipt)=>e.channel==='visual_organization'&&e.start_seconds>=window[0]&&e.end_seconds<=window[1];
+      if(!row.current.some(located)||!row.teaching.evidence.some(located))issues.push(`${row.unit_id}:visual_evidence_outside_requested_window`);
+    }
     if (JSON.stringify([...row.point_ids].sort()) !== JSON.stringify([...expected.point_ids].sort())) issues.push(`${row.unit_id}:unit_point_mismatch`);
-    if (!row.previous.length || !row.current.length) issues.push(`${row.unit_id}:missing_front_back_evidence`);
+    if ((!row.previous.length&&!filmOriginPrevious(row,input)) || !row.current.length) issues.push(`${row.unit_id}:missing_front_back_evidence`);
     positive(row.narrative, false, `${row.unit_id}:narrative`);
     positive(row.teaching, true, `${row.unit_id}:teaching`);
     for (const e of row.teaching.evidence) if (!row.current.some((c) => e.start_seconds < c.end_seconds && e.end_seconds > c.start_seconds)) {
@@ -214,6 +234,27 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
   });
   return { status: issues.length ? 'review_required' as const : 'pass' as const,
     issues, unit_results, full_film_accepted: false as const };
+}
+
+/** Re-evaluate only bounded observation/origin contract rejections, retaining the immutable original result.
+ * Negative judgments, missing quotes, incomplete generation and real overruns never qualify. */
+export function previewBoundaryRevalidation(result:unknown,input:PreviewReviewInput){
+  if(!object(result)||result.status!=='review_required'||typeof result.raw_public_judgment!=='string'
+    ||JSON.stringify(parsePreviewTeachingJudgment(result.raw_public_judgment))!==JSON.stringify(result.judgment)||!Array.isArray(result.finish_reasons)
+    ||result.finish_reasons.length!==1||result.finish_reasons[0]!=='STOP'||!Array.isArray(result.issues)||!result.issues.length)return null;
+  if(evaluatePreviewTeachingJudgment(result.judgment,input).status!=='pass'||!object(result.judgment))return null;
+  const j=result.judgment as unknown as PreviewTeachingJudgment;
+  const originIds=new Set(j.continuity.filter(row=>filmOriginPrevious(row as unknown as Record<string,unknown>,input)).map(row=>row.unit_id));
+  const missingPrevious=':missing_front_back_evidence';
+  if(!result.issues.every(i=>typeof i==='string'&&(/^(invalid_coverage_row|invalid_continuity_row)$/.test(i)
+    ||/:(missing_coverage|missing_continuity)$/.test(i)
+    ||i.endsWith(missingPrevious)&&originIds.has(i.slice(0,-missingPrevious.length)))))return null;
+  const receipts=[...j.coverage.flatMap(c=>[...c.depiction,...c.teaching.evidence]),...j.continuity.flatMap(c=>[...c.previous,...c.current,...c.narrative.evidence,...c.teaching.evidence])];
+  const origin=j.continuity.some(row=>filmOriginPrevious(row as unknown as Record<string,unknown>,input));
+  if(!origin&&!receipts.some(e=>e.end_seconds>input.duration_seconds))return null;
+  return {method:origin?'film-origin-continuity-v1':'observation-centisecond-eof-v1',original_status:result.status,original_issues:[...result.issues],
+    raw_judgment_sha256:hash(String(result.raw_public_judgment)),time_precision_seconds:0.01,
+    max_eof_rounding_seconds:0.005,scope:origin?'first_segment_has_no_predecessor_not_frame_evidence':'observation_times_only_not_edit_boundaries'};
 }
 
 /** Remove only a complete Markdown JSON envelope; never repair JSON or rewrite judgments. */

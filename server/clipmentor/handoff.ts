@@ -7,8 +7,8 @@ import {getStoredEntry,withSerializedProjectStore} from '../plugins/project-stor
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {createProductionPreparation} from './production-readiness';
-import {assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaApproved} from './visual-done-criteria';
-import {storeAgentArtifact,loadAgentArtifact} from '../../src/persist/agentRuntimeStore';
+import {assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved} from './visual-done-criteria';
+import {storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
 import {digestValue} from '../agent-runs/store-values';
 import {getRun,recoverServerRun,flushRunPersistence,type ServerRun} from '../agent-runs/store';
 import type {ServerRunInput} from '../agent-runs/executor';
@@ -25,7 +25,7 @@ export async function assertHandoffSubject(policy:HandoffPolicy,doc:ProjectDoc):
  if(policy.brief.phase==='execution'){
   if(!doc.clipMentorAnalysis||checkSourceBreakdown(doc).status!=='structurally_ready')throw new Error('handoff_blueprint_incomplete');
   const prepared=await createProductionPreparation(doc),packet=prepared.rawPacket;
-  assertVisualCriteriaPlan(visual,packet.delivery_sections);
+  assertVisualCriteriaPlan(visual,packet.delivery_sections,packet.units.map(u=>u.unit_id),doc.activeTimelineId);
   if(!packet.units.length||packet.units.some(u=>!u.picture_plan?.execution_plan))throw new Error('handoff_picture_plan_required');
   const subject=prepared.reviewed.subject,b=policy.brief.blueprint;
   if(!b||b.revision!==subject.revision||b.digest!==subject.digest)throw new Error('handoff_blueprint_changed');
@@ -34,7 +34,7 @@ export async function assertHandoffSubject(policy:HandoffPolicy,doc:ProjectDoc):
 function assertVisualApproval(policy:HandoffPolicy,doc:ProjectDoc){
  if(policy.brief.phase!=='execution')return;
  const criteria=boundVisualCriteria(policy),receipt=doc.clipMentorAnalysis?.production_copy_review;
- if(criteria&&!visualCriteriaApproved(criteria,receipt))
+ if(criteria&&!visualCriteriaPlanApproved(criteria,receipt))
   throw Error('handoff_visual_criteria_review_missing_or_stale');
 }
 export async function readHandoffPolicy(projectId:string):Promise<HandoffPolicy|null>{
@@ -90,24 +90,45 @@ export async function prepareHandoff(projectId:string,messages:readonly {role:st
  const content=JSON.stringify(data);if(Buffer.byteLength(content)>512*1024)throw new Error('handoff_payload_too_large');
  return {policy,controlText,taskDetails,ignoredInstructions:instructions??'',ignoredHistory:messages.slice(0,-1),blueprint,messages:[{role:'user',content}],instructions:controlText};
 }
-export async function saveHandoffRun(run:ServerRun,prepared:PreparedHandoff):Promise<void>{
- const artifactId=`h_${randomUUID().replaceAll('-','').slice(0,18)}`;
+export async function saveHandoffRun(run:ServerRun,prepared:PreparedHandoff,persist=withSerializedProjectStore):Promise<void>{
  const body=JSON.stringify({version:1,templateVersion:HANDOFF_TEMPLATE_VERSION,brief:prepared.policy.brief,bindingDigest:prepared.policy.digest,
   generatedControl:{text:prepared.controlText,digest:digestValue(prepared.controlText)},
   plannerDetails:{text:prepared.taskDetails,digest:digestValue(prepared.taskDetails),authority:'task_data_only'},
   ignoredClientInstructions:{text:prepared.ignoredInstructions,digest:digestValue(prepared.ignoredInstructions),authority:'none_not_sent'},
   ignoredClientHistory:{messages:prepared.ignoredHistory,digest:digestValue(prepared.ignoredHistory),authority:'none_not_sent'},
   sent:{instructions:prepared.instructions,messages:prepared.messages,digest:digestValue({instructions:prepared.instructions,messages:prepared.messages})}});
- const saved=await storeAgentArtifact({version:1,artifactId,projectId:run.projectId,runId:run.id,kind:'checkpoint-source',toolName:'clipmentor-handoff',body,
-  bodySha256:digestText(body),originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false});
- if(!saved)throw new Error('handoff_payload_not_saved');
+ // Publication spans immutable payload, policy membership and a separate binding.
+ // Reuse only the exact original payload after any interrupted write; never
+ // restamp a changed request under an old run identity or consume another slot.
+ const sidecar=await loadAgentRuntimeSidecar(run.projectId);
+ const prior=sidecar.artifacts.filter(a=>a.runId===run.id&&a.toolName==='clipmentor-handoff');
+ let artifactId:string|undefined,payloadCreatedAt:number|undefined;
+ for(const index of prior){
+  const artifact=await loadAgentArtifact(run.projectId,index.artifactId);
+  if(!artifact||artifact.body!==body)throw Error('handoff_run_already_bound');
+  if(!artifactId){artifactId=artifact.artifactId;payloadCreatedAt=artifact.createdAt;}
+ }
+ if(!artifactId){
+  artifactId=`h_${randomUUID().replaceAll('-','').slice(0,18)}`;
+  payloadCreatedAt=Date.now();
+  const saved=await storeAgentArtifact({version:1,artifactId,projectId:run.projectId,runId:run.id,kind:'checkpoint-source',toolName:'clipmentor-handoff',body,
+   bodySha256:digestText(body),originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:payloadCreatedAt,redacted:false,binaryOmitted:false});
+  if(!saved)throw new Error('handoff_payload_not_saved');
+ }
  const binding:HandoffRunBinding={version:1,projectId:run.projectId,runId:run.id,policyDigest:prepared.policy.digest,templateVersion:HANDOFF_TEMPLATE_VERSION,payloadArtifactId:artifactId};
- await withSerializedProjectStore(async store=>{
+ await persist(async store=>{
   const entry=await store.readEntry(handoffKey(run.projectId));const current=parseHandoffPolicy(entry.value);
   if(current.digest!==binding.policyDigest)throw new Error('handoff_binding_changed');
-  const key=handoffRunKey(run.projectId,run.id);if((await store.readEntry(key)).found)throw new Error('handoff_run_already_bound');
-  current.runIds.push(run.id);current.startedAt??=Date.now();
-  await store.writeEntry(key,binding);await store.writeEntry(handoffKey(run.projectId),current);
+  const key=handoffRunKey(run.projectId,run.id),existing=await store.readEntry(key);
+  if(existing.found&&digestValue(existing.value)!==digestValue(binding))throw new Error('handoff_run_already_bound');
+  // Reserve membership first so even a failed binding write keeps the run
+  // visible to replacement/deadline checks. A retry fills only the missing side.
+  if(!current.runIds.includes(run.id)||current.startedAt===null){
+   if(!current.runIds.includes(run.id))current.runIds.push(run.id);
+   current.startedAt??=payloadCreatedAt!;
+   await store.writeEntry(handoffKey(run.projectId),current);
+  }
+  if(!existing.found)await store.writeEntry(key,binding);
  });
  await flushRunPersistence(run);
 }
@@ -115,7 +136,7 @@ function digestText(text:string):string{return createHash('sha256').update(text)
 export async function assertRunHandoff(run:ServerRun):Promise<HandoffPolicy|null>{
  const policy=await readHandoffPolicy(run.projectId);if(!policy)return null;
  const entry=await getStoredEntry(handoffRunKey(run.projectId,run.id));const v=entry.value;
- if(!handoffRecord(v)||v.version!==1||v.runId!==run.id||v.projectId!==run.projectId||v.policyDigest!==policy.digest||v.templateVersion!==HANDOFF_TEMPLATE_VERSION)throw new Error('handoff_run_binding_required');
+ if(!policy.runIds.includes(run.id)||!handoffRecord(v)||v.version!==1||v.runId!==run.id||v.projectId!==run.projectId||v.policyDigest!==policy.digest||v.templateVersion!==HANDOFF_TEMPLATE_VERSION)throw new Error('handoff_run_binding_required');
  const snapshot=await loadOfflineStoredProject(run.projectId);if(!snapshot)throw new Error('handoff_project_missing');
  await assertHandoffSubject(policy,snapshot.doc);
  assertVisualApproval(policy,snapshot.doc);

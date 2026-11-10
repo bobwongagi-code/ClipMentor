@@ -39,10 +39,20 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     }
    }
   };
+  const localAuthorOrigin=task.input.author.origin,localReviewerOrigin=task.input.reviewer.origin;
   const work=(async()=>{
    try{
-    if(!await prepareSharedProduction(task))return;
-    await runProductionWithRecovery(task,restoring?resumeWorker:worker,worker===productionStageWorker?reconcileBlockedBlueprint:async()=>{});
+    await runProductionWithRecovery(task,restoring?resumeWorker:worker,worker===productionStageWorker?reconcileBlockedBlueprint:async()=>{},
+     productionTaskStore,async signal=>{
+      const latest=await productionTaskStore.load(task.projectId,task.taskId);
+      if(latest.sequence!==task.sequence||latest.updatedAt!==task.updatedAt)Object.assign(task,latest);
+      // Only the local service address is rebound; durable attempts, approvals,
+      // terminal states and saved effects win over a late dispatch snapshot.
+      task.input.author.origin=localAuthorOrigin;task.input.reviewer.origin=localReviewerOrigin;
+      signal.throwIfAborted();
+      if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return false;
+      return prepareSharedProduction(task,signal);
+     });
    }catch(error){task.status='blocked';task.error=String(error);await productionTaskStore.save(task);throw error;}
   })().finally(async()=>{
    active.delete(task.taskId);
@@ -50,8 +60,8 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    if(task.blueprintApproval&&['awaiting_review','completed'].includes(task.status)){
     const approval=task.blueprintApproval;
     const parent=await productionTaskStore.load(approval.sourceProjectId,approval.sourceTaskId);
-    for(const entry of parent.productionChildren??[]){
-     const sibling=await productionTaskStore.load(entry.projectId,entry.taskId);
+    const siblings=parent.productionChildren?.length?await queueBlueprintContinuations(parent):[];
+    for(const sibling of siblings){
      if(sibling.status==='queued'&&sibling.sharedProduction?.taskId===task.taskId&&!active.has(sibling.taskId))launch(sibling,true);
     }
    }
@@ -60,7 +70,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
   void work.catch(error=>console.error('ClipMentor production worker failed',task.taskId,error));
  };
  const isActive=(id:string,projectId:string)=>active.has(id)||productionExecutionActive(projectId,id);
- const panel=createProductionPanel(launch,isActive);
+ const panel=createProductionPanel(launch,isActive,controls);
  return {name:'clipmentor-production-task',configureServer(server){
   let startup:Promise<void>|undefined;
   const recoverOnListen=()=>{
@@ -108,7 +118,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     const origin=`http://127.0.0.1:${port}`;
     const params=new URLSearchParams(query);
     await startup;
-    if(/^panel(?:_board|_video|_download|_reference)?$/.test(params.get('view')??'')){
+    if(/^panel(?:_board|_video|_download|_reference|_attachment)?$/.test(params.get('view')??'')){
      panelRequest=true;
      await panel(params.get('projectId')??'',origin,params,req,res,()=>json(req));return;
     }
@@ -130,7 +140,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
      if(input.authorBackend!==undefined||input.reviewerBackend!==undefined||input.panelDelivery!==undefined)throw new Error('Panel production configuration is available only from the configured panel');
      const task=await createProductionTask(input);launch(task);send(202,{taskId:task.taskId,projectId:task.projectId,status:'queued'});return;
     }
-    controlId=`${String(body.projectId)}:${String(body.taskId)}`;
+    controlId=String(body.projectId);
     if(controls.has(controlId)){controlId=undefined;throw new Error('Task control request already pending');}
     controls.add(controlId);
     const task=await productionTaskStore.load(String(body.projectId),String(body.taskId));

@@ -1,8 +1,10 @@
-import type { AgentRunLeaseState } from '../../shared/project-store-transport';
+import type { AgentRunLeaseState,ProjectStoreRequest } from '../../shared/project-store-transport';
+type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {
   kvWriteAgentRuntime,
   kvDel,
   kvGet,
+  kvGetAuthoritative,
   kvKeys,
   kvSet,
   resetSharedKvMemory,
@@ -36,6 +38,7 @@ import {
   type AgentArtifactRecord,
   type AgentCheckpointRecord,
   type AgentRunEvent,
+  type AgentRunContext,
   type AgentRunRecord,
   type AgentRunStatus,
   type AgentRuntimeSidecar,
@@ -80,9 +83,22 @@ function withProjectLock<T>(projectId: string, work: () => Promise<T>): Promise<
   return locks ? locks.request(`openchatcut:${runtimeKey(projectId)}`, { mode: 'exclusive' }, work) : work();
 }
 function notify(projectId: string): void {
-  for (const listener of listeners.get(projectId) ?? []) listener();
+  for (const listener of listeners.get(projectId) ?? []) {
+    try {
+      const result:unknown=listener();
+      if(result&&typeof (result as PromiseLike<unknown>).then==='function')void Promise.resolve(result).catch(()=>undefined);
+    } catch { /* Observers cannot roll back a durable runtime write. */ }
+  }
 }
-async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T]): Promise<{ result: T; previous: AgentRuntimeSidecar; next: AgentRuntimeSidecar }> {
+/** An interrupted publication may already be indexed. Retain its immutable body
+ * whenever authoritative readback is unavailable; an unindexed orphan is safe. */
+async function discardUnpublishedArtifact(projectId:string,key:string,artifactId:string,generation:string):Promise<void>{
+  try {
+    const current=normalizeSidecar(projectId,await kvGetAuthoritative(runtimeKey(projectId,generation)));
+    if(!current.artifacts.some(item=>item.artifactId===artifactId))await kvDel(key);
+  } catch { /* Unknown publication outcome must not destroy a published body. */ }
+}
+async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSidecar) => [AgentRuntimeSidecar, T], entryPreconditions?:EntryPreconditions): Promise<{ result: T; previous: AgentRuntimeSidecar; next: AgentRuntimeSidecar }> {
   const sessionGeneration = await agentSessionWriteGeneration(projectId);
   const key = runtimeKey(projectId, sessionGeneration);
   // Primary writer is this process (serialized by enqueue/withStoreLock).
@@ -104,7 +120,7 @@ async function mutateOnce<T>(projectId: string, change: (current: AgentRuntimeSi
       operation: 'agent-runtime-write',
       key,
       expectedRevision: raw === undefined ? null : previous.revision,
-      value: next,
+      value: next,...(entryPreconditions?{entryPreconditions}:{}),
     });
     if (canonical.accepted) {
       return { result, previous, next: normalizeSidecar(projectId, canonical.value) };
@@ -122,7 +138,7 @@ export async function mutate<T>(projectId: string, change: (current: AgentRuntim
     const retained = new Set(next.artifacts.map((item) => item.artifactId));
     const sessionGeneration = next.sessionGeneration ?? 'legacy';
     await Promise.all(previous.artifacts.filter((item) => !retained.has(item.artifactId))
-      .map((item) => kvDel(agentArtifactKey(projectId, item.artifactId, sessionGeneration))));
+      .map((item) => kvDel(agentArtifactKey(projectId, item.artifactId, sessionGeneration)).catch(()=>undefined)));
     notify(projectId);
     return result;
   }));
@@ -176,17 +192,41 @@ export async function updateAgentRunLease(
   if (result.authoritative) notify(projectId);
   return result.lease;
 }
-export function appendAgentRunEvent(projectId: string, runId: string, event: Omit<AgentRunEvent, 'eventId' | 'projectId' | 'runId' | 'sequence' | 'createdAt'>): Promise<AgentRunEvent> {
-  const eventId = crypto.randomUUID();
+type NewAgentRunEvent = Omit<AgentRunEvent, 'eventId' | 'projectId' | 'runId' | 'sequence' | 'createdAt'>;
+export class AgentRunEventConflictError extends Error {
+  readonly reason: 'generation' | 'sequence';
+  constructor(reason: 'generation' | 'sequence') { super(`Agent run event ${reason} changed`); this.reason = reason; }
+}
+interface RunRecoveryBinding {
+  sessionGeneration: string;
+  expectedSequence: number;
+  context: AgentRunContext;
+}
+
+
+/** Publish a recovery suffix in one existing store mutation, without per-event fsync/CAS. */
+export function appendAgentRunEvents(projectId: string, runId: string, events: readonly NewAgentRunEvent[], recovery?: RunRecoveryBinding): Promise<AgentRunEvent[]> {
+  if (!events.length && !recovery) return Promise.resolve([]);
+  const pending = events.map(event => ({ ...event, eventId: crypto.randomUUID() }));
   return mutate(projectId, (current) => {
+    if (recovery && (current.sessionGeneration ?? 'legacy') !== recovery.sessionGeneration) throw new AgentRunEventConflictError('generation');
     const run = current.runs.find((item) => item.runId === runId);
     if (!run) throw new Error(`Agent run not found: ${runId}`);
-    const next: AgentRunEvent = { ...event, eventId, projectId, runId, sequence: (run.events.at(-1)?.sequence ?? 0) + 1, createdAt: Date.now() };
+    const start = run.events.at(-1)?.sequence ?? 0, now = Date.now();
+    if (recovery && start !== recovery.expectedSequence) throw new AgentRunEventConflictError('sequence');
+    const next = pending.map((event, index) => ({ ...event, projectId, runId, sequence: start + index + 1, createdAt: now }));
     const runs = current.runs.map((item) => item.runId === runId
-      ? { ...item, updatedAt: next.createdAt, events: [...item.events, next] } : item);
-    return [{ ...current, runs }, next];
+      ? { ...item, ...(recovery && !terminal(item.status) ? { context: recovery.context } : {}), updatedAt: next.at(-1)?.createdAt ?? item.updatedAt, events: [...item.events, ...next] } : item);
+    const approvals = recovery ? current.approvals.map(a => a.runId === runId && a.status === 'pending'
+      ? { ...a, status: 'cancelled' as const, decidedAt: now } : a) : current.approvals;
+    return [{ ...current, runs, approvals }, next];
   });
 }
+
+export async function appendAgentRunEvent(projectId: string, runId: string, event: NewAgentRunEvent): Promise<AgentRunEvent> {
+  return (await appendAgentRunEvents(projectId, runId, [event]))[0];
+}
+
 export function upsertAgentApproval(record: AgentApprovalRecord): Promise<void> {
   return mutate(record.projectId, (current) => {
     const existing = current.approvals.find((item) => item.approvalId === record.approvalId);
@@ -230,7 +270,7 @@ export async function releaseAgentRunLease(
   if (result.authoritative) notify(projectId);
   return result.accepted;
 }
-export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<boolean> {
+export async function storeAgentArtifact(record: AgentArtifactRecord,entryPreconditions?:EntryPreconditions): Promise<boolean> {
   requireProjectId(record.projectId);
   if (!ARTIFACT_ID.test(record.artifactId) || record.originalBytes > MAX_ARTIFACT_BYTES
       || !isValidArtifactRecord(record, record.projectId, record.artifactId)
@@ -258,16 +298,16 @@ export async function storeAgentArtifact(record: AgentArtifactRecord): Promise<b
         const runs = current.runs.map((run) => run.runId === record.runId
           ? { ...run, artifactIds: [...new Set([...run.artifactIds, record.artifactId])] } : run);
         return [{ ...current, runs, artifacts: [...current.artifacts, index] }, true];
-      });
+      },entryPreconditions);
       if (!mutation.result || !mutation.next.artifacts.some((item) => item.artifactId === record.artifactId)) await kvDel(key);
       const retained = new Set(mutation.next.artifacts.map((item) => item.artifactId));
       await Promise.all(mutation.previous.artifacts
         .filter((item) => !retained.has(item.artifactId))
-        .map((item) => kvDel(agentArtifactKey(record.projectId, item.artifactId, generation))));
+        .map((item) => kvDel(agentArtifactKey(record.projectId, item.artifactId, generation)).catch(()=>undefined)));
       notify(record.projectId);
       return mutation.result;
     } catch (error) {
-      await kvDel(key);
+      await discardUnpublishedArtifact(record.projectId,key,record.artifactId,generation);
       throw error;
     }
   }));
@@ -279,7 +319,7 @@ export async function archiveAgentArtifacts(record:AgentArtifactRecord, expected
  if(!expected.length||new Set(expected.map(e=>e.artifactId)).size!==expected.length
   ||record.toolName!=='clipmentor-production-task-history'||record.kind!=='checkpoint-source'
   ||expected.some(e=>e.projectId!==record.projectId||e.runId!==record.runId||e.kind!=='checkpoint-source'
-   ||!['clipmentor-production-task','clipmentor-production-task-history'].includes(e.toolName??''))
+   ||!['clipmentor-production-task','clipmentor-production-task-history','clipmentor-gateway-recovery'].includes(e.toolName??''))
   ||record.originalBytes>MAX_ARTIFACT_BYTES||!isValidArtifactRecord(record,record.projectId,record.artifactId)
   ||new TextEncoder().encode(record.body).byteLength!==record.originalBytes||await sha256Text(record.body)!==record.bodySha256)return false;
  return enqueue(record.projectId,()=>withProjectLock(record.projectId,async()=>{
@@ -302,7 +342,7 @@ export async function archiveAgentArtifacts(record:AgentArtifactRecord, expected
    // Cleanup is after the durable pointer swap. Failure leaves harmless duplicates.
    await Promise.all(expected.map(e=>kvDel(agentArtifactKey(record.projectId,e.artifactId,generation)).catch(()=>undefined)));
    notify(record.projectId);return true;
-  }finally{if(!committed)await kvDel(key);}
+  }finally{if(!committed)await discardUnpublishedArtifact(record.projectId,key,record.artifactId,generation);}
  }));
 }
 

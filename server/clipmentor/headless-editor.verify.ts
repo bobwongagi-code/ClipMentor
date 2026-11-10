@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import {join} from 'node:path';import {execFileSync} from 'node:child_process';
 import {makeDraft} from '../../src/editor/store';
@@ -28,6 +29,24 @@ try{
  const editor=await openHeadlessEditor(opts),item=editor.getDoc().timelines[0].items[0];
  const page=await editor.loadSkillTool({name:'clipmentor',file:'SKILL.md',offset:0,limit:40});assert.equal((page as {nextOffset:number}).nextOffset,40);
  await assert.rejects(editor.loadSkillTool({name:'clipmentor',file:'../SKILL.md'}));
+ const beforeSkillReads=JSON.stringify(editor.getDoc());
+ await assert.rejects(editor.loadSkillTool({name:'clipmentor',file:'references/not-installed.md'}),/ENOENT/);
+ // Production reads filesystem skills rather than Vite's bundle. Exercise
+ // actual routed pages too, without invoking an author or modifying a project.
+ for(const name of ['clipmentor','storyboard-shot-breakdown','transcription','verification','skill-creator','export','voice','known-errors']){
+  const files=new Set(['SKILL.md']);
+  for(const file of files){
+   const expected=await readFile(new URL(`../../src/agent/skills/${name}/${file}`,import.meta.url),'utf8');
+   let text='',offset:number|null=0;
+   while(offset!==null){
+    const chunk=await editor.loadSkillTool({name,file,offset,limit:997}) as {contents:Record<string,string>;nextOffset:number|null};
+    text+=chunk.contents[file];assert(chunk.nextOffset===null||chunk.nextOffset>offset);offset=chunk.nextOffset;
+   }
+   assert.equal(text,expected,`production loader must retain all ${name}/${file} content`);
+   for(const match of text.matchAll(/\]\((references\/[a-zA-Z0-9_-]+\.md)(?:#[^)]*)?\)/g))files.add(match[1]);
+  }
+ }
+ assert.equal(JSON.stringify(editor.getDoc()),beforeSkillReads,'failed and successful skill reads never change the draft');
  const result=await editor.execute('update_item_props',{itemId:item.id,props:{text:'AFTER'}},'edit') as {ok:boolean};assert(result.ok);
  const saved=JSON.parse(await readFile(join(root,'saved.json'),'utf8'));assert.equal(saved.timelines[0].items[0].props.text,'AFTER');
  const beforeAtomic=JSON.stringify(editor.getDoc());
@@ -44,6 +63,19 @@ try{
  const oldPictures=await renderTimelineStills({state:d.getDoc().timelines[0],project:d.getDoc(),timelineId:d.getDoc().activeTimelineId,frames:[5]});
  assert.notEqual(pictures[0].base64,oldPictures[0].base64,'persisted AFTER text must actually change rendered pixels from BEFORE');
  assert(pictures[0].base64.length>1000,'saved composition produces visible rendered pixels');
+ // A saved style value is not proof: exercise the actual native renderer's pixels.
+ const styleDoc=structuredClone(saved),native=styleDoc.timelines[0].items[0];
+ native.width=320;native.height=180;native.transform={};native.props={text:'TEXT',fontSize:40,paddingX:24,color:'#000000',backgroundColor:'#123456',backgroundOpacity:1,textShadow:'none'};
+ const styled=await renderTimelineStills({state:styleDoc.timelines[0],project:styleDoc,timelineId:styleDoc.activeTimelineId,frames:[5]});
+ const {data,info:rawInfo}=await sharp(Buffer.from(styled[0].base64,'base64')).removeAlpha().raw().toBuffer({resolveWithObject:true});
+ const pixel=(x:number,y:number)=>[...data.subarray((y*rawInfo.width+x)*rawInfo.channels,(y*rawInfo.width+x)*rawInfo.channels+3)];
+ assert(pixel(Math.round(30/320*rawInfo.width),Math.round(90/180*rawInfo.height)).every((v,n)=>Math.abs(v-[18,52,86][n])<12),'declared text backplate must be present in exported pixels');
+ native.props={...native.props,backgroundColor:'#FFFFFF',textShadow:'0 10px 0 #ff0000'};
+ const shadowed=await renderTimelineStills({state:styleDoc.timelines[0],project:styleDoc,timelineId:styleDoc.activeTimelineId,frames:[5]});
+ native.props={...native.props,textShadow:'none'};
+ const plain=await renderTimelineStills({state:styleDoc.timelines[0],project:styleDoc,timelineId:styleDoc.activeTimelineId,frames:[5]});
+ assert.notEqual(shadowed[0].base64,plain[0].base64,'shadow:none must change the real rendered result, not just metadata');
+
  await editor.close();
  const restarted=await openHeadlessEditor({...opts,persistence:new FilePersistence(saved)});
  assert.equal(restarted.getDoc().timelines[0].items[0].props.text,'AFTER');await restarted.close();

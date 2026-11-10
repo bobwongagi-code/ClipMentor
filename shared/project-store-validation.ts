@@ -252,11 +252,20 @@ function isAgentRuntimeWriteRequest(value: Record<string, unknown>): boolean {
     || (typeof expectedRevision === 'number'
       && Number.isSafeInteger(expectedRevision)
       && expectedRevision >= 0);
-  return Object.keys(value).length === 4
+  return Object.keys(value).length === (value.entryPreconditions===undefined?4:5)
+    && (value.entryPreconditions===undefined||Array.isArray(value.entryPreconditions)&&value.entryPreconditions.length>0&&value.entryPreconditions.length<=4
+      &&value.entryPreconditions.every(p=>isProjectStoreRecord(p)&&Object.keys(p).length===2&&isProjectStoreKey(p.key)
+        &&typeof p.key==='string'&&projectIdFromProjectStoreKey(p.key)===projectIdFromProjectStoreKey(String(value.key))
+        &&(p.digest===null||typeof p.digest==='string'&&/^[a-f0-9]{64}$/.test(p.digest))))
     && isProjectStoreKey(value.key)
     && isAgentRuntimeKey(value.key)
     && validRevision
     && isAgentRuntimeStoreValue(value.key, value.value);
+}
+
+/** An ordinary runtime mutation advances the version it read exactly once. */
+export function isNextAgentRuntimeRevision(current:number|null,next:unknown):boolean {
+  return typeof next==='number'&&Number.isSafeInteger(next)&&next===(current??0)+1;
 }
 
 function isProjectDocumentWriteRequest(value: Record<string, unknown>): boolean {

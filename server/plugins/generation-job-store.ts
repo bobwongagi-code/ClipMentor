@@ -153,12 +153,10 @@ function normalizePersistedJob(value: unknown): GenerationJob | null {
 
 export async function loadPersistedJobs(): Promise<void> {
   await initializeSqliteProjectStore();
-  let parsed: { version?: unknown; jobs?: unknown } | null = null;
+  let parsed: { version?: unknown; jobs?: unknown } | null | undefined;
   if (sqliteStoreEnabled()) {
     const row = await sqliteReadEntry(GENERATION_JOBS_KV_KEY);
-    if (row.found && row.value && typeof row.value === 'object') {
-      parsed = row.value as { version?: unknown; jobs?: unknown };
-    }
+    if (row.found) parsed = row.value as typeof parsed;
   } else {
     try {
       parsed = JSON.parse(await readFile(STORE_PATH, 'utf8')) as { version?: unknown; jobs?: unknown };
@@ -166,13 +164,23 @@ export async function loadPersistedJobs(): Promise<void> {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
-  if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
+  if (parsed === undefined) {
     persistenceHydrated = true;
     return;
   }
+  if (!parsed || typeof parsed !== 'object' || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
+    throw new Error('generation job ledger format is unsupported or invalid');
+  }
+  // Validate the whole ledger before publishing jobs or arming expiry timers.
+  // Unknown rows must not disappear when the next ordinary write occurs.
+  const incoming: GenerationJob[] = [], ids = new Set<string>();
   for (const value of parsed.jobs) {
     const job = normalizePersistedJob(value);
-    if (!job || jobs.has(job.id)) continue;
+    if (!job || ids.has(job.id)) throw new Error('generation job ledger contains unsupported or duplicate records');
+    ids.add(job.id); incoming.push(job);
+  }
+  for (const job of incoming) {
+    if (jobs.has(job.id)) continue;
     jobs.set(job.id, job);
     if (job.timestamps.acceptedAt) job.acceptance?.resolve(acceptanceOf(job));
     if (TERMINAL.has(job.status)) scheduleExpiry(job);
@@ -185,11 +193,15 @@ export function normalizeRetentionMs(value: number | undefined): number {
 }
 
 export function scheduleExpiry(job: GenerationJob, retryMs?: number): void {
-  if (!TERMINAL.has(job.status)) return;
+  if (jobs.get(job.id)!==job||!TERMINAL.has(job.status)) return;
   clearTimeout(job.expiryTimer);
   const remaining = retryMs ?? Math.max(0, job.retentionMs - (Date.now() - job.updatedAt));
-  job.expiryTimer = setTimeout(() => { void evictTerminalJob(job.id, true); }, remaining);
-  job.expiryTimer.unref?.();
+  const timer=setTimeout(() => {
+    if(jobs.get(job.id)!==job||job.expiryTimer!==timer)return;
+    void evictTerminalJob(job.id,true).catch(()=>console.warn(`[generation-job] scheduled cleanup failed for ${job.id}`));
+  },remaining);
+  job.expiryTimer=timer;
+  timer.unref?.();
 }
 
 async function retentionBlocked(job: GenerationJob): Promise<boolean> {
@@ -203,41 +215,47 @@ async function retentionBlocked(job: GenerationJob): Promise<boolean> {
   }
 }
 
-export async function evictTerminalJob(jobId: string, retentionExpiry = false): Promise<boolean> {
-  const job = jobs.get(jobId);
-  if (!job || !TERMINAL.has(job.status)) return false;
-  const cleanup = job.cleanupPolicy
-    ? cleanupPolicyHandlers.get(job.cleanupPolicy)
-    : job.cleanupResult;
-  if (job.cleanupPolicy && !cleanup) {
-    console.warn(`[generation-job] refusing to evict ${jobId}: unknown cleanup policy ${job.cleanupPolicy}`);
+const evictions=new Map<string,Promise<boolean>>();
+export function isGenerationJobEvicting(jobId:string):boolean{return evictions.has(jobId);}
+
+/** The claim covers guard, durable removal and cleanup. A failed commit must
+ * leave actual result bytes intact; cleanup never precedes that commit. */
+async function evictClaimedJob(jobId:string,job:GenerationJob,retentionExpiry:boolean):Promise<boolean>{
+  const current=()=>jobs.get(jobId)===job&&TERMINAL.has(job.status);
+  if(!current())return false;
+  const cleanup=job.cleanupPolicy?cleanupPolicyHandlers.get(job.cleanupPolicy):job.cleanupResult;
+  if(job.cleanupPolicy&&!cleanup){console.warn(`[generation-job] refusing to evict ${jobId}: unknown cleanup policy ${job.cleanupPolicy}`);return false;}
+  if(await retentionBlocked(job)){
+    if(retentionExpiry&&current())scheduleExpiry(job,60_000);
     return false;
   }
-  if (await retentionBlocked(job)) {
-    if (retentionExpiry) scheduleExpiry(job, 60_000);
-    return false;
-  }
-  if (job.results?.length && cleanup) {
-    try {
-      await Promise.all(job.results.map((result) => cleanup(result)));
-    } catch (error) {
-      console.warn(`[generation-job] failed to clean result for ${jobId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  jobs.delete(jobId);
-  clearTimeout(job.expiryTimer);
-  try {
-    await persistJobs();
-  } catch (error) {
-    jobs.set(jobId, job);
-    scheduleExpiry(job, 60_000);
+  if(!current())return false;
+  jobs.delete(jobId);clearTimeout(job.expiryTimer);job.expiryTimer=undefined;
+  try{await persistJobs();}
+  catch(error){
+    if(!jobs.has(jobId))jobs.set(jobId,job);
+    if(jobs.get(jobId)===job)scheduleExpiry(job,60_000);
     throw error;
   }
+  if(jobs.has(jobId))return false;
+  if(job.results?.length&&cleanup)try{await Promise.all(job.results.map(result=>cleanup(result)));}
+  catch{console.warn(`[generation-job] result cleanup failed after durable removal for ${jobId}`);}
   return true;
+}
+
+export function evictTerminalJob(jobId:string,retentionExpiry=false):Promise<boolean>{
+  const pending=evictions.get(jobId);if(pending)return pending;
+  const job=jobs.get(jobId);if(!job||!TERMINAL.has(job.status))return Promise.resolve(false);
+  // Publish ownership before calling a possibly reentrant async guard.
+  const attempt=Promise.resolve().then(()=>evictClaimedJob(jobId,job,retentionExpiry));
+  evictions.set(jobId,attempt);
+  const release=()=>{if(evictions.get(jobId)===attempt)evictions.delete(jobId);};
+  void attempt.then(release,release);
+  return attempt;
 }
 
 export async function cleanOldJobs(): Promise<void> {
   const cutoff = Date.now() - MAX_JOB_AGE_MS;
-  const expired = [...jobs.values()].filter((job) => TERMINAL.has(job.status) && job.updatedAt < cutoff);
+  const expired = [...jobs.values()].filter((job) => TERMINAL.has(job.status) && job.updatedAt < cutoff && !isGenerationJobEvicting(job.id));
   await Promise.all(expired.map((job) => evictTerminalJob(job.id, true)));
 }

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import {digestValue} from '../agent-runs/store-values';
+import type {ProjectStoreRequest} from '../../shared/project-store-transport';
 import type {
   AgentRunLeaseAction,
   AgentRunLeaseState,
@@ -6,6 +8,7 @@ import type {
 } from '../../shared/project-store-transport.ts';
 import {
   classifyAgentRuntimeStoreValue,
+  isNextAgentRuntimeRevision,
   isProjectStoreRecord,
 } from '../../shared/project-store-validation.ts';
 import { normalizeAgentRuntimeSidecar } from '../../src/persist/agentRuntimeCodec.ts';
@@ -17,6 +20,7 @@ import type {
 export interface AgentRuntimeWriteInput {
   key: string;
   expectedRevision: number | null;
+  entryPreconditions?:Extract<ProjectStoreRequest,{operation:"agent-runtime-write"}>["entryPreconditions"];
   value: unknown;
 }
 
@@ -152,19 +156,23 @@ async function writeAgentRuntime(
   return withStoreLock(async (store) => {
     const current = await store.readEntry(input.key);
     const runtime = supportedRuntimeEntry(input.key, current);
-    // Single-writer world: the agent runtime sidecar is only ever written by
-    // this server process (executor events, settle endpoint, artifact store),
-    // serialized by withStoreLock. The expectedRevision CAS check is gone;
-    // the revision increment and terminal-status guards below still protect
-    // data integrity inside the lock.
+    // The lock serializes commits, not the earlier reads in another caller or
+    // browser. A late snapshot must re-read instead of deleting newer evidence.
+    const revision=runtime?Number(runtime.revision):null;
+    if(input.expectedRevision!==revision)return mutationResponse(current,false);
     const incoming = classifyAgentRuntimeStoreValue(input.key, input.value);
     if (incoming.kind !== 'supported') throw new Error('invalid agent runtime CAS value');
     normalizeAgentRuntimeSidecar(String(incoming.value.projectId), incoming.value);
+    if(!isNextAgentRuntimeRevision(revision,incoming.value.revision))throw new Error('invalid agent runtime successor revision');
     if (!preservesTerminalStatuses(runtime, incoming.value)) {
       return mutationResponse(current, false);
     }
     const managed = serverManagedRuntimeValue(runtime, incoming.value, Date.now());
     if (!managed) return mutationResponse(current, false);
+    for(const condition of input.entryPreconditions??[]){
+      const entry=await store.readEntry(condition.key);
+      if((entry.found?digestValue(entry.value):null)!==condition.digest)throw Error('agent_runtime_precondition_changed');
+    }
     await store.writeAgentRuntimeExact(input.key, managed);
     return mutationResponse(await store.readEntry(input.key), true);
   });

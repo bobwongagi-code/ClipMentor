@@ -39,12 +39,20 @@ export function feedbackProjectDigest(doc:ProjectDoc){
 }
 export async function productionFeedbackAnchor(task:ProductionTask,doc:ProjectDoc){
  const t=doc.timelines.find(t=>t.id===doc.activeTimelineId);if(!t)throw new Error('feedback_timeline_missing');
- const packet=await copyTeachingPacketFromDoc(doc),facts=productionPreviewFacts(doc,t,packet),exported=task.completed.export?.artifact;
+ const exported=task.completed.export?.artifact;
  const revision=revisionOf(doc);
- const selectionOnly=exported?.feedback_project_digest===feedbackProjectDigest(doc)&&exported?.facts_digest===previewFactsDigest(facts);
- assertPreviewExportBinding(exported,selectionOnly?String(exported?.revision):revision,facts);
+ const unchanged=exported?.feedback_project_digest===feedbackProjectDigest(doc);
+ let factsDigest:string;
+ if(unchanged&&typeof exported?.revision==='string'&&typeof exported.facts_digest==='string'&&/^[a-f0-9]{64}$/.test(exported.facts_digest)){
+  // The complete saved project (apart from editor selection) is stronger than a
+  // freshly derived projection. Algorithm upgrades must not stale an unchanged preview.
+  factsDigest=exported.facts_digest;
+ }else{
+  const packet=await copyTeachingPacketFromDoc(doc),facts=productionPreviewFacts(doc,t,packet);
+  assertPreviewExportBinding(exported,revision,facts);factsDigest=previewFactsDigest(facts);
+ }
  if(typeof exported?.renderId!=='string')throw new Error('feedback_render_missing');
- return{saved_revision:revision,preview:{revision:String(exported.revision),renderId:exported.renderId,facts_digest:previewFactsDigest(facts),timelineId:t.id},blueprint:await copyReviewSubject(doc)};
+ return{saved_revision:revision,preview:{revision:String(exported.revision),renderId:exported.renderId,facts_digest:factsDigest,timelineId:t.id},blueprint:await copyReviewSubject(doc)};
 }
 /** Bind once against the actual exported snapshot, before a feedback checkpoint is changed. */
 export async function bindProductionFeedback(task:ProductionTask,doc:ProjectDoc,input:unknown){

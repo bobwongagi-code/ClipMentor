@@ -90,7 +90,7 @@ export function runtimeEvent(
     : (event.type === 'tool-result' || event.type === 'server-tool-result')
       ? 'tool_outcome'
       : 'final';
-  const unknown = event.type === 'server-tool-result' && fields.outcome && typeof fields.outcome === 'object'
+  const unknown = (event.type === 'tool-result' || event.type === 'server-tool-result') && fields.outcome && typeof fields.outcome === 'object'
     && (fields.outcome as {kind?:unknown}).kind === 'outcome_unknown';
   const error = typeof fields.error === 'string' ? fields.error : fields.success === false ? 'Tool returned an unsuccessful result' : undefined;
   return {

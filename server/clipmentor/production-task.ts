@@ -1,7 +1,14 @@
-import {compactProductionTaskHistory} from './production-task-history';
+import {compactProductionTaskHistory,newestProductionCheckpoints,orderedProductionCheckpointRecords,decodePublishedProductionCheckpoint,loadPublishedProductionCheckpoint} from './production-task-history';
+import {productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
 import type {ProjectDoc} from '../../src/editor/types';
+import type {ProjectStoreRequest} from '../../shared/project-store-transport';
+import {getStoredEntry} from '../plugins/project-store';
+import {runProjectMigrations} from '../../src/persist/migrations';
+import {revisionOf} from '../../src/agent/external-edit-session';
+import {digestValue} from '../agent-runs/store-values';
+type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {randomUUID,createHash} from 'node:crypto';
-import {storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
+import {agentRuntimeKey,appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
 import {createRun,flushRunPersistence,setRunStatus,pushRunEvent,recoverServerRun} from '../agent-runs/store';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {LLM_PROVIDER_PRESETS} from '../../shared/llm-providers';
@@ -9,6 +16,12 @@ import {confirmedUnsubmittedGateway} from './production-recovery';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ReviewApiConfig} from './copy-review-api';
 import type {HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {assertFinalPreviewEvidence} from './production-preview-facts';
+import {productionDeliverables} from './production-deliverables';
+import {feedbackProjectDigest} from './production-feedback';
+import {sha256File} from '../../shared/node-content-hash';
+import {verifyProductionOutput} from './production-format';
+import {resolveUploadFile,isSafeUploadName} from '../media-dir';
 
 /** Keep independent findings through intermediate author/structure repairs, never overwrite them with a self-check. */
 export function productionRepairContext(previous:Record<string,unknown>|undefined,artifact:Record<string,unknown>){
@@ -27,6 +40,7 @@ export interface ProductionInput {
  author:ReviewApiConfig;reviewer:ReviewApiConfig;
  voice?:{provider:string;voiceId:string};
  humanBlueprintReview?:true;
+ gatewayRecovery?:'bounded'|'none';
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
   bookends?:'layered-v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
@@ -42,30 +56,32 @@ export interface ProductionTask {
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
- visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[]};
+ visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
  createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
 }
-export interface TaskStore {save(task:ProductionTask):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
+export interface TaskStore {save(task:ProductionTask,entryPreconditions?:EntryPreconditions):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
 export const productionTaskStore:TaskStore={
- async save(task){
+ async save(task,entryPreconditions){
   for(let batch=0;batch<64&&await compactProductionTaskHistory(task.projectId,task.taskId);batch++){ /* bounded, lossless compaction to the existing low-water mark */ }
   task.updatedAt=Math.max(Date.now(),task.updatedAt+1);task.sequence++;
   const body=JSON.stringify({type:'clipmentor-production-task/v1',task});
   const ok=await storeAgentArtifact({version:1,artifactId:`p_${randomUUID().replaceAll('-','').slice(0,18)}`,projectId:task.projectId,runId:task.taskId,
    kind:'checkpoint-source',toolName:'clipmentor-production-task',body,bodySha256:createHash('sha256').update(body).digest('hex'),
-   originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:task.updatedAt,redacted:false,binaryOmitted:false});
+   originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:task.updatedAt,redacted:false,binaryOmitted:false},entryPreconditions);
   if(!ok)throw new Error('Production checkpoint could not be persisted');
  },
  async load(projectId,id){
   const sidecar=await loadAgentRuntimeSidecar(projectId);
-  const records=sidecar.artifacts.filter(a=>a.runId===id&&a.toolName==='clipmentor-production-task').sort((a,b)=>b.createdAt-a.createdAt);
+  const records=orderedProductionCheckpointRecords(sidecar.artifacts.filter(a=>a.runId===id&&a.toolName==='clipmentor-production-task'));
   let latest:ProductionTask|undefined;
-  for(const record of records){const artifact=await loadAgentArtifact(projectId,record.artifactId);if(!artifact)continue;
-   const value=JSON.parse(artifact.body);if(value.type!=='clipmentor-production-task/v1'||value.task.taskId!==id||value.task.projectId!==projectId)continue;
-   const candidate=value.task as ProductionTask;
+  for await(const record of records){
+   const artifact=await loadPublishedProductionCheckpoint(record);
+   // An indexed-but-unreadable checkpoint is unknown, not permission to roll
+   // counters, submitted operations or human decisions back to an older body.
+   const candidate=decodePublishedProductionCheckpoint(artifact,record,projectId,id);
    if(!latest){
     if(!isInterruptedReviewCheckpoint(candidate))return candidate;
     latest=candidate;
@@ -83,7 +99,7 @@ export const productionTaskStore:TaskStore={
 };
 export async function latestPanelProductionTask(projectId:string){
  const sidecar=await loadAgentRuntimeSidecar(projectId);
- const ids=[...new Set(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task').sort((a,b)=>b.createdAt-a.createdAt).map(a=>a.runId))];
+ const ids=[...new Set(newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task')).map(a=>a.runId))];
  for(const id of ids){const task=await productionTaskStore.load(projectId,id);if(task.input.humanBlueprintReview)return task;}
 }
 /** Host-owned requirements for a confirmed output variant, never an execution-role policy. */
@@ -202,8 +218,7 @@ export async function reconcileLegacyTechnicalRecoveries(task:ProductionTask){
   if(record.runId!==task.taskId||record.toolName!=='clipmentor-production-task')continue;
   const artifact=await loadAgentArtifact(task.projectId,record.artifactId);
   if(!artifact)continue;
-  const value=JSON.parse(artifact.body);
-  if(value.type==='clipmentor-production-task/v1'&&value.task)history.push(value.task);
+  history.push(decodePublishedProductionCheckpoint(artifact,record,task.projectId,task.taskId));
  }
  const epochs=legacyTechnicalRecoveryEpochs(history,task);
  if(epochs.length)task.technicalRecoveryEpochs=[...new Set([...(task.technicalRecoveryEpochs??[]),...epochs])].sort((a,b)=>a-b);
@@ -221,6 +236,7 @@ export function cancelActiveProductionTask(projectId:string,id:string){
 }
 export function validateProductionInput(v:ProductionInput){
  if(!v||!/^[A-Za-z0-9_-]{1,160}$/.test(v.projectId)||!v.sourceAssetId||!v.product?.name?.trim()||typeof v.brief!=='string'||!v.brief.trim()||v.brief.length>32000)throw new Error('Invalid production input');
+ if(v.gatewayRecovery!==undefined&&!['bounded','none'].includes(v.gatewayRecovery))throw Error('Invalid gateway recovery policy');
  for(const config of [v.author,v.reviewer])if(!config?.model?.trim()||!LLM_PROVIDER_PRESETS.some(p=>p.id===config.provider)||!['responses','chat'].includes(config.apiMode))throw new Error('Explicit API author/reviewer configuration required');
  if(v.panelDelivery){
   const {productAssetId,productAssetHash,salesAssetId,ctaAssetId,ctaAssetHash}=v.panelDelivery;
@@ -245,8 +261,14 @@ export function validateProductionInput(v:ProductionInput){
  if(v.budget.preview_review!==undefined&&(!Number.isSafeInteger(v.budget.preview_review)||v.budget.preview_review<0||v.budget.preview_review>1000))throw new Error('Invalid preview_review budget');
  for(const kind of ['model','review','observation','tts','render'] as const)if(!Number.isSafeInteger(v.budget[kind])||v.budget[kind]<0||v.budget[kind]>1000)throw new Error(`Invalid ${kind} budget`);
 }
-export async function createProductionTask(input:ProductionInput,store=productionTaskStore):Promise<ProductionTask>{
+/** New batches freeze recovery authority once; a resumed old task never infers it from spare calls. */
+export function freezeProductionInput(input:ProductionInput):ProductionInput{
  validateProductionInput(input);
+ return {...structuredClone(input),gatewayRecovery:input.gatewayRecovery
+  ??(input.budget.routine&&!input.panelDelivery?.audience?'bounded':'none')};
+}
+export async function createProductionTask(input:ProductionInput,store=productionTaskStore):Promise<ProductionTask>{
+ input=freezeProductionInput(input);
  const run=createRun({projectId:input.projectId,sessionGeneration:await currentAgentSessionGeneration(input.projectId),backend:input.authorBackend??'api',provider:input.author.provider,model:input.author.model,askOnly:false});
  await flushRunPersistence(run);
  const now=Date.now(),task:ProductionTask={version:1,taskId:run.id,projectId:input.projectId,input:structuredClone(input),stage:'analysis',status:'queued',createdAt:now,updatedAt:now,sequence:0,
@@ -261,6 +283,13 @@ export interface StageContext {
 }
 export interface StageResult {artifact:Record<string,unknown>;repair?:'blueprint'|'edit'|'copy_review'}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
+/** Observational context in the existing bounded run log, never a checkpoint or authority.
+ * It intentionally has no serverEvent envelope: terminal transport replay stays closed. */
+export async function recordProductionDecision(task:ProductionTask,decision:ProductionDecisionDetails){
+ try{await appendAgentRunEvent(task.projectId,task.taskId,{type:'context_projected',
+  summary:JSON.stringify({productionDecision:productionDecisionEvent(task,decision)})});}
+ catch{ /* Diagnostic failure cannot authorize retry, reopen transport or discard saved production. */ }
+}
 async function withProductionExecution(task:ProductionTask,work:(controller:AbortController)=>Promise<ProductionTask>){
  const key=`${task.projectId}:${task.taskId}`;
  if(cancellations.has(key))throw new Error('Production task already running');
@@ -273,7 +302,8 @@ export async function advanceProductionTask(task:ProductionTask,worker:StageWork
  return withProductionExecution(task,controller=>advanceWithinExecution(task,worker,store,now,controller));
 }
 async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,store:TaskStore,now:()=>number,abort:AbortController){
- if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
+ if(['completed','cancelled'].includes(task.status)
+  ||['awaiting_blueprint','awaiting_review'].includes(task.status)&&!abort.signal.aborted)return task;
  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
  const timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-now()));
  const check=()=>{abort.signal.throwIfAborted();if(now()>=deadline)throw new Error('Production deadline exceeded');};
@@ -291,7 +321,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
  hasEffect:(kind,name)=>task.effects[effectKey(name)]?.kind===budgetKind(kind),async effect<T>(kind:EffectKind,name:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>){
   check();const id=effectKey(name);
   const old=task.effects[id];
-  if(old?.status==='completed')return structuredClone(old.result) as T;
+  const decision=productionEffectDecision(old,!!recover,remaining(kind));
+  if(decision.action!=='submit'){
+   await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
+   check();
+  }
+  if(decision.action==='reuse')return structuredClone(old!.result) as T;
   const settle=async(effect:ProductionTask['effects'][string],result:T)=>{
    const unsubmitted=confirmedUnsubmittedGateway(kind,result,effect.operationId,task.projectId);
    task.effects[id]={...effect,status:'completed',result:structuredClone(result),...(unsubmitted?{transportUnsubmitted:true as const}:{})};
@@ -299,13 +334,18 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    await store.save(task);
    return result;
   };
-  if(old&&recover)return settle(old,await recover(old.operationId));
-  if(old)throw new Error(`effect_outcome_${old.status}:${old.operationId}; read original receipt, no automatic resubmission`);
-  if(remaining(kind)<=0)throw new Error(`${kind} budget exhausted`);
+  if(decision.action==='recover'){
+   const result=await recover!(old!.operationId);check();return settle(old!,result);
+  }
+  if(decision.action==='stop'){
+   if(old)throw new Error(`effect_outcome_${old.status}:${old.operationId}; read original receipt, no automatic resubmission`);
+   throw new Error(`${kind} budget exhausted`);
+  }
   const counter=budgetKind(kind);
   const effect={kind:counter,operationId:/^[a-f0-9-]{36}$/.test(name)?name:randomUUID(),status:'reserved' as const};task.effects[id]=effect;task.attempts[counter]=(task.attempts[counter]??0)+1;await store.save(task);
+  await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,operationId:effect.operationId});
   let result:T;
-  try{result=await work(effect.operationId);check();}
+  try{check();result=await work(effect.operationId);check();}
   catch(error){task.effects[id]={...effect,status:'failed',error:String(error).slice(0,1200)};await store.save(task);throw error;}
   return settle(effect,result);
  }};
@@ -331,7 +371,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      const detail=selfCheck??result.artifact.blueprint_structure_issue;
      throw new Error(`已用完自动返修额度${typeof detail==='string'?`。未解决：${detail.slice(0,360)}`:''}`);
     }
-    task.repairs++;index=PRODUCTION_STAGES.indexOf(result.repair);
+    task.repairs++;task.stage=result.repair;index=PRODUCTION_STAGES.indexOf(result.repair);
     for(const stage of PRODUCTION_STAGES.slice(index))delete task.completed[stage];
     await store.save(task);continue;
    }
@@ -364,13 +404,28 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
 }
 /** Keep recoverable checkpoints within the same server job and ownership window. */
 export async function runProductionWithRecovery(task:ProductionTask,worker:StageWorker,
- reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore){
+ reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore,prepare?:(signal:AbortSignal)=>Promise<boolean>){
  return withProductionExecution(task,async controller=>{
   const advance=()=>advanceWithinExecution(task,worker,store,Date.now,controller);
+  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
+  const timer=setTimeout(()=>controller.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-Date.now()));
+  try{
+  if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
+  if(prepare){
+   try{
+    const checkPreparation=()=>{if(Date.now()>=deadline&&!controller.signal.aborted)controller.abort(new Error('Production deadline exceeded'));controller.signal.throwIfAborted();};
+    checkPreparation();
+    const ready=await prepare(controller.signal);
+    checkPreparation();
+    if(!ready)return task;
+   }catch(error){if(controller.signal.aborted)return advance();throw error;}
+  }
   await advance();
   while(task.status==='blocked'){
-   if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs)return advance();
-   if(task.error?.includes('checkpoint_write_failed:'))return task;
+   const from={stage:task.stage,repairs:task.repairs};
+   const stop=(reason:'cancelled_or_expired'|'checkpoint_unpersisted'|'no_verified_progress')=>recordProductionDecision(task,{scope:'recovery',action:'stop',reason,fromStage:from.stage,fromEpoch:from.repairs});
+   if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs){await stop('cancelled_or_expired');return advance();}
+   if(task.error?.includes('checkpoint_write_failed:')){await stop('checkpoint_unpersisted');return task;}
    const previousStage=task.stage,previousEpoch=task.repairs;
    try{await reconcile(task);}catch(error){
     if(controller.signal.aborted)return advance();
@@ -379,10 +434,11 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
     return controller.signal.aborted?advance():task;
    }
    if(controller.signal.aborted)return advance();
-   if(task.repairs<=previousEpoch&&PRODUCTION_STAGES.indexOf(task.stage)<=PRODUCTION_STAGES.indexOf(previousStage))return task;
+   if(!productionRecoveryProgress(task,{stage:previousStage,repairs:previousEpoch},PRODUCTION_STAGES)){await stop('no_verified_progress');return task;}
    await advance();
   }
   return task;
+  }finally{clearTimeout(timer);}
  });
 }
 export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,store=productionTaskStore){
@@ -420,6 +476,46 @@ export async function savePendingBlueprintFeedback(task:ProductionTask,revision:
  await store.save(next);Object.assign(task,next);
 }
 
+/** Control intents keep the preview they were based on, but may merge a
+ * concurrently published immutable shared-body marker. Never overwrite another
+ * worker's effects, counters, feedback or acceptance with an old control clone. */
+async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc){
+ const subject=(task:ProductionTask)=>{const {updatedAt:_at,sequence:_sequence,sharedProduction:_shared,...rest}=task;return digestValue(rest);};
+ let contention:unknown=new Error('agent_runtime_precondition_changed');
+ for(let attempt=0;attempt<3;attempt++){
+  const key=agentRuntimeKey(base.projectId,await currentAgentSessionGeneration(base.projectId)),entry=await getStoredEntry(key);
+  if(!entry.found){await store.save(next,guards);return;}
+  const current=await productionTaskStore.load(base.projectId,base.taskId);
+  if(subject(current)!==subject(base))throw Error('production_control_subject_changed');
+  const a=base.sharedProduction,b=current.sharedProduction;
+  if(a&&b&&(a.projectId!==b.projectId||a.taskId!==b.taskId||a.prepared&&b.prepared&&(a.endFrame!==b.endFrame||a.digest!==b.digest)))throw Error('shared_producer_binding_changed');
+  const marker=b?.prepared?b:a?.prepared?a:b??a;
+  if(marker)next.sharedProduction=structuredClone(marker);
+  const conditions=[...(guards??[]),{key,digest:digestValue(entry.value)}];
+  if(expectedDoc){
+   const project=await getStoredEntry('project:'+base.projectId),doc=project.found?runProjectMigrations(project.value)?.doc:null;
+   if(!doc||feedbackProjectDigest(doc)!==feedbackProjectDigest(expectedDoc))throw Error('feedback_project_changed');
+   conditions.push({key:'project:'+base.projectId,digest:digestValue(project.value)});
+  }
+  next.sequence=current.sequence;next.updatedAt=current.updatedAt;
+  try{await store.save(next,conditions);return;}
+  catch(error){
+   if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;
+   // Only a runtime checkpoint contest can be merged. Changed project or
+   // requirements guards still reject the original control immediately.
+   for(const guard of conditions.filter(guard=>guard.key!==key)){
+    const current=await getStoredEntry(guard.key);
+    if((current.found?digestValue(current.value):null)!==guard.digest){
+     const doc=expectedDoc&&guard.key==='project:'+base.projectId&&current.found?runProjectMigrations(current.value)?.doc:null;
+     if(!doc||feedbackProjectDigest(doc)!==feedbackProjectDigest(expectedDoc!))throw error;
+    }
+   }
+   contention=error;
+  }
+ }
+ throw contention;
+}
+
 export async function productionFeedback(task:ProductionTask,feedback:unknown,store=productionTaskStore,doc?:ProjectDoc){
  if(task.status!=='awaiting_review'||task.feedbackUsed)throw new Error('One consolidated local feedback is allowed after preview');
  if(!doc)throw new Error('feedback_saved_project_required');
@@ -429,24 +525,49 @@ export async function productionFeedback(task:ProductionTask,feedback:unknown,st
  next.feedback=bound.text;next.feedbackUsed=true;next.repairContext={final_feedback:bound};
  next.stage=bound.kind==='execution'?'edit':'blueprint';next.status='queued';next.projectRevision=bound.saved_revision;
  for(const stage of PRODUCTION_STAGES.slice(PRODUCTION_STAGES.indexOf(next.stage)))delete next.completed[stage];
- await store.save(next);Object.assign(task,next);return task;
+ await saveProductionControl(task,next,store,undefined,doc);Object.assign(task,next);return task;
 }
 export async function acceptProductionTask(task:ProductionTask,languageConfirmed:boolean,store=productionTaskStore,
- visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown}){
+ visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown;wholePreviewConfirmed?:unknown}){
  if(task.status!=='awaiting_review'||languageConfirmed!==true)throw new Error('Final reviewer must confirm Malay delivery suitability');
+ const next=structuredClone(task);let entryPreconditions:EntryPreconditions;
+ if(task.input.panelDelivery){
+  const saved=await loadOfflineStoredProject(task.projectId),src=task.completed.self_check?.artifact.preview;
+  const name=typeof src==='string'&&src.startsWith('/media/uploads/')?src.slice('/media/uploads/'.length):'';
+  const file=isSafeUploadName(name)?resolveUploadFile(name):null;
+  if(!saved||!file)throw Error('final_output_evidence_missing_or_stale');
+  await verifyProductionOutput(file);
+  const projectEntry=await getStoredEntry('project:'+task.projectId),normalized=projectEntry.found?runProjectMigrations(projectEntry.value)?.doc:null;
+  if(!normalized||revisionOf(normalized)!==saved.revision)throw Error('final_output_evidence_missing_or_stale');
+  entryPreconditions=[{key:'project:'+task.projectId,digest:digestValue(projectEntry.value)}];
+  assertFinalPreviewEvidence(task,saved.revision,await sha256File(file));
+  await productionDeliverables(saved.doc);
+ }
  const {readHandoffPolicy}=await import('./handoff');
  const {boundVisualCriteria}=await import('./visual-done-criteria');
- const criteria=boundVisualCriteria(await readHandoffPolicy(task.projectId)??task.blueprintApproval?.requirements??null);
+ const policy=await readHandoffPolicy(task.projectId);
+ const requirements=policy??task.blueprintApproval?.requirements??null;
+ if(entryPreconditions){
+  const entry=await getStoredEntry('clipmentor-handoff:'+task.projectId);
+  if((entry.found?digestValue(entry.value):null)!==(policy?digestValue(policy):null))throw Error('final_requirements_changed');
+  entryPreconditions.push({key:'clipmentor-handoff:'+task.projectId,digest:entry.found?digestValue(entry.value):null});
+  if(requirements){
+   const digest=digestValue(requirements.brief.doneCriteria),checked=task.completed.self_check?.artifact.requirementsDigest;
+   if(task.completed.copy_review?.artifact.requirementsDigest!==digest||checked!==undefined&&checked!==digest)throw Error('final_requirements_changed');
+  }
+ }
+ const criteria=boundVisualCriteria(requirements);
+ const confirmed=visual?.wholePreviewConfirmed===true?criteria?.entries.map(({criterion})=>criterion.id):visual?.confirmed;
  if(task.completed.self_check?.artifact.visualCriteriaDigest!==criteria?.digest
-  ||criteria&&(visual?.digest!==criteria.digest||!Array.isArray(visual.confirmed)
-   ||visual.confirmed.length!==criteria.entries.length||!criteria.entries.every(({criterion})=>(visual.confirmed as unknown[]).includes(criterion.id))))
+  ||criteria&&(visual?.digest!==criteria.digest||!Array.isArray(confirmed)
+   ||confirmed.length!==criteria.entries.length||!criteria.entries.every(({criterion})=>confirmed.includes(criterion.id))))
   throw Error('请对照成片逐项核对画面要求');
  if(criteria){
   const renderId=task.completed.export?.artifact.renderId;
   if(typeof renderId!=='string'||!renderId||visual?.renderId!==renderId)throw Error('请核对当前成片版本');
-  task.visualAcceptance={criteriaDigest:criteria.digest,renderId,confirmedIds:criteria.entries.map(({criterion})=>criterion.id)};
+  next.visualAcceptance={criteriaDigest:criteria.digest,renderId,confirmedIds:visual?.wholePreviewConfirmed===true?[]:criteria.entries.map(({criterion})=>criterion.id),...(visual?.wholePreviewConfirmed===true?{scope:'whole_preview' as const}:{})};
  }
- task.status='completed';await store.save(task);return task;
+ next.status='completed';await saveProductionControl(task,next,store,entryPreconditions);Object.assign(task,next);return task;
 }
 
 export async function cancelProductionTask(task:ProductionTask,store=productionTaskStore){

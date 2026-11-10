@@ -14,6 +14,10 @@ import { execClipMentorAnalysisTool } from '../../src/agent/tools/clipmentor-ana
 import { confirmedUnsubmittedGateway } from '../clipmentor/production-recovery';
 import type { AgentContext } from '../../src/agent/context.ts';
 import sharp from 'sharp';
+import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
+import type {ProjectDoc} from '../../src/editor/types';
+import {reviewBoardArtifactRoot} from '../clipmentor/blueprint-review-board-artifacts';
+import {collectSavedPreviewVisualEvidence} from '../clipmentor/preview-visual-evidence';
 
 const directory = await mkdtemp(join(tmpdir(),'preview-bridge-verify-'));
 const video = join(directory,'preview.mp4');
@@ -45,7 +49,8 @@ globalThis.fetch=(async (url,init)=>{
   const target=new URL(String(url),origin);assert.equal(target.origin,origin,'no external model permitted in this verifier');
   return originalFetch(target,{...init,headers:{Host:`127.0.0.1:${address.port}`,Origin:origin,'Sec-Fetch-Site':'same-origin',...Object.fromEntries(new Headers(init?.headers).entries())}});
 }) as typeof fetch;
-const ctx={getProjectId:()=> 'project-a',getAgentRunId:()=> 'agent-run-test'} as AgentContext;
+const testDoc=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
+const ctx={getDoc:()=>testDoc,getProjectId:()=> 'project-a',getAgentRunId:()=> 'agent-run-test'} as AgentContext;
 try {
   const b=body();
   assert.equal((await previewBridge(b,deps)).status,'completed');assert.equal(calls,1);
@@ -147,6 +152,90 @@ try {
   const visualResult=await previewBridge(visualRun,visualDeps);
   assert.equal(visualResult.effective_review.can_use_as_pass,true);
   assert.equal(visualResult.visualCriteriaDigest,criteriaDigest);
+  const comparisonProject='comparison-'+randomUUID(),comparisonRun={...visualRun,operationId:randomUUID(),projectId:comparisonProject};
+  let extractions=0;
+  const comparisonDeps={...visualDeps,visualEvidenceIO:{hash:async(file:string)=>createHash('sha256').update(await readFile(file)).digest('hex'),
+    frame:async()=>{extractions++;return (await readFile(ref)).toString('base64');}}};
+  try{
+    const original=await previewBridge(comparisonRun,comparisonDeps);
+    assert.equal((original.visual_comparison as any).status,'deferred','model result returns without waiting for local collection');
+    assert.equal(extractions,0,'paid request cannot add another ninety seconds of local work');
+    const requestPath=join(deps.directory,comparisonProject,comparisonRun.operationId),rawBefore=await readFile(join(requestPath,'result.json'),'utf8');
+    const lightweight=await previewBridge({action:'read',projectId:comparisonProject,operationId:comparisonRun.operationId},comparisonDeps);
+    assert.equal(lightweight.requestsSent,0);assert.equal(extractions,0,'ten-second result recovery must never start frame extraction');
+    const comparisonRead={action:'read',projectId:comparisonProject,operationId:comparisonRun.operationId,includeVisualEvidence:true};
+    const collected=await previewBridge(comparisonRead,comparisonDeps);
+    assert.equal((collected.visual_comparison as any).status,'collected');assert.equal(extractions,3);
+    let clientCalls=0;
+    const localContext={...ctx,getProjectId:()=>comparisonProject,hostFetch:async(_url:unknown,init?:RequestInit)=>{clientCalls++;return Response.json(await previewBridge(JSON.parse(String(init?.body)),comparisonDeps));}} as AgentContext;
+    const throughClient=await execClipMentorAnalysisTool('review_clipmentor_preview',{action:'read',operationId:comparisonRun.operationId,includeVisualEvidence:true},localContext) as any;
+    assert.equal(throughClient.visual_comparison.status,'collected');assert.equal(throughClient.requestsSent,0,'same read flag survives the actual Agent client and server whitelist');
+    const invalidClient=await execClipMentorAnalysisTool('review_clipmentor_preview',{action:'request',operationId:comparisonRun.operationId,maxRequests:1,src:comparisonRun.src,videoSha256,input:comparisonRun.input,executionManifest:comparisonRun.executionManifest,includeVisualEvidence:true},localContext) as any;
+    assert(invalidClient.error,'local collection flag cannot be used to extend a paid request');
+    assert.equal(clientCalls,1,'invalid paid flag is rejected before dispatch');
+    await assert.rejects(previewBridge({...comparisonRead,includeVisualEvidence:'yes'},comparisonDeps),/Invalid receipt read/);
+    const reread=await previewBridge(comparisonRead,comparisonDeps);
+    assert.equal((reread.visual_comparison as any).cached,true);assert.equal(extractions,3);
+    assert.deepEqual(reread.result,original.result);assert.equal(reread.requestsSent,0);
+    const manifestPath=join(requestPath,'execution-manifest.json'),originalManifest=await readFile(manifestPath,'utf8');
+    const tamperedManifest=JSON.parse(originalManifest);tamperedManifest.scenes[0].content=1;
+    await writeFile(manifestPath,JSON.stringify(tamperedManifest));
+    const downgraded=await collectSavedPreviewVisualEvidence(original,args=>previewBridge({...args,projectId:comparisonProject},comparisonDeps));
+    assert.equal((downgraded.effective_review as any).can_use_as_pass,false,'actual read invalidation cannot be hidden behind original pass');
+    assert.deepEqual(downgraded.result,original.result,'original model judgment survives a derived gate downgrade');
+    assert((downgraded.effective_review as any).blockers.includes('saved_evidence_invalid_or_binding_mismatch'));
+    await writeFile(manifestPath,originalManifest);
+    await writeFile(video,'changed video');
+    const changed=await previewBridge(comparisonRead,comparisonDeps);
+    assert.equal((changed.visual_comparison as any).status,'not_collected','stale export cannot inherit cached screenshots');
+    assert.equal(changed.effective_review.can_use_as_pass,false,'known changed bytes cannot keep a current derived pass');
+    const changedFast=await previewBridge({action:'read',projectId:comparisonProject,operationId:comparisonRun.operationId},comparisonDeps);
+    assert.equal(changedFast.effective_review.can_use_as_pass,false,'lightweight recovery also preserves media identity checks without image work');
+    assert.deepEqual(changed.result,original.result,'local extraction never rewrites original review');
+    await writeFile(video,bytes);
+    assert.equal(await readFile(join(requestPath,'result.json'),'utf8'),rawBefore);
+    const bindingPath=join(requestPath,'binding.json'),bindingBefore=await readFile(bindingPath,'utf8'),oldBinding=JSON.parse(bindingBefore);
+    delete oldBinding.src;await writeFile(bindingPath,JSON.stringify(oldBinding));
+    const legacyComparison=await previewBridge(comparisonRead,comparisonDeps);
+    assert.equal((legacyComparison.visual_comparison as any).code,'binding_missing');assert.equal(legacyComparison.requestsSent,0);
+    assert.deepEqual(legacyComparison.result,original.result,'legacy missing locator does not rewrite historical review');
+    await writeFile(bindingPath,bindingBefore);
+    const cancelledProject='comparison-cancel-'+randomUUID(),cancel=new AbortController();let cancelledExtractions=0,sawAbort=false;
+    try{
+      const cancelledRun={...comparisonRun,projectId:cancelledProject,operationId:randomUUID()};
+      await previewBridge(cancelledRun,comparisonDeps);
+      const cancelled=await previewBridge({action:'read',projectId:cancelledProject,operationId:cancelledRun.operationId,includeVisualEvidence:true},
+        {...comparisonDeps,visualEvidenceIO:{...comparisonDeps.visualEvidenceIO,frame:async(_p:string,_s:number,_out:string,signal?:AbortSignal)=>{
+          cancelledExtractions++;cancel.abort();sawAbort=signal!.aborted;return(await readFile(ref)).toString('base64');
+        }}},cancel.signal);
+      assert.equal((cancelled.visual_comparison as any).code,'cancelled');assert.equal(cancelledExtractions,1);assert(sawAbort);
+      assert.equal(cancelled.result.status,'pass','cancelled local evidence cannot rewrite the model original');
+    }finally{await rm(reviewBoardArtifactRoot(cancelledProject),{recursive:true,force:true});}
+  }finally{await writeFile(video,bytes);await rm(reviewBoardArtifactRoot(comparisonProject),{recursive:true,force:true});}
+
+  const nativeDeps={...visualDeps,visualCriteria:async()=>({digest:criteriaDigest,entries:[{src:'/media/uploads/reference.jpg',sha:refHash,
+   criterion:{id:'intro',quote,question:'实际原片标识是否沿用认可版式？',sectionId:'U',pictureStage:'原片',layout:'native_composition' as const,reference:{assetId:'ref',fileName:'reference.jpg',seconds:0}}}]})};
+  const nativeRun={...visualRun,operationId:randomUUID(),input:{...visualInput,points:input.points,units:[{unit_id:'U',point_ids:['P'],output_range_seconds:[0,2]}]}};
+  assert.equal((await previewBridge(nativeRun,nativeDeps)).effective_review.can_use_as_pass,true,'teaching-unit requirement reaches the actual preview window');
+  const allDeps={...nativeDeps,visualCriteria:async()=>({...await nativeDeps.visualCriteria(),timelineId:'tl',entries:[{...(await nativeDeps.visualCriteria())!.entries[0],criterion:{...(await nativeDeps.visualCriteria())!.entries[0].criterion,sectionId:'tl'}}]}),run:async(args:string[])=>{
+   const clean=JSON.parse(await readFile(args[args.indexOf('--input')+1],'utf8'));
+   assert.equal(clean.visual_criteria[0].quote,quote);assert.equal(clean.visual_criteria[0].pictureStage,'原片');
+   assert.equal(clean.units.filter((u:any)=>u.unit_id.startsWith('delivery/criterion/intro/')).length,5,'all five native groups require a separate answer with one shared reference');
+   const ev=(u:any)=>evidence(u.output_range_seconds[0]+.1,u.output_range_seconds[0]+1,'实际对象');
+   const judgment={coverage:clean.points.map((p:any)=>{const receipts=clean.units.filter((u:any)=>u.point_ids.includes(p.point_id)).map(ev);return {point_id:p.point_id,depiction:receipts,teaching:finding(receipts)};}),continuity:clean.units.map((u:any)=>({unit_id:u.unit_id,point_ids:u.point_ids,previous:[evidence(Math.max(0,u.output_range_seconds[0]-.1),u.output_range_seconds[0]+.05,'前接')],current:[ev(u)],relation:'continuation',narrative:finding([ev(u)]),teaching:finding([ev(u)])}))};
+   await writeFile(args[args.indexOf('--out')+1],JSON.stringify({...makeResult(judgment),input_sha256:createHash('sha256').update(JSON.stringify(clean)).digest('hex')}));
+  }};
+  const allRun={...nativeRun,operationId:randomUUID(),executionManifest:{fps:30,total_frames:300,scenes:[{start_frame:0,end_frame:300,kind:'original',content:0}],timeline_id:'tl'},input:{...nativeRun.input,units:[...Array.from({length:5},(_,i)=>({unit_id:'U'+i,point_ids:['P'],output_range_seconds:[i*2,i*2+2]})),{unit_id:'delivery/ending',point_ids:['P'],output_range_seconds:[0,2]}]}};
+  const allResult=await previewBridge(allRun,allDeps);assert.equal(allResult.effective_review.can_use_as_pass,true,JSON.stringify(allResult.effective_review));
+  const genericEvidence={...allDeps,run:async(args:string[])=>{await allDeps.run(args);const file=args[args.indexOf('--out')+1],r=JSON.parse(await readFile(file,'utf8'));const broad=evidence(0,10,'全片都有');r.judgment.coverage.find((c:any)=>c.point_id==='delivery/criterion/intro').teaching.evidence=[broad];for(const c of r.judgment.continuity.filter((c:any)=>c.unit_id.startsWith('delivery/criterion/intro/'))){c.current=[broad];c.teaching.evidence=[broad];}r.raw_public_judgment=JSON.stringify(r.judgment);await writeFile(file,JSON.stringify(r));}};
+  assert.equal((await previewBridge({...allRun,operationId:randomUUID()},genericEvidence)).effective_review.can_use_as_pass,false,'one whole-film observation cannot stand in for each actual group');
+  const missingGroup={...allDeps,run:async(args:string[])=>{await allDeps.run(args);const file=args[args.indexOf('--out')+1],r=JSON.parse(await readFile(file,'utf8'));r.judgment.continuity=r.judgment.continuity.filter((c:any)=>c.unit_id!=='delivery/criterion/intro/4');r.raw_public_judgment=JSON.stringify(r.judgment);await writeFile(file,JSON.stringify(r));}};
+  assert.equal((await previewBridge({...allRun,operationId:randomUUID()},missingGroup)).effective_review.can_use_as_pass,false,'four groups cannot certify the fifth');
+  await assert.rejects(previewBridge({...allRun,operationId:randomUUID(),executionManifest:{...manifest,timeline_id:'wrong'}},allDeps),/timeline missing/);
+  const omittedNative={...nativeDeps,run:async(args:string[])=>{await visualDeps.run(args);const path=args[args.indexOf('--out')+1],r=JSON.parse(await readFile(path,'utf8'));
+   r.judgment.coverage=r.judgment.coverage.filter((c:any)=>c.point_id!=='delivery/criterion/intro');r.raw_public_judgment=JSON.stringify(r.judgment);await writeFile(path,JSON.stringify(r));}};
+  assert.equal((await previewBridge({...nativeRun,operationId:randomUUID()},omittedNative)).effective_review.can_use_as_pass,false,'a source/plan pass cannot cover a missing actual-screen answer');
+
   await assert.rejects(previewBridge({...visualRun,operationId:randomUUID(),input:{...visualInput,visual_criteria:[]}},visualDeps));
   await assert.rejects(previewBridge({...visualRun,operationId:randomUUID(),input:cleanInput},visualDeps),/section missing/);
   const rawPath=join(deps.directory,'project-a',approved.operationId,'result.json');
@@ -235,8 +324,92 @@ try {
    for(;;){const part=await reader.read();if(part.done)break;text+=new TextDecoder().decode(part.value);}
    assert.equal(JSON.parse(text).status,'completed');assert.equal(calls,beforeWaiting+1,'keepalive does not submit another operation');
   }finally{release();deps.run=originalRun;}
+
+  // A full native composition manifest can exceed the former 256 KiB wire cap.
+  // Whitespace preserves the exact valid request semantics while testing the HTTP envelope.
+  const beforeLarge=calls;
+  const large=await fetch(`${origin}/api/clipmentor/review-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(270_000)+JSON.stringify(body())});
+  assert.equal(large.status,200,'valid >256 KiB JSON reaches the same single operation');
+  assert.equal((await large.json() as any).effective_review.can_use_as_pass,false,'transport acceptance never supplies approval');assert.equal(calls,beforeLarge+1);
+  const oversized=await fetch(`${origin}/api/clipmentor/review-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(2*1024*1024)+JSON.stringify(body())});
+  assert.equal(oversized.status,413);const limitReply=await oversized.json() as any;assert.equal(limitReply.requestsAttempted,0);assert.equal(calls,beforeLarge+1,'oversized requests never enter the provider');
+  const {requestPreviewReview}=await import('../../src/clipmentor/request-preview-review');
+  const rawRound='{"coverage":[],"continuity":[]}';
+  const roundReceipt={operationId:randomUUID(),projectId:'project-a',full_film_accepted:false,scope:'rendered_preview_continuous_review',status:'completed',
+    result:{status:'review_required',issues:['invalid_coverage_row'],raw_public_judgment:rawRound},timeline_check:{status:'no_detected_conflict'},
+    effective_review:{status:'pass',can_use_as_pass:true,blockers:[],full_film_accepted:false,manifest_binding:'frozen_at_request',contract_revalidation:{method:'observation-centisecond-eof-v1',original_status:'review_required',original_issues:['invalid_coverage_row'],raw_judgment_sha256:createHash('sha256').update(rawRound).digest('hex')}}};
+  const roundCtx={...ctx,hostFetch:async()=>Response.json(roundReceipt)} as AgentContext;
+  assert.equal((await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},roundCtx) as any).ok,true,'canonical server rounding revalidation preserves raw status and is accepted');
+  roundReceipt.effective_review.contract_revalidation.method='film-origin-continuity-v1';
+  assert.equal((await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},roundCtx) as any).ok,true,'canonical first-segment revalidation is accepted without rewriting raw result');
+  roundReceipt.effective_review.contract_revalidation.raw_judgment_sha256='0'.repeat(64);
+  assert((await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},roundCtx) as any).error,'raw-bound revalidation cannot be a bare pass flag');
+  // Hold JSON completion after headers, exactly where the keepalive route can wait.
+  roundReceipt.effective_review.contract_revalidation.raw_judgment_sha256=createHash('sha256').update(rawRound).digest('hex');
+  const contextFailures:string[]=[];
+  for(const action of ['request','read'])for(const change of ['stable','equal-clone','equal-reordered','pre-abort','abort','project','run','in-place','new-doc','signal']){
+    let doc=structuredClone(testDoc),project='project-a',run='agent-run-test',controller=new AbortController(),dispatches=0;
+    let release!:()=>void,enter!:()=>void;
+    const waiting=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{enter=r;});
+    const receipt={...structuredClone(roundReceipt),videoSha256};
+    const caller={getDoc:()=>doc,getProjectId:()=>project,getAgentRunId:()=>run,getAgentRunSignal:()=>controller.signal,
+      hostFetch:async(_url:unknown,init?:RequestInit)=>{dispatches++;assert(init?.signal,'preview cancellation must reach fetch');return{ok:true,json:async()=>{enter();await waiting;return receipt;}} as Response;}} as AgentContext;
+    if(change==='pre-abort')controller.abort();
+    const pending=requestPreviewReview({action,operationId:receipt.operationId,...(action==='request'?{maxRequests:1,videoSha256}:{})},caller);
+    if(change==='pre-abort')release();else{
+      await entered;
+      if(change==='abort')controller.abort();
+      if(change==='signal')controller=new AbortController();
+      if(change==='project')project='project-b';
+      if(change==='run')run='other-run';
+      if(change==='in-place')doc.version++;
+      if(change==='new-doc')doc={...doc,version:doc.version+1};
+      if(change==='equal-clone')doc=structuredClone(doc);
+      if(change==='equal-reordered')doc=JSON.parse(JSON.stringify(doc,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v));
+      release();
+    }
+    const result=await pending as any,valid=['stable','equal-clone','equal-reordered'].includes(change);
+    console.log('PREVIEW_CONTEXT',action,change,{dispatches,pass:result.effective_review?.can_use_as_pass,error:result.error});
+    try{
+      if(valid){assert.equal(dispatches,1);assert.equal(result.ok,true);assert.equal(result.effective_review.can_use_as_pass,true);assert.deepEqual(result.result,receipt.result);}
+      else{assert(result.error,`${action}/${change} must refuse stale/cancelled results`);assert.equal(result.can_use_as_pass,false);assert.equal(result.effective_review,undefined);assert.equal(result.operationId,receipt.operationId);assert.equal(dispatches,change==='pre-abort'?0:1);if(change==='pre-abort')assert.equal(result.requestsSent,0);}
+    }catch(e){contextFailures.push(`${action}/${change}: ${String(e)}`);}
+  }
+  assert.deepEqual(contextFailures,[],'preview current-context regressions');
+  const originalDigest=crypto.subtle.digest;
+  try{
+    for(const change of ['stable','equal-clone','abort','project','run','in-place','signal']){
+      let doc=structuredClone(testDoc),project='project-a',run='agent-run-test',controller=new AbortController(),hashCalls=0;
+      let release!:()=>void,enter!:()=>void;
+      const waiting=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{enter=r;});
+      crypto.subtle.digest=async function(...args){hashCalls++;enter();await waiting;return originalDigest.apply(this,args);};
+      const caller={getDoc:()=>doc,getProjectId:()=>project,getAgentRunId:()=>run,getAgentRunSignal:()=>controller.signal,hostFetch:async()=>Response.json(roundReceipt)} as AgentContext;
+      const pending=requestPreviewReview({action:'read',operationId:roundReceipt.operationId},caller);
+      await entered;
+      if(change==='abort')controller.abort();
+      if(change==='signal')controller=new AbortController();
+      if(change==='project')project='project-b';
+      if(change==='run')run='other-run';
+      if(change==='in-place')doc.version++;
+      if(change==='equal-clone')doc=structuredClone(doc);
+      if(change==='equal-reordered')doc=JSON.parse(JSON.stringify(doc,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v));
+      release();const result=await pending as any;
+      assert.equal(hashCalls,1,'must pause the real raw-judgment hash, not response JSON');
+      if(change==='stable'||change==='equal-clone')assert.equal(result.effective_review?.can_use_as_pass,true);
+      else{assert(result.error,`hash/${change} must refuse a late pass`);assert.equal(result.can_use_as_pass,false);assert.equal(result.effective_review,undefined);}
+      console.log('PREVIEW_HASH_CONTEXT',change,'checked');
+    }
+  }finally{crypto.subtle.digest=originalDigest;}
+  const {revisionOf}=await import('../../src/agent/external-edit-session');
+  let collisionDoc=structuredClone(testDoc);
+  const changedDoc=structuredClone(testDoc);
+  Object.assign(collisionDoc.timelines.find(t=>t.id===collisionDoc.activeTimelineId)!,{name:'8f4031f6dc10e756',width:722});
+  Object.assign(changedDoc.timelines.find(t=>t.id===changedDoc.activeTimelineId)!,{name:'2cd0fc20ef8ffa6a',width:720});
+  assert.notDeepEqual(collisionDoc,changedDoc);assert.equal(revisionOf(collisionDoc),revisionOf(changedDoc),'fixed full-project collision exercises content, not a changed version');
+  const collisionResult=await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},{...ctx,getDoc:()=>collisionDoc,hostFetch:async()=>({ok:true,json:async()=>{collisionDoc=changedDoc;return structuredClone(roundReceipt);}} as Response)} as AgentContext) as any;
+  assert(collisionResult.error,'a short revision collision must not expose an old pass');assert.equal(collisionResult.effective_review,undefined);
   const unauth=await originalFetch(`${origin}/api/clipmentor/review-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body())});
   assert.equal(unauth.status,401);
   assert.equal(await readFile(video,'utf8'),bytes.toString(),'review does not modify media');
-  console.log('clipmentor-preview-review.verify: real local route/tool dispatch, receipt read, exact binding, one-call/failure budget, auth, policy/gate and no edits passed');
+  console.log('clipmentor-preview-review.verify: real local route/tool dispatch, lightweight paid/recovery result, separate zero-call evidence read, exact binding, one-call/failure budget, auth, policy/gate and no edits passed');
 } finally {globalThis.fetch=originalFetch;server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));await rm(directory,{recursive:true,force:true});}

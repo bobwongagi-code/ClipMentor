@@ -31,6 +31,10 @@ jobs:
           ONNXRUNTIME_NODE_INSTALL: 'skip'
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      # Storyboard/PDF verification exercises the real local still renderer.
+      # A fresh runner needs the same pinned browser as desktop packaging.
+      - name: Ensure test browser
+        run: node -e "import('@remotion/renderer').then(m => m.ensureBrowser()).then(() => console.log('test browser ready'))"
       - name: Verify release version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

@@ -39,6 +39,7 @@ for (const [target, field, allowed] of [
 
 const originalFetch = globalThis.fetch;
 let response = result(), changeDuringCall = false, calls = 0;
+let cancelDuringCall:AbortController|undefined;
 let engine = makeDraft(base);
 const ctx: AgentContext = { commands: engine.commands, getDoc: engine.getDoc, getState: engine.getState, getCreativeMode: () => null, templates: [], audio: [] };
 const args = () => ({ assetId: 'source', operationId, maxRequests: 1, expectedRevision: 0, actor, reason: 'Test-only ASR initialization' });
@@ -50,6 +51,7 @@ try {
     assert.equal(body.src, base.assets[0].src); assert.equal(body.sourceSize, media.length);
     assert(!('apiKey' in body));
     if (changeDuringCall) engine.commands.applyDoc({ ...engine.getDoc(), assets: [{ ...base.assets[0], src: '/media/uploads/replacement.mp4' }] });
+    cancelDuringCall?.abort();
     return Response.json(response);
   };
   assert((await call()).ok); const saved = structuredClone(engine.getDoc());
@@ -64,6 +66,26 @@ try {
   assert.equal((await checkAnalysisHandoff(saved)).status, 'review_required');
   assert((await call()).error); assert.equal(calls, 1, 'existing analysis blocks a second paid operation');
 
+  engine = makeDraft(base); Object.assign(ctx, { commands: engine.commands, getDoc: engine.getDoc, getState: engine.getState });
+  const cancelledRun=new AbortController();cancelDuringCall=cancelledRun;ctx.getAgentRunSignal=()=>cancelledRun.signal;
+  const beforeCancelled=calls;
+  assert((await call()).error,'a received ASR result must not initialize a cancelled run');
+  assert.equal(calls,beforeCancelled+1,'cancellation does not retry the paid operation');
+  assert.equal(engine.getDoc().clipMentorAnalysis,undefined,'cancelled late response cannot change the draft');
+  cancelDuringCall=undefined;delete ctx.getAgentRunSignal;
+  {
+    const {readClipMentorSourceAsr}=await import('./read-source-asr');
+    const readDoc=structuredClone(saved);
+    for(const cancel of [false,true]){
+      const controller=new AbortController();let reads=0;
+      const readContext={...ctx,getDoc:()=>readDoc,getProjectId:()=> 'asr-read-cancel-fixture',getAgentRunSignal:()=>controller.signal,
+        hostFetch:async()=>{reads++;if(cancel)controller.abort();return Response.json({operationId,source_hash:hash,state:'completed',requestsSent:0,requestsAttempted:1,
+          original_status:'completed',recovered_from_raw:false,result:result(),project_mutated:false,production_approved:false,listeningVerified:false});}} as AgentContext;
+      const value=await readClipMentorSourceAsr({view:'source_asr',assetId:'source',operationId},readContext) as {ok?:boolean;error?:string};
+      assert.equal(reads,1);assert.equal(value.ok,cancel?undefined:true);if(cancel)assert(value.error);
+      assert.deepEqual(readDoc,saved);
+    }
+  }
   engine = makeDraft(base); Object.assign(ctx, { commands: engine.commands, getDoc: engine.getDoc, getState: engine.getState });
   changeDuringCall = true; assert((await call()).error); assert(!engine.getDoc().clipMentorAnalysis); changeDuringCall = false;
   engine = makeDraft(base); Object.assign(ctx, { commands: engine.commands, getDoc: engine.getDoc, getState: engine.getState });

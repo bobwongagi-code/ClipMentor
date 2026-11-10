@@ -5,6 +5,8 @@ description: Use when a OpenChatCut tool call fails or returns an unexpected sha
 
 # Known Errors
 
+Before repeating an external effect, read its saved operation/result and follow the active workflow’s recovery and budget policy. A lost response or timeout may be an unknown outcome; do not change operation IDs, providers or input to disguise a resubmission. Local schema/format fixes are not new provider requests.
+
 `edit_item` update raw shape:
 
 - Wrong: `{ "id": "abc", "fromFrame": 30 }`
@@ -32,9 +34,9 @@ Workspace path restrictions:
 Browser video conversion failure:
 
 - Error text often includes `Unable to convert video without dropping audio/video tracks` or `unknown_source_codec`.
-- Rerun the OpenChatCut media import helper; it owns frontend-aligned conversion and will surface a user-actionable error if conversion is impossible.
-- Do not ask the user to re-import the same file through the editor UI as a workaround — the conversion path is the same, the error will repeat. Fix the source (re-encode locally with `ffmpeg`) or pick a different file.
-- After the replacement asset is uploaded/transcribed, delete the failed original asset if it is unused. The clean final media pool should look like a successful import, not a failed import plus a replacement.
+- Read the helper’s conversion failure and saved upload/finalize result first. A codec/unsupported-conversion error will not improve by resubmitting the same file unchanged. For an incomplete local preparation, repair that preparation through the existing import helper instead of duplicating a successful upload.
+- Do not ask the user to re-import the same file through the editor UI as a workaround. If conversion is genuinely required, preserve the original and use the supported loss/track-preserving conversion with the task’s permission; report any changed media properties. Do not silently degrade evidence video to force success.
+- After replacement, verify the actual referenced asset and timeline instances. Preserve failed-attempt records and existing assets; deletion is a separate authorized cleanup, not part of recovering a usable file.
 
 Motion Graphic requirements:
 
@@ -50,6 +52,6 @@ Local dev Zero caveat:
 
 Timeline frame renderer caveat:
 
-- If `view_timeline_frames` fails for one frame, the project write path can still be healthy — retry with fewer frames or a different time before concluding anything.
+- If `view_timeline_frames` fails for one frame, the project write path can still be healthy. Diagnose the local extraction, source and requested frame first; a different sample can narrow a fault but cannot prove the required failed frame or substitute a requested representative video.
 - Assets still on `blob:` placeholders (upload in flight) render as empty; wait for `track_progress` target=upload before treating a blank frame as a bug.
 - Do not report visual proof success unless the tool returns image content that visibly confirms the target frame.

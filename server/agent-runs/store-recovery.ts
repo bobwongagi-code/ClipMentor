@@ -1,8 +1,7 @@
 import {
-  appendAgentRunEvent,
+  appendAgentRunEvents,
   loadAgentRuntimeSidecar,
-  patchAgentRun,
-  upsertAgentApproval,
+  AgentRunEventConflictError,
   type AgentApprovalRecord,
   type AgentRunContext,
   type AgentRunRecord,
@@ -52,14 +51,8 @@ function serverEvents(record: AgentRunRecord): ServerRunEvent[] {
 
 const INTERRUPTED_TOOL_ERROR = 'The agent run was interrupted before this tool returned a result.';
 
-/**
- * Recovered runs carry tool-request events whose results never arrived (the
- * server died mid-flight). Synthesize an in-memory tool-result closer for
- * each so inspectors and any future resume path see a complete pairing
- * instead of a dangling request. Synthetic events are not persisted: the
- * run is already terminal and the sidecar is authoritative for replays.
- */
-function closeInterruptedToolRequests(events: ServerRunEvent[]): ServerRunEvent[] {
+/** Missing results are unknown outcomes, never proof a tool did not run. */
+function interruptedToolClosers(events: ServerRunEvent[]): ServerRunEvent[] {
   const settled = new Set<string>();
   for (const event of events) {
     if (event.type !== 'tool-result' && event.type !== 'server-tool-result') continue;
@@ -71,31 +64,31 @@ function closeInterruptedToolRequests(events: ServerRunEvent[]): ServerRunEvent[
     const data = event.data as { toolCallId?: unknown } | null;
     return typeof data?.toolCallId === 'string' && !settled.has(data.toolCallId);
   });
-  if (pending.length === 0) return events;
-  let nextId = events.length > 0 ? events[events.length - 1]!.id + 1 : 1;
+  let nextId = (events.at(-1)?.id ?? 0) + 1;
   const now = Date.now();
-  const closers = pending.map((event) => {
-    const data = event.data as { toolCallId: string; name?: unknown; argsDigest?: unknown };
+  return pending.map((event) => {
+    const data = event.data as { toolCallId: string; name?: unknown; toolName?: unknown; argsDigest?: unknown };
+    const name = typeof data.name === 'string' ? data.name : data.toolName;
     return {
       id: nextId++,
       type: event.type === 'server-tool-request' ? 'server-tool-result' : 'tool-result',
       data: {
         toolCallId: data.toolCallId,
-        ...(event.type === 'server-tool-request' ? {outcome:{kind:'outcome_unknown',operationId:data.toolCallId}} : {}),
-        ...(typeof data.name === 'string' ? { toolName: data.name } : {}),
+        outcome: { kind: 'outcome_unknown', operationId: data.toolCallId },
+        ...(typeof name === 'string' ? { toolName: name } : {}),
         ...(typeof data.argsDigest === 'string' ? { argsDigest: data.argsDigest } : {}),
         error: INTERRUPTED_TOOL_ERROR,
       },
       at: now,
     };
   });
-  // Closers belong before the terminal events, not after them: the done
-  // event must stay the final entry of a recovered run.
-  const terminalIndex = events.findIndex((event) => event.type === 'done'
-    || event.type === 'finish');
-  return terminalIndex < 0
-    ? [...events, ...closers]
-    : [...events.slice(0, terminalIndex), ...closers, ...events.slice(terminalIndex)];
+}
+
+/** Keep immutable journal IDs; only the last durable done terminates replay. */
+function replayEvents(record: AgentRunRecord): ServerRunEvent[] {
+  const events = serverEvents(record);
+  const lastDone = events.findLastIndex(event => !!terminalTransportEvidence([event], true));
+  return events.filter((event, index) => event.type !== 'done' || index === lastDone);
 }
 
 function terminalTransportEvidence(
@@ -128,7 +121,7 @@ function restoredRun(
   record: AgentRunRecord,
   capabilityVerifier: string,
 ): ServerRun {
-  const events = closeInterruptedToolRequests(serverEvents(record));
+  const events = replayEvents(record);
   const status = terminalTransportEvidence(events, true)?.status ?? 'failed';
   const runtimeContext: AgentRunContext = record.context ?? {
     requestShapeHash: record.userInputDigest,
@@ -203,81 +196,55 @@ function terminalTransportRepair(
   };
 }
 
-async function appendRecoveryEvent(
-  projectId: string,
-  sessionGeneration: string,
-  runId: string,
-  event: ServerRunEvent,
-): Promise<void> {
-  adoptAgentSessionWriteGeneration(projectId, sessionGeneration);
-  await appendAgentRunEvent(projectId, runId, runtimeEvent(event));
-}
-
 async function persistTerminalTransportRepair(
   projectId: string,
   sessionGeneration: string,
   record: AgentRunRecord,
   repair: TerminalTransportRepair,
+  closers: ServerRunEvent[],
+  terminalRequired: boolean,
 ): Promise<void> {
-  let nextId = repair.nextId;
-  if (!repair.inferred) {
-    await appendRecoveryEvent(projectId, sessionGeneration, record.runId, {
-      id: nextId,
-      type: 'status',
-      data: { status: repair.status, error: repair.error, reason: 'server-restart' },
-      at: repair.at,
-    });
-    nextId += 1;
+  let nextId = repair.nextId + closers.length;
+  const suffix: ServerRunEvent[] = [...closers];
+  if (terminalRequired && !repair.inferred) {
+    suffix.push({ id: nextId++, type: 'status',
+      data: { status: repair.status, error: repair.error, reason: 'server-restart' }, at: repair.at });
   }
+  if (terminalRequired) suffix.push({ id: nextId, type: 'done', data: {
+    status: repair.status, error: repair.error,
+    reason: repair.inferred ? 'server-restart-terminal-recovery' : 'server-restart',
+  }, at: repair.at });
   adoptAgentSessionWriteGeneration(projectId, sessionGeneration);
-  await patchAgentRun(projectId, record.runId, { context: repair.context });
-  await appendRecoveryEvent(projectId, sessionGeneration, record.runId, {
-    id: nextId,
-    type: 'done',
-    data: {
-      status: repair.status,
-      error: repair.error,
-      reason: repair.inferred ? 'server-restart-terminal-recovery' : 'server-restart',
-    },
-    at: repair.at,
+  await appendAgentRunEvents(projectId, record.runId, suffix.map(runtimeEvent), {
+    sessionGeneration, expectedSequence: record.events.at(-1)?.sequence ?? 0, context: repair.context,
   });
 }
-async function cancelRecoveredApprovals(
-  projectId: string,
-  sessionGeneration: string,
-  runId: string,
-  approvals: readonly AgentApprovalRecord[],
-): Promise<void> {
-  const pending = approvals.filter(
-    (approval) => approval.runId === runId && approval.status === 'pending',
-  );
-  if (!pending.length) return;
-  adoptAgentSessionWriteGeneration(projectId, sessionGeneration);
-  const decidedAt = Date.now();
-  await Promise.all(pending.map((approval) => upsertAgentApproval({
-    ...approval,
-    status: 'cancelled',
-    decidedAt,
-  })));
-}
-
-
 async function ensureTerminalTransport(
   projectId: string,
   sessionGeneration: string,
-  record: AgentRunRecord,
-  approvals: readonly AgentApprovalRecord[],
+  initial: AgentRunRecord,
+  initialApprovals: readonly AgentApprovalRecord[],
 ): Promise<AgentRunRecord> {
-  await cancelRecoveredApprovals(projectId, sessionGeneration, record.runId, approvals);
-  const events = serverEvents(record);
-  if (terminalTransportEvidence(events, true)) return record;
-  const repair = terminalTransportRepair(record, events);
-  await persistTerminalTransportRepair(projectId, sessionGeneration, record, repair);
-  const sidecar = await loadAgentRuntimeSidecar(projectId);
-  return sidecar.runs.find((item) => item.runId === record.runId) ?? {
-    ...record,
-    context: repair.context,
-  };
+  let record = initial, approvals = initialApprovals;
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const events = serverEvents(record), closers = interruptedToolClosers(events);
+    const terminalRequired = !terminalTransportEvidence(events.slice(-1), true) || closers.length > 0;
+    if (!terminalRequired && !approvals.some(a => a.runId === record.runId && a.status === 'pending')) return record;
+    if (attempt === 3) break;
+    try {
+      await persistTerminalTransportRepair(projectId, sessionGeneration, record, terminalTransportRepair(record, events), closers, terminalRequired);
+    } catch (error) {
+      if (!(error instanceof AgentRunEventConflictError) || error.reason !== 'sequence') throw error;
+      // Only reread the journal; conflict never grants another tool/provider submission.
+    }
+    const sidecar = await loadAgentRuntimeSidecar(projectId);
+    if (sidecar.sessionGeneration !== sessionGeneration || await currentAgentSessionGeneration(projectId) !== sessionGeneration)
+      throw new AgentRunEventConflictError('generation');
+    const saved = sidecar.runs.find(item => item.runId === record.runId);
+    if (!saved) throw new Error('Recovered Agent run record is unavailable');
+    record = saved; approvals = sidecar.approvals;
+  }
+  throw new Error('Agent run recovery changed during bounded readback');
 }
 
 async function recoverServerRunOnce(
@@ -303,12 +270,12 @@ async function recoverServerRunOnce(
   if (!record || !record.userInputPreview.startsWith('server:')) return undefined;
   const verifier = record.context?.serverRunCapabilityVerifier;
   if (!isServerRunCapabilityVerifier(verifier)) return undefined;
-  record = await ensureTerminalTransport(
-    projectId,
-    sessionGeneration,
-    record,
-    sidecar.approvals,
-  );
+  try {
+    record = await ensureTerminalTransport(projectId, sessionGeneration, record, sidecar.approvals);
+  } catch (error) {
+    if (error instanceof AgentRunEventConflictError && error.reason === 'generation') return undefined;
+    throw error;
+  }
   if (await currentAgentSessionGeneration(projectId) !== sessionGeneration) return undefined;
   const run = restoredRun(projectId, sessionGeneration, record, verifier);
   dependencies.runs.set(run.id, run);

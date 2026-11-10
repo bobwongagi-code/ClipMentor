@@ -12,6 +12,16 @@ export const DEV_PROFILE_METADATA = 'openchatcut-dev-profile.json';
 export const DEV_PROFILE_ID_ENV = 'OPENCHATCUT_DEV_PROFILE_ID';
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const execFileAsync = promisify(execFile);
+const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+
+/** Developer provenance, not an attestation of uncommitted source bytes. */
+export async function describeDevCheckout(repoRoot) {
+  const [{ stdout: commit }, { stdout: status }] = await Promise.all([
+    execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }),
+    execFileAsync('git', ['status', '--porcelain', '-uall'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024 }),
+  ]);
+  return { repoRoot, commit: commit.trim(), dirty: Boolean(status.trim()) };
+}
 
 function profileError(metadataPath, reason) {
   return new Error(
@@ -252,12 +262,14 @@ export async function resolveDevProfile(options = {}) {
 
 async function runProfileCommand(profile, command, args) {
   const environment = await profileChildEnvironment(profile);
+  const source = await describeDevCheckout(sourceRoot);
+  process.stdout.write(`[OpenChatCut] source ${source.repoRoot} · commit ${source.commit} · ${source.dirty ? 'uncommitted changes (commit is parent only)' : 'clean working tree'}\n`);
   const npmCli = command === 'npm' ? process.env.npm_execpath : undefined;
   const executable = npmCli ? process.execPath : command;
   const commandArgs = npmCli ? [npmCli, ...args] : args;
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(executable, commandArgs, {
-      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      cwd: sourceRoot,
       env: environment,
       stdio: 'inherit',
     });
@@ -272,7 +284,9 @@ async function runVite(profile, args) {
 }
 
 async function main() {
-  const profile = await resolveDevProfile();
+  // Profile selection and child execution must use the same checkout, even
+  // when this script is invoked by absolute path from another working directory.
+  const profile = await resolveDevProfile({ cwd: sourceRoot });
   const args = process.argv.slice(2);
   if (args[0] === '--exec') {
     const command = args[1];
@@ -283,7 +297,8 @@ async function main() {
   process.exitCode = await runVite(profile, args);
 }
 
-const entryPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';
+const entryPath = process.argv[1]
+  ? pathToFileURL(await realpath(resolve(process.argv[1])).catch(() => resolve(process.argv[1]))).href : '';
 if (import.meta.url === entryPath) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

@@ -154,6 +154,51 @@ try{assert.equal(await get('/api/clipmentor/production-task'),403);for(const suf
   const before=JSON.stringify(draft.getDoc()),result=await execClipMentorAnalysisTool('read_clipmentor_analysis',{view:'storyboard'},ctx) as any;
   assert(!result.error,JSON.stringify(result));assert.equal(result.storyboard.digest,b.digest);assert.equal(result.review_approved,false);assert.equal(JSON.stringify(draft.getDoc()),before);assert.equal(calls,1);
  });
+ const {readClipMentorStoryboard}=await import('../../src/clipmentor/read-storyboard');
+ for(const part of ['summary','source','actual'])for(const change of ['stable','equal-clone','equal-reordered','pre-abort','abort','project','run','in-place','new-doc','signal']){
+  await test(`read lifecycle: ${part}/${change}`,async()=>{
+   let doc=fixture(),project='tool-context',run:string|undefined=undefined,controller=new AbortController(),dispatches=0;
+   const board=await productionStoryboard(doc,project),card=board.cards[0].id;
+   const response=part==='summary'?{...board,board_url:'/board'}:{digest:board.digest,card_id:card,part,offset:0,images:[{status:'available',origin:'source',frame:1,source_seconds:1/30,base64:jpg}]};
+   let release!:()=>void,enter!:()=>void;
+   const waiting=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{enter=r;});
+   const ctx={getDoc:()=>doc,getProjectId:()=>project,getAgentRunId:()=>run,getAgentRunSignal:()=>controller.signal,
+    hostFetch:async(_url:unknown,init?:RequestInit)=>{dispatches++;return{ok:true,json:async()=>{enter();await waiting;return response;}} as Response;}} as any;
+   if(change==='pre-abort')controller.abort();
+   const pending=readClipMentorStoryboard({boardPart:part,...(part==='summary'?{}:{unitId:card,boardDigest:board.digest})},ctx);
+   if(change==='pre-abort')release();else{
+    await entered;
+    if(change==='abort')controller.abort();
+    if(change==='signal')controller=new AbortController();
+    if(change==='project')project='another-project';
+    if(change==='run')run='another-run';
+    if(change==='in-place')doc.version++;
+    if(change==='new-doc')doc={...doc,version:doc.version+1};
+    if(change==='equal-clone')doc=structuredClone(doc);
+      if(change==='equal-reordered')doc=JSON.parse(JSON.stringify(doc,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v));
+    release();
+   }
+   const result=await pending as any,valid=['stable','equal-clone','equal-reordered'].includes(change);
+   console.log('STORYBOARD_CONTEXT',part,change,{dispatches,images:result.__images?.length,error:result.error});
+   if(valid){assert(!result.error,JSON.stringify(result));assert.equal(result.review_approved,false);assert.equal(dispatches,1);if(part!=='summary')assert.equal(result.__images.length,1);}
+   else{assert(result.error,'changed context must not expose old board/images');assert.equal(result.storyboard,undefined);assert.equal(result.__images,undefined);assert.equal(result.review_approved,false);assert.equal(dispatches,change==='pre-abort'?0:1);}
+  });
+ }
+ await test('read cancellation signal is forwarded without requiring a run context',async()=>{
+  const doc=fixture(),board=await productionStoryboard(doc,'signal'),controller=new AbortController();let signal:AbortSignal|undefined;
+  const result=await readClipMentorStoryboard({}, {getDoc:()=>doc,getProjectId:()=> 'signal',getAgentRunSignal:()=>controller.signal,hostFetch:async(_url:unknown,init?:RequestInit)=>{signal=init?.signal as AbortSignal;return Response.json({...board,board_url:'/board'});}} as any) as any;
+  assert(!result.error);assert.equal(signal,controller.signal);
+ });
+ for(const part of ['summary','source','actual'])await test(`read lifecycle: short revision collision/${part}`,async()=>{
+  const {revisionOf}=await import('../../src/agent/external-edit-session');let doc=fixture();const changed=fixture();
+  Object.assign(doc.timelines.find(t=>t.id===doc.activeTimelineId)!,{name:'8f4031f6dc10e756',width:722});
+  Object.assign(changed.timelines.find(t=>t.id===changed.activeTimelineId)!,{name:'2cd0fc20ef8ffa6a',width:720});
+  assert.notDeepEqual(doc,changed);assert.equal(revisionOf(doc),revisionOf(changed));
+  const board=await productionStoryboard(doc,'collision'),card=board.cards[0].id;
+  const response=part==='summary'?{...board,board_url:'/board'}:{digest:board.digest,card_id:card,part,offset:0,images:[{status:'available',origin:'source',frame:1,source_seconds:1/30,base64:jpg}]};
+  const result=await readClipMentorStoryboard({boardPart:part,...(part==='summary'?{}:{unitId:card,boardDigest:board.digest})},{getDoc:()=>doc,getProjectId:()=> 'collision',hostFetch:async()=>({ok:true,json:async()=>{doc=changed;return response;}} as Response)} as any) as any;
+  assert(result.error,'short revision equality cannot make different snapshots interchangeable');assert.equal(result.storyboard,undefined);assert.equal(result.__images,undefined);
+ });
  await test('adversarial: board arguments cannot be confused with review/evidence reads',async()=>{
   const d=fixture(),draft=makeDraft(d);let calls=0;const ctx={...draft,templates:[],audio:[],getProjectId:()=> 'mixed',hostFetch:async()=>{calls++;throw Error('must not fetch');}} as never;
   for(const args of [{view:'storyboard',reviewPart:'packet'},{view:'current_copy',boardDigest:'a'.repeat(64)},{view:'storyboard',packetOffset:0}]){

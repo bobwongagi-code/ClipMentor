@@ -3,7 +3,9 @@ import {timelineTrackIds,trackKind,isVisualItemKind} from '../../src/editor/time
 import {checkTransitionManifest,type Scene,type PictureLayer} from '../../src/clipmentor/transition-check';
 import type {ProjectDoc,TimelineState,TimelineItem} from '../../src/editor/types';
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
+import {NATIVE_TEXT_STYLE_VERSION} from '../../shared/native-text-style';
 import {deliveryAudio} from '../../src/clipmentor/delivery-bindings';
+import {nativeExecutionMapping} from '../../src/clipmentor/source-breakdown';
 
 function canonical(value:unknown):string {
  if(value===null||typeof value!=='object')return JSON.stringify(value)??'null';
@@ -15,7 +17,7 @@ const renderKeys=['srcInFrame','playbackRate','props','templateId','width','heig
 const hashCode=(i:TimelineItem)=>i.code?previewFactsDigest(i.code):undefined;
 /** Snapshot actual native rendering inputs. Names, local paths and author evaluations are excluded. */
 function renderState(i:TimelineItem) {
- return {code_sha256:hashCode(i),source_locator_sha256:i.src?previewFactsDigest(i.src):undefined,...Object.fromEntries(renderKeys.filter(k=>i[k]!==undefined).map(k=>[k,i[k]]))};
+ return {...(i.kind==='text'?{renderer:NATIVE_TEXT_STYLE_VERSION}:{}),code_sha256:hashCode(i),source_locator_sha256:i.src?previewFactsDigest(i.src):undefined,...Object.fromEntries(renderKeys.filter(k=>i[k]!==undefined).map(k=>[k,i[k]]))};
 }
 function assertLinear(i:TimelineItem) {
  if(i.deletedWordIdx?.length||i.transcriptPlayOrder?.length||i.silenceFrames!==undefined||i.cutPadFrames!==undefined||Object.keys(i.gapCapsMs??{}).length)
@@ -81,10 +83,14 @@ export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:Tea
    source_asset_id:i.sourceAssetId??null,source_start_seconds:(i.srcInFrame??0)/t.fps,playback_rate:i.playbackRate??1,
    volume:i.volume??1,fade_in_frames:i.fadeInFrames??0,fade_out_frames:i.fadeOutFrames??0};
  });
+ const nativePlacement=packet.units.some(u=>!doc.clipMentorAnalysis?.source_breakdown?.units.find(v=>v.unit_id===u.unit_id)?.placement)
+  ?nativeExecutionMapping(doc):null;
+ if(nativePlacement?.issues.length)throw Error('preview_native_mapping_invalid:'+JSON.stringify(nativePlacement.issues));
  const input={duration_seconds:total_frames/t.fps,
   points:packet.units.flatMap(u=>u.points.map(p=>({point_id:p.point_id,teaching_goal_zh:p.question,product_relevance:p.buying_concern}))),
   units:packet.units.map(u=>{
-   const placement=doc.clipMentorAnalysis?.source_breakdown?.units.find(v=>v.unit_id===u.unit_id)?.placement;
+   const placement=doc.clipMentorAnalysis?.source_breakdown?.units.find(v=>v.unit_id===u.unit_id)?.placement
+    ?? nativePlacement?.placements[u.unit_id];
    // A historical single-unit teaching packet can be reviewed against the whole film.
    // This broadens observation context; it does not invent a group cut or narrow away a defect.
    if(!placement&&packet.units.length===1)return {unit_id:u.unit_id,point_ids:u.points.map(p=>p.point_id),output_range_seconds:[0,total_frames/t.fps] as [number,number]};
@@ -114,10 +120,10 @@ export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:Tea
   input.units.push({unit_id:id,point_ids:[id],output_range_seconds:[item.startFrame/t.fps,(item.startFrame+item.durationInFrames)/t.fps]});
  }
  const nativeItems=t.items.map(i=>Object.fromEntries(Object.entries(i).filter(([key])=>key!=='originalFilePath')));
- const executionManifest={native_snapshot_sha256:previewFactsDigest(nativeItems),fps:t.fps,total_frames,scenes,audios,canvas:{width:t.width,height:t.height,fit:t.fit??'contain',
+ const executionManifest={timeline_id:doc.activeTimelineId,native_snapshot_sha256:previewFactsDigest(nativeItems),fps:t.fps,total_frames,scenes,audios,canvas:{width:t.width,height:t.height,fit:t.fit??'contain',
   audio_track_state:trackIds.map(id=>({id,hidden:t.tracks?.[id]?.hidden??false,muted:t.tracks?.[id]?.muted??false,role:t.tracks?.[id]?.role??null,audio_routing:t.tracks?.[id]?.audioRouting??null})),
   captions_hidden:t.captionsHidden??null,captions:t.captions??null,caption_tracks:trackIds.filter(id=>trackKind(t,id)==='caption').map(id=>({id,...t.tracks?.[id]})),watermark:t.watermark??null,fx_defs_sha256:previewFactsDigest(t.fxDefs??{})},
-  review_window_basis:packet.units.map(u=>({unit_id:u.unit_id,basis:doc.clipMentorAnalysis?.source_breakdown?.units.find(v=>v.unit_id===u.unit_id)?.placement?'saved_placement':'whole_film_context_not_inferred_group_cut'})),
+  review_window_basis:packet.units.map(u=>({unit_id:u.unit_id,basis:doc.clipMentorAnalysis?.source_breakdown?.units.find(v=>v.unit_id===u.unit_id)?.placement?'saved_placement':nativePlacement?.placements[u.unit_id]?'actual_native_source_and_audio':'whole_film_context_not_inferred_group_cut'})),
   fact_scope:'scheduled_native_composition_not_pixel_visibility',layer_order:'bottom_to_top',source_timing:'linear_media_only',
   limits:['MG code hash and native props are frozen; internal animation, occlusion and actual speech require continuous preview observation.']};
  checkTransitionManifest(executionManifest);
@@ -126,4 +132,17 @@ export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:Tea
 /** Refuse stale/unbound exports before any paid self-check. No old approval is reconstructed. */
 export function assertPreviewExportBinding(exported:Record<string,unknown>|undefined,revision:string,facts:ReturnType<typeof productionPreviewFacts>){
  if(exported?.revision!==revision||exported?.facts_digest!==previewFactsDigest(facts))throw new Error('preview_export_binding_missing_or_stale');
+}
+
+/** A successful plan/export is not evidence that this current file was inspected. */
+export function assertFinalPreviewEvidence(task:Pick<import('./production-task').ProductionTask,'projectId'|'projectRevision'|'completed'>,revision:string,videoSha256:string){
+ const row=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
+ const exported=task.completed.export?.artifact,checked=task.completed.self_check?.artifact,r=checked?.receipt;
+ if(!row(r))throw Error('final_output_evidence_missing_or_stale');
+ const gate=row(r.effective_review)?r.effective_review:{},timeline=row(r.timeline_check)?r.timeline_check:{};
+ if(!/^[a-f0-9]{64}$/.test(videoSha256)||revision!==task.projectRevision||exported?.revision!==revision||checked?.preview!==exported?.path
+  ||r.projectId!==task.projectId||r.videoSha256!==videoSha256||r.status!=='completed'
+  ||r.scope!=='rendered_preview_continuous_review'||r.full_film_accepted!==false
+  ||gate.can_use_as_pass!==true||gate.status!=='pass'||!Array.isArray(gate.blockers)||gate.blockers.length!==0
+  ||gate.manifest_binding!=='frozen_at_request'||timeline.status!=='no_detected_conflict')throw Error('final_output_evidence_missing_or_stale');
 }

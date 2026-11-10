@@ -31,7 +31,8 @@ try {
  let ffmpegCalls=0;const deps={directory:dir,resolve:(n:string)=>join(dir,n),execute:async()=>{ffmpegCalls++;}};
  const call=(action:string,d=doc)=>previewEditBridge({projectId,operationId,action,doc:d},deps);
  assert.equal((await call('read')).allowed,true);
- const before=JSON.stringify(doc),r=await call('prepare') as any,next=buildPreviewRevision(doc,r.plan);
+ const before=JSON.stringify(doc),[r,raced]=await Promise.all([call('prepare'),call('prepare')]) as any[],next=buildPreviewRevision(doc,r.plan);
+ assert.deepEqual(raced,r,'concurrent exact prepares read the same complete published winner');
  assert.equal(JSON.stringify(doc),before);assert.equal(ffmpegCalls,0);
  assert.equal(await previewDocDigest(next),r.preparedProjectSha256);
  assert.equal(await previewDocDigest(makeDraft(next).getDoc()),r.preparedProjectSha256);
@@ -63,6 +64,17 @@ try {
  await writeFile(join(dir,'still.png'),'changed');await assert.rejects(call('read'),/Still material changed/);await writeFile(join(dir,'still.png'),'still.png');
  await call('reserve_render',next);await assert.rejects(call('reserve_render',next),/EEXIST/);
  assert.deepEqual(doc.clipMentorAnalysis,next.clipMentorAnalysis,'export failures cannot mutate already committed edits or old approvals');
+ const renderReservation=await readFile(join(grant,'render-reserved.json'),'utf8');
+ await rm(join(grant,'prepared.json'));
+ const annotationPath=join(dir,r.plan.native.annotation.src.split('/').at(-1)),annotation=await readFile(annotationPath,'utf8');
+ await writeFile(annotationPath,'corrupt annotation');
+ await assert.rejects(call('prepare'),/content mismatch/);
+ assert.equal(await readFile(annotationPath,'utf8'),'corrupt annotation','wrong existing material is never overwritten');
+ await writeFile(annotationPath,annotation);
+ const [restored,restoredRace]=await Promise.all([call('prepare'),call('prepare')]);
+ assert.deepEqual(restored,restoredRace);assert.deepEqual(restored,r,'exact orphaned material recovers a lost prepared publication');
+ assert.equal(await readFile(join(grant,'render-reserved.json'),'utf8'),renderReservation,'preparation recovery never refunds the consumed render');
+ await assert.rejects(call('check_render',next),/attempt already consumed/);
  await rm(join(grant,'prepared.json'));
  for(const altered of [{...native,videoId:'audio'},{...native,removeIds:['a','cap']},{...native,range:[9,20]},
    {...native,videoFrames:10},{...native,sourceStartFrame:-1},{...native,boxes:[{x:0,y:1900,width:300,height:300}]}]) {

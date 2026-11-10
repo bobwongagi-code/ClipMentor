@@ -105,6 +105,9 @@ const finished={...task,projectId:'fixture',taskId:'fixture-task',status:'awaiti
  completed:{export:{at:1,artifact:{renderId:'render-frozen',revision:revisionOf(project),facts_digest:previewFactsDigest(facts)}}}} as unknown as ProductionTask;
 finished.completed.export!.artifact.feedback_project_digest=feedbackProjectDigest(project);
 const anchor=await productionFeedbackAnchor(finished,project),target=t.items[0].id;
+const legacyProjection=structuredClone(finished);legacyProjection.completed.export!.artifact.facts_digest='a'.repeat(64);
+assert.equal((await productionFeedbackAnchor(legacyProjection,project)).preview.facts_digest,'a'.repeat(64),'a new projection algorithm does not stale an identical frozen project');
+const changedLegacy=structuredClone(project);changedLegacy.timelines[0].items[0].transform={x:8};await assert.rejects(productionFeedbackAnchor(legacyProjection,changedLegacy),/stale/,'the frozen project digest cannot authorize changed native content');
 const selection=structuredClone(project);selection.timelines[0].selectedId=t.items[0].id;selection.timelines[0].selectedIds=[t.items[0].id];
 assert.deepEqual((await productionFeedbackAnchor(finished,selection)).preview,anchor.preview,'selection-only changes are not new rendered content');
 const changed=structuredClone(project);changed.timelines[0].items[0].transform={x:9};await assert.rejects(productionFeedbackAnchor(finished,changed),/stale/);

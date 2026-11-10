@@ -96,11 +96,16 @@ try{
  await test('Panel Storyboard creates a reusable local image from the bound original',async()=>{
   const {createPanelStoryboard}=await import('./production-panel-delivery');
   const project=clone(bindings[0]),signal=new AbortController().signal;
+  const a=project.clipMentorAnalysis!,duration=a.source.duration_seconds;
+  a.evidence.push({evidence_id:'source-quote',kind:'original_claim',text:'Ini contoh warna.',source_ids:[a.source.asset_id],supporting_evidence_ids:[],status:'candidate',source_range_seconds:[0,duration]});
+  a.source_breakdown!.segments=[{segment_id:'whole',source_range_seconds:[0,duration],claim_evidence_ids:['source-quote'],visible_evidence_ids:[],interpretation_evidence_ids:[],unknowns:[]}];
+  a.source_breakdown!.units.forEach(u=>{u.original_segment_ids=['whole'];u.original_source_ranges=[[0,duration]];});
+  await (await import('./creator-storyboard.verify-fixtures')).writeStoryboardFixtureReceipt(project,root);
   const asset=await createPanelStoryboard(project,signal);assert(asset);
   assert.equal(asset.props?.clipmentorStoryboardSource,source.id);
   assert.equal(asset.props?.clipmentorStoryboardHash,source.sourceContentHash);
   const times=asset.props?.clipmentorStoryboardTimes as number[];
-  assert.equal(times.length,3);assert(times.every((time,index)=>index===0||time>times[index-1]));
+  assert.equal(times.length,1);assert(times.every((time,index)=>index===0||time>times[index-1]));
   const bytes=await readFile(join(media,asset.src.split('/').at(-1)!));
   assert(bytes.length>1000);assert.equal(hash(bytes),asset.sourceContentHash);
   project.assets.push(asset);

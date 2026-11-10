@@ -303,6 +303,9 @@ export async function verifySuccessfulGenerationJobs(
     () => getGenerationJobSnapshot(expiring.jobId) === undefined,
     'expired generation was not evicted',
   );
+  // The durable ledger removal precedes file cleanup. Join the existing expiry
+  // claim rather than treating absence from the Map as completed cleanup.
+  await deleteGenerationJob(expiring.jobId);
   assert.equal(getGenerationJobSnapshot(expiring.jobId), undefined, 'expired jobs must be evicted automatically');
   assert.ok(cleanedPaths.includes(`expired:/media/uploads/${expiring.jobId}.mp4`), 'expiry must dispose the result file');
 }

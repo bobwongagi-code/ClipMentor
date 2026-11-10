@@ -45,7 +45,15 @@ export function assertHandoffCopy(name: string, args: Record<string, unknown>, c
       if (Array.isArray(cues.revisit)) cues.revisit.filter(handoffRecord).forEach(v => add(v.text));
     }
   }
-  for(const s of deliverySectionsFromDoc(ctx.getDoc())){add(s.line.narration_ms);s.line.caption_lines.forEach(add);add(s.line.caption_lines.join(' '));s.line.labels.forEach(add);}
+  for(const s of deliverySectionsFromDoc(ctx.getDoc())){
+    add(s.line.narration_ms);s.line.caption_lines.forEach(add);add(s.line.caption_lines.join(' '));s.line.labels.forEach(add);
+    // The production gate checks the current review before this guard. Exact
+    // structured visual copy is frozen too; prose and old plans are excluded.
+    const layout=s.picture.layout;
+    if(layout?.kind==='original_underlay')for(const lines of [layout.headline,layout.transition]){
+      lines.forEach(add);add(lines.join(' '));
+    }
+  }
   if (name === 'edit_captions' && args.action === 'display_text') {
     const json = typeof args.json === 'string' ? JSON.parse(args.json) : args.json;
     if (!handoffRecord(json)) throw new Error('handoff_caption_input_invalid');

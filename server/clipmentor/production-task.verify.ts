@@ -69,12 +69,48 @@ const empty=fresh();await advanceProductionTask(empty,async()=>({artifact:{}}),s
 const repair=fresh();let repaired=false;
 await advanceProductionTask(repair,async(t)=>t.stage==='copy_review'&&!repaired?(repaired=true,{artifact:{},repair:'blueprint'}):{artifact:{saved:true}},store);
 assert.equal(repair.repairs,1);assert.equal(repair.status,'awaiting_review');
+// The persisted rewind itself must restart at its target after a process loss.
+for(const [from,target] of [['copy_review','blueprint'],['self_check','edit']] as const){
+ const rewinding=fresh();rewinding.stage=from;
+ for(const stage of PRODUCTION_STAGES.slice(0,PRODUCTION_STAGES.indexOf(from)))rewinding.completed[stage]={at:1,artifact:{saved:true}};
+ let rewindCheckpoint:ProductionTask|undefined;
+ await advanceProductionTask(rewinding,async t=>t.repairs===0?{artifact:{issue:'fixture negative'},repair:target}:{artifact:{saved:true}},
+  {...store,async save(t){if(t.repairs===1&&!rewindCheckpoint)rewindCheckpoint=structuredClone(t);}});
+ assert(rewindCheckpoint);assert.equal(rewindCheckpoint.stage,target,'rewind target and invalidation must be in the same durable checkpoint');
+ assert(!rewindCheckpoint.completed[target]);
+ const coldVisited:string[]=[];
+ await advanceProductionTask(structuredClone(rewindCheckpoint),async t=>{coldVisited.push(t.stage);return{artifact:{saved:true}};},store);
+ assert.equal(coldVisited[0],target,'a cold resume must execute the repair before later review/export');
+}
 const cancellation=fresh();let cancelInvoked=false;
 await advanceProductionTask(cancellation,async(t,c)=>{cancelInvoked=cancelActiveProductionTask(t.projectId,t.taskId);c.signal.throwIfAborted();return {artifact:{saved:true}};},store);assert(cancelInvoked);assert.equal(cancellation.status,'cancelled');
+// Diagnostic persistence introduces an await: reservation must remain before it so
+// concurrent duplicate effect names cannot both cross the provider boundary.
+const duplicate=fresh();let duplicateSubmits=0;
+await advanceProductionTask(duplicate,async(t,c)=>{
+ if(t.stage==='analysis'){
+  const results=await Promise.allSettled([1,2].map(()=>c.effect('render','same-name',async()=>{duplicateSubmits++;return {saved:true};})));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(results.filter(r=>r.status==='rejected').length,1);
+ }
+ return {artifact:{saved:true}};
+},store);
+assert.equal(duplicateSubmits,1);assert.equal(duplicate.attempts.render,1);
 const reserved=fresh();reserved.effects['analysis:initial:0:pending']={kind:'review',operationId:'unknown-outcome',status:'reserved'};
 await advanceProductionTask(reserved,async(_t,c)=>{await c.effect('review','pending',async()=>{throw Error('must not resubmit');});return {artifact:{saved:true}};},store);assert.match(reserved.error!,/outcome_reserved/);assert.equal(reserved.attempts.review,0);
 const reconciled=fresh();reconciled.attempts.render=1;reconciled.effects['analysis:initial:0:existing']={kind:'render',operationId:'saved-render-id',status:'reserved'};
 await advanceProductionTask(reconciled,async(t,c)=>{if(t.stage==='analysis')await c.effect('render','existing',async()=>{throw Error('must not submit');},async id=>({renderId:id}));return {artifact:{saved:true}};},store);assert.equal(reconciled.status,'awaiting_review');assert.equal(reconciled.attempts.render,1);
+// A late lookup result remains external evidence, not a completed task effect
+// after the user cancels the owning production execution.
+const lookupCancelled=fresh();lookupCancelled.attempts.render=1;
+lookupCancelled.effects['analysis:initial:0:lookup']={kind:'render',operationId:'original-lookup',status:'reserved'};
+let lookupSubmits=0;
+await advanceProductionTask(lookupCancelled,async(t,c)=>{
+ await c.effect('render','lookup',async()=>{lookupSubmits++;return {};},async id=>{
+  assert.equal(id,'original-lookup');assert(cancelActiveProductionTask(t.projectId,t.taskId));return {renderId:'late-result'};
+ });return {artifact:{saved:true}};
+},store);
+assert.equal(lookupSubmits,0);assert.equal(lookupCancelled.status,'cancelled');assert.equal(lookupCancelled.effects['analysis:initial:0:lookup'].status,'reserved');assert.equal(lookupCancelled.attempts.render,1);
 const persistenceFailure=fresh();let forbiddenPaid=0;
 await advanceProductionTask(persistenceFailure,async(_t,c)=>{await c.effect('review','x',async()=>{forbiddenPaid++;return {};});return {artifact:{saved:true}};},{...store,async save(){throw Error('Injected checkpoint quota');}});assert.equal(forbiddenPaid,0);assert.equal(persistenceFailure.status,'blocked');assert.match(persistenceFailure.error!,/checkpoint_write_failed/);
 console.log('production-task: all stages, saved resume, spent/zero/deadline budgets, bounded repair, one feedback and explicit language acceptance passed; zero provider calls');
@@ -291,6 +327,17 @@ console.log('Focused blueprint continuation: only new or strictly shrinking know
 
 
 const {runProductionWithRecovery}=await import('./production-task');
+for(const waiting of ['awaiting_review','awaiting_blueprint'] as const){
+ const freshened=fresh();let workerVisits=0;
+ await runProductionWithRecovery(freshened,async()=>{workerVisits++;return{artifact:{saved:true}};},async()=>{},store,async()=>{
+  freshened.status=waiting;
+  assert(cancelActiveProductionTask(freshened.projectId,freshened.taskId));
+  return true;
+ });
+ assert.equal(freshened.status,'cancelled','a refreshed waiting snapshot cannot swallow cancellation of its preparation owner');
+ assert.equal((await store.load(freshened.projectId,freshened.taskId)).status,'cancelled');
+ assert.equal(workerVisits,0);assert.deepEqual(freshened.attempts,fresh().attempts);
+}
 const background=fresh();
 let restorations=0;
 await runProductionWithRecovery(background,async t=>{
@@ -439,6 +486,141 @@ const inheritedPolicy:import('../../shared/clipmentor-handoff').HandoffPolicy={v
 const visualDigest=boundVisualCriteria(inheritedPolicy)!.digest;
 const readyVariant=()=>{const v=fresh();v.status='awaiting_review';v.blueprintApproval={sourceProjectId:'parent',sourceTaskId:'parent-task',sourceRevision:'r1',digest:'c'.repeat(64),requirementsDigest:'d'.repeat(64),requirements:inheritedPolicy,confirmedAt:1};v.completed.self_check={at:1,artifact:{visualCriteriaDigest:visualDigest}};v.completed.export={at:1,artifact:{renderId:'current-render'}};return v;};
 const acceptedVariant=readyVariant();await acceptProductionTask(acceptedVariant,true,store,{digest:visualDigest,confirmed:['opening'],renderId:'current-render'});assert.equal(acceptedVariant.status,'completed');assert.deepEqual(acceptedVariant.visualAcceptance?.confirmedIds,['opening']);
+const wholePreview=readyVariant();await acceptProductionTask(wholePreview,true,store,{digest:visualDigest,wholePreviewConfirmed:true,renderId:'current-render'});assert.equal(wholePreview.status,'completed');assert.equal(wholePreview.visualAcceptance?.scope,'whole_preview');assert.deepEqual(wholePreview.visualAcceptance?.confirmedIds,[],'whole-preview acknowledgment is not a fabricated per-question answer');
+for(const confirmation of [{digest:visualDigest,wholePreviewConfirmed:false,renderId:'current-render'},{digest:'old',wholePreviewConfirmed:true,renderId:'current-render'},{digest:visualDigest,wholePreviewConfirmed:true,renderId:'old'}]){const v=readyVariant();await assert.rejects(acceptProductionTask(v,true,store,confirmation));assert.equal(v.status,'awaiting_review');}
+await assert.rejects(acceptProductionTask(readyVariant(),false,store,{digest:visualDigest,wholePreviewConfirmed:true,renderId:'current-render'}));
 for(const confirmation of [{digest:visualDigest,confirmed:[],renderId:'current-render'},{digest:'wrong',confirmed:['opening'],renderId:'current-render'},{digest:visualDigest,confirmed:['opening'],renderId:'old-render'}]){const v=readyVariant();await assert.rejects(acceptProductionTask(v,true,store,confirmation));assert.equal(v.status,'awaiting_review');}
 const staleVisual=readyVariant();staleVisual.completed.self_check!.artifact.visualCriteriaDigest='old';await assert.rejects(acceptProductionTask(staleVisual,true,store,{digest:visualDigest,confirmed:['opening'],renderId:'current-render'}));assert.equal(staleVisual.status,'awaiting_review');
 console.log('Inherited output visual requirements: accepted only for current digest, full confirmations and current render.');
+
+// Real 2026-11-07 source upload: HTTP 100, 2,359,296/13,597,513 bytes, 595s timeout.
+// This is a possibly submitted attempt, never a free retry or a model verdict.
+function partialSourceUpload(args:Record<string,unknown>){
+ const failure=sourceGatewayFailure(args,100);
+ return {...failure,receipt:{...failure.receipt,source_hash:'a'.repeat(64),subject:{revision:7,digest:'b'.repeat(64)},
+  actual_handoff_verified:false,complete_film_accepted:false,
+  transport_diagnostic:{operation_id:args.operationId,http_status:100,request_bytes:13597513,
+   curl_exit_code:28,error_kind:'curl_timeout',metrics:{size_upload:2359296,size_download:0,
+    time_pretransfer:2.055728,time_starttransfer:2.504034,time_total:595.075462},request_ids:{},response_body:{bytes:0}}}};
+}
+const savedSourceRead=(failure:ReturnType<typeof partialSourceUpload>)=>({ok:true,current_binding:'current',requestsSent:0,
+ receipt:{...failure.receipt,requestsSent:0}});
+{
+ let calls=0,reads=0;const decisions:Array<{action:string}>=[];
+ const recovered=await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>calls<2,
+  async(args:Record<string,unknown>)=>++calls===1?partialSourceUpload(args):{ok:true,operationId:args.operationId},async()=>{},2,
+  {allowRetry:true,readOriginal:async()=>{reads++;return savedSourceRead(partialSourceUpload(gatewayArgs));},
+   recordDecision:async(d:{action:string})=>{decisions.push(d);}}) as {ok:boolean};
+ assert.equal(calls,2,'a persisted partial HTTP100 upload may use one remaining charged retry after readback');
+ assert.equal(reads,1);assert.equal(recovered.ok,true);assert.equal(decisions[0].action,'retry_charged');
+ assert.equal(confirmedUnsubmittedGateway('observation',{body:partialSourceUpload(gatewayArgs)},originalOperation,'test'),false);
+}
+
+const {freezeProductionInput}=await import('./production-task');
+const automaticInput={...input,budget:{...input.budget,routine:{model:1,review:1,observation:1,tts:1,render:1}}};
+assert.equal(freezeProductionInput(automaticInput).gatewayRecovery,'bounded');
+assert.equal(automaticInput.gatewayRecovery,undefined,'freeze does not mutate the caller or retrofit a loaded task');
+assert.equal(freezeProductionInput({...automaticInput,gatewayRecovery:'none'}).gatewayRecovery,'none');
+assert.equal(freezeProductionInput(input).gatewayRecovery,'none','single-attempt preparation does not gain retry authority');
+assert.throws(()=>freezeProductionInput({...input,gatewayRecovery:'arbitrary' as never}),/gateway recovery policy/);
+
+for(const [reason,patch,allowed,mayRetry] of [
+ ['budget_or_deadline_exhausted',{},false,true],
+ ['automatic_retry_not_authorized',{},true,false],
+ ['original_receipt_not_terminal',{receipt:{...savedSourceRead(partialSourceUpload(gatewayArgs)).receipt,status:'reserved'}},true,true],
+ ['original_receipt_not_terminal',{receipt:{...savedSourceRead(partialSourceUpload(gatewayArgs)).receipt,status:'preparing'}},true,true],
+ ['original_receipt_unbound_or_stale',{current_binding:'stale'},true,true],
+ ['original_receipt_unbound_or_stale',{receipt:{...savedSourceRead(partialSourceUpload(gatewayArgs)).receipt,projectId:'foreign'}},true,true],
+ ['original_receipt_unbound_or_stale',{receipt:{...savedSourceRead(partialSourceUpload(gatewayArgs)).receipt,source_hash:'c'.repeat(64)}},true,true],
+ ['original_receipt_not_persisted',{receipt:{...savedSourceRead(partialSourceUpload(gatewayArgs)).receipt,receipt_persisted:false}},true,true],
+] as const){
+ let calls=0;const decisions:Array<{action:string;reason:string}>=[];
+ await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>allowed,
+  async args=>{calls++;return partialSourceUpload(args);},async()=>{throw Error('unsafe second upload');},2,
+  {allowRetry:mayRetry,readOriginal:async()=>({...savedSourceRead(partialSourceUpload(gatewayArgs)),...patch}),
+   recordDecision:async d=>{decisions.push(d);}});
+ assert.equal(calls,1,reason);assert.equal(decisions.at(-1)?.action,'stop',reason);assert.equal(decisions.at(-1)?.reason,reason);
+}
+{
+ let calls=0;const decisions:Array<{reason:string}>=[];
+ await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>true,
+  async args=>{calls++;return partialSourceUpload(args);},async()=>{throw Error('read unavailable');},2,
+  {readOriginal:async()=>{throw Error('unavailable');},recordDecision:async d=>{decisions.push(d);}});
+ assert.equal(calls,1);assert.equal(decisions.at(-1)?.reason,'original_receipt_unavailable');
+}
+function completedSourceRead(){
+ const read=savedSourceRead(partialSourceUpload(gatewayArgs));
+ return {...read,receipt:{...read.receipt,status:'completed',result:{operationId:originalOperation,source_hash:'a'.repeat(64),
+  subject:{digest:'b'.repeat(64),revision:7},validation:{status:'valid'},scope:'source_windows_and_planned_capacity_only',
+  actual_handoff_verified:false,complete_film_accepted:false}}};
+}
+{
+ let calls=0;const decisions:Array<{action:string}>=[];
+ const result=await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>false,
+  async()=>{calls++;return {error:'lost local response'};},async()=>{throw Error('no second upload');},2,
+  {readOriginal:async()=>completedSourceRead(),recordDecision:async d=>{decisions.push(d);}}) as {ok:boolean;cached:boolean};
+ assert.equal(calls,1);assert.equal(result.ok,true);assert.equal(result.cached,true);assert.equal(decisions[0].action,'reuse_saved_result');
+}
+{
+ let calls=0;const read=completedSourceRead();read.receipt.result.source_hash='c'.repeat(64);
+ const result=await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>true,
+  async args=>{calls++;return partialSourceUpload(args);},async()=>{throw Error('wrong result reused');},2,
+  {readOriginal:async()=>read}) as {gateway_recovery_decisions:Array<{reason:string}>};
+ assert.equal(calls,1);assert.equal(result.gateway_recovery_decisions.at(-1)?.reason,'completed_source_result_invalid');
+}
+{
+ let calls=0;const negative={operationId:originalOperation,projectId:'test',videoSha256:'preview',status:'completed',
+  full_film_accepted:false,scope:'rendered_preview_continuous_review',effective_review:{can_use_as_pass:false,status:'review_required'}};
+ const result=await recoverProductionGateway('review_clipmentor_preview',{...gatewayArgs,action:'request',videoSha256:'preview'},'test',()=>true,
+  async()=>{calls++;return {error:'local response lost'};},async()=>{throw Error('a saved verdict must not be retried');},2,
+  {readOriginal:async()=>negative}) as typeof negative;
+ assert.equal(calls,1);assert.equal(result.effective_review.can_use_as_pass,false);assert.equal(result.status,'completed');
+}
+{
+ let calls=0;let latest=partialSourceUpload(gatewayArgs);
+ const result=await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>true,
+  async args=>{calls++;latest=partialSourceUpload(args);return latest;},async()=>{},99,
+  {readOriginal:async()=>savedSourceRead(latest)}) as {gateway_recovery_decisions:Array<{reason:string}>};
+ assert.equal(calls,3,'uncertain submissions stop after two charged retries even with a larger task cap');
+ assert.equal(result.gateway_recovery_decisions.at(-1)?.reason,'recovery_retry_limit');
+}
+{
+ let calls=0,allowed=true;
+ const result=await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>allowed,
+  async args=>{calls++;return partialSourceUpload(args);},async()=>{allowed=false;},2,
+  {readOriginal:async()=>savedSourceRead(partialSourceUpload(gatewayArgs))}) as {gateway_recovery_decisions:Array<{reason:string}>};
+ assert.equal(calls,1);assert.equal(result.gateway_recovery_decisions.at(-1)?.reason,'budget_or_deadline_exhausted_after_backoff');
+}
+{
+ let calls=0;
+ await assert.rejects(recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>true,
+  async args=>{calls++;return partialSourceUpload(args);},async()=>{},2,
+  {readOriginal:async()=>savedSourceRead(partialSourceUpload(gatewayArgs)),recordDecision:async()=>{throw Error('disk full');}}),/disk full/);
+ assert.equal(calls,1,'no new request before its decision is durable');
+}
+for(const status of [400,401,403,422]){
+ let calls=0;const failed=partialSourceUpload(gatewayArgs);
+ failed.receipt.upstream_http_status=status;failed.receipt.transport_diagnostic.http_status=status;
+ await recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,'test',()=>true,
+  async()=>{calls++;return failed;},async()=>{throw Error('configuration or content error is not a transient upload');},2,
+  {readOriginal:async()=>savedSourceRead(failed)});
+ assert.equal(calls,1);
+}
+{
+ const task=fresh();task.input.budget.observation=2;let calls=0,latest=partialSourceUpload(gatewayArgs);
+ await advanceProductionTask(task,async(t,c)=>{
+  if(t.stage==='analysis'){
+   const execute=async()=>recoverProductionGateway('observe_clipmentor_source_video',gatewayArgs,t.projectId,
+    next=>c.remaining!('observation')>0||c.hasEffect!('observation',next),async args=>{
+     const response=await c.effect('observation',String(args.operationId),async()=>({status:++calls===1?502:200,
+      body:calls===1?(latest=partialSourceUpload(args)):{ok:true,operationId:args.operationId}}));
+     return response.body;
+    },async()=>{},2,{allowRetry:true,readOriginal:async()=>savedSourceRead(latest)});
+   const result=await execute();assert.deepEqual(await execute(),result,'restart reuses saved terminal effects, not another upload');
+  }
+  return {artifact:{saved:true}};
+ },store);
+ assert.equal(task.status,'awaiting_review',task.error);assert.equal(calls,2);assert.equal(task.attempts.observation,2);
+ assert.equal(Object.values(task.effects).filter(e=>e.transportUnsubmitted).length,0,'partial HTTP100 uploads never refund a call');
+}
+console.log('Upload recovery: real HTTP100 regression, receipt reuse/isolation, unknown-outcome stop, frozen retry authority, charged limits, replay accounting and durable decisions passed; zero network/model calls.');

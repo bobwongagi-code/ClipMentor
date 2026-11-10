@@ -1,6 +1,7 @@
 import { isHandoffStoreKey } from '../../shared/clipmentor-handoff.ts';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import {
   classifyAgentRuntimeStoreValue,
   isAgentSessionGenerationStoreValue,
@@ -92,7 +93,7 @@ function mergeRun(left: Record<string, unknown>, right: Record<string, unknown>)
   const legacyRenewal = !left.leaseToken && !right.leaseToken
     && !!left.ownerInstanceId && left.ownerInstanceId === right.ownerInstanceId;
   const leaseSource = legacyRenewal ? newer : left;
-  return {
+  const result:Record<string,unknown>={
     ...older, ...newer, events,
     artifactIds: mergeIds('artifactIds'),
     checkpointIds: mergeIds('checkpointIds'),
@@ -101,6 +102,9 @@ function mergeRun(left: Record<string, unknown>, right: Record<string, unknown>)
     leaseToken: leaseSource.leaseToken,
     leaseExpiresAt: leaseSource.leaseExpiresAt,
   };
+  // These absent wire fields must not turn replaying an import into a change.
+  for(const key of ['ownerInstanceId','leaseToken','leaseExpiresAt'])if(result[key]===undefined)delete result[key];
+  return result;
 }
 
 function retainRuntimeRows(sidecar: Record<string, unknown>): Record<string, unknown> {
@@ -170,6 +174,15 @@ function mergeRuntimeSidecars(
   return retainArtifactRows(retainRuntimeRows(merged));
 }
 
+function runtimeMergePublication(base:Record<string,unknown>,merged:Record<string,unknown>):Record<string,unknown>{
+  if(isDeepStrictEqual(base,merged))return base;
+  // set/merge are also writers. Even an equal/older imported version may add
+  // evidence; make that commit visible to ordinary expectedRevision readers.
+  const revision=Math.max(Number(base.revision)+1,Number(merged.revision));
+  if(!Number.isSafeInteger(revision))throw new Error('agent runtime revision exhausted');
+  return {...merged,revision};
+}
+
 export function mergeAgentSidecar(
   key: string,
   base: unknown,
@@ -209,12 +222,12 @@ export function mergeAgentSidecar(
     const revisionDelta = Number(incomingSidecar.revision) - Number(baseSidecar.revision);
     return {
       accepted: true,
-      value: revisionDelta === 0
+      value: runtimeMergePublication(baseSidecar,revisionDelta === 0
         ? Number(incomingSidecar.updatedAt) > Number(baseSidecar.updatedAt) ? incoming : base
-        : revisionDelta > 0 ? incoming : base,
+        : revisionDelta > 0 ? incoming : base),
     };
   }
-  return { accepted: true, value: mergeRuntimeSidecars(baseSidecar, incomingSidecar) };
+  return { accepted: true, value: runtimeMergePublication(baseSidecar,mergeRuntimeSidecars(baseSidecar, incomingSidecar)) };
 }
 
 function projectMetas(entries: Record<string, unknown>): Map<string, ProjectMeta> {

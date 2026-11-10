@@ -30,7 +30,7 @@ function validateEleven(input: VoiceRequest): void {
     throw new Error('optimizeStreamingLatency must be an integer from 0 to 4');
   }
   if (input.pronunciationDictionaryLocators && input.pronunciationDictionaryLocators.length > 3) throw new Error('ElevenLabs supports at most 3 pronunciation dictionaries');
-  reject([input.speedRatio, input.emotion, input.emotionScale, input.loudnessRatio, input.pitch, input.volume, input.performancePrompt,
+  reject([input.instructions, input.speedRatio, input.emotion, input.emotionScale, input.loudnessRatio, input.pitch, input.volume, input.performancePrompt,
     input.explicitDialect, input.sampleRate, input.bitrate, input.audioFormat, input.channel, input.forceCbr, input.languageBoost,
     input.stream, input.excludeAggregatedAudio, input.textNormalization, input.latexRead, input.pronunciations,
     input.timbreWeights, input.voiceModify, input.subtitleEnable, input.subtitleType],
@@ -45,7 +45,7 @@ function validateDoubao(input: VoiceRequest, voiceId: string): void {
   if (input.performancePrompt && input.performancePrompt.length > 200) throw new Error('performancePrompt must be 200 characters or fewer');
   if (input.emotionScale != null && !input.emotion) throw new Error('emotionScale requires emotion');
   if (input.explicitDialect && voiceId !== 'vivi') throw new Error('explicitDialect is only supported by the Vivi preset');
-  reject([input.modelId, input.stability, input.speed, input.similarityBoost, input.style, input.useSpeakerBoost, input.languageCode,
+  reject([input.instructions, input.modelId, input.stability, input.speed, input.similarityBoost, input.style, input.useSpeakerBoost, input.languageCode,
     input.seed, input.outputFormat, input.optimizeStreamingLatency, input.enableLogging, input.applyTextNormalization,
     input.applyLanguageTextNormalization, input.pronunciationDictionaryLocators, input.previousText, input.nextText,
     input.previousRequestIds, input.nextRequestIds, input.volume, input.sampleRate, input.bitrate, input.audioFormat, input.channel,
@@ -84,7 +84,7 @@ function validateMinimax(input: VoiceRequest, text: string): void {
     throw new Error('MiniMax voiceModify supports non-streaming mp3/wav/flac or streaming mp3 only');
   }
   if (input.timbreWeights?.length && input.voiceId?.trim()) throw new Error('MiniMax timbreWeights require an empty voiceId');
-  reject([input.modelId, input.stability, input.similarityBoost, input.style, input.useSpeakerBoost, input.languageCode,
+  reject([input.instructions, input.modelId, input.stability, input.similarityBoost, input.style, input.useSpeakerBoost, input.languageCode,
     input.seed, input.outputFormat, input.optimizeStreamingLatency, input.enableLogging, input.applyTextNormalization,
     input.applyLanguageTextNormalization, input.pronunciationDictionaryLocators, input.previousText, input.nextText,
     input.previousRequestIds, input.nextRequestIds, input.speedRatio, input.emotionScale, input.loudnessRatio,
@@ -93,7 +93,7 @@ function validateMinimax(input: VoiceRequest, text: string): void {
 
 /** Inworld / Fish Audio / Speechify only take text, voiceId, and an optional modelId override. */
 function validateMinimalProvider(input: VoiceRequest, label: string): void {
-  reject([input.stability, input.speed, input.similarityBoost, input.style, input.useSpeakerBoost, input.languageCode,
+  reject([input.instructions, input.stability, input.speed, input.similarityBoost, input.style, input.useSpeakerBoost, input.languageCode,
     input.seed, input.outputFormat, input.optimizeStreamingLatency, input.enableLogging, input.applyTextNormalization,
     input.applyLanguageTextNormalization, input.pronunciationDictionaryLocators, input.previousText, input.nextText,
     input.previousRequestIds, input.nextRequestIds, input.speedRatio, input.emotion, input.emotionScale, input.loudnessRatio,

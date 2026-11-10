@@ -19,23 +19,36 @@ export function boundVisualCriteria(policy:HandoffPolicy|null) {
    ||(asset.kind==='image'&&criterion.reference.seconds!==0))throw Error('handoff_visual_reference_unbound:'+criterion.id);
   return {criterion,src,sha};
  });
- return {entries,digest:digestValue(entries)};
+ return {entries,digest:digestValue(entries),...(policy?.brief.timelineId?{timelineId:policy.brief.timelineId}:{})};
 }
 export type BoundVisualCriteria=NonNullable<ReturnType<typeof boundVisualCriteria>>;
 
-export function assertVisualCriteriaPlan(bound:BoundVisualCriteria|undefined,sections:readonly Section[]|undefined) {
+/** A teaching screen is verified from the exported pixels, never from source samples or a plan verdict. */
+export function plannedVisualCriteria(bound:BoundVisualCriteria|undefined):BoundVisualCriteria|undefined {
+ const entries=bound?.entries.filter(e=>e.criterion.layout!=='native_composition');
+ return entries?.length?(entries.length===bound!.entries.length?bound:{...bound!,entries,digest:digestValue(entries)}):undefined;
+}
+export function assertVisualCriteriaPlan(bound:BoundVisualCriteria|undefined,sections:readonly Section[]|undefined,unitIds:readonly string[]=[],timelineId?:string) {
  for(const {criterion} of bound?.entries??[]){
+  if(criterion.layout==='native_composition'){
+   if(criterion.sectionId!==(timelineId??bound?.timelineId)&&!unitIds.includes(criterion.sectionId))throw Error('handoff_visual_criterion_unresolved:'+criterion.id);
+   continue;
+  }
   if(criterion.layout==='unrepresented'||!sections?.some(s=>s.section_id===criterion.sectionId&&s.picture.layout?.kind===criterion.layout
     &&(!criterion.pictureSha256||s.picture.sha256===criterion.pictureSha256)
     &&deliveryLayoutStages(s.picture).includes(criterion.pictureStage)))
    throw Error('handoff_visual_criterion_unresolved:'+criterion.id);
  }
 }
-export function visualCriteriaApproved(bound:BoundVisualCriteria,receipt:{verdict:string;visual_criteria_digest?:string;
+export function visualCriteriaPlanReceiptMatches(bound:BoundVisualCriteria,receipt:{visual_criteria_digest?:string}|undefined){
+ return !!receipt&&receipt.visual_criteria_digest===plannedVisualCriteria(bound)?.digest;
+}
+export function visualCriteriaPlanApproved(bound:BoundVisualCriteria,receipt:{verdict:string;visual_criteria_digest?:string;
  visual_criteria_checks?:Array<{id:string;answer:string;picture_stage:string}>}|undefined){
- return receipt?.verdict==='pass'&&receipt.visual_criteria_digest===bound.digest
-  &&receipt.visual_criteria_checks?.length===bound.entries.length
-  &&bound.entries.every(({criterion})=>receipt.visual_criteria_checks?.some(c=>c.id===criterion.id&&c.answer==='yes'&&c.picture_stage===criterion.pictureStage));
+ const planned=plannedVisualCriteria(bound);
+ return receipt?.verdict==='pass'&&visualCriteriaPlanReceiptMatches(bound,receipt)&&(!planned||receipt.visual_criteria_digest===planned.digest
+  &&receipt.visual_criteria_checks?.length===planned.entries.length
+  &&planned.entries.every(({criterion})=>receipt.visual_criteria_checks?.some(c=>c.id===criterion.id&&c.answer==='yes'&&c.picture_stage===criterion.pictureStage)));
 }
 
 export type VisualReferenceFrame={criterion:VisualDoneCriterion;base64:string};

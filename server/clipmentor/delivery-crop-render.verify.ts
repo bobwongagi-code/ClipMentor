@@ -1,3 +1,4 @@
+import {installedRenderBrowserExecutable} from '../render-browser';
 // Local regression only: real shared timeline renderer, installed headless binary,
 // one-frame test compositions, no Agent/model/export job or production project.
 import assert from 'node:assert/strict';
@@ -20,8 +21,7 @@ const repo=resolve(fileURLToPath(new URL('../../',import.meta.url))),exec=promis
 const argument=(n:string)=>process.argv.find(a=>a.startsWith('--'+n+'='))?.slice(n.length+3);
 await mkdir(join(repo,'node_modules/.tmp'),{recursive:true});const dir=await mkdtemp(join(repo,'node_modules/.tmp/delivery-crop-'));
 const out=argument('out-dir');if(out)await mkdir(out,{recursive:true});
-const browserPlatform=process.platform==='darwin'?'mac':process.platform;
-const browserPath=process.env.CC_BROWSER_EXECUTABLE??join(repo,'node_modules/.remotion/chrome-headless-shell',browserPlatform+'-'+process.arch,`chrome-headless-shell-${browserPlatform}-${process.arch}`,'chrome-headless-shell');
+const browserPath=installedRenderBrowserExecutable();
 const started=performance.now();let browser:Awaited<ReturnType<typeof openBrowser>>|undefined;let renderedFrames=0;
 try{
  await access(browserPath); // Never download a browser during a zero-call test.

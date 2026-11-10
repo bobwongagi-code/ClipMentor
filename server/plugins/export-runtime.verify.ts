@@ -119,6 +119,16 @@ try {
     path: `/media/uploads/${promotionSourceName}`,
   }, exportDir)).path, promoted.path, 'promotion is idempotent');
 
+  const copiedId = randomUUID(), copiedSource = exportJobFilename(copiedId, 'mp4');
+  const copiedDestination = `openchatcut-derived-${copiedId}.mp4`;
+  await writeFile(join(exportDir, copiedSource), 'GOOD');
+  await writeFile(join(exportDir, copiedDestination), 'EVIL');
+  await assert.rejects(promoteExportResult({assetId: copiedId, path: `/media/uploads/${copiedSource}`}, exportDir), /content mismatch/);
+  assert.equal(await readFile(join(exportDir, copiedDestination), 'utf8'), 'EVIL', 'do not overwrite an unrelated existing managed file');
+  await writeFile(join(exportDir, copiedDestination), 'GOOD');
+  assert.equal((await promoteExportResult({assetId: copiedId, path: `/media/uploads/${copiedSource}`}, exportDir)).sizeBytes, 4,
+    'an exact earlier copy remains reusable');
+
   const removed = await cleanupStaleExportFiles(exportDir, {
     now,
     retentionMs: 60 * 60_000,

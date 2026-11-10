@@ -49,7 +49,12 @@ if(!scope.handoffEfficiencyTest){
   const {productionAuthorTaskData}=await import('./production-worker');
   const assertTaskUnchanged=(actual:any,previous:any)=>{
    if(actual.stage==='edit'){
-    assert.equal(actual.goal.endsWith(previous.goal.slice(previous.goal.indexOf('，')+1)),true,'existing editing protections remain intact');
+    // Native instance assembly supersedes the old generic still-frame sentence;
+    // compare preserved protections independently of that intentional clarification.
+    for(const protection of previous.goal.slice(previous.goal.indexOf('，')+1).split('。').filter(Boolean)){
+     if(protection.startsWith('需要定格时'))assert(actual.goal.includes('save_clipmentor_source_frame保留来源，不用无关素材'));
+     else assert(actual.goal.includes(protection),'existing editing protection lost: '+protection);
+    }
     for(const term of ['edit_item 的 adds','空数组不代表禁止创建','不得把估算当实测','必须带实际 unitId'])assert(actual.goal.includes(term));
    }else assert.equal(actual.goal,previous.goal);
    const {goal:actualGoal,...a}=actual,{goal:previousGoal,...b}=previous;
@@ -60,6 +65,8 @@ if(!scope.handoffEfficiencyTest){
   // The frozen efficiency baseline contains the independently fixed frame-rounded
   // delivery-duration bug. Adjust only that known output, never the current view.
   const measuredBaseline=(view:any,d:ProjectDoc)=>{
+   // Deliberate capability-only handoff extension; all prior frozen facts remain compared.
+   view.native_text={renderer:'native-text-style-v2',supported_props:['text','fontSize','fontWeight','color','align','paddingX','backgroundColor','backgroundOpacity','textShadow','shadow'],evidence_scope:'capability_only_verify_actual_rendered_pixels'};
    for(const section of view.packet.delivery_sections??[]){
     const a=view.audio.find((a:any)=>a.line_id===section.line.line_id&&a.status==='reusable');
     if(!a)continue;

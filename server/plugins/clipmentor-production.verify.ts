@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {once} from 'node:events';
 import {createMiniConnect} from '../../desktop/mini-connect';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import sharp from 'sharp';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -50,6 +52,19 @@ try{
  assert.equal(readback.blueprintReadiness.complete_film_accepted,false,'a completed mocked task cannot certify a missing project');
  assert.equal((await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:false})).status,409);
  const accepted=await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:true});assert.equal(accepted.status,200,JSON.stringify(await accepted.json()));
+ // A saved queue/start snapshot may be stale by the time it is dispatched.
+ // Re-read under the execution owner so it cannot resurrect a completed run.
+ const lateSnapshot=structuredClone(running),readCurrentTask=productionTaskStore.load;
+ let staleReadOnce=true;const stepsBeforeStaleLaunch=steps.length;
+ productionTaskStore.load=async(project,id)=>{if(project===input.projectId&&id===created.taskId&&staleReadOnce){staleReadOnce=false;return structuredClone(lateSnapshot);}return readCurrentTask(project,id);};
+ try{assert.equal((await post({action:'resume',projectId:input.projectId,taskId:created.taskId})).status,202);}finally{productionTaskStore.load=readCurrentTask;}
+ for(let i=0;i<200;i++){
+  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${input.projectId}&taskId=${created.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+  if(!(await response.json()).executionActive)break;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ assert.equal(steps.length,stepsBeforeStaleLaunch,'a stale dispatch snapshot must not execute completed stages again');
+ assert.equal((await productionTaskStore.load(input.projectId,created.taskId)).status,'completed','stale dispatch cannot revoke final acceptance');
  const panelTask=await createProductionTask({...input,author:{...input.author,origin},reviewer:{...input.reviewer,origin},humanBlueprintReview:true} as Parameters<typeof createProductionTask>[0]);
  const panelGet=async()=>await (await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}})).json();
  for(const [error,reason] of [
@@ -72,11 +87,104 @@ try{
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
  await setStoredEntry(`project:${panelTask.projectId}`,projectDoc());
  const {default:boardFixture}=await import('../clipmentor/fixtures/blueprint-review-board-20261031.json');
- const {createBlueprintContinuation,createBlueprintContinuations,selectProductionAudience,sharedProductionDocument,commonProductionDigest,assertSharedProduction,prepareSharedProduction,queueBlueprintContinuations,continuationBrief,upgradeContinuationBrief}=await import('../clipmentor/production-continuation');
+ const {createBlueprintContinuation,createBlueprintContinuations,selectProductionAudience,sharedProductionDocument,alignUnstartedSharedBlueprint,commonProductionDigest,assertSharedProduction,prepareSharedProduction,queueBlueprintContinuations,continuationBrief,upgradeContinuationBrief}=await import('../clipmentor/production-continuation');
  const {deliverySectionsFromDoc}=await import('../../src/clipmentor/delivery-bindings');
  const {checkCopyProduction}=await import('../../src/clipmentor/production-gate');
  const full=structuredClone(boardFixture.cases.newBinding) as unknown as import('../../src/editor/types').ProjectDoc;
  const partnerDoc=structuredClone(boardFixture.cases.existingBinding) as unknown as import('../../src/editor/types').ProjectDoc;
+ // A declared downloadable output must cross the real HTTP route with exact bytes.
+ const deliveryDoc=structuredClone(partnerDoc),deliverySection=deliverySectionsFromDoc(deliveryDoc).find(s=>s.kind==='creator_invitation')!;
+ const png=await sharp({create:{width:4,height:4,channels:3,background:'#123456'}}).png().toBuffer();
+ const media=(await import('../media-dir')).uploadDir();await mkdir(media,{recursive:true});
+ const {execFileSync}=await import('node:child_process');const {ffmpegBin}=await import('../media-binaries');
+ const sourceId=deliveryDoc.clipMentorAnalysis!.source.asset_id;
+ const original=deliveryDoc.assets.find(a=>a.id===sourceId)!;
+ original.src='/media/uploads/fixture-original.mp4';
+ execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=90x160:r=1','-t',String(deliveryDoc.clipMentorAnalysis!.source.duration_seconds),'-c:v','libx264','-pix_fmt','yuv420p',join(media,'fixture-original.mp4')]);
+ original.sourceContentHash=createHash('sha256').update(await readFile(join(media,'fixture-original.mp4'))).digest('hex');
+ deliveryDoc.clipMentorAnalysis!.source.sourceContentHash=original.sourceContentHash;
+ const duration=deliveryDoc.clipMentorAnalysis!.source.duration_seconds;
+ deliveryDoc.clipMentorAnalysis!.evidence.push({evidence_id:'fixture-original-claim',kind:'original_claim',text:'Ini contoh suara asal.',source_ids:[sourceId],supporting_evidence_ids:[],status:'candidate',source_range_seconds:[0,duration]});
+ const breakdown=deliveryDoc.clipMentorAnalysis!.source_breakdown!;
+ breakdown.segments=[{segment_id:'original',source_range_seconds:[0,duration],claim_evidence_ids:['fixture-original-claim'],visible_evidence_ids:[],interpretation_evidence_ids:[],unknowns:[]}];
+ breakdown.units.forEach(u=>{u.original_segment_ids=['original'];u.original_source_ranges=[[0,duration]];});
+ await (await import('../clipmentor/creator-storyboard.verify-fixtures')).writeStoryboardFixtureReceipt(deliveryDoc,directory);
+ const pngHash=createHash('sha256').update(png).digest('hex'),ref=(id:string)=>({asset_id:id,src:`/media/uploads/${id}.png`,sha256:pngHash});
+ const attachment=ref('fixture-attachment');deliverySection.section_id='existing_partner';
+ const deliveryIR=(deliveryDoc.clipMentorAnalysis!.blueprint[0] as unknown as {internal_review:Record<string,unknown>}).internal_review;
+ const deliveryRows=deliverySectionsFromDoc(deliveryDoc);deliveryRows[deliveryRows.findIndex(s=>s.kind==='creator_invitation')]=deliverySection;
+ (deliveryIR[String(deliveryIR.current_picture_plan)] as {delivery_sections:unknown}).delivery_sections=deliveryRows;
+ delete deliverySection.picture.crop;
+ deliverySection.picture.layout={kind:'product_storyboard',product:ref('fixture-product'),storyboard:ref('fixture-board'),attachment};
+ deliveryDoc.assets.find(a=>a.id===deliverySection.picture.asset_id)!.width=720;
+ deliveryDoc.assets.find(a=>a.id===deliverySection.picture.asset_id)!.height=1280;
+ for(const id of ['fixture-product','fixture-board','fixture-attachment'])deliveryDoc.assets.push({id,name:id+'.png',kind:'image',src:ref(id).src,sourceContentHash:pngHash,width:4,height:4,durationInFrames:1,props:{clipmentorStoryboardSource:deliveryDoc.clipMentorAnalysis!.source.asset_id,clipmentorStoryboardHash:deliveryDoc.clipMentorAnalysis!.source.sourceContentHash}});
+ await writeFile(join(media,'fixture-attachment.png'),png);await writeFile(join(media,'fixture-preview.mp4'),'synthetic identity only');
+ await setStoredEntry('project:'+panelTask.projectId,deliveryDoc);
+ const deliverySaved=(await loadOfflineStoredProject(panelTask.projectId))!;
+ panelTask.status='awaiting_review';panelTask.projectRevision=deliverySaved.revision;
+ panelTask.completed.export={at:1,artifact:{revision:deliverySaved.revision,renderId:'delivery-fixture',path:'/media/uploads/fixture-preview.mp4'}};
+ panelTask.completed.self_check={at:2,artifact:{preview:'/media/uploads/fixture-preview.mp4'}};await productionTaskStore.save(panelTask);
+ const download=(assetId='fixture-attachment',renderId='delivery-fixture',authorized=true)=>fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view:'panel_attachment',projectId:panelTask.projectId,assetId,renderId})}`,{headers:authorized?{Origin:origin,'Sec-Fetch-Site':'same-origin'}:{}});
+ assert.equal((await download(undefined,undefined,false)).status,403);
+ const delivered=await download();assert.equal(delivered.status,200);assert.match(delivered.headers.get('content-disposition')! ,/attachment/);assert.equal(delivered.headers.get('content-type'),'application/pdf');assert.equal(Buffer.from(await delivered.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+ assert.equal((await panelGet()).task.attachments[0].assetId,'fixture-attachment');
+ assert.equal((await download('fixture-product')).status,409,'pool assets are not automatically deliverables');
+ assert.equal((await download(undefined,'old-render')).status,409,'old export links cannot serve current attachments');
+ await writeFile(join(media,'fixture-attachment.png'),'changed');assert.equal((await download()).status,409);assert.equal((await panelGet()).task.deliveryUnavailable,true);
+ await writeFile(join(media,'fixture-attachment.png'),png);
+ const newer=structuredClone(deliveryDoc);newer.name='changed project';await setStoredEntry('project:'+panelTask.projectId,newer);assert.equal((await download()).status,409);
+ assert.deepEqual(await readFile(join(media,'fixture-attachment.png')),png,'delivery never rewrites source files');
+ // Exercise final acceptance itself, with a synthetic portrait MP4 and fake local review evidence.
+ execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=720x1280:r=10','-frames:v','1','-c:v','libx264','-pix_fmt','yuv420p',join(media,'fixture-preview.mp4')]);
+ await setStoredEntry('project:'+panelTask.projectId,deliveryDoc);panelTask.projectRevision=(await loadOfflineStoredProject(panelTask.projectId))!.revision;
+ panelTask.completed.export!.artifact.revision=panelTask.projectRevision;
+ panelTask.input.panelDelivery={productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:pngHash};await productionTaskStore.save(panelTask);
+ const acceptFixture=()=>post({action:'accept',projectId:panelTask.projectId,taskId:panelTask.taskId,malayDeliveryConfirmed:true});
+ assert.equal((await acceptFixture()).status,409,'export alone and a checked language box cannot certify actual inspection');
+ const videoSha=createHash('sha256').update(await readFile(join(media,'fixture-preview.mp4'))).digest('hex');
+ panelTask.completed.self_check!.artifact.receipt={projectId:panelTask.projectId,videoSha256:videoSha,status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}};
+ await productionTaskStore.save(panelTask);
+ await rm(join(media,'fixture-attachment.png'));assert.equal((await acceptFixture()).status,409,'review success cannot replace the missing promised attachment');
+ await writeFile(join(media,'fixture-attachment.png'),png);assert.equal((await acceptFixture()).status,200,'fully bound local positive control remains deliverable');
+ assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).status,'completed');
+ const finalVideo=await fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view:'panel_download',projectId:panelTask.projectId,renderId:'delivery-fixture'})}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+ assert.equal(finalVideo.status,200);assert.match(finalVideo.headers.get('content-disposition')!,/filename\*=UTF-8''/);assert.deepEqual(Buffer.from(await finalVideo.arrayBuffer()),await readFile(join(media,'fixture-preview.mp4')),'confirmed download contains actual saved MP4 bytes');
+ delete panelTask.input.panelDelivery; // Complete requirement identity and atomic publication use the real canonical store.
+ const requirementProject='required-final-fixture';await setStoredEntry('project:'+requirementProject,deliveryDoc);
+ const required=await createProductionTask({...panelTask.input,projectId:requirementProject,panelDelivery:{productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:'f'.repeat(64)}});
+ required.status='awaiting_review';required.projectRevision=(await loadOfflineStoredProject(requirementProject))!.revision;required.completed=structuredClone(panelTask.completed);required.completed.export!.artifact.revision=required.projectRevision;
+ (required.completed.self_check!.artifact.receipt as Record<string,unknown>).projectId=requirementProject;
+ const requirementApi=await import('../clipmentor/handoff'),{digestValue:requirementHash}=await import('../agent-runs/store-values');
+ const requirementBrief={version:1,briefId:'final-requirements',revision:1,mode:'autonomous',phase:'planning',planner:'builtin_agent',executor:'builtin_agent',projectId:requirementProject,timelineId:deliveryDoc.activeTimelineId,objective:'Actual output',doneCriteria:['Original requirement'],blueprint:null,budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}};
+ const registered=await requirementApi.registerHandoff({projectId:requirementProject,expectedProjectRevision:required.projectRevision,previousDigest:null,brief:requirementBrief});
+ required.completed.copy_review={at:1,artifact:{requirementsDigest:requirementHash(requirementBrief.doneCriteria)}};required.completed.self_check!.artifact.requirementsDigest=requirementHash(requirementBrief.doneCriteria);await productionTaskStore.save(required);
+ const changedBrief={...requirementBrief,revision:2,doneCriteria:['Original requirement','先导出代表视频并连续观看，不可用截图替代']};
+ await requirementApi.registerHandoff({projectId:requirementProject,expectedProjectRevision:required.projectRevision,previousDigest:registered.digest,brief:changedBrief});
+ const {acceptProductionTask}=await import('../clipmentor/production-task');
+ await assert.rejects(acceptProductionTask(required,true),/final_requirements_changed/,'new text requirements cannot inherit old visual approval');
+ assert.equal(required.status,'awaiting_review');
+ required.completed.copy_review!.artifact.requirementsDigest=requirementHash(changedBrief.doneCriteria);required.completed.self_check!.artifact.requirementsDigest=requirementHash(changedBrief.doneCriteria);await productionTaskStore.save(required);
+ const {loadAgentRuntimeSidecar}=await import('../../src/persist/agentRuntimeStore');const beforeRace=(await loadAgentRuntimeSidecar(requirementProject)).artifacts.length;
+ const racingStore={...productionTaskStore,save:async(next:typeof required,conditions?:Parameters<typeof productionTaskStore.save>[1])=>{await setStoredEntry('project:'+requirementProject,newer);await productionTaskStore.save(next,conditions);}};
+ await assert.rejects(acceptProductionTask(required,true,racingStore),/precondition_changed/,'a commit during evidence inspection cannot publish completed');
+ assert.equal(required.status,'awaiting_review','failed acceptance does not mutate caller state');assert.equal((await productionTaskStore.load(requirementProject,required.taskId)).status,'awaiting_review');assert.equal((await loadAgentRuntimeSidecar(requirementProject)).artifacts.length,beforeRace,'failed completion body is not indexed');
+ await setStoredEntry('project:'+requirementProject,deliveryDoc);
+ const originalControlLoad=productionTaskStore.load;let controlEntered!:()=>void,controlRelease!:()=>void,holdControl=true;
+ const enteredControl=new Promise<void>(r=>{controlEntered=r;}),releaseControl=new Promise<void>(r=>{controlRelease=r;});
+ productionTaskStore.load=async(project,id)=>{if(project===requirementProject&&holdControl){holdControl=false;controlEntered();await releaseControl;}return originalControlLoad(project,id);};
+ const pendingAccept=post({action:'accept',projectId:requirementProject,taskId:required.taskId,malayDeliveryConfirmed:true});await enteredControl;
+ const errorLog=console.error;const controlErrors:string[]=[];console.error=(...args)=>{controlErrors.push(args.map(String).join(' '));};
+ try{
+  const competing=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${requirementProject}`,{method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'accept',renderId:'delivery-fixture',languageConfirmed:true})});
+  assert.equal(competing.status,409);assert(controlErrors.some(e=>e.includes('该工程正在处理上一次操作')),'panel and API must share the same project control boundary');
+ }finally{console.error=errorLog;productionTaskStore.load=originalControlLoad;controlRelease();}
+ assert.equal((await pendingAccept).status,200);assert.equal((await originalControlLoad(requirementProject,required.taskId)).status,'completed');
+
+
+ panelTask.status='awaiting_blueprint';panelTask.completed={};await productionTaskStore.save(panelTask);
+ await setStoredEntry('project:'+panelTask.projectId,projectDoc());
+ console.log('actual attachment route: exact bytes, declared scope, origin, stale render/revision and changed bytes; no external calls');
  const allSections=deliverySectionsFromDoc(full),partnerSection=deliverySectionsFromDoc(partnerDoc).find(s=>s.kind==='creator_invitation')!;
  allSections.find(s=>s.kind==='creator_invitation')!.section_id='new_contact';partnerSection.section_id='existing_partner';allSections.push(partnerSection);
  for(const asset of partnerDoc.assets)if(!full.assets.some(a=>a.id===asset.id))full.assets.push(asset);
@@ -120,7 +228,7 @@ try{
   projectId:panelTask.projectId,timelineId:full.activeTimelineId,objective:'Use saved source',blueprint:null,
   doneCriteria:['Keep the supplied words and pictures',...(['new_contact','existing_partner'] as const).map(sectionId=>({id:sectionId,sectionId,
    quote:'Use the supplied reference',question:'Is the correct supplied picture visible?',pictureStage:'完整招商卡',layout:'recruitment_card',pictureSha256:suppliedScope.ctaAssetHash,
-   reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}}))],
+   reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}})),{id:'body-style',sectionId:full.clipMentorAnalysis!.blueprint[0].unit_id,quote:'保留本项目认可的原片标识',question:'实际原片标识是否一致？',pictureStage:'原片',layout:'native_composition',reference:{assetId:suppliedScope.ctaAssetId,fileName:'CTA.png',seconds:0}}],
   budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}}});
  const variantRequirements=await variantHandoff.readHandoffPolicy(panelTask.projectId);
  // Crash immediately after the first durable child checkpoint; it must already be a non-runnable bound continuation.
@@ -142,7 +250,7 @@ try{
  assert.equal(confirmationParent.attempts.review,8);assert.equal(confirmationParent.error,'original HTTP 502');
  const {productionReviewRequirements}=await import('../clipmentor/production-task');
  const inherited=await productionReviewRequirements(output.projectId);
- assert.deepEqual(inherited!.brief.doneCriteria.filter(c=>typeof c!=='string').map(c=>c.sectionId),['existing_partner']);
+ assert.deepEqual(inherited!.brief.doneCriteria.filter(c=>typeof c!=='string').map(c=>c.sectionId),['existing_partner',full.clipMentorAnalysis!.blueprint[0].unit_id]);
  assert.equal(inherited!.brief.doneCriteria[0],'Keep the supplied words and pictures');
  await (await import('./project-store')).withSerializedProjectStore(store=>store.removeEntry(variantHandoff.handoffKey(panelTask.projectId)));
  const outputDoc=(await loadOfflineStoredProject(output.projectId))!.doc;
@@ -153,6 +261,36 @@ try{
  assert.deepEqual(batch.map(t=>t.taskId),replayedBatch.map(t=>t.taskId),'one confirmation always creates the same two outputs');
  assert.deepEqual(confirmationParent.productionChildren!.map(t=>t.audience),['existing_partner','new_contact']);
  assert.equal(batch[1].sharedProduction!.taskId,batch[0].taskId);
+ const reversedLabels=structuredClone(confirmationParent);
+ reversedLabels.productionChildren!.forEach(entry=>{entry.audience=entry.audience==='new_contact'?'existing_partner':'new_contact';});
+ const beforeWrongBatch=await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId)));
+ await assert.rejects(queueBlueprintContinuations(reversedLabels),/production_outputs_binding_invalid/,'audience labels must match the actual saved variant before dispatch');
+ assert.deepEqual(await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId))),beforeWrongBatch,'an invalid batch cannot partly queue or rewrite either child');
+
+ // Two releases can interleave: hold the second queued checkpoint until
+ // the first release has already returned and a worker checkpoint is saved.
+ const beforeConcurrentRelease=await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId)));
+ for(const child of beforeConcurrentRelease){child.status='awaiting_blueprint';await productionTaskStore.save(child);}
+ const normalSave=productionTaskStore.save;let queuedWrites=0,releaseSecondWrite!:()=>void;
+ const secondWriteHeld=new Promise<void>(resolve=>{releaseSecondWrite=resolve;});
+ productionTaskStore.save=async(child,conditions)=>{
+  if(child.taskId===batch[0].taskId&&child.status==='queued'&&++queuedWrites===2)await secondWriteHeld;
+  await normalSave(child,conditions);
+ };
+ let concurrentRelease:Promise<unknown>|undefined;
+ try{
+  const firstRelease=queueBlueprintContinuations(confirmationParent);concurrentRelease=queueBlueprintContinuations(confirmationParent);
+  await firstRelease;
+  const live=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+  live.status='running';live.attempts.review=1;live.effects['copy_review:initial:0:live']={kind:'review',operationId:'existing-live-operation',status:'reserved'};
+  await normalSave(live);releaseSecondWrite();await concurrentRelease;
+  const retained=await productionTaskStore.load(live.projectId,live.taskId);
+  assert.equal(retained.attempts.review,1,'a concurrent batch release cannot erase the worker counter');
+  assert.equal(retained.effects['copy_review:initial:0:live']?.operationId,'existing-live-operation','queued publication cannot erase an existing operation');
+ }finally{
+  releaseSecondWrite();if(concurrentRelease)await concurrentRelease;productionTaskStore.save=normalSave;
+ }
+ for(const before of beforeConcurrentRelease){const latest=await productionTaskStore.load(before.projectId,before.taskId);before.sequence=latest.sequence;before.updatedAt=latest.updatedAt;before.status='queued';await productionTaskStore.save(before);}
  const migrated=structuredClone(batch[0]);
  migrated.input.brief=confirmationParent.input.brief+'\n用户已确认含两种结尾的完整蓝图。本执行任务负责其中的existing_partner输出；两版共用片头、教学主体与同文配音，仅片尾不同。从独立审核接续，不重新分析原片。片尾使用独立时间线实例，片头和教学主体的实例在片尾起点前闭合，便于直接复用实际剪辑。';
  const oldAttempts=structuredClone(migrated.attempts),oldApproval=structuredClone(migrated.blueprintApproval);
@@ -198,6 +336,26 @@ try{
  assert.throws(()=>commonProductionDigest(cross,100),/crosses_ending/);
  const changedCopy=structuredClone(secondDoc);(changedCopy.clipMentorAnalysis!.blueprint[0].internal_review as Record<string,any>)[String(changedCopy.clipMentorAnalysis!.blueprint[0].internal_review!.current_script_candidate)].lines[0].narration_ms+=' changed';
  await assert.rejects(sharedProductionDocument(firstDoc,changedCopy),/shared_body_blueprint_changed/);
+ // The untouched second output follows the latest producer plan; its own
+ // ending survives and no producer receipt is copied as its approval.
+ const updatedProducer=structuredClone(firstDoc),updatedIR=(updatedProducer.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+ const active=updatedIR[updatedIR.current_picture_plan];
+ active.composition={...(typeof active.composition==='object'?active.composition:{}),detail:'Updated producer picture allocation; synthetic test only'};
+ const preAlign=JSON.stringify(secondDoc),ownEnding=deliverySectionsFromDoc(secondDoc).filter(s=>s.kind==='creator_invitation');
+ await assert.rejects(sharedProductionDocument(updatedProducer,secondDoc),/shared_body_blueprint_changed/);
+ const aligned=await alignUnstartedSharedBlueprint(updatedProducer,secondDoc);
+ assert.deepEqual(deliverySectionsFromDoc(aligned).filter(s=>s.kind==='creator_invitation'),ownEnding);
+ assert.equal(aligned.clipMentorAnalysis!.production_copy_review,undefined,'no independent approval is inherited');
+ assert.equal(JSON.stringify(secondDoc),preAlign,'candidate alignment never writes the waiting input');
+ await sharedProductionDocument(updatedProducer,aligned);
+ const started=structuredClone(secondDoc);started.timelines[0].items.push(structuredClone(timeline.items[0]));
+ await assert.rejects(alignUnstartedSharedBlueprint(updatedProducer,started),/untouched_same_source/);
+ const unrelated=structuredClone(secondDoc);unrelated.clipMentorAnalysis!.source.sourceContentHash='e'.repeat(64);
+ await assert.rejects(alignUnstartedSharedBlueprint(updatedProducer,unrelated),/untouched_same_source/);
+ const conflicting=structuredClone(updatedProducer),endingFact=ownEnding[0].evidence_ids[0];
+ conflicting.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===endingFact)!.text='Conflicting condition';
+ await assert.rejects(alignUnstartedSharedBlueprint(conflicting,secondDoc),/ending_fact_conflict/);
+
  const missingEnding=selectProductionAudience(full,'existing_partner');
  await assert.rejects(createBlueprintContinuations(confirmationParent,{doc:missingEnding,revision:'missing-new-ending'},variantRequirements,origin),/尚未齐备/);
 
@@ -205,7 +363,7 @@ try{
  // dependency preparation and automatic second-output dispatch through the service.
  const {copyTeachingPacketFromDoc,copyReviewSubject}=await import('../../src/clipmentor/production-gate');
  const {productionPreviewFacts,previewFactsDigest}=await import('../clipmentor/production-preview-facts');
- const {feedbackProjectDigest}=await import('../clipmentor/production-feedback');
+ const {feedbackProjectDigest,productionFeedbackAnchor}=await import('../clipmentor/production-feedback');
  for(const doc of [firstDoc,secondDoc])doc.clipMentorAnalysis!.source_breakdown!.units.forEach((u,i)=>{
   u.placement={timeline_id:doc.activeTimelineId,original_frames:[i*15,i*15+5],explanation_frames:[i*15+5,i*15+15]};
  });
@@ -218,7 +376,110 @@ try{
  batch[0].completed.self_check={at:Date.now(),artifact:{fixtureOnly:true}};
  batch[1].blueprintApproval!.digest=(await copyReviewSubject(secondDoc)).digest;
  await productionTaskStore.save(batch[0]);await productionTaskStore.save(batch[1]);
- assert.equal(await prepareSharedProduction(batch[1]),true);
+ // Hold the follower inside shared-body preparation, then cancel through the
+ // real HTTP endpoint. Ownership must already cover this pre-worker phase.
+ const waitingBeforeCancel=structuredClone(batch[1]);
+ const originalLoad=productionTaskStore.load;
+ let preparationEntered!:()=>void,releasePreparation!:()=>void;
+ const enteredPreparation=new Promise<void>(resolve=>{preparationEntered=resolve;});
+ const heldPreparation=new Promise<void>(resolve=>{releasePreparation=resolve;});
+ let cancellationReply:{status?:string}|undefined;
+ productionTaskStore.load=async(projectId,id)=>{
+  if(projectId===batch[0].projectId&&id===batch[0].taskId){preparationEntered();await heldPreparation;}
+  return originalLoad(projectId,id);
+ };
+ try{
+  assert.equal((await post({action:'resume',projectId:batch[1].projectId,taskId:batch[1].taskId})).status,202);
+  await enteredPreparation;
+  const cancellation=await post({action:'cancel',projectId:batch[1].projectId,taskId:batch[1].taskId});
+  assert.equal(cancellation.status,202);cancellationReply=await cancellation.json();
+ }finally{releasePreparation();productionTaskStore.load=originalLoad;}
+ for(let i=0;i<200;i++){
+  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${batch[1].projectId}&taskId=${batch[1].taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+  if(!(await response.json()).executionActive)break;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ const cancelledPreparation=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+ assert.equal(cancellationReply?.status,'cancelling','shared preparation must be inside the execution cancellation window');
+ assert.equal(cancelledPreparation.status,'cancelled','a cancelled pre-worker task must not be resurrected by saved preparation');
+ assert.deepEqual(cancelledPreparation.attempts,waitingBeforeCancel.attempts);
+ assert.equal(batchSteps.filter(step=>step.startsWith('new_contact:')).length,0,'cancel before preparation completes makes no worker request');
+ await productionTaskStore.save(waitingBeforeCancel);Object.assign(batch[1],waitingBeforeCancel);
+ // Reverse ordering: a feedback clone is already waiting to save when the
+ // follower publishes the producer marker. The later intent must retain it.
+ const reverseBeforeProducer=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+ const reverseBeforeFollower=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+ const reverseBeforeDoc=(await loadOfflineStoredProject(batch[1].projectId))!.doc;
+ const reverseProducerDoc=(await loadOfflineStoredProject(batch[0].projectId))!.doc;
+ const {productionFeedback}=await import('../clipmentor/production-task');
+ const reverseAnchor=await productionFeedbackAnchor(reverseBeforeProducer,reverseProducerDoc);
+ let feedbackSaveEntered!:()=>void,releaseFeedbackSave!:()=>void,feedbackHeld=false;
+ const feedbackSaveWait=new Promise<void>(resolve=>{feedbackSaveEntered=resolve;}),feedbackSaveRelease=new Promise<void>(resolve=>{releaseFeedbackSave=resolve;});
+ const feedbackOriginalSave=productionTaskStore.save;
+ const reverseFeedback=productionFeedback(structuredClone(reverseBeforeProducer),{kind:'content',text:'只核片尾说明',preview:reverseAnchor.preview,unit_ids:[],item_ids:[]},
+  {...productionTaskStore,async save(t,conditions){if(!feedbackHeld){feedbackHeld=true;feedbackSaveEntered();await feedbackSaveRelease;}await feedbackOriginalSave(t,conditions);}},reverseProducerDoc);
+ try{await feedbackSaveWait;await prepareSharedProduction(batch[1]);releaseFeedbackSave();await reverseFeedback;}
+ finally{releaseFeedbackSave();await reverseFeedback.catch(()=>undefined);}
+ const reverseSaved=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+ assert.equal(reverseSaved.sharedProduction?.prepared,true,'a late feedback control must keep the newly published shared-body protection');
+ assert.equal(reverseSaved.feedbackUsed,true);assert.equal(reverseSaved.stage,'blueprint');
+ for(const before of [reverseBeforeProducer,reverseBeforeFollower]){const now=await productionTaskStore.load(before.projectId,before.taskId);before.sequence=now.sequence;before.updatedAt=now.updatedAt;await productionTaskStore.save(before);}
+ await setStoredEntry('project:'+batch[1].projectId,reverseBeforeDoc);Object.assign(batch[1],structuredClone(reverseBeforeFollower));
+ // Feedback has always ignored editor-only selection. Preserve that semantic
+ // binding even if selection moves after capture or during the guarded save.
+ for(const contentChange of [false,true]){
+  const selectionTask=await productionTaskStore.load(batch[0].projectId,batch[0].taskId),selectionDoc=(await loadOfflineStoredProject(batch[0].projectId))!.doc;
+  const selectionAnchor=await productionFeedbackAnchor(selectionTask,selectionDoc),changedSelection=structuredClone(selectionDoc);
+  changedSelection.timelines[0].selectedId=changedSelection.timelines[0].items[0].id;changedSelection.timelines[0].selectedIds=[changedSelection.timelines[0].items[0].id];
+  if(contentChange)(changedSelection.timelines[0].items[0] as any).volume=0.2;
+  else assert.deepEqual((await productionFeedbackAnchor(selectionTask,changedSelection)).preview,selectionAnchor.preview);
+  let changedOnce=false;
+  const feedbackPromise=productionFeedback(structuredClone(selectionTask),{kind:'content',text:'保留原片头',preview:selectionAnchor.preview,unit_ids:[],item_ids:[]},
+   {...productionTaskStore,async save(t,conditions){if(!changedOnce){changedOnce=true;await setStoredEntry('project:'+selectionTask.projectId,changedSelection);}await productionTaskStore.save(t,conditions);}},selectionDoc);
+  if(contentChange){await assert.rejects(feedbackPromise,/precondition_changed/);assert.equal((await productionTaskStore.load(selectionTask.projectId,selectionTask.taskId)).feedbackUsed,false);}
+  else{await feedbackPromise;assert.equal((await productionTaskStore.load(selectionTask.projectId,selectionTask.taskId)).feedbackUsed,true);}
+  const latestSelectionTask=await productionTaskStore.load(selectionTask.projectId,selectionTask.taskId);
+  selectionTask.sequence=latestSelectionTask.sequence;selectionTask.updatedAt=latestSelectionTask.updatedAt;
+  await setStoredEntry('project:'+selectionTask.projectId,selectionDoc);await productionTaskStore.save(selectionTask);
+ }
+ // A human acceptance may arrive while shared preparation publishes its
+ // reciprocal marker. Only that marker may be merged, never an older status.
+ const sharedBeforeTask=structuredClone(batch[1]),sharedBeforeDoc=structuredClone(secondDoc);
+ const sharedNormalSave=productionTaskStore.save;
+ let producerMarkerEntered!:()=>void,releaseProducerMarker!:()=>void,heldOnce=false;
+ const producerMarkerWait=new Promise<void>(resolve=>{producerMarkerEntered=resolve;}),producerMarkerRelease=new Promise<void>(resolve=>{releaseProducerMarker=resolve;});
+ productionTaskStore.save=async(t,conditions)=>{
+  if(t.taskId===batch[0].taskId&&t.sharedProduction?.prepared&&!heldOnce){heldOnce=true;producerMarkerEntered();await producerMarkerRelease;}
+  await sharedNormalSave(t,conditions);
+ };
+ const mergingPreparation=prepareSharedProduction(batch[1]);
+ try{
+  await producerMarkerWait;
+  const acceptedDuringPreparation=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+  acceptedDuringPreparation.status='completed';acceptedDuringPreparation.visualAcceptance={criteriaDigest:'human-checked',renderId:'synthetic-first-export',confirmedIds:['original'],scope:'whole_preview'};
+  await sharedNormalSave(acceptedDuringPreparation);releaseProducerMarker();await mergingPreparation;
+ }finally{releaseProducerMarker();await mergingPreparation.catch(()=>undefined);productionTaskStore.save=sharedNormalSave;}
+ const acceptedShared=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+ assert.equal(acceptedShared.status,'completed','shared preparation cannot undo a concurrently saved human acceptance');
+ assert.equal(acceptedShared.visualAcceptance?.criteriaDigest,'human-checked');
+ acceptedShared.status='awaiting_review';delete acceptedShared.visualAcceptance;await productionTaskStore.save(acceptedShared);
+ // Crash after committing the shared project but before its final task checkpoint.
+ const resetShared=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+ sharedBeforeTask.sequence=resetShared.sequence;sharedBeforeTask.updatedAt=resetShared.updatedAt;
+ await setStoredEntry('project:'+batch[1].projectId,sharedBeforeDoc);await productionTaskStore.save(sharedBeforeTask);Object.assign(batch[1],structuredClone(sharedBeforeTask));
+ let crashOnce=true;
+ productionTaskStore.save=async(t,conditions)=>{if(t.taskId===batch[1].taskId&&t.sharedProduction?.prepared&&crashOnce){crashOnce=false;throw Error('fixture crash after shared project commit');}await sharedNormalSave(t,conditions);};
+ try{await assert.rejects(prepareSharedProduction(batch[1]),/fixture crash/);}finally{productionTaskStore.save=sharedNormalSave;}
+ const sharedCommitted=(await loadOfflineStoredProject(batch[1].projectId))!.doc;
+ const coldShared=await productionTaskStore.load(batch[1].projectId,batch[1].taskId),spentBeforeShared=structuredClone(coldShared.attempts);
+ const editedShared=structuredClone(sharedCommitted);(editedShared.timelines[0].items[0] as any).volume=0.25;
+ await setStoredEntry('project:'+batch[1].projectId,editedShared);
+ await assert.rejects(prepareSharedProduction(coldShared),/shared_output_changed_during_preparation/,'recovery cannot overwrite an edit made after the partial commit');
+ assert.deepEqual((await loadOfflineStoredProject(batch[1].projectId))!.doc,editedShared);
+ await setStoredEntry('project:'+batch[1].projectId,sharedCommitted);
+ assert.equal(await prepareSharedProduction(coldShared),true,'a matching committed preparation recovers without a model call or a guessed timeline');
+ assert.deepEqual(coldShared.attempts,spentBeforeShared);Object.assign(batch[1],coldShared);
+
  assert.equal(batch[1].sharedProduction!.prepared,true);
  assert.equal((await productionTaskStore.load(batch[0].projectId,batch[0].taskId)).sharedProduction!.digest,batch[1].sharedProduction!.digest);
  assert.equal((await checkCopyProduction((await loadOfflineStoredProject(batch[1].projectId))!.doc,'clipmentor')).allowed,false,'copying saved common editing cannot create formal review permission');
@@ -226,6 +487,21 @@ try{
  assert.equal(await prepareSharedProduction(coldPrepared),true,'preparation is safe to resume after persisted readback');
  const readyFirst=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
  readyFirst.status='queued';readyFirst.stage='self_check';delete readyFirst.completed.self_check;await productionTaskStore.save(readyFirst);
+ // An automatic sibling wakeup uses the same batch binding as a user click.
+ // A corrupt label cannot dispatch the other ending or erase the saved producer.
+ const invalidWakeParent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+ invalidWakeParent.productionChildren![0].audience='new_contact';await productionTaskStore.save(invalidWakeParent);
+ assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,202);
+ for(let i=0;i<200;i++){
+  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${readyFirst.projectId}&taskId=${readyFirst.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+  if(!(await response.json()).executionActive)break;
+  await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ assert.equal((await productionTaskStore.load(readyFirst.projectId,readyFirst.taskId)).status,'awaiting_review');
+ assert.equal((await productionTaskStore.load(batch[1].projectId,batch[1].taskId)).status,'queued');
+ assert.equal(batchSteps.filter(step=>step.startsWith('new_contact:')).length,0);
+ const restoredWakeParent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+ restoredWakeParent.productionChildren=structuredClone(confirmationParent.productionChildren);await productionTaskStore.save(restoredWakeParent);
  assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,202);
  for(let i=0;i<200;i++){
   const second=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
@@ -241,11 +517,11 @@ try{
  await setStoredEntry(`project:${panelTask.projectId}`,projectDoc());
  panelTask.projectRevision=(await loadOfflineStoredProject(panelTask.projectId))!.revision;
  await productionTaskStore.save(panelTask);
- const boardAction=(revision:string)=>fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${panelTask.projectId}`,{
-  method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'approve_blueprint',revision}),
+ const boardAction=async(revision:string,boardIdentity?:string)=>fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${panelTask.projectId}`,{
+  method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'approve_blueprint',revision,boardIdentity:boardIdentity??(await panelGet()).task.boardIdentity}),
  });
  const unregistered=await boardAction(panelTask.projectRevision);
- assert.equal(unregistered.status,409);assert.equal((await unregistered.json()).reason,'review_board_reload');
+ assert.equal(unregistered.status,409);assert.equal((await unregistered.json()).reason,'review_board_changed','a request without a viewed board identity cannot be replayed');
  const stale=await boardAction('stale-board');assert.equal(stale.status,409);assert.notEqual((await stale.json()).reason,'review_board_reload');
  assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).sequence,panelTask.sequence,'both rejections must precede any write');
  const {default:savedBlueprints}=await import('../../src/clipmentor/fixtures/production-saved-projects-20261028.json');
@@ -280,10 +556,19 @@ try{
  panelTask.projectRevision=currentDraft.revision;
  panelTask.completed.copy_review={at:Date.now(),artifact:{requirementsDigest:digestValue(brief.doneCriteria)}};
  await productionTaskStore.save(panelTask);
- assert.equal((await panelGet()).task.canApproveBlueprint,true,'matching original requirements retain the ordinary confirmation path');
+ const previouslyViewed=(await panelGet()).task;
+ assert.match(previouslyViewed.boardIdentity,/^[a-f0-9]{64}$/,'the HTTP board has an opaque binding');
+ assert.equal(previouslyViewed.canApproveBlueprint,true,'matching original requirements retain the ordinary confirmation path');
  await registerHandoff({projectId:panelTask.projectId,expectedProjectRevision:currentDraft.revision,previousDigest:bound.digest,
   brief:{...brief,revision:2,doneCriteria:['Use original CTA and retain the comparison hook']}});
- assert.equal((await panelGet()).task.canApproveBlueprint,false,'changing only a plain-text requirement invalidates prior confirmation readiness');
+ const changedRequirements=(await panelGet()).task;
+ assert.equal(changedRequirements.blueprintRevision,previouslyViewed.blueprintRevision);
+ assert.notEqual(changedRequirements.boardIdentity,previouslyViewed.boardIdentity,'same project revision with changed review requirements is a different board');
+ assert.equal(changedRequirements.canApproveBlueprint,false,'changing only a plain-text requirement invalidates prior confirmation readiness');
+ const oldBoard=await boardAction(currentDraft.revision,previouslyViewed.boardIdentity);
+ assert.equal(oldBoard.status,409);assert.equal((await oldBoard.json()).reason,'review_board_changed','old viewed identity cannot be rebound to a newer cache');
+ const unseen=await boardAction(currentDraft.revision,changedRequirements.boardIdentity);
+ assert.equal(unseen.status,409);assert.equal((await unseen.json()).reason,'review_board_reload','only the exact same subject can rebuild a missing cache');
  assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).completed.copy_review?.artifact.requirementsDigest,digestValue(brief.doneCriteria),
   'stale approval is preserved as history, never rewritten to match new requirements');
  await withSerializedProjectStore(store=>store.removeEntry(handoffKey(panelTask.projectId)));

@@ -1,4 +1,4 @@
-import {externalCall} from './external-call';
+import {externalCall,readSavedExternalResponse} from './external-call';
 import { echoesMediaSecret, videoRequestDigest, videoInput, type VideoInput, type PreparedVideo } from './video-input';
 import { prepareVideoMedia, VideoMediaError } from './video-media';
 import { materialRange, prepareObservationMaterial } from './observation-material';
@@ -195,7 +195,7 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     frozenInput = prepared.input; requestHash = hash(prepared.body); videoBytes = media.bytes;
     signal.throwIfAborted();
     attempts = 1;
-    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'reserved',requests_attempted:1,model_retry_policy:retryPolicy,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,input:prepared.input,request_sha256:hash(prepared.body),logical_request_sha256:logicalRequestHash,media_transfer:mediaTransfer,observation_material:observationMaterial}));
+    await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'reserved',requests_attempted:1,model_retry_policy:retryPolicy,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,source_src:request.source.src,input:prepared.input,request_sha256:hash(prepared.body),video_bytes:videoBytes,logical_request_sha256:logicalRequestHash,media_transfer:mediaTransfer,observation_material:observationMaterial}));
     phase = 'gateway_request';
     const response = await externalCall({directory:deps.directory,kind:'video',purpose:'source-observation-v1',requestId:request.operationId,preserveErrors:true,
       identity:{fingerprint,logicalRequestHash,account:hash(deps.key)},signal,execute:async childSignal=>{
@@ -203,7 +203,10 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
         httpStatus=response.status;transportDiagnostic=safeSourceTransportDiagnostic(response.diagnostic,deps.key,request.operationId);
         if(JSON.stringify(response.body)?.includes(deps.key)||echoesMediaSecret(response.body,media))throw Error('Credential echo rejected');
         safeResponse=response.body;if(response.status===200)phase='save_result';
-        return {...response,diagnostic:safeSourceTransportDiagnostic(response.diagnostic,deps.key,request.operationId)};
+        return {...response,fingerprint,logical_request_sha256:logicalRequestHash,request_sha256:requestHash,
+          projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,source_src:request.source.src,
+          input_sha256:prepared.input_sha256,video_bytes:videoBytes,
+          diagnostic:safeSourceTransportDiagnostic(response.diagnostic,deps.key,request.operationId)};
       }});
     phase='gateway_request';
     httpStatus = response.status;
@@ -214,7 +217,7 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     if (encoded.includes(deps.key) || echoesMediaSecret(response.body,media)) throw new Error('Credential echo rejected');
     safeResponse = response.body;phase='save_result';
     await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'reserved',requests_attempted:1,model_retry_policy:retryPolicy,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,
-      input:prepared.input,logical_request_sha256:logicalRequestHash,media_transfer:mediaTransfer,observation_material:observationMaterial,raw_response:safeResponse,transport_diagnostic:transportDiagnostic}));
+      source_src:request.source.src,input:prepared.input,request_sha256:requestHash,video_bytes:videoBytes,logical_request_sha256:logicalRequestHash,media_transfer:mediaTransfer,observation_material:observationMaterial,raw_response:safeResponse,transport_diagnostic:transportDiagnostic}));
     phase = 'validate_response';
     const candidates = response.body.candidates;
     if (!Array.isArray(candidates) || candidates.length !== 1 || candidates[0]?.finishReason !== 'STOP') throw new Error('Incomplete model response');
@@ -241,7 +244,7 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
     const validation = error instanceof SourceObservationValidationError ? error.validation : undefined;
     let receiptPersisted=true;
     try {await atomicWriteFile(ledger,JSON.stringify({fingerprint,status:'failed',requests_attempted:attempts,model_retry_policy:retryPolicy,projectId:request.projectId,
-      subject:request.subject,source_hash:request.source.hash,input:frozenInput,request_sha256:requestHash,video_bytes:videoBytes,
+      subject:request.subject,source_hash:request.source.hash,source_src:request.source.src,input:frozenInput,request_sha256:requestHash,video_bytes:videoBytes,
       phase,http_status:httpStatus,logical_request_sha256:logicalRequestHash,media_transfer:mediaTransfer,observation_material:observationMaterial,...(error instanceof VideoMediaError?{media_failure:{stage:error.stage,code:error.code,metrics:error.metrics}}:{}),raw_response:safeResponse,validation,...(transportDiagnostic?{transport_diagnostic:transportDiagnostic}:{}),error:validation ? 'source_observation_validation_failed' : phase==='save_result'?'source_receipt_persist_failed':'source_observation_failed_or_unknown'}));} catch {receiptPersisted=false;}
     throw new SourceVideoOperationError({ operationId:request.operationId, status:'failed', requestsAttempted:attempts, requestsSent:httpStatus === null && attempts > 0 ? 'unknown' : attempts > 0 ? 1 : 0,
       projectId:request.projectId, subject:request.subject,source_hash:request.source.hash,phase,model_retry_policy:retryPolicy,upstream_http_status:httpStatus,
@@ -292,7 +295,7 @@ function publicTransportRecord(value:any,operationId:string):any {
 }
 
 /** No credential or network is required to inspect a retained operation. Legacy unbound records require explicit offline recovery. */
-export async function readSourceVideoReceipt(operationId: string, projectId: string, deps: Pick<SourceVideoDependencies, 'directory'>): Promise<SourceVideoReceipt> {
+export async function readSourceVideoReceipt(operationId: string, projectId: string, deps: Pick<SourceVideoDependencies, 'directory'> & Partial<Pick<SourceVideoDependencies,'resolve'|'hash'>>): Promise<SourceVideoReceipt> {
   if (!OPERATION_ID.test(operationId) || !text(projectId)) throw new Error('Invalid receipt identity');
   const originalText = await readFile(join(deps.directory, `${operationId}.json`), 'utf8');
   const original = JSON.parse(originalText);
@@ -309,6 +312,50 @@ export async function readSourceVideoReceipt(operationId: string, projectId: str
   }
   if (original.projectId !== projectId || !object(original.subject) || !text(original.source_hash)
     || !['preparing', 'reserved', 'failed', 'completed'].includes(original.status)) throw new Error('Receipt not bound to project; offline recovery required');
+  // A cancelled caller may leave the operation failed while its noncooperative
+  // transport later archives a complete response. Recover only the frozen,
+  // hash-bound response; never change the original operation or submit again.
+  if (original.requests_attempted === 1 && (original.status === 'reserved'
+    || (original.status === 'failed' && ['gateway_request','save_result'].includes(original.phase)))) {
+    try {
+      const saved = await readSavedExternalResponse(deps.directory,operationId,{maxBytes:2_000_000,maxRecords:512});
+      if(!object(saved)||saved.status!==200||!object(saved.body)||!deps.resolve||!deps.hash
+        ||saved.fingerprint!==original.fingerprint||saved.logical_request_sha256!==original.logical_request_sha256
+        ||saved.projectId!==projectId||JSON.stringify(saved.subject)!==JSON.stringify(original.subject)
+        ||saved.source_hash!==original.source_hash||saved.source_src!==original.source_src
+        ||saved.request_sha256!==original.request_sha256||!/^[a-f0-9]{64}$/.test(original.request_sha256)
+        ||saved.input_sha256!==hash(JSON.stringify(original.input))||saved.video_bytes!==original.video_bytes
+        ||!Number.isSafeInteger(original.video_bytes)||original.video_bytes<=0
+        ||typeof original.source_src!=='string'||!original.source_src.startsWith('/media/uploads/'))throw Error('Saved source binding missing');
+      const name=decodeURIComponent(original.source_src.slice('/media/uploads/'.length));
+      if(!isSafeUploadName(name))throw Error('Saved source binding invalid');
+      const file=deps.resolve(name);
+      if(!file||await deps.hash(file)!==original.source_hash)throw Error('Saved source changed');
+      const parsed=sourceObservationToSourceClock(normalizeTaskObservation(publicObservation(saved.body),original.input),original.observation_material);
+      const observation=validateSourceVideoObservation(parsed,original.input);
+      const diagnostic=safeSourceTransportDiagnostic(saved.diagnostic,'',operationId);
+      const result:SourceVideoResult={operationId,requestsAttempted:1,subject:original.subject,source_hash:original.source_hash,
+        requested_model:PREVIEW_REVIEW_MODEL,returned_model:typeof saved.body.modelVersion==='string'?saved.body.modelVersion:null,
+        method_version:original.observation_material?MATERIAL_VERSION:VERSION,request_sha256:original.request_sha256,
+        input_sha256:saved.input_sha256,video_bytes:original.video_bytes,validation:inspectSourceVideoObservation(parsed,original.input),
+        input_media:{full_original_video:original.observation_material?.kind!=='stream_copy_excerpt',audio_stream_present:true,video_fps_requested:5},
+        raw_observation:observation,finish_reasons:['STOP'],usage:saved.body.usageMetadata??null,
+        ...(original.observation_material?{observation_material:original.observation_material}:{}),
+        ...(original.input.observation_task?{observation_task:original.input.observation_task}:{}),
+        ...(diagnostic?{transport_diagnostic:diagnostic}:{}),
+        scope:'source_windows_and_planned_capacity_only',actual_handoff_verified:false,complete_film_accepted:false};
+      if(await readFile(join(deps.directory,`${operationId}.json`),'utf8')!==originalText
+        ||await deps.hash(file)!==original.source_hash)throw Error('Saved source changed during recovery');
+      const recovered={operationId,projectId,status:'completed' as const,subject:original.subject,source_hash:original.source_hash,
+        requestsAttempted:1,requestsSent:0 as const,receipt_persisted:true,model_retry_policy:original.model_retry_policy,
+        result,raw_observation:observation,validation:result.validation,raw_response_available:true,receipt_reference:operationId,
+        local_response_recovery:true,original_operation_status:original.status,
+        ...(original.observation_material?{observation_material:original.observation_material}:{}),
+        ...(original.input.observation_task?{observation_task:original.input.observation_task}:{}),
+        ...(diagnostic?{transport_diagnostic:diagnostic}:{}),actual_handoff_verified:false as const,complete_film_accepted:false as const};
+      return recovered;
+    } catch { /* Missing, mismatched or invalid raw keeps the original outcome. */ }
+  }
   let observed: unknown;
   try { observed = sourceObservationToSourceClock(publicObservation(original.raw_response),original.observation_material); } catch { /* Raw response remains private for diagnosis. */ }
   const transportDiagnostic=safeSourceTransportDiagnostic(original.transport_diagnostic,'',operationId);

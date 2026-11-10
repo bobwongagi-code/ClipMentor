@@ -1,19 +1,12 @@
-import {createHash} from 'node:crypto';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
-import {mkdtemp,readFile,rename,rm,writeFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {createHash,randomUUID} from 'node:crypto';
+import {rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {MediaAsset,ProjectDoc} from '../../src/editor/types';
 import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
-import {originalPlaybackRanges} from '../../src/clipmentor/source-breakdown';
 import {resolveUploadFile,uploadDir} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
-import {sourceFrameSeekMs} from '../../shared/source-frame-seek';
-import {extractOneFrame} from '../plugins/extract-frames';
-import {tileContactSheet} from '../frame-grid';
-import {ffmpegBin} from '../media-binaries';
-import {resolveProductAsset} from '../product-assets';
+import {creatorStoryboard} from './creator-storyboard';
+import {loadCreatorStoryboardDocument,creatorDocumentHash,creatorDocumentFromSourceAsset,isCreatorDocumentIssue,type CreatorStoryboardDocument} from './creator-storyboard-document';
 import type {ProductionTask} from './production-task';
 import type {AnalysisEvidence} from '../../src/clipmentor/analysis';
 
@@ -25,35 +18,33 @@ export function panelSalesEvidence(sourceId:string,salesId:string):AnalysisEvide
   provenance:'操作者在原片成绩图上传槽提供，按用户确认的业务口径登记'};
 }
 
-export function panelStoryboardTimes(doc:ProjectDoc){
- const breakdown=doc.clipMentorAnalysis?.source_breakdown;
- const units=breakdown?.units;
- if(!breakdown||!units?.length)return [];
- return [...new Set([0,Math.floor(units.length/2),units.length-1])].flatMap(index=>{
-  const window=originalPlaybackRanges(breakdown,units[index])[0];
-  return window?[(window[0]+window[1])/2]:[];
- });
+export function panelStoryboardTimes(doc:ProjectDoc,content=creatorDocumentFromSourceAsset(doc)){
+ return content?content.rows.flatMap(r=>r.source_frames.map(f=>f/doc.clipMentorAnalysis!.source.fps)):[];
 }
 function storyboardSourceMatches(doc:ProjectDoc,asset:MediaAsset|undefined,times:number[]){
  const source=doc.clipMentorAnalysis?.source;
- return !!times.length&&!!source?.sourceContentHash&&asset?.kind==='image'&&asset.props?.clipmentorStoryboardSource===source.asset_id
+ return asset?.props?.clipmentorStoryboardDocument===2&&!!times.length&&!!source?.sourceContentHash&&asset?.kind==='image'&&asset.props?.clipmentorStoryboardSource===source.asset_id
   &&asset.props?.clipmentorStoryboardHash===source.sourceContentHash
   &&JSON.stringify(asset.props?.clipmentorStoryboardTimes)===JSON.stringify(times)
   &&asset.id===`clipmentor-storyboard-${asset.sourceContentHash}`
   &&asset.src===`/media/uploads/${asset.id}.jpg`;
 }
-export function panelStoryboardAsset(doc:ProjectDoc){
- const times=panelStoryboardTimes(doc);
- return doc.assets.find(asset=>storyboardSourceMatches(doc,asset,times));
+export function panelStoryboardAsset(doc:ProjectDoc,content:CreatorStoryboardDocument|null|undefined=creatorDocumentFromSourceAsset(doc)){
+ if(!content)return undefined;
+ const times=panelStoryboardTimes(doc,content),documentHash=creatorDocumentHash(content);
+ return doc.assets.find(asset=>storyboardSourceMatches(doc,asset,times)&&asset.props?.clipmentorCreatorDocumentHash===documentHash);
 }
 
 /** Previewable original-frame reference for the existing partner ending. */
 export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):Promise<MediaAsset|undefined>{
- const analysis=doc.clipMentorAnalysis,source=analysis?.source,breakdown=analysis?.source_breakdown;
- if(!source||!breakdown?.units.length)throw Error('panel_storyboard_source_plan_missing');
- const times=panelStoryboardTimes(doc);
- if(times.length!==Math.min(3,breakdown.units.length)||times.some(s=>!Number.isFinite(s)||s<0||s>=source.duration_seconds))throw Error('panel_storyboard_source_plan_missing');
- const registered=panelStoryboardAsset(doc);
+ signal.throwIfAborted();
+ const source=doc.clipMentorAnalysis?.source;
+ if(!source)throw Error('panel_storyboard_source_plan_missing');
+ let content:Awaited<ReturnType<typeof loadCreatorStoryboardDocument>>;
+ content=await loadCreatorStoryboardDocument(doc);
+ const times=panelStoryboardTimes(doc,content);
+ const contentHash=createHash('sha256').update(JSON.stringify(content)).digest('hex');
+ const registered=doc.assets.find(a=>storyboardSourceMatches(doc,a,times)&&a.props?.clipmentorCreatorDocumentHash===contentHash);
  if(registered){
   const file=resolveUploadFile(`${registered.id}.jpg`);
   if(file&&await sha256File(file)===registered.sourceContentHash)return;
@@ -62,36 +53,24 @@ export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):P
  const asset=doc.assets.find(a=>a.id===source.asset_id);
  const file=asset?.kind==='video'&&resolveUploadFile(asset.src.replace(/^\/media\/uploads\//,''));
  if(!file||!source.sourceContentHash||await sha256File(file)!==source.sourceContentHash)throw Error('Original source changed');
- const logo=resolveProductAsset('clipmentor/rootify-logo.png');
- if(!logo)throw Error('panel_storyboard_logo_unavailable');
- const work=await mkdtemp(join(tmpdir(),'clipmentor-panel-storyboard-'));
- try{
-  const frames=[];
-  for(const [index,seconds]of times.entries()){
-   signal.throwIfAborted();
-   const frame=join(work,`${index}.jpg`);
-   await extractOneFrame(file,sourceFrameSeekMs(seconds*1000),frame,true);
-   frames.push({jpeg:await readFile(frame),label:`${index+1} / ${seconds.toFixed(1)}s`});
-  }
-  const sheet=join(work,'sheet.jpg'),branded=join(work,'storyboard.jpg');
-  await writeFile(sheet,await tileContactSheet(frames,{cellWidth:320,cellHeight:560,cols:frames.length}));
-  await promisify(execFile)(ffmpegBin(),['-v','error','-i',sheet,'-i',logo,'-filter_complex_threads','1',
-   '-filter_complex','[0:v]pad=iw:ih+72:0:72:color=white[card];[1:v]scale=120:-2[logo];[card][logo]overlay=12:6',
-   '-frames:v','1','-q:v','4',branded],{timeout:20_000,signal});
-  const bytes=await readFile(branded);
-  signal.throwIfAborted();
-  if(await sha256File(file)!==source.sourceContentHash)throw Error('Original source changed');
-  const hash=createHash('sha256').update(bytes).digest('hex'),id=`clipmentor-storyboard-${hash}`;
-  // Stage beside the destination so publishing is atomic across volumes.
-  const target=join(uploadDir(),`${id}.jpg`),temp=`${target}.${createHash('sha256').update(work).digest('hex')}.tmp`;
-  try{await writeFile(temp,bytes,{flag:'wx'});await rename(temp,target);}finally{await rm(temp,{force:true});}
-  return {id,name:'Storyboard video asal · Rootify',kind:'image',src:`/media/uploads/${id}.jpg`,sourceContentHash:hash,
-   width:320*frames.length,height:632,durationInFrames:1,props:{clipmentorStoryboardSource:source.asset_id,
-    clipmentorStoryboardHash:source.sourceContentHash,clipmentorStoryboardTimes:times}};
- }finally{await rm(work,{recursive:true,force:true});}
+ signal.throwIfAborted();
+ const document=await creatorStoryboard(doc,signal);
+ signal.throwIfAborted();
+ const bytes=document.preview,hash=createHash('sha256').update(bytes).digest('hex'),id=`clipmentor-storyboard-${hash}`;
+ const target=join(uploadDir(),`${id}.jpg`),temp=`${target}.${randomUUID()}.tmp`;
+ try{await writeFile(temp,bytes,{flag:'wx'});await rename(temp,target);}finally{await rm(temp,{force:true});}
+ return {id,name:'Storyboard video asal · Rootify',kind:'image',src:`/media/uploads/${id}.jpg`,sourceContentHash:hash,
+  width:1190,height:1684,durationInFrames:1,props:{clipmentorStoryboardSource:source.asset_id,
+   clipmentorStoryboardHash:source.sourceContentHash,clipmentorStoryboardTimes:times,clipmentorStoryboardDocument:2,clipmentorCreatorDocumentHash:contentHash}};
 }
 
-export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionTask['input']['panelDelivery']>){
+/** A local document problem must return to the author, not block the author from running. */
+export async function preparePanelStoryboardForAuthor(doc:ProjectDoc,signal:AbortSignal){
+ try{return {asset:await createPanelStoryboard(doc,signal)};}
+ catch(error){if(!isCreatorDocumentIssue(error))throw error;return {issue:(error as Error).message};}
+}
+
+export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionTask['input']['panelDelivery']>,content:CreatorStoryboardDocument|null|undefined=creatorDocumentFromSourceAsset(doc)){
  const sections=deliverySectionsFromDoc(doc);
  const opening=sections.find(s=>s.kind==='performance_opening');
  const invited=sections.filter(s=>s.kind==='creator_invitation');
@@ -119,7 +98,8 @@ export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionT
    ||fresh?.picture.asset_id!==scope.ctaAssetId||fresh.picture.sha256!==scope.ctaAssetHash?['new_contact_cta_image']:[]),
   ...(scope.audience!=='existing_partner'&&layered&&freshLayout?.kind!=='product_commission'&&freshLayout?.kind!=='recruitment_card'?['new_contact_product_commission_composition_missing']:[]),
   ...(scope.audience==='new_contact'?[]:partnerLayout?.kind==='product_storyboard'
-   ?partnerLayout.product.asset_id!==scope.productAssetId||partnerLayout.product.sha256!==scope.productAssetHash?['existing_partner_product_image']:[]
-   :!partner||!storyboardSourceMatches(doc,doc.assets.find(a=>a.id===partner.picture.asset_id),panelStoryboardTimes(doc))?['existing_partner_storyboard']:[]),
+   ?partnerLayout.product.asset_id!==scope.productAssetId||partnerLayout.product.sha256!==scope.productAssetHash?['existing_partner_product_image']
+    :panelStoryboardAsset(doc,content)?.id!==partnerLayout.storyboard.asset_id?['existing_partner_storyboard']:[]
+   :!partner||panelStoryboardAsset(doc,content)?.id!==partner.picture.asset_id?['existing_partner_storyboard']:[]),
  ];
 }

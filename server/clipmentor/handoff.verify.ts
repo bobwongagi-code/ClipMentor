@@ -85,6 +85,27 @@ try{
  for(const text of [['UNAPPROVED REPLACEMENT'],{value:'replacement'},null,1])assert.throws(()=>assertHandoffCopy('update_item_props',{props:{text}},ctx),/text_not_frozen/);
  assert.doesNotThrow(()=>assertHandoffCopy('edit_item',{adds:[{type:'text',text:'Dekat untuk melihat butiran.'}]},ctx));
  assert.doesNotThrow(()=>assertHandoffCopy('update_item_props',{props:{fontSize:24,color:'#fff'}},ctx));
+ { // Replay layered-opening exact text through the same copy guard. These are
+ // structured frozen visual strings, not caption rewrites or author notes.
+ const {default:bookends}=await import('../../src/agent/tools/fixtures/barely-there-bookend-replacement-20261029.json');
+ const visualDoc=structuredClone(bookends.before) as unknown as ProjectDoc;
+ const ir=(visualDoc.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+ const section=ir[ir.current_picture_plan].delivery_sections.find((s:any)=>s.kind==='performance_opening');
+ const video=visualDoc.assets.find(a=>a.kind==='video')!;
+ section.picture.layout={kind:'original_underlay',source:{asset_id:video.id,src:video.src,sha256:video.sourceContentHash},range:[0,10],shade:0.63,show_sales:true,
+  headline:['JUDYDOLL','339.32k tontonan','≈ RM5,310 jualan'],transition:['Produk yang sama.','Kenapa video ini?','Jom tengok cara dia rakam.']};
+ const visualCtx={...ctx as object,getDoc:()=>visualDoc} as never;
+ for(const text of [...section.picture.layout.headline,...section.picture.layout.transition,
+  section.picture.layout.headline.join('\n'),section.picture.layout.transition.join('\n')])
+  assert.doesNotThrow(()=>assertHandoffCopy('edit_item',{adds:[{type:'text',text}]},visualCtx),'frozen visual text is executable');
+ for(const text of ['339.33k tontonan','JUDYDOLL\nUNAPPROVED REPLACEMENT',section.picture.layout.headline.slice().reverse().join('\n'),
+  section.picture.layout.headline.concat(section.picture.layout.transition).join('\n')])
+  assert.throws(()=>assertHandoffCopy('edit_item',{adds:[{type:'text',text}]},visualCtx),/text_not_frozen/,'no arbitrary recombination or new claims');
+ const replaced=structuredClone(visualDoc),nextIR=(replaced.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+ nextIR.current_picture_plan='picture_replacement';nextIR.picture_replacement={...nextIR[ir.current_picture_plan]};delete nextIR.picture_replacement.delivery_sections;
+ assert.throws(()=>assertHandoffCopy('edit_item',{adds:[{type:'text',text:'339.32k tontonan'}]},{...visualCtx as object,getDoc:()=>replaced} as never),/text_not_frozen/,'old plan strings do not remain executable');
+
+ }
  const captionDoc=structuredClone(snapshot.doc);captionDoc.timelines[0]!.captions={enabled:true,template:'plain',pacing:'phrase',words:[{text:'Dekat',start:0,end:100},{text:'untuk',start:100,end:200},{text:'melihat',start:200,end:300},{text:'butiran.',start:300,end:400}]};
  const captionEngine=makeDraft(captionDoc);
  const captionCtx={...ctx as object,commands:captionEngine.commands,getState:()=>captionEngine.getState(),getDoc:()=>captionEngine.getDoc()} as never;
@@ -169,7 +190,7 @@ try{
  const {acceptProductionTask}=await import('./production-task');
  const bound=boundVisualCriteria(visualPolicy)!;
  let accepted=0;
- const humanTask={projectId:visualProject,status:'awaiting_review',completed:{export:{artifact:{renderId:'fixture-render'}},self_check:{artifact:{visualCriteriaDigest:bound.digest}}}} as import('./production-task').ProductionTask;
+ const humanTask={input:{},projectId:visualProject,status:'awaiting_review',completed:{export:{artifact:{renderId:'fixture-render'}},self_check:{artifact:{visualCriteriaDigest:bound.digest}}}} as import('./production-task').ProductionTask;
  const acceptanceStore={save:async()=>{accepted++;},load:async()=>humanTask};
  await assert.rejects(acceptProductionTask(humanTask,true,acceptanceStore),/逐项/);
  await assert.rejects(acceptProductionTask(humanTask,true,acceptanceStore,{digest:'0'.repeat(64),confirmed:['opening']}),/逐项/);

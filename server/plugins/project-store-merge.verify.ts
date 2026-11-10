@@ -117,6 +117,9 @@ assert.equal(isProjectStoreRequest({
     sessionGeneration: 'generation_1',
   },
 }), true);
+const guardedRuntime={operation:'agent-runtime-write',key:shortSessionRuntimeKey,expectedRevision:null,value:{...runtimeSidecar('a',1,1,'session-run'),sessionGeneration:'generation_1'},entryPreconditions:[{key:'project:a',digest:'a'.repeat(64)},{key:'clipmentor-handoff:a',digest:null}]};
+assert.equal(isProjectStoreRequest(guardedRuntime),true,'guarded server persistence uses the existing request');
+for(const conditions of [[{key:'project:another',digest:'a'.repeat(64)}],[{key:'project:a',digest:'bad'}],[],Array.from({length:5},()=>({key:'project:a',digest:null}))])assert.equal(isProjectStoreRequest({...guardedRuntime,entryPreconditions:conditions}),false);
 assert.equal(isProjectStoreRequest({
   operation: 'agent-run-lease',
   key: shortSessionRuntimeKey,
@@ -314,10 +317,11 @@ assert.equal((newerRuntime['agent-runtime:a'] as { revision: number }).revision,
 const newerTimestamp = mergeProjectEntries(newerRuntime, {
   'agent-runtime:a': runtimeSidecar('a', 5, 2, 'newer-time'),
 });
-assert.deepEqual(newerTimestamp['agent-runtime:a'], runtimeSidecar('a', 5, 2, 'newer-time'));
+assert.deepEqual(newerTimestamp['agent-runtime:a'], runtimeSidecar('a', 6, 2, 'newer-time'),
+  'a changed equal-version merge must advance the server version');
 assert.deepEqual(
   mergeProjectEntries(newerTimestamp, {
-    'agent-runtime:a': runtimeSidecar('a', 5, 2, 'tie-loses'),
+    'agent-runtime:a': runtimeSidecar('a', 6, 2, 'tie-loses'),
   })['agent-runtime:a'],
   newerTimestamp['agent-runtime:a'],
   'runtime ties preserve the existing server value',
@@ -406,6 +410,11 @@ const boundedMerge = mergeProjectEntries(
   { 'agent-runtime:a': boundedRight },
 )['agent-runtime:a'] as { runs: unknown[] };
 assert.equal(boundedMerge.runs.length, 30, 'structural sidecar merge enforces retained run bounds');
+assert.deepEqual(mergeProjectEntries({'agent-runtime:a':boundedMerge},{'agent-runtime:a':boundedRight})['agent-runtime:a'],boundedMerge,
+  'replaying retained history does not create another runtime version');
+const higherHistory=mergeProjectEntries({'agent-runtime:a':boundedMerge},{'agent-runtime:a':{...boundedRight,revision:100}})['agent-runtime:a'];
+assert.equal((higherHistory as {revision:number}).revision,100,'a higher imported version is retained without an extra increment');
+assert.deepEqual(mergeProjectEntries({'agent-runtime:a':higherHistory},{'agent-runtime:a':{...boundedRight,revision:100}})['agent-runtime:a'],higherHistory);
 
 const validReplacement = runtimeSidecar('a', 1, 1, 'valid-replacement');
 

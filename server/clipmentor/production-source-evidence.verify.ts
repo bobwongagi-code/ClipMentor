@@ -2,12 +2,35 @@ import assert from 'node:assert/strict';
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProductionTask} from './production-task';
-import {productionEvidenceInspection,productionReviewObservation} from './production-source-evidence';
+import {importProductionSourceEvidence,productionEvidenceInspection,productionReviewObservation} from './production-source-evidence';
+import {checkSourceBreakdown,copyPreparationReady} from '../../src/clipmentor/source-breakdown';
 const base=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
 const a=base.clipMentorAnalysis!;
 a.source.sourceContentHash='a'.repeat(64);
 base.assets.find(asset=>asset.id===a.source.asset_id)!.sourceContentHash='a'.repeat(64);
 const task={stage:'blueprint',input:{sourceAssetId:a.source.asset_id,brief:'Inspect saved original'},repairContext:{author_self_check:[]}} as unknown as ProductionTask;
+{
+ const doc=structuredClone(base),analysis=doc.clipMentorAnalysis!,unit=analysis.blueprint[0],review=unit.internal_review as Record<string,any>;
+ const candidate=review[review.current_script_candidate],plan=review[review.current_picture_plan];
+ const registered=analysis.source_breakdown!.units[0];
+ plan.phases=[{mode:'original',source_range_seconds:registered.original_source_ranges![0],picture:'Original'},
+  ...candidate.lines.map((line:any)=>({mode:'explanation',line_id:line.id,source_range_seconds:line.source_seconds,picture:'Explain'}))];
+ assert(checkSourceBreakdown(doc).issues.some(i=>i.code==='picture_plan_revisits_mismatch'));
+ assert(copyPreparationReady(doc),'a partially updated picture plan remains repairable');
+ const receipt={projectId:'preparation-fixture',operationId:'neutral-observation',source_hash:analysis.source.sourceContentHash,
+  result:{operationId:'neutral-observation',source_hash:analysis.source.sourceContentHash,validation:{status:'valid'},actual_handoff_verified:false,complete_film_accepted:false,
+   subject:{units:[{unit_id:unit.unit_id}]},raw_observation:{windows:[{window_id:unit.unit_id+':0',evidence:[{start_seconds:0.2,end_seconds:0.3,visible:'A source-bound action',audible:'A model-reported phrase'}]}]}}};
+ const next=importProductionSourceEvidence(analysis,receipt as never,'preparation-fixture');
+ assert(next);const imported={...doc,clipMentorAnalysis:next};
+ assert(copyPreparationReady(imported),'neutral evidence import does not require the picture repair to be finished');
+ assert.equal(checkSourceBreakdown(imported).status,'review_required','strict admission still refuses the incomplete picture plan');
+ const missing=structuredClone(imported);missing.clipMentorAnalysis!.source_breakdown!.segments[0].visible_evidence_ids.push('missing-source-evidence');
+ assert.equal(copyPreparationReady(missing),false,'missing source references are not picture repair issues');
+ const outside=structuredClone(imported),segment=outside.clipMentorAnalysis!.source_breakdown!.segments[0];
+ outside.clipMentorAnalysis!.evidence.push({evidence_id:'outside-source-evidence',kind:'visible_action',text:'outside',source_range_seconds:[100,101],source_ids:[],supporting_evidence_ids:[]});
+ segment.visible_evidence_ids.push('outside-source-evidence');assert.equal(copyPreparationReady(outside),false,'out-of-range source evidence still blocks preparation');
+ console.log('PASS source import during picture repair; strict admission, missing and outside source references remain blocked');
+}
 let failures=0;
 function check(name:string,fn:()=>void){try{fn();console.log('PASS',name);}catch(e){failures++;console.error('FAIL',name,String(e));}}
 check('registered point-frame evidence is reusable',()=>{
