@@ -1,5 +1,6 @@
 import {access} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
+import {createRequire} from 'node:module';
 import sharp from 'sharp';
 import {openBrowser} from '@remotion/renderer';
 import type {CreatorStoryboardDocument} from './creator-storyboard-document';
@@ -31,10 +32,19 @@ export function creatorDocumentHtml(title:string,content:CreatorStoryboardDocume
  </style><body>${pages.join('')}</body></html>`;
 }
 
+/** Read the pinned renderer's own cache/platform mapping; never provision it.
+ * Keep this package-internal lookup in one place so a renderer update is tested
+ * by the actual PDF/crop paths, rather than maintaining another OS path table. */
+export function creatorDocumentBrowserExecutable(){
+ if(process.env.CC_BROWSER_EXECUTABLE)return process.env.CC_BROWSER_EXECUTABLE;
+ const require=createRequire(import.meta.url);
+ const fetcher=require(join(dirname(require.resolve('@remotion/renderer')),'browser','BrowserFetcher.js')) as {getRevisionInfo:(mode:'headless-shell')=>{executablePath:string}};
+ return fetcher.getRevisionInfo('headless-shell').executablePath;
+}
 /** Reuse the installed product render engine. No browser download or external page request. */
 export async function renderCreatorDocument(html:string,signal:AbortSignal){
- const platform=process.platform==='darwin'?'mac':process.platform;
- const executable=process.env.CC_BROWSER_EXECUTABLE??join(process.cwd(),'node_modules/.remotion/chrome-headless-shell',platform+'-'+process.arch,`chrome-headless-shell-${platform}-${process.arch}`,'chrome-headless-shell');
+ signal.throwIfAborted();
+ const executable=creatorDocumentBrowserExecutable();
  await access(executable);signal.throwIfAborted();
  const browser=await openBrowser('chrome',{browserExecutable:executable,logLevel:'error'});
  const abort=()=>{void browser.close({silent:true}).catch(()=>{});};signal.addEventListener('abort',abort,{once:true});

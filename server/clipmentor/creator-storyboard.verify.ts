@@ -10,12 +10,29 @@ const directory=await mkdtemp(join(tmpdir(),'creator-storyboard-test-'));
 process.env.OPENCHATCUT_DATA_DIR=directory;
 const {creatorStoryboard}=await import('./creator-storyboard');
 const {validateCreatorDocument,assertCreatorDocumentEdit,saveCreatorStoryboardDocument,loadCreatorStoryboardDocument}=await import('./creator-storyboard-document');
-const {assertCreatorDocumentPdf}=await import('./creator-storyboard-pdf');
+const {assertCreatorDocumentPdf,renderCreatorDocument,creatorDocumentBrowserExecutable}=await import('./creator-storyboard-pdf');
 const {createPanelStoryboard,panelStoryboardAsset,preparePanelStoryboardForAuthor}=await import('./production-panel-delivery');
 const {deliveryFileName,attachmentDisposition}=await import('./delivery-filename');
 const {uploadDir}=await import('../media-dir');
 const {ffmpegBin}=await import('../media-binaries');
 try{
+ const previousBrowser=process.env.CC_BROWSER_EXECUTABLE,missingBrowserPath=join(directory,'missing-test-browser');
+ const os=(await import('node:os')).default,oldPlatform=os.platform,oldArch=os.arch;
+ try{
+  delete process.env.CC_BROWSER_EXECUTABLE;
+  for(const [platform,arch,folder,executable]of [
+   ['linux','x64','linux64','chrome-headless-shell'],['linux','arm64','linux-arm64','headless_shell'],
+   ['win32','x64','win64','chrome-headless-shell.exe'],['darwin','arm64','mac-arm64','chrome-headless-shell'],['darwin','x64','mac-x64','chrome-headless-shell'],
+  ] as const){
+   os.platform=()=>platform;os.arch=()=>arch;
+   assert(creatorDocumentBrowserExecutable().endsWith(join(folder,`chrome-headless-shell-${folder}`,executable)),`${platform}/${arch} uses the installed engine's mapping`);
+  }
+ }finally{os.platform=oldPlatform;os.arch=oldArch;if(previousBrowser!==undefined)process.env.CC_BROWSER_EXECUTABLE=previousBrowser;}
+
+ try{process.env.CC_BROWSER_EXECUTABLE=missingBrowserPath;assert.equal(creatorDocumentBrowserExecutable(),missingBrowserPath);
+  await assert.rejects(renderCreatorDocument('<html></html>',new AbortController().signal),/ENOENT/);
+ }finally{if(previousBrowser===undefined)delete process.env.CC_BROWSER_EXECUTABLE;else process.env.CC_BROWSER_EXECUTABLE=previousBrowser;}
+ const cancelled=new AbortController();cancelled.abort();await assert.rejects(renderCreatorDocument('<html></html>',cancelled.signal),/abort/i);
  const media=uploadDir();await mkdir(media,{recursive:true});const file=join(media,'source.mp4');
  execFileSync(ffmpegBin(),['-v','error','-f','lavfi','-i','color=c=red:s=96x160:r=10','-t','4','-c:v','libx264','-pix_fmt','yuv420p',file]);
  const sourceBytes=await readFile(file),sha=createHash('sha256').update(sourceBytes).digest('hex');
