@@ -263,6 +263,11 @@ function isAgentRuntimeWriteRequest(value: Record<string, unknown>): boolean {
     && isAgentRuntimeStoreValue(value.key, value.value);
 }
 
+/** An ordinary runtime mutation advances the version it read exactly once. */
+export function isNextAgentRuntimeRevision(current:number|null,next:unknown):boolean {
+  return typeof next==='number'&&Number.isSafeInteger(next)&&next===(current??0)+1;
+}
+
 function isProjectDocumentWriteRequest(value: Record<string, unknown>): boolean {
   const guarded = Object.hasOwn(value, 'agentRunId');
   if (guarded && (typeof value.agentRunId !== 'string'

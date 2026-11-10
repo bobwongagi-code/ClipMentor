@@ -12,7 +12,7 @@ import type {
   ProjectDocumentMutationResponse,
   ProjectStoreRequest,
 } from '../../shared/project-store-transport';
-import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation';
+import { classifyAgentRuntimeStoreValue,isNextAgentRuntimeRevision,projectIdFromProjectStoreKey } from '../../shared/project-store-validation';
 import type { ProjectSaveContext } from './projectStoreCoordinators';
 type AgentRuntimeWriteRequest = Extract<ProjectStoreRequest, { operation: 'agent-runtime-write' }>;
 type AgentRunLeaseRequest = Extract<ProjectStoreRequest, { operation: 'agent-run-lease' }>;
@@ -253,8 +253,14 @@ export async function kvWriteAgentRuntime(
 async function localAgentRuntimeWrite(
   request: AgentRuntimeWriteRequest,
 ): Promise<ProjectStoreMutationResponse> {
-  // CAS removed: local writes are serialized by the caller's enqueue/lock;
-  // the expected revision is no longer compared.
+  // The caller's existing enqueue/Web Lock owns the local read/write turn.
+  // Match the server contract so a stale snapshot cannot silently replace it.
+  const value=await localGet<unknown>(request.key),current=classifyAgentRuntimeStoreValue(request.key,value);
+  if(current.kind!=='absent'&&current.kind!=='supported')throw new Error('agent runtime entry is unavailable');
+  const revision=current.kind==='supported'?current.value.revision:null;
+  if(request.expectedRevision!==revision)return {accepted:false,found:value!==undefined,...(value!==undefined?{value}:{})};
+  const incoming=classifyAgentRuntimeStoreValue(request.key,request.value);
+  if(incoming.kind!=='supported'||!isNextAgentRuntimeRevision(revision,incoming.value.revision))throw new Error('invalid agent runtime successor revision');
   await localSet(request.key, request.value);
   return { accepted: true, found: true, value: request.value };
 }

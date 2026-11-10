@@ -5,6 +5,7 @@
 ## 事实源与完成含义
 
 - `ProductionTask` 及持久运行检查点是制作控制依据。派发时的内存快照不能覆盖执行所有者读到的新检查点。返修要同时保存目标阶段及失效的后续检查点。已登记的最新检查点不可读、正文与索引不符或协议身份错误时，不能退回旧检查点。等时间戳按索引中的发布先后排序，读取与历史压缩共用同一实现。
+- 运行索引的排队写入不代表读取版本仍然有效。普通写入必须匹配 `expectedRevision` 并推进一次；set/merge 合入有效变化也推进版本，无变化重放不推进。竞争后仅由现有本地重读接续，不授予外部重试。
 - 外部调用台账与 raw 文件是“已发出／已收到”的依据。源观察、独立审核及 ASR 的本地回读可接续已保存 raw，不重新发送；缺失、错配、损坏或结果未知仍不算成功。原失败、预算和审核原判不因此重置。
 - 共享主体的本地准备许可绑定前后工程字节、生产者、原审核与共用主体。仅允许完成相同的部分提交；遇到后续编辑拒绝。当前任务的额度仍是唯一授权来源，许可不复制额度。片尾仍独立，正式审核仍必须通过。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
@@ -18,6 +19,7 @@
 | 阶段回退、取消及旧派发快照 | `server/clipmentor/production-task.verify.ts`、`server/plugins/clipmentor-production.verify.ts` | 重启跳过返修；取消被等待状态吞掉；重复执行已完成阶段 |
 | 共享主体分步提交、人审并发 | `server/plugins/clipmentor-production.verify.ts` | 工程已提交但检查点保存失败；晚反馈擦除共享标记；晚准备覆盖成片确认；真实内容漂移与仅选择变化 |
 | 检查点读入与压缩 | `server/clipmentor/production-checkpoint.verify.ts` | 最新正文丢失/损坏不能退回较少次数；等时间戳保留最近发布；旧历史不可伪造 technical epoch |
+| 运行索引多写方 | `server/plugins/project-store-agent-runtime.verify.ts`、`server/plugins/project-store-merge.verify.ts` | 旧快照不能删新证据；租约续期仍可见；同版本合入推进版本，重复与 retention 后重放不空增 |
 | 产物 body/index 发布 | `src/persist/agentRuntimeStore.verify.ts` | 发布已生效但确认丢失；同步/异步 observer 抛错；清理失败 |
 | 交接预算与绑定发布 | `server/clipmentor/handoff-publication.verify.ts` | 部分写入隐藏预算消耗；不同 payload 复用同一运行绑定 |
 | raw 与 ASR 分块冷恢复 | `server/clipmentor/saved-model-response-recovery.verify.ts`、`server/plugins/clipmentor-funasr.verify.ts` | 真实子进程中断；只恢复已有块；错来源、损坏和缺结果不补调 |
@@ -134,7 +136,7 @@
 | SM92 | Tool claim/result settlement | 保留现有 | `server/agent-runs/store-tools.ts` |
 | SM93 | Cold Agent-run/event recovery | 保留现有 | `server/agent-runs/store-recovery.ts` |
 | SM94 | Project edit ownership lease | 保留现有 | `server/external-agent/project-edit-ownership.ts` |
-| SM95 | Agent-run ownership lease | 保留现有 | `server/plugins/project-store-agent-runtime.ts` |
+| SM95 | Agent-run ownership lease | 本轮修补 | `server/plugins/project-store-agent-runtime.ts` |
 | SM96 | Headless draft/commit transaction | 保留现有 | `server/clipmentor/headless-editor.ts` |
 | SM97 | Agent session generation | 保留现有 | `src/persist/agentSessionGeneration.ts` |
 | SM98 | Artifact body/index publication | 本轮修补 | `src/persist/agentRuntimeStore.ts` |

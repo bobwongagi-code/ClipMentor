@@ -317,10 +317,11 @@ assert.equal((newerRuntime['agent-runtime:a'] as { revision: number }).revision,
 const newerTimestamp = mergeProjectEntries(newerRuntime, {
   'agent-runtime:a': runtimeSidecar('a', 5, 2, 'newer-time'),
 });
-assert.deepEqual(newerTimestamp['agent-runtime:a'], runtimeSidecar('a', 5, 2, 'newer-time'));
+assert.deepEqual(newerTimestamp['agent-runtime:a'], runtimeSidecar('a', 6, 2, 'newer-time'),
+  'a changed equal-version merge must advance the server version');
 assert.deepEqual(
   mergeProjectEntries(newerTimestamp, {
-    'agent-runtime:a': runtimeSidecar('a', 5, 2, 'tie-loses'),
+    'agent-runtime:a': runtimeSidecar('a', 6, 2, 'tie-loses'),
   })['agent-runtime:a'],
   newerTimestamp['agent-runtime:a'],
   'runtime ties preserve the existing server value',
@@ -409,6 +410,11 @@ const boundedMerge = mergeProjectEntries(
   { 'agent-runtime:a': boundedRight },
 )['agent-runtime:a'] as { runs: unknown[] };
 assert.equal(boundedMerge.runs.length, 30, 'structural sidecar merge enforces retained run bounds');
+assert.deepEqual(mergeProjectEntries({'agent-runtime:a':boundedMerge},{'agent-runtime:a':boundedRight})['agent-runtime:a'],boundedMerge,
+  'replaying retained history does not create another runtime version');
+const higherHistory=mergeProjectEntries({'agent-runtime:a':boundedMerge},{'agent-runtime:a':{...boundedRight,revision:100}})['agent-runtime:a'];
+assert.equal((higherHistory as {revision:number}).revision,100,'a higher imported version is retained without an extra increment');
+assert.deepEqual(mergeProjectEntries({'agent-runtime:a':higherHistory},{'agent-runtime:a':{...boundedRight,revision:100}})['agent-runtime:a'],higherHistory);
 
 const validReplacement = runtimeSidecar('a', 1, 1, 'valid-replacement');
 
