@@ -10,6 +10,7 @@
 - 共享主体的本地准备许可绑定前后工程字节、生产者、原审核与共用主体。仅允许完成相同的部分提交；遇到后续编辑拒绝。当前任务的额度仍是唯一授权来源，许可不复制额度。片尾仍独立，正式审核仍必须通过。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
 - 局部预览准备先写本次私有临时目录，再不可覆盖地发布。相同名称不代表相同字节；并发晚到进程不能截断已发布文件。导出遇到既有文件同样比较真实字节。
+- 导出结果的目标重选只更新目的地，不重写已渲染结果的时间线、帧率等身份；已提交状态不能被旧重选、注册或错误回退。本地阶段与租约在同一 IndexedDB 事务内校验并写入，与服务端共用转换判断。远端回执只可合并匹配目标的当前本地句柄；缓存读取失败不能退用旧句柄授权。
 - 人审页面按实际看过的板提交：主工程、兄弟片尾、任务与要求一起确定 identity。该 identity 是 HTTP 版本绑定，不能替代内容审核。取消、页面代次或上下文变化后，晚到响应不可写入当前工程或替换当前板。
 
 ## 零调用验证入口
@@ -102,7 +103,7 @@
 | SM58 | Material-intake commit/cleanup | 保留现有 | `server/clipmentor/material-intake.ts` |
 | SM59 | Export/generation job lifecycle | 低风险保留 | `server/plugins/generation-job-lifecycle.ts` |
 | SM60 | Export temporary-to-managed publication | 本轮修补 | `server/plugins/export-runtime.ts` |
-| SM61 | Export delivery claim/reconciliation | 保留现有 | `server/plugins/project-store-export-recovery.ts` |
+| SM61 | Export delivery claim/reconciliation | 本轮修补 | `server/plugins/project-store-export-recovery.ts`、`src/export/serverExportRecovery.ts` |
 | SM62 | Agent upload staging ownership | 保留现有 | `server/plugins/upload-route-write.ts` |
 | SM63 | Uploaded-asset finalize commit | 保留现有 | `src/agent/tools/upload-finalize.ts` |
 | SM64 | Per-project board generation exclusion | 保留现有 | `server/clipmentor/blueprint-review-board-api.ts` |

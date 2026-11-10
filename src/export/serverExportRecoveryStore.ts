@@ -1,4 +1,5 @@
 import type { TimelineState } from '../editor/types';
+import { isExportRecoveryDestination, type ExportRecoveryStage } from '../../shared/export-recovery';
 import type {
   BrowserExportDirectoryHandle,
   BrowserExportFileHandle,
@@ -9,11 +10,7 @@ const DATABASE_NAME = 'openchatcut-server-export-recovery';
 const STORE_NAME = 'jobs';
 const memoryJobs = new Map<string, PersistedServerExportJob>();
 
-export type ServerExportRecoveryStage =
-  | 'polling'
-  | 'output-ready'
-  | 'delivery-ambiguous'
-  | 'target-committed';
+export type ServerExportRecoveryStage = ExportRecoveryStage;
 export type ServerExportRecoveryDestination =
   | Exclude<ExportDestination, { readonly type: 'browser-directory' | 'browser-file' }>
   | {
@@ -90,30 +87,6 @@ function isBrowserFileHandle(value: unknown): value is BrowserExportFileHandle {
     && typeof handle.requestPermission === 'function';
 }
 
-function validDestination(value: unknown): value is ServerExportRecoveryDestination {
-  if (!value || typeof value !== 'object') return false;
-  const destination = value as Partial<ServerExportRecoveryDestination>;
-  if (typeof destination.label !== 'string' || !destination.label) return false;
-  if (destination.type === 'browser-directory') {
-    if (destination.handle === null) return true;
-    return typeof destination.handle === 'object'
-      && destination.handle.kind === 'directory'
-      && typeof destination.handle.name === 'string';
-  }
-  if (destination.type === 'browser-file') {
-    if (destination.handle === null) return true;
-    return typeof destination.handle === 'object'
-      && destination.handle.kind === 'file'
-      && typeof destination.handle.name === 'string';
-  }
-  if (destination.type === 'downloads') return true;
-  if (destination.type === 'desktop-directory') {
-    return typeof destination.grantId === 'string';
-  }
-  return destination.type === 'desktop-file'
-    && typeof destination.grantId === 'string'
-    && typeof destination.filename === 'string';
-}
 
 export function validRecord(value: unknown): value is PersistedServerExportJob {
   if (!value || typeof value !== 'object') return false;
@@ -130,7 +103,7 @@ export function validRecord(value: unknown): value is PersistedServerExportJob {
     && typeof record.base === 'string'
     && typeof record.fps === 'number' && record.fps > 0
     && !!record.state && typeof record.state === 'object'
-    && validDestination(record.destination)
+    && isExportRecoveryDestination(record.destination)
     && typeof record.autoQaEnabled === 'boolean'
     && (record.stage === 'polling' || record.stage === 'output-ready'
       || record.stage === 'delivery-ambiguous' || record.stage === 'target-committed')
@@ -210,6 +183,47 @@ export async function writeLocalRecord(record: PersistedServerExportJob): Promis
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('无法保存导出恢复记录'));
       transaction.onabort = () => reject(transaction.error ?? new Error('导出恢复记录写入已取消'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+/** Read, validate and publish a local transition in one IndexedDB transaction. */
+export async function mutateLocalRecord<T>(renderId: string,
+  mutate: (current: PersistedServerExportJob | null) => { result: T; next?: PersistedServerExportJob | null },
+): Promise<T> {
+  const apply = (value: unknown) => {
+    if (value !== undefined && !validRecord(value)) throw new Error('导出恢复记录不兼容，已保留');
+    return mutate(value === undefined ? null : value as PersistedServerExportJob);
+  };
+  if (!hasIndexedDb()) {
+    const change = apply(memoryJobs.get(renderId));
+    if (change.next === null) memoryJobs.delete(renderId);
+    else if (change.next) memoryJobs.set(renderId, change.next);
+    return change.result;
+  }
+  const database = await openDatabase();
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      let change: ReturnType<typeof apply> | undefined;
+      let failure: unknown;
+      transaction.oncomplete = () => change ? resolve(change.result) : reject(new Error('导出恢复记录未读取'));
+      transaction.onerror = () => reject(failure ?? transaction.error ?? new Error('无法保存导出恢复记录'));
+      transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('导出恢复记录写入已取消'));
+      const request = store.get(renderId);
+      request.onsuccess = () => {
+        try {
+          change = apply(request.result);
+          if (change.next === null) store.delete(renderId);
+          else if (change.next) store.put(change.next);
+        } catch (error) {
+          failure = error;
+          transaction.abort();
+        }
+      };
     });
   } finally {
     database.close();

@@ -1,3 +1,4 @@
+import { exportRecoveryNextStage, type ExportRecoveryTransition } from '../../shared/export-recovery';
 import type { ExportDestination } from './exportDestination';
 import {
   browserDestination,
@@ -8,7 +9,7 @@ import {
   removeLocalRecord,
   resetServerExportRecoveryMemory,
   validRecord,
-  writeLocalRecord,
+  mutateLocalRecord,
 } from './serverExportRecoveryStore';
 import type {
   PersistedServerExportJob,
@@ -42,17 +43,44 @@ const deliveryOwnerId = globalThis.crypto?.randomUUID?.()
 
 class RetiredExportRecoveryError extends Error {}
 
+async function registerLocalRecord(record: PersistedServerExportJob): Promise<void> {
+  await mutateLocalRecord(record.renderId, (current) => {
+    if (current && current.projectId !== record.projectId) throw new Error('导出恢复记录不属于当前工程');
+    // Reopening an old registration is not a stage transition or destination rebind.
+    return { result: undefined, ...(!current ? { next: record } : {}) };
+  });
+}
+
 function joinRemoteRecord(
   remote: PersistedServerExportJob,
   local?: PersistedServerExportJob | null,
 ): PersistedServerExportJob {
   const destination = browserDestination(remote.destination)
     && local && browserDestination(local.destination)
-    && local.destination.type === remote.destination.type
+    && sameDestinationBinding(remote, local)
     && hasServerExportDestinationAuthority(local.destination)
     ? local.destination
     : remote.destination;
   return { ...remote, destination, remoteAuthorityEstablished: true };
+}
+
+function sameDestinationBinding(a: PersistedServerExportJob, b: PersistedServerExportJob): boolean {
+  if (a.renderId !== b.renderId || a.projectId !== b.projectId || a.targetPath !== b.targetPath
+    || a.destination.type !== b.destination.type || a.destination.label !== b.destination.label) return false;
+  if (a.destination.type === 'desktop-directory' && b.destination.type === 'desktop-directory') return a.destination.grantId === b.destination.grantId;
+  if (a.destination.type === 'desktop-file' && b.destination.type === 'desktop-file') return a.destination.grantId === b.destination.grantId && a.destination.filename === b.destination.filename;
+  return true;
+}
+
+async function cacheRemoteRecord(remote: PersistedServerExportJob): Promise<PersistedServerExportJob> {
+  return mutateLocalRecord(remote.renderId, (local) => {
+    const joined = joinRemoteRecord(remote, local);
+    // A stale observation may be returned without a usable handle, but must not
+    // erase authority that has since been rebound to another destination.
+    const compatible = local && sameDestinationBinding(remote, local);
+    const terminal = local?.stage === 'target-committed' && remote.stage !== 'target-committed';
+    return { result: joined, ...(compatible && !terminal ? { next: joined } : {}) };
+  });
 }
 
 async function reconcileRemoteRecord(
@@ -76,7 +104,7 @@ export async function persistServerExportJob(record: PersistedServerExportJob): 
   let localError: unknown;
   if (requiresLocalAuthority) {
     try {
-      await writeLocalRecord(record);
+      await registerLocalRecord(record);
       localSaved = true;
     } catch (error) {
       localError = error;
@@ -88,7 +116,7 @@ export async function persistServerExportJob(record: PersistedServerExportJob): 
       const canonical = await reconcileRemoteRecord(record);
       if (!canonical) throw new RetiredExportRecoveryError('导出恢复记录已退役');
       remoteSaved = true;
-      if (localSaved) await writeLocalRecord(joinRemoteRecord(canonical, record));
+      if (localSaved) await cacheRemoteRecord(canonical);
     } catch (error) {
       if (error instanceof RetiredExportRecoveryError) {
         if (localSaved) await removeLocalRecord(record.renderId);
@@ -97,7 +125,7 @@ export async function persistServerExportJob(record: PersistedServerExportJob): 
     }
   }
   if (!localSaved && !remoteSaved) {
-    await writeLocalRecord(record);
+    await registerLocalRecord(record);
     localSaved = true;
   }
   if (requiresLocalAuthority && !localSaved) {
@@ -105,28 +133,30 @@ export async function persistServerExportJob(record: PersistedServerExportJob): 
   }
 }
 
-type RecoveryTransitionAction = 'ready' | 'ambiguous' | 'commit';
+type RecoveryTransitionAction = Exclude<ExportRecoveryTransition, 'rebind'>;
 
 async function updateLocalStage(
   renderId: string,
-  stage: ServerExportRecoveryStage,
+  action: RecoveryTransitionAction,
   claim?: ServerExportDeliveryClaim,
 ): Promise<boolean> {
-  const local = await readLocalRecord(renderId);
-  if (!local) return false;
-  if (stage === 'output-ready' && local.stage !== 'polling') return true;
-  if (stage !== 'output-ready') {
-    const active = local.deliveryClaim;
-    if (!claim || active?.leaseToken !== claim.leaseToken || active.leaseExpiresAt <= Date.now()) return false;
-  }
-  await writeLocalRecord({ ...local, stage, updatedAt: Date.now() });
-  return true;
+  return mutateLocalRecord(renderId, (local) => {
+    if (!local) return { result: false };
+    const stage = exportRecoveryNextStage(local.stage, action);
+    if (!stage) return { result: false };
+    if (action === 'ready' && stage === local.stage) return { result: true };
+    if (action !== 'ready') {
+      const active = local.deliveryClaim;
+      if (!claim || active?.ownerInstanceId !== deliveryOwnerId || active.leaseToken !== claim.leaseToken
+        || active.leaseExpiresAt <= Date.now()) return { result: false };
+    }
+    return { result: true, next: { ...local, stage, updatedAt: Date.now() } };
+  });
 }
 
 async function transitionServerExportStage(
   renderId: string,
   action: RecoveryTransitionAction,
-  stage: ServerExportRecoveryStage,
   claim?: ServerExportDeliveryClaim,
 ): Promise<void> {
   if (projectStoreRemoteAvailable()) {
@@ -139,29 +169,28 @@ async function transitionServerExportStage(
       ...(claim ? { leaseToken: claim.leaseToken } : {}),
     }));
     if (!result.accepted) throw new Error('导出恢复阶段已变更');
-    const local = await readLocalRecord(renderId);
-    if (local && validRecord(result.value)) {
-      await writeLocalRecord(joinRemoteRecord(result.value, local));
+    if (await readLocalRecord(renderId) && validRecord(result.value)) {
+      await cacheRemoteRecord(result.value);
     }
     return;
   }
-  if (!await updateLocalStage(renderId, stage, claim)) throw new Error('无法持久化导出恢复阶段');
+  if (!await updateLocalStage(renderId, action, claim)) throw new Error('无法持久化导出恢复阶段');
 }
 
 export const markServerExportOutputReady = (
   renderId: string,
   claim?: ServerExportDeliveryClaim,
-) => transitionServerExportStage(renderId, 'ready', 'output-ready', claim);
+) => transitionServerExportStage(renderId, 'ready', claim);
 
 export const markServerExportDeliveryAmbiguous = (
   renderId: string,
   claim: ServerExportDeliveryClaim,
-) => transitionServerExportStage(renderId, 'ambiguous', 'delivery-ambiguous', claim);
+) => transitionServerExportStage(renderId, 'ambiguous', claim);
 
 export const markServerExportTargetCommitted = (
   renderId: string,
   claim: ServerExportDeliveryClaim,
-) => transitionServerExportStage(renderId, 'commit', 'target-committed', claim);
+) => transitionServerExportStage(renderId, 'commit', claim);
 
 
 function leaseResponse(value: unknown): {
@@ -177,37 +206,33 @@ async function localDeliveryLease(
   action: 'claim' | 'renew' | 'release' | 'check',
   claim?: ServerExportDeliveryClaim,
 ): Promise<ServerExportDeliveryClaim | null> {
-  const record = await readLocalRecord(renderId);
-  if (!record) return null;
-  const recoverable = record.stage === 'polling' || record.stage === 'output-ready'
-    || record.stage === 'delivery-ambiguous';
-  if (action !== 'release' && !recoverable) return null;
-  const current = record.deliveryClaim;
-  const now = Date.now();
-  const exact = current?.ownerInstanceId === deliveryOwnerId
-    && !!claim && current.leaseToken === claim.leaseToken;
-  if (action === 'check') return exact && current!.leaseExpiresAt > now ? current! : null;
-  if (action === 'renew') {
-    if (!exact || current!.leaseExpiresAt <= now) return null;
-    const renewed = { ...current!, leaseExpiresAt: now + DELIVERY_LEASE_MS };
-    await writeLocalRecord({ ...record, deliveryClaim: renewed, updatedAt: now });
-    return renewed;
-  }
-  if (action === 'release') {
-    if (!exact) return null;
-    const { deliveryClaim: _deliveryClaim, ...released } = record;
-    await writeLocalRecord({ ...released, updatedAt: now });
-    return current!;
-  }
-  if (current && current.leaseExpiresAt > now && !exact) return null;
-  const acquired = {
-    ownerInstanceId: deliveryOwnerId,
-    leaseToken: exact ? current!.leaseToken : (globalThis.crypto?.randomUUID?.()
-      ?? `delivery-${now}-${Math.random().toString(36).slice(2)}`),
-    leaseExpiresAt: now + DELIVERY_LEASE_MS,
-  };
-  await writeLocalRecord({ ...record, deliveryClaim: acquired, updatedAt: now });
-  return acquired;
+  return mutateLocalRecord<ServerExportDeliveryClaim | null>(renderId, (record) => {
+    if (!record) return { result: null };
+    const recoverable = record.stage !== 'target-committed';
+    if (action !== 'release' && !recoverable) return { result: null };
+    const current = record.deliveryClaim;
+    const now = Date.now();
+    const exact = current?.ownerInstanceId === deliveryOwnerId
+      && !!claim && current.leaseToken === claim.leaseToken;
+    if (action === 'check') return { result: exact && current!.leaseExpiresAt > now ? current! : null };
+    if (action === 'renew') {
+      if (!exact || current!.leaseExpiresAt <= now) return { result: null };
+      const renewed = { ...current!, leaseExpiresAt: now + DELIVERY_LEASE_MS };
+      return { result: renewed, next: { ...record, deliveryClaim: renewed, updatedAt: now } };
+    }
+    if (action === 'release') {
+      if (!exact) return { result: null };
+      const { deliveryClaim: _deliveryClaim, ...released } = record;
+      return { result: current!, next: { ...released, updatedAt: now } };
+    }
+    if (current && current.leaseExpiresAt > now && !exact) return { result: null };
+    const acquired = {
+      ownerInstanceId: deliveryOwnerId,
+      leaseToken: globalThis.crypto?.randomUUID?.() ?? `delivery-${now}-${Math.random().toString(36).slice(2)}`,
+      leaseExpiresAt: now + DELIVERY_LEASE_MS,
+    };
+    return { result: acquired, next: { ...record, deliveryClaim: acquired, updatedAt: now } };
+  });
 }
 
 async function updateRemoteDeliveryLease(
@@ -296,6 +321,7 @@ export async function rebindServerExportJob(
     updatedAt: Date.now(),
   };
   if (projectStoreRemoteAvailable()) {
+    const localBefore = await readLocalRecord(renderId);
     const result = leaseResponse(await requestProjectStore({
       operation: 'export-recovery-lease',
       key: `${REMOTE_PREFIX}${renderId}`,
@@ -310,23 +336,39 @@ export async function rebindServerExportJob(
     }
     const canonical = joinRemoteRecord(result.value, next);
     if (browserDestination(destination) || await readLocalRecord(renderId)) {
-      await writeLocalRecord(canonical);
+      const saved = await mutateLocalRecord(renderId, (live) => {
+        const lease = canonical.deliveryClaim, active = live?.deliveryClaim;
+        if (!lease || lease.ownerInstanceId !== claim.ownerInstanceId || lease.leaseToken !== claim.leaseToken
+          || lease.leaseExpiresAt <= Date.now()
+          || (active && active.leaseExpiresAt > Date.now()
+            && (active.ownerInstanceId !== lease.ownerInstanceId || active.leaseToken !== lease.leaseToken))
+          || live?.stage === 'target-committed'
+          || (live && !(localBefore && sameDestinationBinding(live, localBefore)) && !sameDestinationBinding(live, canonical))) return { result: false };
+        return { result: true, next: canonical };
+      });
+      if (!saved) throw new Error('导出恢复目标绑定已失效');
     }
     if (!await checkServerExportDelivery(renderId, claim)) throw new Error('导出恢复目标绑定已失效');
     return canonical;
   }
-  await writeLocalRecord(next);
-  if (!await checkServerExportDelivery(renderId, claim)) throw new Error('导出恢复目标绑定已失效');
-  return next;
+  const rebound = await mutateLocalRecord<PersistedServerExportJob | null>(renderId, (live) => {
+    const stage = live && exportRecoveryNextStage(live.stage, 'rebind');
+    const active = live?.deliveryClaim;
+    if (!live || !stage || active?.ownerInstanceId !== deliveryOwnerId || active.leaseToken !== claim.leaseToken
+      || active.leaseExpiresAt <= Date.now()) return { result: null };
+    const next = { ...live, destination, targetPath, stage, updatedAt: Date.now() };
+    return { result: next, next };
+  });
+  if (!rebound) throw new Error('导出恢复目标绑定已失效');
+  return rebound;
 }
 
 export async function retireServerExportJob(renderId: string): Promise<boolean> {
   if (!projectStoreRemoteAvailable()) {
-    const local = await readLocalRecord(renderId);
-    if (!local) return true;
-    if (local.deliveryClaim && local.deliveryClaim.leaseExpiresAt > Date.now()) return false;
-    await removeLocalRecord(renderId);
-    return true;
+    return mutateLocalRecord(renderId, (local) => {
+      if (local?.deliveryClaim && local.deliveryClaim.leaseExpiresAt > Date.now()) return { result: false };
+      return { result: true, next: null };
+    });
   }
   const result = leaseResponse(await requestProjectStore({
     operation: 'export-recovery-lease',
@@ -380,9 +422,8 @@ async function joinedRemoteRecords(
       if (projectStoreWriteCredential()) await retireServerExportJob(renderId).catch(() => false);
       continue;
     }
-    const joined = joinRemoteRecord(remote, local);
+    const joined = local ? await cacheRemoteRecord(remote).catch(() => joinRemoteRecord(remote)) : joinRemoteRecord(remote);
     records.push(joined);
-    if (local) await writeLocalRecord(joined).catch(() => undefined);
   }
   return records;
 }
@@ -416,11 +457,10 @@ async function reconciledLocalRecords(
         await removeLocalRecord(local.renderId);
         continue;
       }
-      const joined = joinRemoteRecord(canonical, local);
-      await writeLocalRecord(joined);
+      const joined = await cacheRemoteRecord(canonical);
       records.push(joined);
     } catch {
-      records.push(local);
+      records.push(remoteSafeRecord(local));
     }
   }
   return records;

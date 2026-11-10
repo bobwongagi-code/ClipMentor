@@ -13,18 +13,23 @@ import {
   claimServerExportDelivery,
   listServerExportJobs,
   markServerExportOutputReady,
+  markServerExportDeliveryAmbiguous,
   markServerExportTargetCommitted,
   persistServerExportJob,
   releaseServerExportDelivery,
+  rebindServerExportJob,
   resetServerExportRecoveryMemory,
   retireServerExportJob,
   type PersistedServerExportJob,
 } from './serverExportRecovery';
+import { readLocalRecord } from './serverExportRecoveryStore';
 
 const requests: Array<{ request: unknown }> = [];
 const indexedDbRows = new Map<string, unknown>();
 const originalIndexedDbDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
 let transportOutage = false;
+let afterLocalListRead: (() => void) | undefined;
+let rejectLocalMutationFor: string | undefined;
 
 interface FakeRequest<Result> {
   result: Result;
@@ -34,6 +39,7 @@ interface FakeRequest<Result> {
 }
 
 interface FakeTransaction {
+  abort(): void;
   oncomplete: (() => void) | null;
   onerror: (() => void) | null;
   onabort: (() => void) | null;
@@ -49,8 +55,9 @@ interface FakeTransaction {
 function installIndexedDb(): void {
   const database = {
     close: () => undefined,
-    transaction: (): FakeTransaction => {
+    transaction: (_name?: string, mode?: string): FakeTransaction => {
       const transaction: FakeTransaction = {
+        abort: () => transaction.onabort?.(),
         oncomplete: null,
         onerror: null,
         onabort: null,
@@ -65,6 +72,10 @@ function installIndexedDb(): void {
           },
           delete: (key) => { indexedDbRows.delete(key); },
           get: (key) => {
+            if (mode === 'readwrite' && rejectLocalMutationFor === key) {
+              rejectLocalMutationFor = undefined;
+              throw new Error('injected local transaction unavailable');
+            }
             const request: FakeRequest<unknown> = {
               result: indexedDbRows.get(key),
               error: null,
@@ -81,12 +92,14 @@ function installIndexedDb(): void {
               onsuccess: null,
               onerror: null,
             };
-            queueMicrotask(() => request.onsuccess?.());
+            queueMicrotask(() => { const hook = afterLocalListRead; afterLocalListRead = undefined; hook?.(); request.onsuccess?.(); });
             return request;
           },
         }),
       };
-      queueMicrotask(() => transaction.oncomplete?.());
+      // IndexedDB completion follows request callbacks; completing immediately
+      // on transaction creation cannot model an atomic get -> validate -> put.
+      setTimeout(() => transaction.oncomplete?.(), 0);
       return transaction;
     },
   };
@@ -266,6 +279,78 @@ async function verifyDurableDeliveryLeaseExclusion(): Promise<void> {
     'an unresolved output older than the one-hour retention window remains rebindable');
 }
 
+async function verifyLateRecoveryTransitions(): Promise<void> {
+  for (const stage of ['output-ready', 'target-committed'] as const) {
+    const current = { ...record(`late-${stage}`, 'late-project'), stage,
+      deliveryClaim: { ownerInstanceId: 'tab', leaseToken: 'active-token', leaseExpiresAt: Date.now() + 60_000 } };
+    const key = `export-recovery:${current.renderId}`, rows: Record<string, unknown> = { [key]: current };
+    const mutate = fakeRecoveryOperation(rows);
+    const before = JSON.stringify(rows);
+    const stale = await mutate({ operation: 'export-recovery-lease', key, renderId: current.renderId,
+      action: 'rebind', ownerInstanceId: 'tab', leaseToken: 'active-token',
+      value: { ...current, stage: stage === 'target-committed' ? 'output-ready' : 'polling', targetPath: 'late.mp4' } });
+    assert.equal(stale.accepted, false, `A late rebind must not rewind ${stage}`);
+    assert.equal(JSON.stringify(rows), before, 'Rejected transitions leave the saved output untouched');
+  }
+  const current = { ...record('rebind-metadata', 'same-project'), stage: 'output-ready' as const,
+    deliveryClaim: { ownerInstanceId: 'tab', leaseToken: 'active-token', leaseExpiresAt: Date.now() + 60_000 } };
+  const key = `export-recovery:${current.renderId}`, rows: Record<string, unknown> = { [key]: current };
+  const rebound = await fakeRecoveryOperation(rows)({ operation: 'export-recovery-lease', key, renderId: current.renderId,
+    action: 'rebind', ownerInstanceId: 'tab', leaseToken: 'active-token',
+    value: { ...current, targetPath: 'new.mp4', fps: 1, state: { items: ['stale timeline'] }, label: 'wrong-label' } });
+  assert.equal(rebound.accepted, true, 'An unresolved result can still receive a valid new target');
+  const canonical = rows[key] as PersistedServerExportJob;
+  assert.equal(canonical.targetPath, 'new.mp4');
+  assert.equal(canonical.fps, current.fps, 'Target reselection cannot rewrite the identity of the retained output');
+  assert.deepEqual(canonical.state, current.state); assert.equal(canonical.label, current.label);
+  for (const patch of [{ destination: undefined }, { destination: { type: 'unsupported', label: 'bad' } }, { targetPath: 42 }]) {
+    const before = JSON.stringify(rows);
+    const bad = await fakeRecoveryOperation(rows)({ operation: 'export-recovery-lease', key, renderId: current.renderId,
+      action: 'rebind', ownerInstanceId: 'tab', leaseToken: 'active-token', value: { ...canonical, ...patch } });
+    assert.equal(bad.accepted, false, 'Invalid destination must not corrupt the retained output descriptor');
+    assert.equal(JSON.stringify(rows), before);
+  }
+}
+
+async function verifyTransitionMatrix(): Promise<void> {
+  const expected = {
+    polling: { ready: 'output-ready', ambiguous: null, commit: null, rebind: 'polling' },
+    'output-ready': { ready: 'output-ready', ambiguous: 'delivery-ambiguous', commit: 'target-committed', rebind: 'output-ready' },
+    'delivery-ambiguous': { ready: 'delivery-ambiguous', ambiguous: null, commit: 'target-committed', rebind: 'output-ready' },
+    'target-committed': { ready: 'target-committed', ambiguous: null, commit: null, rebind: null },
+  } as const;
+  for (const [stage, actions] of Object.entries(expected)) {
+    for (const [action, nextStage] of Object.entries(actions)) {
+      for (const validLease of [true, false]) {
+        const current = { ...record('matrix', 'matrix-project'), stage,
+          deliveryClaim: { ownerInstanceId: 'tab', leaseToken: 'active', leaseExpiresAt: Date.now() + 60_000 } };
+        const key = 'export-recovery:matrix', rows = { [key]: current };
+        const before = JSON.stringify(rows);
+        const result = await fakeRecoveryOperation(rows)({ operation: 'export-recovery-lease', key, renderId: 'matrix',
+          action: action as ExportRecoveryLeaseInput['action'], ownerInstanceId: 'tab', leaseToken: validLease ? 'active' : 'wrong',
+          ...(action === 'rebind' ? { value: { ...current, stage: nextStage ?? 'output-ready', targetPath: 'selected.mp4' } } : {}) });
+        const accepted = nextStage !== null && (action === 'ready' || validLease);
+        assert.equal(result.accepted, accepted, `${stage}/${action}/lease=${validLease}`);
+        if (!accepted) assert.equal(JSON.stringify(rows), before);
+        else assert.equal(rows[key].stage, nextStage);
+      }
+    }
+  }
+}
+
+async function verifyStandaloneStageParity(): Promise<void> {
+  uninstallTransport(); resetServerExportRecoveryMemory(); indexedDbRows.clear();
+  const id = 'local-stage';
+  await persistServerExportJob(record(id, 'local-project'));
+  const claim = await claimServerExportDelivery(id); assert(claim);
+  await assert.rejects(markServerExportTargetCommitted(id, claim), /恢复阶段/, 'A polling job is not yet a delivered output');
+  await markServerExportOutputReady(id);
+  await markServerExportTargetCommitted(id, claim);
+  const saved = await readLocalRecord(id);
+  await assert.rejects(markServerExportDeliveryAmbiguous(id, claim), /恢复阶段/, 'A late error must not rewind an already committed delivery');
+  assert.deepEqual(await readLocalRecord(id), saved);
+}
+
 async function main(): Promise<void> {
   const serverStore: Record<string, unknown> = {};
   installTransport(serverStore);
@@ -273,6 +358,8 @@ async function main(): Promise<void> {
   indexedDbRows.clear();
   installIndexedDb();
   await verifyDurableDeliveryLeaseExclusion();
+  await verifyLateRecoveryTransitions();
+  await verifyTransitionMatrix();
 
   // Browser handle authority is always kept in IndexedDB, while the remote
   // stage is JSON-safe and is joined to that handle after a refresh.
@@ -298,6 +385,82 @@ async function main(): Promise<void> {
   if (remoteBrowser.destination.type !== 'browser-directory') throw new Error('expected browser descriptor');
   assert.equal(remoteBrowser.destination.handle, null, 'remote stage must never serialize FileSystemHandle authority');
   assert.doesNotThrow(() => JSON.stringify(remoteBrowser), 'remote recovery stage must remain JSON-safe');
+
+  // An old registration / a late server mirror cannot recover the old handle A
+  // after the operator has explicitly selected B for this same retained render.
+  const oldRegistration = record('late-browser-register', 'late-browser-project', {
+    type: 'browser-directory', label: 'A', handle: browserHandle,
+  });
+  await persistServerExportJob(oldRegistration);
+  await markServerExportOutputReady(oldRegistration.renderId);
+  const snapshotA = { version: 1, entries: { ...serverStore } };
+  const reboundClaim = await claimServerExportDelivery(oldRegistration.renderId); assert(reboundClaim);
+  const handleB = { ...browserHandle, name: 'B' };
+  await rebindServerExportJob(oldRegistration.renderId, { type: 'browser-directory', label: 'B', handle: handleB }, 'B/new.mp4', reboundClaim);
+  await releaseServerExportDelivery(oldRegistration.renderId, reboundClaim);
+  await persistServerExportJob(oldRegistration);
+  const localB = await readLocalRecord(oldRegistration.renderId);
+  assert.equal(localB?.targetPath, 'B/new.mp4');
+  assert.equal(localB?.destination.type === 'browser-directory' && localB.destination.handle, handleB, 'A late registration must retain B, not combine path B with handle A');
+  const desktop = (globalThis as any).window.openChatCutDesktop;
+  const originalTransport = desktop.projectStore;
+  desktop.projectStore = (request: FakeProjectStoreRequest) => request.operation === 'snapshot' ? Promise.resolve(snapshotA) : originalTransport(request);
+  try {
+    const staleObservation = (await listServerExportJobs(oldRegistration.projectId))[0]!;
+    assert.equal(staleObservation.destination.type === 'browser-directory' && staleObservation.destination.handle, null, 'A snapshot for A cannot borrow authority for B');
+    assert.deepEqual(await readLocalRecord(oldRegistration.renderId), localB, 'A stale remote snapshot must not erase the newer B authority');
+    indexedDbRows.set(oldRegistration.renderId, oldRegistration);
+    afterLocalListRead = () => { indexedDbRows.set(oldRegistration.renderId, localB); rejectLocalMutationFor = oldRegistration.renderId; };
+    const failedMirror = (await listServerExportJobs(oldRegistration.projectId))[0]!;
+    assert.equal(failedMirror.destination.type === 'browser-directory' && failedMirror.destination.handle, null, 'A failed current-authority read cannot fall back to the captured A handle');
+    assert.equal(rejectLocalMutationFor, undefined, 'The intended target must actually reach the failing cache read');
+    assert.deepEqual(await readLocalRecord(oldRegistration.renderId), localB, 'Cache failure must preserve B in storage');
+  } finally { desktop.projectStore = originalTransport; afterLocalListRead = undefined; rejectLocalMutationFor = undefined; }
+  const splitId = 'split-destination';
+  await persistServerExportJob(record(splitId, 'split-project', { type: 'browser-directory', label: 'A', handle: browserHandle }));
+  await markServerExportOutputReady(splitId);
+  const splitClaim = await claimServerExportDelivery(splitId); assert(splitClaim);
+  const splitKey = `export-recovery:${splitId}`, splitRemote = serverStore[splitKey] as PersistedServerExportJob;
+  // Server committed B, but the process died before publishing B's local handle.
+  assert.equal((await fakeRecoveryOperation(serverStore)({ operation: 'export-recovery-lease', key: splitKey, renderId: splitId,
+    action: 'rebind', ownerInstanceId: splitClaim.ownerInstanceId, leaseToken: splitClaim.leaseToken,
+    value: { ...splitRemote, targetPath: 'B/out.mp4', destination: { type: 'browser-directory', label: 'B', handle: null } } })).accepted, true);
+  const handleC = { ...browserHandle, name: 'C' };
+  await rebindServerExportJob(splitId, { type: 'browser-directory', label: 'C', handle: handleC }, 'C/out.mp4', splitClaim);
+  const splitRecovered = await readLocalRecord(splitId);
+  assert.equal(splitRecovered?.targetPath, 'C/out.mp4');
+  assert.equal(splitRecovered?.destination.type === 'browser-directory' && splitRecovered.destination.handle, handleC, 'An explicit new authorization recovers a server/local partial commit without rerendering');
+  await releaseServerExportDelivery(splitId, splitClaim);
+  const fileHandle = (physical: string) => ({ kind: 'file' as const, name: 'out.mp4', physical,
+    queryPermission: async () => 'granted' as const, requestPermission: async () => 'granted' as const,
+    createWritable: async () => ({ write: async () => undefined, close: async () => undefined }) });
+  const sameId = 'same-name-lease', handleAFile = fileHandle('folderA/out.mp4'), handleBFile = fileHandle('folderB/out.mp4');
+  await persistServerExportJob(record(sameId, 'same-name-project', { type: 'browser-file', label: 'out.mp4', handle: fileHandle('original/out.mp4') }));
+  await markServerExportOutputReady(sameId);
+  const claimA = await claimServerExportDelivery(sameId); assert(claimA);
+  const entered = Promise.withResolvers<void>(), releaseReply = Promise.withResolvers<void>();
+  let holdReply = true;
+  desktop.projectStore = async (request: FakeProjectStoreRequest) => {
+    const response = await originalTransport(request);
+    if (request.renderId === sameId && request.action === 'rebind' && holdReply) {
+      holdReply = false; entered.resolve(); await releaseReply.promise;
+    }
+    return response;
+  };
+  const lateA = rebindServerExportJob(sameId, { type: 'browser-file', label: 'out.mp4', handle: handleAFile }, 'out.mp4', claimA);
+  try {
+    await entered.promise;
+    const key = `export-recovery:${sameId}`, pending = serverStore[key] as PersistedServerExportJob;
+    serverStore[key] = { ...pending, deliveryClaim: { ...pending.deliveryClaim!, leaseExpiresAt: Date.now() - 1 } };
+    const claimB = await claimServerExportDelivery(sameId); assert(claimB); assert.notEqual(claimB.leaseToken, claimA.leaseToken);
+    await rebindServerExportJob(sameId, { type: 'browser-file', label: 'out.mp4', handle: handleBFile }, 'out.mp4', claimB);
+    releaseReply.resolve();
+    await assert.rejects(lateA, /绑定已失效/);
+    const bound = await readLocalRecord(sameId);
+    assert.equal(bound?.destination.type === 'browser-file' && bound.destination.handle, handleBFile, 'Same basename is not the same authority: a late old lease cannot restore folderA over folderB');
+    assert.equal((serverStore[key] as PersistedServerExportJob).deliveryClaim?.leaseToken, claimB.leaseToken);
+    await releaseServerExportDelivery(sameId, claimB);
+  } finally { releaseReply.resolve(); desktop.projectStore = originalTransport; await lateA.catch(() => undefined); }
   const localBrowser = indexedDbRows.get('render-browser') as PersistedServerExportJob;
   assert.equal(localBrowser.destination.type, 'browser-directory');
   if (localBrowser.destination.type !== 'browser-directory') throw new Error('expected local browser destination');
@@ -372,6 +535,8 @@ async function main(): Promise<void> {
 
   // ── explicit retirement is durable and idempotent ──
   assert.equal(await retireServerExportJob('render-1'), true);
+
+  await verifyStandaloneStageParity();
   assert.equal((serverStore['export-recovery:render-1'] as Record<string, unknown>).stage, 'retired');
   assert.equal(await retireServerExportJob('render-1'), true);
 

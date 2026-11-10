@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { exportRecoveryNextStage, isExportRecoveryDestination, type ExportRecoveryStage } from '../../shared/export-recovery.ts';
 import type {
   AgentRunLeaseState,
   ProjectStoreMutationResponse,
@@ -115,11 +116,15 @@ function rebindMutation(
 ): RecoveryMutation {
   const current = storedLease(record);
   const incoming = recoveryRecord(input.value, input.renderId);
-  const validStage = incoming?.stage === 'polling' || incoming?.stage === 'output-ready';
-  if (!exactLease(current, input, now) || !incoming || !validStage
-    || incoming.projectId !== record.projectId) return mutation(stored, false);
+  const stage = exportRecoveryNextStage(record.stage as ExportRecoveryStage, 'rebind');
+  if (!exactLease(current, input, now) || !incoming || !stage || incoming.stage !== stage
+    || incoming.projectId !== record.projectId || !isExportRecoveryDestination(incoming.destination)
+    || (incoming.targetPath !== null && typeof incoming.targetPath !== 'string')) return mutation(stored, false);
   return mutation(stored, true, {
-    ...incoming,
+    ...record,
+    destination: incoming.destination,
+    targetPath: incoming.targetPath,
+    stage,
     deliveryClaim: current,
     updatedAt: now,
   }, current);
@@ -132,16 +137,13 @@ function stageMutation(
   now: number,
 ): RecoveryMutation {
   const current = storedLease(record);
+  const stage = exportRecoveryNextStage(record.stage as ExportRecoveryStage, input.action as 'ready' | 'ambiguous' | 'commit');
+  if (!stage) return mutation(stored, false);
   if (input.action === 'ready') {
-    if (record.stage !== 'polling') return mutation(stored, true, undefined, current ?? undefined);
-    return mutation(stored, true, { ...record, stage: 'output-ready', updatedAt: now }, current ?? undefined);
+    if (record.stage === stage) return mutation(stored, true, undefined, current ?? undefined);
+    return mutation(stored, true, { ...record, stage, updatedAt: now }, current ?? undefined);
   }
-  const exact = exactLease(current, input, now);
-  const ambiguous = input.action === 'ambiguous' && record.stage === 'output-ready';
-  const committed = input.action === 'commit'
-    && (record.stage === 'output-ready' || record.stage === 'delivery-ambiguous');
-  if (!exact || (!ambiguous && !committed)) return mutation(stored, false);
-  const stage = input.action === 'ambiguous' ? 'delivery-ambiguous' : 'target-committed';
+  if (!exactLease(current, input, now)) return mutation(stored, false);
   return mutation(stored, true, { ...record, stage, updatedAt: now }, current);
 }
 
