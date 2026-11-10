@@ -13,6 +13,7 @@
 - 素材回执核对当前四槽的真实文件哈希，并在异步核验后重读工程版本；文件存在不等于登记内容仍有效。尚未制作的工程可用同名称、同类型、同哈希输入修复缺失或坏文件，保留资产 ID 和有效槽位；旧对象不覆盖、不删除。提交后回读不确定时保留新引用文件，后续可直接读取回执。
 - 局部预览准备先写本次私有临时目录，再不可覆盖地发布。相同名称不代表相同字节；并发晚到进程不能截断已发布文件。导出遇到既有文件同样比较真实字节。
 - 导出结果的目标重选只更新目的地，不重写已渲染结果的时间线、帧率等身份；已提交状态不能被旧重选、注册或错误回退。本地阶段与租约在同一 IndexedDB 事务内校验并写入，与服务端共用转换判断。远端回执只可合并匹配目标的当前本地句柄；缓存读取失败不能退用旧句柄授权。
+- 复核回执与审片板图片的消费同时绑定项目、运行、取消信号和完整规范化工程快照。请求前已取消不提交；JSON 或异步回执哈希完成后上下文已变，不暴露旧 pass 或图片。内容等值的新对象可读；短 revision 仅作原 HTTP 版本绑定，不能替代完整快照等值。原服务端回执保留，不因此重新调用。
 - 人审页面按实际看过的板提交：主工程、兄弟片尾、任务与要求一起确定 identity。该 identity 是 HTTP 版本绑定，不能替代内容审核。取消、页面代次或上下文变化后，晚到响应不可写入当前工程或替换当前板。
 
 ## 零调用验证入口
@@ -26,6 +27,7 @@
 | 产物 body/index 发布 | `src/persist/agentRuntimeStore.verify.ts` | 发布已生效但确认丢失；同步/异步 observer 抛错；清理失败 |
 | 交接预算与绑定发布 | `server/clipmentor/handoff-publication.verify.ts` | 部分写入隐藏预算消耗；不同 payload 复用同一运行绑定 |
 | raw 与 ASR 分块冷恢复 | `server/clipmentor/saved-model-response-recovery.verify.ts`、`server/plugins/clipmentor-funasr.verify.ts` | 真实子进程中断；只恢复已有块；错来源、损坏和缺结果不补调 |
+| 客户端回执/图片消费上下文 | `server/plugins/clipmentor-preview-review.verify.ts`、`server/clipmentor/storyboard.verify.ts` | 预取消零提交；JSON/真实 SHA 等待中切换；完整文档短 revision 碰撞；等值克隆及键顺序正控 |
 | 截止与晚返回 | `server/clipmentor/external-call.verify.ts` | 登记后发前已到期；非协作 transport 晚返回；未知提交不能重发 |
 | 并发文件发布与同名异字节 | `server/clipmentor/preview-edit.verify.ts`、`server/clipmentor/native-preview-edit.verify.ts`、`server/plugins/export-runtime.verify.ts` | 同尾/异尾并发编码；晚到进程 truncate；同长错文件 |
 | 取消后的客户端应用 | `src/clipmentor/source-asr.verify.ts`、`src/clipmentor/production-gate.verify.ts`、`server/clipmentor/source-video.verify.ts` | 取消后完成 JSON/本地投影，不得应用或宣称当前 |
@@ -133,8 +135,8 @@
 | SM86 | Copy result received versus applied | 本轮修补 | `src/clipmentor/request-copy-review.ts` |
 | SM87 | ASR one-shot initialization | 本轮修补 | `src/clipmentor/transcribe-source.ts` |
 | SM88 | Observation/saved-ASR read currentness | 本轮修补 | `src/clipmentor/request-source-video.ts` |
-| SM89 | Preview client effective-gate projection | 保留现有 | `src/clipmentor/request-preview-review.ts` |
-| SM90 | Storyboard/artifact snapshot readers | 保留现有 | `src/clipmentor/read-storyboard.ts` |
+| SM89 | Preview client effective-gate projection | 本轮修补 | `src/clipmentor/request-preview-review.ts` |
+| SM90 | Storyboard/artifact snapshot readers | 本轮修补 | `src/clipmentor/read-storyboard.ts` |
 | SM91 | Agent-run lifecycle/terminal settlement | 保留现有 | `server/agent-runs/store-types.ts` |
 | SM92 | Tool claim/result settlement | 保留现有 | `server/agent-runs/store-tools.ts` |
 | SM93 | Cold Agent-run/event recovery | 本轮修补 | `server/agent-runs/store-recovery.ts`、`src/persist/agentRuntimeStore.ts` |

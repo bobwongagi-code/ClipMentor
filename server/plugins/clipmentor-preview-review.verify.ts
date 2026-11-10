@@ -14,6 +14,8 @@ import { execClipMentorAnalysisTool } from '../../src/agent/tools/clipmentor-ana
 import { confirmedUnsubmittedGateway } from '../clipmentor/production-recovery';
 import type { AgentContext } from '../../src/agent/context.ts';
 import sharp from 'sharp';
+import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
+import type {ProjectDoc} from '../../src/editor/types';
 import {reviewBoardArtifactRoot} from '../clipmentor/blueprint-review-board-artifacts';
 import {collectSavedPreviewVisualEvidence} from '../clipmentor/preview-visual-evidence';
 
@@ -47,7 +49,8 @@ globalThis.fetch=(async (url,init)=>{
   const target=new URL(String(url),origin);assert.equal(target.origin,origin,'no external model permitted in this verifier');
   return originalFetch(target,{...init,headers:{Host:`127.0.0.1:${address.port}`,Origin:origin,'Sec-Fetch-Site':'same-origin',...Object.fromEntries(new Headers(init?.headers).entries())}});
 }) as typeof fetch;
-const ctx={getProjectId:()=> 'project-a',getAgentRunId:()=> 'agent-run-test'} as AgentContext;
+const testDoc=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
+const ctx={getDoc:()=>testDoc,getProjectId:()=> 'project-a',getAgentRunId:()=> 'agent-run-test'} as AgentContext;
 try {
   const b=body();
   assert.equal((await previewBridge(b,deps)).status,'completed');assert.equal(calls,1);
@@ -341,6 +344,70 @@ try {
   assert.equal((await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},roundCtx) as any).ok,true,'canonical first-segment revalidation is accepted without rewriting raw result');
   roundReceipt.effective_review.contract_revalidation.raw_judgment_sha256='0'.repeat(64);
   assert((await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},roundCtx) as any).error,'raw-bound revalidation cannot be a bare pass flag');
+  // Hold JSON completion after headers, exactly where the keepalive route can wait.
+  roundReceipt.effective_review.contract_revalidation.raw_judgment_sha256=createHash('sha256').update(rawRound).digest('hex');
+  const contextFailures:string[]=[];
+  for(const action of ['request','read'])for(const change of ['stable','equal-clone','equal-reordered','pre-abort','abort','project','run','in-place','new-doc','signal']){
+    let doc=structuredClone(testDoc),project='project-a',run='agent-run-test',controller=new AbortController(),dispatches=0;
+    let release!:()=>void,enter!:()=>void;
+    const waiting=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{enter=r;});
+    const receipt={...structuredClone(roundReceipt),videoSha256};
+    const caller={getDoc:()=>doc,getProjectId:()=>project,getAgentRunId:()=>run,getAgentRunSignal:()=>controller.signal,
+      hostFetch:async(_url:unknown,init?:RequestInit)=>{dispatches++;assert(init?.signal,'preview cancellation must reach fetch');return{ok:true,json:async()=>{enter();await waiting;return receipt;}} as Response;}} as AgentContext;
+    if(change==='pre-abort')controller.abort();
+    const pending=requestPreviewReview({action,operationId:receipt.operationId,...(action==='request'?{maxRequests:1,videoSha256}:{})},caller);
+    if(change==='pre-abort')release();else{
+      await entered;
+      if(change==='abort')controller.abort();
+      if(change==='signal')controller=new AbortController();
+      if(change==='project')project='project-b';
+      if(change==='run')run='other-run';
+      if(change==='in-place')doc.version++;
+      if(change==='new-doc')doc={...doc,version:doc.version+1};
+      if(change==='equal-clone')doc=structuredClone(doc);
+      if(change==='equal-reordered')doc=JSON.parse(JSON.stringify(doc,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v));
+      release();
+    }
+    const result=await pending as any,valid=['stable','equal-clone','equal-reordered'].includes(change);
+    console.log('PREVIEW_CONTEXT',action,change,{dispatches,pass:result.effective_review?.can_use_as_pass,error:result.error});
+    try{
+      if(valid){assert.equal(dispatches,1);assert.equal(result.ok,true);assert.equal(result.effective_review.can_use_as_pass,true);assert.deepEqual(result.result,receipt.result);}
+      else{assert(result.error,`${action}/${change} must refuse stale/cancelled results`);assert.equal(result.can_use_as_pass,false);assert.equal(result.effective_review,undefined);assert.equal(result.operationId,receipt.operationId);assert.equal(dispatches,change==='pre-abort'?0:1);if(change==='pre-abort')assert.equal(result.requestsSent,0);}
+    }catch(e){contextFailures.push(`${action}/${change}: ${String(e)}`);}
+  }
+  assert.deepEqual(contextFailures,[],'preview current-context regressions');
+  const originalDigest=crypto.subtle.digest;
+  try{
+    for(const change of ['stable','equal-clone','abort','project','run','in-place','signal']){
+      let doc=structuredClone(testDoc),project='project-a',run='agent-run-test',controller=new AbortController(),hashCalls=0;
+      let release!:()=>void,enter!:()=>void;
+      const waiting=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{enter=r;});
+      crypto.subtle.digest=async function(...args){hashCalls++;enter();await waiting;return originalDigest.apply(this,args);};
+      const caller={getDoc:()=>doc,getProjectId:()=>project,getAgentRunId:()=>run,getAgentRunSignal:()=>controller.signal,hostFetch:async()=>Response.json(roundReceipt)} as AgentContext;
+      const pending=requestPreviewReview({action:'read',operationId:roundReceipt.operationId},caller);
+      await entered;
+      if(change==='abort')controller.abort();
+      if(change==='signal')controller=new AbortController();
+      if(change==='project')project='project-b';
+      if(change==='run')run='other-run';
+      if(change==='in-place')doc.version++;
+      if(change==='equal-clone')doc=structuredClone(doc);
+      if(change==='equal-reordered')doc=JSON.parse(JSON.stringify(doc,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).reverse()):v));
+      release();const result=await pending as any;
+      assert.equal(hashCalls,1,'must pause the real raw-judgment hash, not response JSON');
+      if(change==='stable'||change==='equal-clone')assert.equal(result.effective_review?.can_use_as_pass,true);
+      else{assert(result.error,`hash/${change} must refuse a late pass`);assert.equal(result.can_use_as_pass,false);assert.equal(result.effective_review,undefined);}
+      console.log('PREVIEW_HASH_CONTEXT',change,'checked');
+    }
+  }finally{crypto.subtle.digest=originalDigest;}
+  const {revisionOf}=await import('../../src/agent/external-edit-session');
+  let collisionDoc=structuredClone(testDoc);
+  const changedDoc=structuredClone(testDoc);
+  Object.assign(collisionDoc.timelines.find(t=>t.id===collisionDoc.activeTimelineId)!,{name:'8f4031f6dc10e756',width:722});
+  Object.assign(changedDoc.timelines.find(t=>t.id===changedDoc.activeTimelineId)!,{name:'2cd0fc20ef8ffa6a',width:720});
+  assert.notDeepEqual(collisionDoc,changedDoc);assert.equal(revisionOf(collisionDoc),revisionOf(changedDoc),'fixed full-project collision exercises content, not a changed version');
+  const collisionResult=await requestPreviewReview({action:'read',operationId:roundReceipt.operationId},{...ctx,getDoc:()=>collisionDoc,hostFetch:async()=>({ok:true,json:async()=>{collisionDoc=changedDoc;return structuredClone(roundReceipt);}} as Response)} as AgentContext) as any;
+  assert(collisionResult.error,'a short revision collision must not expose an old pass');assert.equal(collisionResult.effective_review,undefined);
   const unauth=await originalFetch(`${origin}/api/clipmentor/review-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body())});
   assert.equal(unauth.status,401);
   assert.equal(await readFile(video,'utf8'),bytes.toString(),'review does not modify media');
