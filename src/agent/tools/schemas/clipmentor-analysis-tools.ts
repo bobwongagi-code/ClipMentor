@@ -103,6 +103,7 @@ export const CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS: AgentToolSchema[] = [
       packetLimit: { type: 'integer', minimum: 256, maximum: 6000, description: 'Only with packetOffset; bounded frozen JSON page size, default 6000. Does not raise model or transport limits.' },
       packetDigest: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Frozen-page digest from the first page; required after offset 0. Rejects mixed-version pages. Current/stale binding and production gate remain separate.' },
       evidenceIds: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 1 }, description: 'With view=evidence: read selected existing evidence records, directly linked frame records and observation metadata; no images, extraction or model call.' },
+      pointId: { type: 'string', minLength: 1, description: 'Only full view, without unitId. Read this exact point and point_review_target.digest with the same revision. If point_omitted is true, inspect the full point separately before recording a decision. Keep the revision and digest with the operator decision.' },
       unitId: { type: 'string', description: 'With storyboard, copy the exact card.id from the saved board summary; do not use subject_id or guess from a raw unit/section ID. With current_copy, select one blueprint unit. With copy_review, optionally filter receipt judgments to one reviewed unit; required for reviewPart=packet. The receipt verdict remains the whole-review verdict, not a new per-unit approval.' },
     }, additionalProperties: false },
   },
@@ -134,15 +135,16 @@ export const CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS: AgentToolSchema[] = [
   },
   {
     name: 'review_clipmentor_analysis',
-    description: 'Record an explicitly operator-requested point confirmation or request for revision, with declared operator/executor and instruction provenance. This is local declared identity, NOT authenticated human verification. Never self-approve or treat this as audio/visual acceptance. Source hash and structural evidence checks must pass before confirmation.',
+    description: 'Record an explicitly operator-requested point confirmation or request for revision, with declared operator/executor and instruction provenance. Use the revision and point digest from the analysis snapshot the operator decided on. After a mismatch obtain a new decision on the changed content. This is local declared identity, NOT authenticated human verification. Never self-approve or treat this as audio/visual acceptance. Source hash and structural evidence checks must pass before confirmation.',
     input_schema: {
       type: 'object', additionalProperties: false,
       properties: {
         pointId: { type: 'string', minLength: 1 },
         state: { type: 'string', enum: ['confirmed', 'needs_revision'] },
         expectedRevision: { type: 'integer', minimum: 1 },
+        expectedPointDigest: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'point_review_target.digest from the same read with pointId as expectedRevision.' },
         actor, reason: { type: 'string', minLength: 1 },
-      }, required: ['pointId', 'state', 'expectedRevision', 'actor', 'reason'],
+      }, required: ['pointId', 'state', 'expectedRevision', 'expectedPointDigest', 'actor', 'reason'],
     },
   },
 ];

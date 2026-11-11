@@ -37,6 +37,7 @@ export interface ReceiptRecord {
   value: ReceiptValue;
   claimId?: string;
   claimExpiresAt?: number;
+  abortedClaimIds?: Set<string>;
   committed?: boolean;
   committedClaimId?: string;
   receiptExpiresAt?: number;
@@ -129,6 +130,9 @@ export function installUploadVerifierFixture(): UploadVerifierFixture {
       }
       if (body.action === 'claim') {
         state.receiptClaims += 1;
+        if (typeof body.claimId === 'string' && record.abortedClaimIds?.has(body.claimId)) {
+          return Response.json({ code: 'upload_receipt_claim_aborted' }, { status: 409 });
+        }
         const claimActive = record.claimId && (record.claimExpiresAt ?? 0) > Date.now();
         const receiptActive = (record.receiptExpiresAt ?? Number.POSITIVE_INFINITY) > Date.now();
         if (record.committed || (!receiptActive && !claimActive)
@@ -167,7 +171,8 @@ export function installUploadVerifierFixture(): UploadVerifierFixture {
           return Response.json({ ok: true, state: 'committed' });
         }
       }
-      if (body.action === 'abort' && body.claimId === record.claimId && !record.committed) {
+      if (body.action === 'abort' && typeof body.claimId === 'string' && body.claimId === record.claimId && !record.committed) {
+        (record.abortedClaimIds ??= new Set()).add(body.claimId);
         record.claimId = undefined;
         record.claimExpiresAt = undefined;
         return Response.json({ ok: true, state: 'available' });

@@ -1,4 +1,5 @@
 import {verifyCopyCandidateCheckpoint} from './copy-candidate-checkpoint.verify-suite';
+import { verifyAnalysisState } from './analysis-state.verify-suite';
 import {assertDeliveryPicturePreservation} from './delivery-bindings';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -313,6 +314,7 @@ function context(doc: ProjectDoc) {
   const ctx: AgentContext = { ...draft, getCreativeMode: () => 'clipmentor', templates: [], audio: [] };
   return { draft, ctx };
 }
+await verifyAnalysisState(base, actor);
 for (const executor of [executeTool]) {
   const receiptContext = context(base);
   const receiptBefore = structuredClone(receiptContext.draft.getDoc());

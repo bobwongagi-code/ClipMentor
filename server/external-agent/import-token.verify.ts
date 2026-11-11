@@ -119,6 +119,8 @@ assert.equal(
   'a concurrent finalizer must not acquire the same receipt',
 );
 assert.equal(abortUploadReceipt(receipt, scope.projectId, firstClaim.claimId), true);
+assert.equal(claimUploadReceipt(receipt, scope.projectId, firstClaim.claimId).status, 'aborted',
+  'a released claim must not authorize a stale prepared journal');
 const retryClaim = claimUploadReceipt(receipt, scope.projectId);
 assert.equal(retryClaim.status, 'accepted', 'abort must restore receipt retryability');
 if (retryClaim.status !== 'accepted') throw new Error('receipt retry claim should be accepted');

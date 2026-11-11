@@ -77,7 +77,7 @@ function durableEventData(value: unknown, maxBytes: number): unknown {
   const encoded = JSON.stringify(projected);
   return typeof encoded === 'string' && Buffer.byteLength(encoded) <= maxBytes
     ? projected
-    : { omitted: true, digest: digestValue(value) };
+    : { omitted: true, digest: digestValue(projected) };
 }
 
 export function runtimeEvent(
@@ -85,6 +85,12 @@ export function runtimeEvent(
 ): Omit<AgentRunEvent, 'eventId' | 'projectId' | 'runId' | 'sequence' | 'createdAt'> {
   const raw = stableValue(event.data);
   const fields = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const data = durableEventData(raw, serverEventMaxBytes(event.type));
+  const textProof = event.type === 'text-delta' && typeof fields.text === 'string'
+    ? data && typeof data === 'object' && 'text' in data && data.text === fields.text
+      ? { rawTextDigest: digestValue(fields.text) }
+      : { rawTextChanged: true }
+    : {};
   const type: AgentRunEvent['type'] = (event.type === 'tool-request' || event.type === 'server-tool-request')
     ? 'tool_requested'
     : (event.type === 'tool-result' || event.type === 'server-tool-result')
@@ -99,7 +105,8 @@ export function runtimeEvent(
       serverEvent: {
         id: event.id,
         type: event.type,
-        data: durableEventData(raw, serverEventMaxBytes(event.type)),
+        data,
+        ...textProof,
         at: event.at,
       },
     }),

@@ -100,7 +100,7 @@ export async function verifyUploadFinalizeRecovery(fixture: UploadVerifierFixtur
   assert.equal(await loadUploadFinalizeJournal('project-test', 'receipt-reconciliation'), null,
     'journal is deleted only after the terminal commit tombstone is confirmed');
   const reconciliationClaimIds = state.commitClaimIds.slice(commitClaimsStart);
-  assert.ok(reconciliationClaimIds.length >= 4, 'dropped requests must retry after same-claim renewal');
+  assert.ok(reconciliationClaimIds.length >= 3, 'two dropped commits must be followed by confirmed same-claim recovery');
   assert.equal(new Set(reconciliationClaimIds).size, 1, 'reconciliation must retain the same claim identity');
 
   const commandFailureReceipt: ReceiptRecord = { value: {

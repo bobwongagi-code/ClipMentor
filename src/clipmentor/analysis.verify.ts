@@ -136,8 +136,12 @@ for (const original of historicalImported.clipMentorAnalysis!.transcripts) {
   assert.deepEqual(current.words.at(-1), { ...original.words.at(-1), end_seconds: analysis.source.duration_seconds });
 }
 for (const point of analysis.points) {
-  const revision = engine.getDoc().clipMentorAnalysis!.revision;
-  assert((await call('review_clipmentor_analysis', { pointId: point.point_id, state: 'confirmed', actor, reason: 'test fixture reviewed', expectedRevision: revision })).ok);
+  const target = await executeTool('read_clipmentor_analysis', { pointId: point.point_id }, ctx) as {
+    revision: number; point_review_target: { point_id: string; digest: string };
+  };
+  assert.equal(target.point_review_target.point_id, point.point_id);
+  assert((await call('review_clipmentor_analysis', { pointId: point.point_id, state: 'confirmed', actor, reason: 'test fixture reviewed',
+    expectedRevision: target.revision, expectedPointDigest: target.point_review_target.digest })).ok);
 }
 const approved = structuredClone(engine.getDoc());
 assert.equal((await checkAnalysisHandoff(approved)).status, 'ready_for_copy_review');

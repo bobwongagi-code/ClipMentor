@@ -184,6 +184,7 @@ interface ReceiptClaim { id: string; expiresAt: number }
 interface ReceiptEntry extends Omit<UploadReceiptValue, 'receipt'> {
   expiresAt: number;
   claim?: ReceiptClaim;
+  abortedClaimIds?: Set<string>;
   committedClaimId?: string;
   committedExpiresAt?: number;
 }
@@ -194,11 +195,12 @@ export type UploadReceiptClaimResult =
     claimExpiresAt: number;
     value: UploadReceiptValue;
   }
-  | { status: 'invalid' | 'expired' | 'mismatch' | 'claimed' | 'consumed' };
+  | { status: 'invalid' | 'expired' | 'mismatch' | 'claimed' | 'consumed' | 'aborted' };
 const uploadReceipts = new Map<string, ReceiptEntry>();
 const RECEIPT_TTL_MS = 10 * 60_000;
 const RECEIPT_CLAIM_TTL_MS = 5 * 60_000;
 const RECEIPT_MAX_ENTRIES = 1_024;
+const RECEIPT_MAX_ABORTED_CLAIMS = 32;
 function pruneUploadReceipts(now = Date.now()): void {
   for (const [receipt, entry] of uploadReceipts) {
     const activeClaim = entry.claim && entry.claim.expiresAt > now;
@@ -267,6 +269,7 @@ export function claimUploadReceipt(
       const {
         expiresAt: _expiresAt,
         claim: _claim,
+        abortedClaimIds: _aborted,
         committedClaimId: _committed,
         committedExpiresAt: _committedExpiry,
         ...value
@@ -281,14 +284,17 @@ export function claimUploadReceipt(
     uploadReceipts.delete(receipt);
     return { status: 'expired' };
   }
+  if (entry.abortedClaimIds?.has(claimId)) return { status: 'aborted' };
   if (entry.claim && entry.claim.id !== claimId && entry.claim.expiresAt > now) {
     return { status: 'claimed' };
   }
+  if ((entry.abortedClaimIds?.size ?? 0) >= RECEIPT_MAX_ABORTED_CLAIMS) return { status: 'invalid' };
   const claimExpiresAt = now + RECEIPT_CLAIM_TTL_MS;
   entry.claim = { id: claimId, expiresAt: claimExpiresAt };
   const {
     expiresAt: _expiresAt,
     claim: _claim,
+    abortedClaimIds: _aborted,
     committedClaimId: _committed,
     committedExpiresAt: _committedExpiry,
     ...value
@@ -336,6 +342,7 @@ export function abortUploadReceipt(
   const entry = uploadReceipts.get(receipt);
   if (!entry || entry.projectId !== projectId || entry.committedClaimId
     || entry.claim?.id !== claimId || entry.claim.expiresAt <= Date.now()) return false;
+  (entry.abortedClaimIds ??= new Set()).add(claimId);
   entry.claim = undefined;
   return true;
 }

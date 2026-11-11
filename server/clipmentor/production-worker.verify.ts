@@ -10,6 +10,7 @@ import {makeDraft} from '../../src/editor/store';
 import {checkTransitionManifest} from '../../src/clipmentor/transition-check';
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
 import {productionAuthorSelfCheckSource,checkProductionAuthorBlueprint} from './production-author-self-check';
+import { verifyAuthorSelfCheckRecovery } from './production-author-self-check.verify-suite';
 import {createProductionPreparation} from './production-readiness';
 import {isBoundCanvasReflow,assertCanvasReflowPreservation} from './production-worker';
 import {digestValue} from '../agent-runs/store-values';
@@ -88,6 +89,7 @@ assert(!reviewInput.includes('originalRequirements'),'author-check material cann
 const effectNames:string[]=[];
 const selfCheckStage={effect:async(_kind:string,name:string)=>{effectNames.push(name);return {digest:'fixture',runId:'fixture',checks:[]};}} as unknown as import('./production-task').StageContext;
 const preparedCheck=await createProductionPreparation(checkDoc);
+await verifyAuthorSelfCheckRecovery(checkDoc, preparedCheck);
 for(const [currentRequirements,guide] of [[['原始要求'],'guide'],[['原始要求'],'guide'],[['更新要求'],'guide'],[['更新要求'],'updated-guide']] as const){
  await checkProductionAuthorBlueprint(task,selfCheckStage,checkDoc,preparedCheck,guide,[...currentRequirements]);
 }

@@ -13,6 +13,8 @@
 - 检查点等时间戳不能把导入到达顺序当任务进度；按经原索引/正文核验的 sequence 排序。并发压缩只可从当前已索引的无损归档取回同一记录，不能借较早检查点减少已用次数。网关诊断复用同一历史归档，不能耗尽进度保存槽；已确认的远端 lease 释放只清本地相同 token。
 - 工程、运行索引、产物文件的提交边界不同。丢失确认时先回读权威索引；不能把已发布的产物当垃圾删除。通知和提交后的清理失败不撤销成功写入。
 - 素材回执核对当前四槽的真实文件哈希，并在异步核验后重读工程版本；文件存在不等于登记内容仍有效。尚未制作的工程可用同名称、同类型、同哈希输入修复缺失或坏文件，保留资产 ID 和有效槽位；旧对象不覆盖、不删除。提交后回读不确定时保留新引用文件，后续可直接读取回执。
+- 外部上传登记的队列、异步准备与后台确认共用原调用的工程／运行／取消边界。只按回执的精确资产 ID 操作；重放先核旧目标和当前 claim，命令实际生效后才确认。已提交但回包丢失时以同 claim 的终态确认恢复，不重传文件。后台确认不重放用户后来删除的资产。旧 relink 日志缺少原目标证据且当前目标不符时保留日志，不能猜测覆盖；已匹配的旧日志仍可确认。目标比较不包含收藏、目录或转录等未被此次登记覆盖的字段。
+- 确认队列的所有者失效后，新调用可以接管；旧回调及其 finally 不能清掉新所有者。取消清理以实际是否开始命令为界：确定未编辑时，同 claim abort 确认后才删除私有日志；已编辑或上下文已变时保留证据，不能拿新工程判断旧写入是否发生。
 - 视觉对照的原子发布结束私有清理权限：取消只清自己的工作目录，不删除共享 HTML/索引。不同文件路径可有同一内容身份，不能靠进程内去重假设没有其他读取者。缺索引的 HTML 不是有效缓存，按原哈希校验在本地重建，不重调模型。
 - 局部预览准备先写本次私有临时目录，再不可覆盖地发布。相同名称不代表相同字节；并发晚到进程不能截断已发布文件。导出遇到既有文件同样比较真实字节。
 - 导出结果的目标重选只更新目的地，不重写已渲染结果的时间线、帧率等身份；已提交状态不能被旧重选、注册或错误回退。本地阶段与租约在同一 IndexedDB 事务内校验并写入，与服务端共用转换判断。远端回执只可合并匹配目标的当前本地句柄；缓存读取失败不能退用旧句柄授权。
@@ -63,9 +65,9 @@
 | SM07 | Blocked-task reconciliation | 保留现有 | `server/clipmentor/production-worker.ts` |
 | SM08 | One author execution per epoch | 保留现有 | `server/clipmentor/production-worker.ts` |
 | SM09 | Recovered source evidence application | 保留现有 | `server/clipmentor/production-source-evidence.ts` |
-| SM10 | Author self-check freshness | 保留现有 | `server/clipmentor/production-author-self-check.ts` |
-| SM11 | Author self-check format repair | 保留现有 | `server/clipmentor/production-author-self-check.ts` |
-| SM12 | Author self-check receipt recovery | 保留现有 | `server/clipmentor/production-author-self-check.ts` |
+| SM10 | Author self-check freshness | 明确绑定到其他请求的回执拒绝复用 | `server/clipmentor/production-author-self-check.ts` |
+| SM11 | Author self-check format repair | 续接已计费的格式重试，未解决项继续阻断 | `server/clipmentor/production-author-self-check.ts` |
+| SM12 | Author self-check receipt recovery | 原槽位恢复，核对连续事件和唯一完成终态 | `server/clipmentor/production-author-self-check.ts` |
 | SM13 | Human blueprint approval binding | 保留现有 | `server/clipmentor/production-task.ts` |
 | SM14 | Pending versus dispatched blueprint feedback | 保留现有 | `server/clipmentor/production-task.ts` |
 | SM15 | Feedback summary freshness | 保留现有 | `server/clipmentor/production-feedback.ts` |
@@ -81,10 +83,10 @@
 | SM25 | History compaction publication | 本轮修补 | `server/clipmentor/production-task-history.ts` |
 | SM26 | Narrow canvas-reflow repair exception | 保留现有 | `server/clipmentor/production-worker.ts` |
 | SM27 | Provider/settings preflight cache | 低风险保留 | `server/clipmentor/production-panel.ts` |
-| SM28 | Analysis mutation/CAS | 保留现有 | `src/agent/tools/clipmentor-analysis-tools.ts` |
+| SM28 | Analysis mutation/CAS | 已补调用期间的工程／运行／取消与实际写入校验 | `src/agent/tools/clipmentor-analysis-tools.ts` |
 | SM29 | Current candidate/picture-plan pair | 保留现有 | `src/agent/tools/clipmentor-analysis-tools.ts` |
-| SM30 | Point-review freshness | 保留现有 | `src/clipmentor/analysis.ts` |
-| SM31 | Production copy-approval freshness | 保留现有 | `src/clipmentor/production-gate.ts` |
+| SM30 | Point-review freshness | 确认及退回绑定同一次读取的版本和要点摘要，覆盖撤销后复用数字版本 | `src/agent/tools/clipmentor-analysis-tools.ts`、`src/clipmentor/analysis.ts` |
+| SM31 | Production copy-approval freshness | 已补回执和分页读取期间的时效校验 | `src/agent/tools/clipmentor-analysis-tools.ts`、`src/clipmentor/production-gate.ts` |
 | SM32 | Readiness routing projection | 保留现有 | `server/clipmentor/production-readiness.ts` |
 | SM33 | Audio reuse eligibility projection | 保留现有 | `server/clipmentor/audio-reuse.ts` |
 | SM34 | Speech-anchor file cache and certification | 保留现有 | `server/clipmentor/word-anchors.ts` |
@@ -116,7 +118,7 @@
 | SM60 | Export temporary-to-managed publication | 本轮修补 | `server/plugins/export-runtime.ts` |
 | SM61 | Export delivery claim/reconciliation | 本轮修补 | `server/plugins/project-store-export-recovery.ts`、`src/export/serverExportRecovery.ts` |
 | SM62 | Agent upload staging ownership | 保留现有 | `server/plugins/upload-route-write.ts` |
-| SM63 | Uploaded-asset finalize commit | 保留现有 | `src/agent/tools/upload-finalize.ts` |
+| SM63 | Uploaded-asset finalize commit | 已补调用失效、目标冲突、确认丢失与重载的批次回归 | `src/agent/tools/upload-finalize.ts`、`upload-tools.verify-lifecycle.ts` |
 | SM64 | Per-project board generation exclusion | 保留现有 | `server/clipmentor/blueprint-review-board-api.ts` |
 | SM65 | Panel board cache/confirmation prerequisite | 本轮修补 | `server/clipmentor/production-panel.ts` |
 | SM66 | Creator PDF generation single-flight | 保留现有 | `server/clipmentor/creator-storyboard.ts` |

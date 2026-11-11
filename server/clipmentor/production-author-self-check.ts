@@ -13,6 +13,7 @@ import type { HandoffBrief } from '../../shared/clipmentor-handoff';
 const questions = ['S1','S2','S3','S4','S5','S6','S7'];
 type RepairResolution={finding_id:string;status:'resolved'|'unresolved';reference:string[];reason:string};
 type Check = { id:string; status:'ok'|'fix'|'unresolved'; reference:string|string[]; reason:string;repair_resolutions?:RepairResolution[] };
+type AuthorCheckResult = { digest:string; sourceDigest:string; runId:string; checks:Check[] };
 class InvalidAuthorCheckResponse extends Error {}
 
 export async function runAuthorSelfCheckWithFormatRetry<T>(run:(formatError?:string)=>Promise<T>) {
@@ -83,14 +84,60 @@ export function selectAuthorSelfCheckReceipt(
 ){
  const eligible=runs.filter(run=>run.projectId===task.projectId&&run.askOnly
   &&run.backend===(task.input.authorBackend??'api')&&run.modelId===task.input.author.model
+  &&(run.provider===undefined||run.provider===task.input.author.provider)
   &&run.createdAt>=blueprintAt&&run.context?.transportStatus==='completed'
-  &&!run.events.some(event=>event.type==='tool_requested'));
+  &&!run.events.some(event=>['tool_requested','tool_started','tool_outcome'].includes(event.type)));
  const exact=eligible.find(run=>run.runId===operationId&&run.userInputDigest===sourceDigest);
  if(exact)return {run:exact,exact:true};
  // A receipt can finish after its parent's last checkpoint. Only the
  // historical identity-less fallback needs the old timestamp restriction.
- if(allowLegacy&&eligible.length===1&&eligible[0].runId!==operationId&&eligible[0].updatedAt<=task.updatedAt)
-  return {run:eligible[0],exact:false};
+ const legacy=eligible.length===1?eligible[0]:undefined;
+ // Server runs without an explicit source binding used the request-shape hash
+ // for both fields. A different explicit source digest is contrary evidence.
+ if(allowLegacy&&legacy&&legacy.runId!==operationId&&legacy.updatedAt<=task.updatedAt
+  &&legacy.userInputDigest===legacy.context?.requestShapeHash)
+  return {run:legacy,exact:false};
+}
+
+function authorSelfCheckText(events:readonly unknown[]):string {
+ const chunks:string[]=[];
+ let done=false;
+ let expectedId=1;
+ const incomplete=()=>new Error('blueprint_author_self_check_recovery_incomplete');
+ for(const raw of events){
+  const event=raw as {id?:unknown;type?:unknown;data?:{status?:unknown;text?:unknown}}|undefined;
+  if(!event||event.id!==expectedId++||typeof event.type!=='string'||done)throw incomplete();
+  if(event.type==='done'){
+   if(event.data?.status!=='completed')throw incomplete();
+   done=true;
+  }else if(event.type==='text-delta'){
+   if(typeof event.data?.text!=='string')throw incomplete();
+   chunks.push(event.data.text);
+  }else if(['tool-request','server-tool-request','tool-result','server-tool-result'].includes(event.type))throw incomplete();
+ }
+ if(!done)throw incomplete();
+ return chunks.join('');
+}
+
+function authorSelfCheckReceiptText(run:AgentRunRecord):{text:string;verified:boolean} {
+ const events=run.events.map(row=>{
+  try{return row.summary===undefined?undefined:JSON.parse(row.summary)?.serverEvent;}
+  catch{return undefined;}
+ });
+ const text=authorSelfCheckText(events);
+ let verified=true;
+ for(const event of events){
+  if(event.type!=='text-delta')continue;
+  if(event.rawTextChanged===true)throw new Error('blueprint_author_self_check_recovery_text_changed');
+  if(event.rawTextDigest===undefined)verified=false;
+  else if(event.rawTextDigest!==digestValue(event.data.text))throw new Error('blueprint_author_self_check_recovery_text_changed');
+ }
+ return {text,verified};
+}
+
+function recordedFormatFailure(effect:ProductionTask['effects'][string]|undefined):boolean {
+ return effect?.status==='failed'
+  &&/^Error: (?:blueprint_author_self_check_(?:invalid_json|incomplete|invalid:S[1-7](?::unmatched_reference=.+)?)|blueprint_author_repair_(?:coverage_incomplete|reference_invalid))$/s.test(effect.error??'');
 }
 
 export function productionAuthorSelfCheckSource(doc:ProjectDoc,prepared:Awaited<ReturnType<typeof createProductionPreparation>>,
@@ -145,14 +192,26 @@ export async function checkProductionAuthorBlueprint(
   repairReview:productionRepairTargets(task,prepared.rawPacket),
   unchangedReviewedDelivery:unchangedReviewedDelivery(task,prepared.rawPacket)};
  const sourceDigest=digestValue({source,guide});
- const effectBase='blueprint-author-self-check:'+sourceDigest;
+ const legacyName='blueprint-author-self-check';
+ const currentName=legacyName+':'+sourceDigest;
+ const effectKey=(name:string)=>`copy_review:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:${name}`;
+ const first=task.effects?.[effectKey(currentName)];
+ const formatRetry=task.effects?.[effectKey(currentName+':format-retry')];
+ if(formatRetry&&(first?.kind!=='model'||formatRetry.kind!=='model'))
+  throw new Error('blueprint_author_self_check_recovery_binding_mismatch');
+ const legacy=task.effects?.[effectKey(legacyName)];
+ const useLegacy=!first&&!formatRetry&&legacy?.kind==='model';
+ const effectBase=useLegacy?legacyName:currentName;
  if(!task.repairContext?.review_contract_recheck&&task.repairContext?.blueprint_digest===reviewed.subject.digest
   &&task.repairContext?.author_self_check_source_digest===sourceDigest
-  &&!stage.hasEffect?.('model',effectBase)&&!stage.hasEffect?.('model','blueprint-author-self-check'))
+  &&!stage.hasEffect?.('model',effectBase)&&!stage.hasEffect?.('model',currentName+':format-retry'))
   throw new Error('蓝图返修未改变送审内容');
- return runAuthorSelfCheckWithFormatRetry(formatError=>{
- const effectName=effectBase+(formatError?':format-retry':'');
- return stage.effect('model',effectName,async operationId=>{
+ const attempt=async(formatError?:string,resumeRetry=false)=>{
+ const isRetry=resumeRetry||formatError!==undefined;
+ const effectName=effectBase+(isRetry?':format-retry':'');
+ const saved=task.effects?.[effectKey(effectName)];
+ const result=await stage.effect<AuthorCheckResult>('model',effectName,async operationId=>{
+  if(resumeRetry||useLegacy)throw new Error('blueprint_author_self_check_recovery_binding_mismatch');
   const author=task.input.author;
   const backend=task.input.authorBackend??'api';
   const run=createRun({id:operationId,userInputDigest:sourceDigest,projectId:task.projectId,sessionGeneration:await currentAgentSessionGeneration(task.projectId),
@@ -169,30 +228,43 @@ export async function checkProductionAuthorBlueprint(
     async execute(){throw new Error('作者自检只读，不允许调用工具');}},
   });
   if(run.status!=='completed')throw new Error(run.error??'blueprint_author_self_check_failed');
-  const text=run.events.filter(event=>event.type==='text-delta').map(event=>(event.data as {text?:string}).text??'').join('');
+  const text=authorSelfCheckText(run.events);
   return {digest:reviewed.subject.digest,sourceDigest,runId:run.id,checks:validateAuthorSelfCheck(text,source)};
  },async operationId=>{
-  const key=`copy_review:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:${effectName}`;
-  const old=task.effects[key];
+  const old=task.effects[effectKey(effectName)];
   const blueprint=task.completed.blueprint;
   if(old?.operationId!==operationId||!blueprint||blueprint.artifact.revision!==task.projectRevision)
    throw new Error('blueprint_author_self_check_recovery_binding_mismatch');
   const sidecar=await loadAgentRuntimeSidecar(task.projectId);
   // Pre-fix runs lack a request binding. Only recover their non-passing findings,
   // with a unique read-only run and every quote verified against this saved revision.
-  const legacy=!formatError&&old.status==='failed'&&/^Error: blueprint_author_self_check_invalid:S[1-7]$/.test(old.error??'');
-  const selected=selectAuthorSelfCheckReceipt(sidecar.runs,task,operationId,sourceDigest,blueprint.at,legacy);
+  const allowLegacy=!isRetry&&old.status==='failed'&&/^Error: blueprint_author_self_check_invalid:S[1-7]$/.test(old.error??'');
+  const selected=selectAuthorSelfCheckReceipt(sidecar.runs,task,operationId,sourceDigest,blueprint.at,allowLegacy);
   if(!selected)throw new Error('blueprint_author_self_check_recovery_run_unverified');
   const {run,exact}=selected;
-  const events=run.events.flatMap(event=>{
-   try{return event.summary?[JSON.parse(event.summary).serverEvent]:[];}catch{return [];}
-  }).filter(Boolean);
-  if(events.findLast(event=>event.type==='done')?.data?.status!=='completed')
-   throw new Error('blueprint_author_self_check_recovery_incomplete');
-  const checks=validateAuthorSelfCheck(events.filter(event=>event.type==='text-delta').map(event=>event.data.text).join(''),source);
+  const {text,verified}=authorSelfCheckReceiptText(run);
+  let checks:Check[];
+  try{checks=validateAuthorSelfCheck(text,source);}
+  catch(error){
+   if(error instanceof InvalidAuthorCheckResponse&&(!exact||(!verified&&!recordedFormatFailure(old))))
+    throw new Error('blueprint_author_self_check_recovery_run_unverified');
+   throw error;
+  }
   if(!exact&&checks.every(check=>check.status==='ok'))
    throw new Error('blueprint_author_self_check_recovery_approval_unverified');
   return {digest:reviewed.subject.digest,sourceDigest,runId:run.runId,checks};
  });
- });
+ if((useLegacy&&saved?.status==='completed')||(isRetry&&saved)){
+  if(result?.digest!==reviewed.subject.digest||result.sourceDigest!==sourceDigest||typeof result.runId!=='string'
+   ||(isRetry&&result.runId!==saved?.operationId))
+   throw new Error('blueprint_author_self_check_recovery_binding_mismatch');
+  return {...result,checks:validateAuthorSelfCheck(JSON.stringify(result.checks),source)};
+ }
+ return result;
+ };
+ // A retry can be reserved after a cold format failure while the primary is
+ // still reserved. The already-counted slot can recover without the first run.
+ if(formatRetry&&(first?.status==='reserved'||recordedFormatFailure(first)))return attempt(undefined,true);
+ if(useLegacy)return attempt();
+ return runAuthorSelfCheckWithFormatRetry(attempt);
 }

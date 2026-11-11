@@ -1,4 +1,4 @@
-import type { MediaAssetKind } from '../editor/types';
+import type { MediaAsset, MediaAssetKind } from '../editor/types';
 import { isProjectStoreRecord } from '../../shared/project-store-validation';
 import { kvDel, kvGet, kvSet } from './sharedKv';
 
@@ -34,7 +34,13 @@ export interface UploadFinalizeAsset {
 export interface UploadFinalizeMutation {
   type: 'add' | 'relink' | 'none';
   asset: UploadFinalizeAsset;
+  /** Prior target for compare-before-replay; absent on legacy journals. */
+  previousAsset?: UploadFinalizeTarget | null;
 }
+
+export type UploadFinalizeTarget = Pick<MediaAsset, 'id' | 'name' | 'kind' | 'src'
+  | 'sourceFilename' | 'durationInFrames' | 'sourceRevision' | 'sourceContentHash'
+  | 'sourceSize' | 'width' | 'height' | 'originalFilePath'>;
 
 export interface UploadFinalizeJournal {
   version: 1;
@@ -60,6 +66,19 @@ function canonicalValue(value: unknown): unknown {
   return Object.fromEntries(Object.keys(value).sort().flatMap((key) => (
     value[key] === undefined ? [] : [[key, canonicalValue(value[key])]]
   )));
+}
+
+export function uploadFinalizeTarget(asset: UploadFinalizeTarget | null): UploadFinalizeTarget | null {
+  if (!asset) return null;
+  const { id, name, kind, src, sourceFilename, durationInFrames, sourceRevision,
+    sourceContentHash, sourceSize, width, height, originalFilePath } = asset;
+  return { id, name, kind, src, sourceFilename, durationInFrames, sourceRevision,
+    sourceContentHash, sourceSize, width, height, originalFilePath };
+}
+
+export function sameUploadFinalizeTarget(left: UploadFinalizeTarget | null, right: UploadFinalizeTarget | null): boolean {
+  return JSON.stringify(canonicalValue(uploadFinalizeTarget(left)))
+    === JSON.stringify(canonicalValue(uploadFinalizeTarget(right)));
 }
 
 async function journalKey(projectId: string, receipt: string): Promise<string> {
