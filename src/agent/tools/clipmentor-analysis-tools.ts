@@ -1,7 +1,9 @@
 import {labelTranslationsShape} from '../../clipmentor/author-translations';
 export { CLIPMENTOR_ANALYSIS_TOOL_SCHEMAS, CLIPMENTOR_ANALYSIS_TOOL_NAMES } from './schemas/clipmentor-analysis-tools';
 import type { AgentContext } from '../context';
-import { checkAnalysisHandoff, invalidateChangedReviews, isAnalysisActor, isClipMentorAnalysis, pointDigest } from '../../clipmentor/analysis';
+import { canonicalProjectJson } from '../external-edit-session';
+import type { ProjectDoc } from '../../editor/types';
+import { checkAnalysisHandoff, invalidateChangedReviews, isAnalysisActor, isClipMentorAnalysis, pointDigest, pointReviewTargetDigest } from '../../clipmentor/analysis';
 import teashellHistorical from '../../clipmentor/fixtures/teashell-historical.json';
 import { importTeashellAnalysis } from '../../clipmentor/import-teashell';
 import {importNativeBlueprint,BlueprintImportError} from '../../clipmentor/import-blueprint';
@@ -23,6 +25,20 @@ import {renderClipMentorReviewBoard} from '../../clipmentor/render-review-board'
 type Args = Record<string, unknown>;
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
+const pointReviewIssues = new Set(['point_pending', 'point_needs_revision', 'point_stale']);
+
+function captureAnalysisSnapshot(ctx: AgentContext, liveDoc: ProjectDoc, signal: AbortSignal | undefined) {
+  const projectId = ctx.getProjectId?.();
+  const runId = ctx.getAgentRunId?.();
+  const doc = structuredClone(liveDoc);
+  const base = canonicalProjectJson(doc);
+  const isCurrent = (live = ctx.getDoc(), expected = base) =>
+    !signal?.aborted && ctx.getAgentRunSignal?.() === signal
+    && ctx.getProjectId?.() === projectId && ctx.getAgentRunId?.() === runId
+    && canonicalProjectJson(live) === expected;
+  return { doc, isCurrent, projectId };
+}
+
 export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: AgentContext): Promise<unknown> {
   if(name==='render_clipmentor_review_board')return renderClipMentorReviewBoard(ctx,args.view);
   if (name === 'edit_clipmentor_preview') return editClipMentorPreview(args, ctx);
@@ -32,9 +48,9 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
   if (name === 'request_clipmentor_copy_review') return requestClipMentorCopyReview(args, ctx);
   if (name === 'transcribe_clipmentor_source') return transcribeClipMentorAsset(args, ctx);
   if (name === 'observe_clipmentor_source') return observeClipMentorSource(args, ctx);
-  const doc = ctx.getDoc();
   if (name === 'read_clipmentor_analysis') {
     const view = args.view ?? 'full';
+    if (args.pointId !== undefined && (view !== 'full' || !text(args.pointId) || args.unitId !== undefined)) return { error: 'pointId requires the full analysis view and one exact point ID' };
     if(view==='source_asr')return readClipMentorSourceAsr(args,ctx);
     if(args.operationId!==undefined||args.assetId!==undefined)return {error:'operationId/assetId require the source_asr view'};
     if(view==='storyboard'){
@@ -45,22 +61,49 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     if (!(typeof view === 'string' && ['full', 'source_breakdown', 'current_copy', 'evidence', 'copy_review'].includes(view))) return { error: 'Invalid analysis read view' };
     if (view !== 'copy_review' && args.reviewPart !== undefined) return { error: 'reviewPart requires the copy_review view' };
     if (view !== 'current_copy' && args.copyPart !== undefined) return { error: 'copyPart requires the current_copy view' };
+    const evidenceIds = args.evidenceIds;
+    if (view === 'evidence' && (!Array.isArray(evidenceIds) || !evidenceIds.length || evidenceIds.length > 8
+      || !evidenceIds.every((id) => typeof id === 'string' && id.trim()))) return { error: 'Evidence view requires 1–8 existing evidenceIds' };
+    if (view !== 'evidence' && evidenceIds !== undefined) return { error: 'evidenceIds requires the evidence view' };
     const pagingRequested = ['packetOffset', 'packetLimit', 'packetDigest'].some((key) => args[key] !== undefined);
     if (pagingRequested && (view !== 'copy_review' || args.reviewPart !== 'packet')) return { error: 'Packet paging requires copy_review with reviewPart=packet' };
     const copyPart = args.copyPart ?? 'all';
     if (view === 'current_copy' && (!(typeof copyPart === 'string' && ['all', 'summary', 'candidate', 'picture_plan'].includes(copyPart))
       || (copyPart !== 'all' && typeof args.unitId !== 'string'))) return { error: 'A valid copyPart and unitId are required for a narrow current-copy read' };
+    const part = args.reviewPart ?? 'result';
+    if (view === 'copy_review') {
+      if (part !== 'result' && part !== 'packet') return { error: 'Invalid reviewPart' };
+      if (part === 'packet' && typeof args.unitId !== 'string') return { error: 'Read the frozen review packet one unit at a time with unitId' };
+    }
+    const offset = args.packetOffset === undefined ? 0 : args.packetOffset;
+    const limit = args.packetLimit === undefined ? 6000 : args.packetLimit;
+    if (pagingRequested) {
+      if (!Number.isSafeInteger(offset) || Number(offset) < 0 || !Number.isSafeInteger(limit) || Number(limit) < 256 || Number(limit) > 6000
+        || (args.packetOffset === undefined && (args.packetLimit !== undefined || args.packetDigest !== undefined))) return { error: 'Use packetOffset >= 0 and packetLimit 256–6000 (UTF-16 characters)' };
+      if ((Number(offset) > 0 && args.packetDigest === undefined)
+        || (args.packetDigest !== undefined && (typeof args.packetDigest !== 'string' || !/^[a-f0-9]{64}$/.test(args.packetDigest)))) return { error: 'Continue with packetDigest from the first page; do not mix frozen reviews' };
+    }
+    const stale = { error: 'Project or run changed during analysis read; read again' };
+    const signal = ctx.getAgentRunSignal?.();
+    if (signal?.aborted) return stale;
+    const { doc, isCurrent, projectId } = captureAnalysisSnapshot(ctx, ctx.getDoc(), signal);
+    const mode = ctx.getCreativeMode();
+    const finishRead = (result: unknown) => isCurrent() && ctx.getCreativeMode() === mode ? result : stale;
     const a = doc.clipMentorAnalysis;
+    if (typeof args.pointId === 'string') {
+      const point = a?.points.find(entry => entry.point_id === args.pointId);
+      if (!a || !point) return { error: 'Analysis point not found' };
+      const contentDigest = await pointDigest(a, point.point_id);
+      const digest = await pointReviewTargetDigest(a, projectId, contentDigest);
+      if (JSON.stringify(point).length > 12_000) {
+        return finishRead({ revision: a.revision, point_review_target: { digest, point_omitted: true,
+          note: 'The point body exceeds the tool output budget. Inspect the full point before recording a decision.' } });
+      }
+      return finishRead({ revision: a.revision, point_review_target: { point_id: point.point_id, digest, point } });
+    }
     const selected = a?.blueprint.filter((unit) => args.unitId === undefined || unit.unit_id === args.unitId) ?? [];
     if (view !== 'copy_review' && args.unitId !== undefined && (typeof args.unitId !== 'string' || !selected.length)) return { error: 'Analysis unit not found' };
-    const evidenceIds = args.evidenceIds;
-    if (view === 'evidence' && (!Array.isArray(evidenceIds) || !evidenceIds.length || evidenceIds.length > 8
-      || !evidenceIds.every((id) => typeof id === 'string' && id.trim()))) return { error: 'Evidence view requires 1–8 existing evidenceIds' };
-    if (view !== 'evidence' && evidenceIds !== undefined) return { error: 'evidenceIds requires the evidence view' };
     if (view === 'copy_review') {
-      const part = args.reviewPart ?? 'result';
-      if (!(typeof part === 'string' && ['result', 'packet'].includes(part))) return { error: 'Invalid reviewPart' };
-      if (part === 'packet' && typeof args.unitId !== 'string') return { error: 'Read the frozen review packet one unit at a time with unitId' };
       const receipt = a?.production_copy_review;
       if (args.unitId !== undefined && (typeof args.unitId !== 'string' || !receipt?.units.some((unit) => unit.unit_id === args.unitId))) return { error: 'Review unit not found' };
       let binding = receipt ? 'unverifiable' : 'missing';
@@ -75,7 +118,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       const units = teaching_review?.packet.units.filter(matches) ?? [];
       const ids = new Set(units.flatMap((unit) => [...unit.points.flatMap((point) => point.evidence_ids), ...(unit.source_context?.evidence_ids ?? [])]));
       const operationId = receipt?.reviewer_run_id.match(/^clipmentor-review:([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/)?.[1] ?? null;
-      const productionGate = await checkCopyProduction(doc, ctx.getCreativeMode());
+      const productionGate = await checkCopyProduction(doc, mode);
       const result = {
         analysis: { copy_review: { operation_id: operationId, binding, unit_filter: args.unitId ?? null,
           receipt: receipt ? { ...metadata, units: receipt.units.filter(matches) } : null,
@@ -87,13 +130,8 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       };
       // Keep small legacy reads unchanged. Large reads page the exact frozen input, never a summary
       // of its picture plan. 12k leaves headroom below the model's 16k result budget.
-      if (part !== 'packet' || (!pagingRequested && JSON.stringify(result).length <= 12_000)) return result;
+      if (part !== 'packet' || (!pagingRequested && JSON.stringify(result).length <= 12_000)) return finishRead(result);
       if (!receipt || !teaching_review) return { error: 'No frozen review packet is available' };
-      const offset = args.packetOffset === undefined ? 0 : args.packetOffset, limit = args.packetLimit === undefined ? 6000 : args.packetLimit;
-      if (!Number.isSafeInteger(offset) || Number(offset) < 0 || !Number.isSafeInteger(limit) || Number(limit) < 256 || Number(limit) > 6000
-        || (args.packetOffset === undefined && (args.packetLimit !== undefined || args.packetDigest !== undefined))) return { error: 'Use packetOffset >= 0 and packetLimit 256–6000 (UTF-16 characters)' };
-      if ((Number(offset) > 0 && args.packetDigest === undefined)
-        || (args.packetDigest !== undefined && (typeof args.packetDigest !== 'string' || !/^[a-f0-9]{64}$/.test(args.packetDigest)))) return { error: 'Continue with packetDigest from the first page; do not mix frozen reviews' };
       // Shared source evidence is retained verbatim. Filtering only by point IDs would lose context-only observations.
       const serialized = JSON.stringify({ operation_id: operationId, analysis_revision: receipt.analysis_revision,
         content_digest: receipt.content_digest, reviewed_at: receipt.reviewed_at,
@@ -103,7 +141,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       if (args.packetDigest !== undefined && args.packetDigest !== digest) return { error: 'Frozen packet changed; restart reading from packetOffset=0, not a new review' };
       if (Number(offset) >= serialized.length) return { error: 'packetOffset is outside this frozen packet' };
       const end = Math.min(serialized.length, Number(offset) + Number(limit));
-      return {
+      return finishRead({
         analysis: { copy_review: { operation_id: operationId, binding, unit_filter: args.unitId,
           receipt_summary_only: true,
           receipt: { analysis_revision: receipt.analysis_revision, content_digest: receipt.content_digest,
@@ -116,7 +154,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
             note: 'Exact frozen JSON page, not the current replacement. Continue with next_offset and the same digest until null. Concatenate json_text in offset order; a last page does not prove earlier pages were read. Read result separately for all judgments. No new review or approval.' },
         } },
         revision: a?.revision ?? 0, production_gate: productionGate,
-      };
+      });
     }
     const evidence = view === 'evidence' ? a?.evidence.filter((entry) => (evidenceIds as string[]).includes(entry.evidence_id)) ?? [] : [];
     if (view === 'evidence' && (evidenceIds as string[]).some((id) => !evidence.some((entry) => entry.evidence_id === id))) return { error: 'Requested evidence not found' };
@@ -145,11 +183,11 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         picture_plan: typeof pictureId === 'string' ? internal?.[pictureId] ?? null : null };
     });
     const pictureBindings=view==='current_copy'&&(copyPart==='all'||copyPart==='picture_plan')?deliveryPictureBindings(doc):[];
-    if (view === 'current_copy' && copyPart !== 'all') return {
+    if (view === 'current_copy' && copyPart !== 'all') return finishRead({
       analysis: { ...(pictureBindings.length?{delivery_picture_bindings:pictureBindings}:{}), current_copy: current }, revision: a?.revision ?? 0,
-      production_gate: await checkCopyProduction(doc, ctx.getCreativeMode()),
-    };
-    return {
+      production_gate: await checkCopyProduction(doc, mode),
+    });
+    return finishRead({
       analysis: view === 'full' ? a ?? null : view === 'source_breakdown'
         ? { source: a?.source ?? null, product: a?.product ?? null, source_breakdown: a?.source_breakdown ?? null }
         : view === 'evidence' ? { source: a?.source ?? null, evidence, linked_evidence: linked,
@@ -158,16 +196,24 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         : { ...(pictureBindings.length?{delivery_picture_bindings:pictureBindings}:{}), current_copy: current },
       revision: a?.revision ?? 0,
       handoff: await checkAnalysisHandoff(doc),
-      production_gate: await checkCopyProduction(doc, ctx.getCreativeMode()),
+      production_gate: await checkCopyProduction(doc, mode),
       breakdown_check: checkSourceBreakdown(doc),
       breakdown_timeline_check: checkSourceBreakdown(doc, true),
-    };
+    });
   }
   if (!['revise_clipmentor_analysis', 'review_clipmentor_analysis'].includes(name)) return { error: 'Unknown analysis tool' };
   if (!isAnalysisActor(args.actor) || typeof args.reason !== 'string' || !args.reason.trim()) return { error: 'Declared operator, executor, instruction and reason are required' };
-  const revision = doc.clipMentorAnalysis?.revision ?? 0;
-  if (args.expectedRevision !== revision) return { error: 'Analysis revision conflict; read again', revision };
   try {
+    const stale = { error: 'Project changed or run ended during analysis write; read again' };
+    const signal = ctx.getAgentRunSignal?.();
+    if (signal?.aborted) return stale;
+    const initial = ctx.getDoc();
+    const revision = initial.clipMentorAnalysis?.revision ?? 0;
+    if (args.expectedRevision !== revision) return { error: 'Analysis revision conflict; read again', revision };
+    if (name === 'review_clipmentor_analysis' && (typeof args.expectedPointDigest !== 'string' || !/^[a-f0-9]{64}$/.test(args.expectedPointDigest))) {
+      return { error: 'Point review requires expectedPointDigest from read_clipmentor_analysis with view=full and pointId' };
+    }
+    const { doc, isCurrent, projectId } = captureAnalysisSnapshot(ctx, initial, signal);
     let a = doc.clipMentorAnalysis ? structuredClone(doc.clipMentorAnalysis) : undefined;
     const now = Date.now();
     if (name === 'revise_clipmentor_analysis' && args.action === 'append') {
@@ -188,11 +234,13 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         if (!(typeof args.state === 'string' && ['confirmed', 'needs_revision'].includes(args.state))) return { error: 'Invalid review state' };
         const point = a.points.find((p) => p.point_id === args.pointId);
         if (!point) return { error: 'Point not found' };
+        const contentDigest = await pointDigest(a, point.point_id);
+        if (await pointReviewTargetDigest(a, projectId, contentDigest) !== args.expectedPointDigest) return { error: 'Point review target changed; read again and obtain a decision on the current content' };
         const check = await checkAnalysisHandoff(doc);
         // Review state itself is expected to be pending. Only structural/source issues block a confirmation.
-        if (args.state === 'confirmed' && check.issues.some((i) => !i.code.startsWith('point_') || i.code === 'point_without_evidence')) return { error: 'Resolve source/reference/time issues before confirmation', handoff: check };
+        if (args.state === 'confirmed' && check.issues.some((i) => !pointReviewIssues.has(i.code))) return { error: 'Resolve source/reference/time issues before confirmation', handoff: check };
         const review = { point_id: point.point_id, state: args.state as 'confirmed' | 'needs_revision',
-          content_digest: await pointDigest(a, point.point_id), source_hash: a.source.sourceContentHash,
+          content_digest: contentDigest, source_hash: a.source.sourceContentHash,
           actor: args.actor, at: now, reason: args.reason };
         a.reviews = [...a.reviews.filter((r) => r.point_id !== point.point_id), review];
       } else if (args.action === 'set_copy_candidate') {
@@ -355,8 +403,6 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     if (writingCopy && !a.source_breakdown) return { error: 'Register source_breakdown before writing or replacing a copy candidate; existing manuscripts remain readable', breakdown_check: checkSourceBreakdown({ ...doc, clipMentorAnalysis: a }) };
     const pointerError = blueprintRevisionError(doc.clipMentorAnalysis?.blueprint ?? [], a.blueprint,args.action==='import'&&!doc.clipMentorAnalysis);
     if (pointerError) return { error: pointerError };
-    // Recheck after asynchronous hashing; never overwrite concurrent project changes.
-    if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; read again' };
     const next = { ...doc, clipMentorAnalysis: a };
     const missingDelivery=missingDeliverySectionKinds(doc,next);
     if(missingDelivery.length)return{error:'delivery_sections_would_be_lost',missing_delivery_kinds:missingDelivery};
@@ -366,9 +412,17 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       return {error:error.message,next_step:'Fix the current delivery declaration before saving. Use section_id, kind, line, evidence_ids, picture and voice. picture must be a bound image, not a video source range. Move delivery lines out of the body candidate atomically with the new plan.'};
     }
     const handoff = await checkAnalysisHandoff(next);
-    if (ctx.getDoc() !== doc) return { error: 'Project changed during analysis write; read again' };
-    ctx.commands.applyDoc(next);
-    return { ok: true, revision: a.revision, handoff, breakdown_check: checkSourceBreakdown(next), identity: 'local_declared_not_authenticated' };
+    const breakdown = checkSourceBreakdown(next);
+    const live = ctx.getDoc();
+    if (!isCurrent(live)) return stale;
+    const replacement = { ...live, clipMentorAnalysis: a };
+    const expected = canonicalProjectJson(replacement);
+    const unconfirmed = { error: 'Analysis write could not be confirmed; read again' };
+    try {
+      ctx.commands.applyDoc(replacement);
+      if (!isCurrent(ctx.getDoc(), expected)) return unconfirmed;
+    } catch { return unconfirmed; }
+    return { ok: true, revision: a.revision, handoff, breakdown_check: breakdown, identity: 'local_declared_not_authenticated' };
   } catch (error) {
     if(error instanceof BlueprintImportError)return{error:error.code};
     // Only this static domain error is exposed; arbitrary input/errors remain redacted.

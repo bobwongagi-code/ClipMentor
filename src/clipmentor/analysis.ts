@@ -165,6 +165,15 @@ function canonical(v: unknown): string {
   if (row(v)) return `{${Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`;
   return JSON.stringify(v);
 }
+async function digestText(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function pointReviewTargetDigest(a: Pick<ClipMentorAnalysis, 'analysis_id' | 'revision'>, projectId: string | undefined, contentDigest: string): Promise<string> {
+  return digestText(JSON.stringify(['clipmentor-point-review-v1', projectId ?? null, a.analysis_id, a.revision, contentDigest]));
+}
+
 export async function pointDigest(a: ClipMentorAnalysis, pointId: string): Promise<string> {
   const point = a.points.find((p) => p.point_id === pointId);
   if (!point) throw new Error('Analysis point not found');
@@ -177,13 +186,11 @@ export async function pointDigest(a: ClipMentorAnalysis, pointId: string): Promi
   const evidence = [...needed].sort().map((id) => a.evidence.find((e) => e.evidence_id === id) ?? { missing_id: id });
   const transcriptIds = new Set(evidence.flatMap((e) => 'source_ids' in e ? e.source_ids : []));
   const { review_status: _historicalReviewStatus, ...content } = point;
-  const bytes = new TextEncoder().encode(canonical({ point: content, evidence,
+  return digestText(canonical({ point: content, evidence,
     transcripts: a.transcripts.filter((t) => transcriptIds.has(t.source_id)),
     product: a.product, source: a.source, source_breakdown: a.source_breakdown,
     blueprint: a.blueprint.filter((b) => b.point_ids.includes(pointId)),
   }));
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
 export interface AnalysisHandoff {

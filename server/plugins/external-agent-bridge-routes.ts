@@ -288,6 +288,7 @@ async function handleBridgeReceipt(req: IncomingMessage, res: ServerResponse): P
     const claimed = claimUploadReceipt(body.receipt, body.projectId, body.claimId);
     if (claimed.status !== 'accepted') {
       sendBridgeJson(res, 409, {
+        ...(claimed.status === 'aborted' ? { code: 'upload_receipt_claim_aborted' } : {}),
         error: claimed.status === 'claimed'
           ? 'upload receipt is already being finalized'
           : 'upload receipt is invalid, expired, consumed, or outside this project',

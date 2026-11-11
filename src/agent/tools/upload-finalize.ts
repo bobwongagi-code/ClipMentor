@@ -3,13 +3,14 @@ import type { MediaAsset } from '../../editor/types';
 import { safeSourceFilename } from '../../media/sourceFilename';
 import {
   saveUploadFinalizeJournal,
+  sameUploadFinalizeTarget,
+  uploadFinalizeTarget,
   type UploadFinalizeAsset,
   type UploadFinalizeIdentity,
   type UploadFinalizeJournal,
 } from '../../persist/uploadFinalizeStore';
 import type { AgentContext } from '../context';
 import {
-  findUploadAsset,
   isUploadSourceType,
   mapUploadKind,
 } from './upload-handoff-tools';
@@ -26,6 +27,9 @@ import {
   scheduleReceiptReconciliation,
   settleReceipt,
   withReceiptCommitLock,
+  finalizeInvocationGuard,
+  assertFinalizeMutation,
+  abortPreparedJournal,
   type PreparedFinalize,
 } from './upload-finalize-journal';
 
@@ -291,7 +295,7 @@ function newFinalizeResult(
 function prepareFinalize(finalize: FinalizeContext, existing: MediaAsset | null): PreparedFinalize {
   const asset = finalizeAsset(finalize, existing ?? undefined);
   if (!existing) {
-    return { mutation: { type: 'add', asset }, result: newFinalizeResult(finalize, asset) };
+    return { mutation: { type: 'add', asset, previousAsset: null }, result: newFinalizeResult(finalize, asset) };
   }
   const relink = asset.src !== existing.src || asset.width !== existing.width
     || asset.height !== existing.height || asset.durationInFrames !== existing.durationInFrames
@@ -300,7 +304,7 @@ function prepareFinalize(finalize: FinalizeContext, existing: MediaAsset | null)
     || asset.sourceContentHash !== existing.sourceContentHash
     || asset.sourceSize !== existing.sourceSize || asset.kind !== existing.kind;
   return {
-    mutation: { type: relink ? 'relink' : 'none', asset },
+    mutation: { type: relink ? 'relink' : 'none', asset, previousAsset: uploadFinalizeTarget(existing) },
     result: existingFinalizeResult(finalize, asset),
   };
 }
@@ -309,6 +313,8 @@ async function prepareClaimedFinalize(
   args: Args,
   ctx: AgentContext,
   input: FinalizeInput,
+  previousAsset: MediaAsset | null,
+  assertActive: () => void,
 ): Promise<UploadFinalizeJournal> {
   if (args.assetType !== input.type) {
     throw new Error(`assetType does not match the trusted upload receipt (${input.type})`);
@@ -319,6 +325,7 @@ async function prepareClaimedFinalize(
   const durationInFrames = durationForFinalize(args, kind, input.type, fps);
   if (durationInFrames === null) throw new Error('durationInSeconds is required for audio/video/gif');
   const source = await finalizedSource(input, args, kind, fps, durationInFrames);
+  assertActive();
   const expectedRevision = createMediaSourceRevision({
     src: input.readUrl, sourceContentHash: input.sourceContentHash,
   });
@@ -326,6 +333,7 @@ async function prepareClaimedFinalize(
     throw new Error('content-derived source revision changed during finalize');
   }
   const claimExpiresAt = await renewFinalizeClaim(input);
+  assertActive();
   if (claimExpiresAt === null) {
     throw new Error('upload receipt claim expired or was superseded before asset commit');
   }
@@ -333,31 +341,43 @@ async function prepareClaimedFinalize(
   const offersTranscription = kind === 'audio'
     || (kind === 'video' && args.hasAudioTrack !== false);
   const finalize = { input: renewedInput, kind, source, offersTranscription, ctx };
-  return createFinalizeJournal(renewedInput, prepareFinalize(
-    finalize,
-    findUploadAsset(ctx, input.assetId),
-  ));
+  const current = ctx.getDoc().assets.find(asset => asset.id === input.assetId) ?? null;
+  if (!sameUploadFinalizeTarget(current, previousAsset)) throw new Error('Upload finalize target changed during preparation.');
+  return createFinalizeJournal(renewedInput, prepareFinalize(finalize, previousAsset));
 }
 
 async function executeClaimedFinalize(
   args: Args,
   ctx: AgentContext,
   input: FinalizeInput,
+  previousAsset: MediaAsset | null,
+  assertActive: () => void,
 ): Promise<Record<string, unknown>> {
   let journal: UploadFinalizeJournal | null = null;
   let journalSaved = false;
+  let mutationStarted = false;
   try {
-    journal = await prepareClaimedFinalize(args, ctx, input);
+    assertActive();
+    journal = await prepareClaimedFinalize(args, ctx, input, previousAsset, assertActive);
+    assertActive();
     await saveUploadFinalizeJournal(journal);
     journalSaved = true;
-    const applied = await applyJournalMutation(journal, ctx);
-    const confirmation = await confirmReceiptCommit(applied, false);
-    if (!confirmation.committed) scheduleReceiptReconciliation(confirmation.journal, ctx);
+    assertActive();
+    const applied = await applyJournalMutation(journal, ctx, assertActive, () => { mutationStarted = true; });
+    assertActive();
+    const confirmation = await confirmReceiptCommit(applied, false, () => assertFinalizeMutation(applied, ctx, assertActive));
+    assertActive();
+    if (!confirmation.committed) scheduleReceiptReconciliation(confirmation.journal, ctx, assertActive);
     return receiptCommitResult(applied.result, confirmation.committed
       ? 'committed' : 'reconciliation_pending');
   } catch (error) {
+    try { assertActive(); } catch (inactive) {
+      if (journalSaved && journal && !mutationStarted) await abortPreparedJournal(journal);
+      else if (!journalSaved) await settleReceipt(input, 'abort');
+      return { error: inactive instanceof Error ? inactive.message : String(inactive) };
+    }
     if (journalSaved && journal && mutationMatchesProject(journal.mutation, ctx)) {
-      scheduleReceiptReconciliation(journal, ctx);
+      scheduleReceiptReconciliation(journal, ctx, assertActive);
       return receiptCommitResult(journal.result, 'reconciliation_pending');
     }
     if (!journalSaved) await settleReceipt(input, 'abort');
@@ -370,15 +390,21 @@ async function execFinalizeUploadLocked(
   ctx: AgentContext,
   receipt: string,
   projectId: string,
+  assertActive: () => void,
 ): Promise<unknown> {
+  let assets: MediaAsset[];
   try {
-    const resumed = await resumeReceiptCommit(receipt, projectId, ctx);
+    assertActive();
+    const resumed = await resumeReceiptCommit(receipt, projectId, ctx, assertActive);
     if (resumed) return resumed;
+    assets = ctx.getDoc().assets;
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
   const input = await claimFinalizeInput(receipt, projectId);
-  return 'error' in input ? input : executeClaimedFinalize(args, ctx, input);
+  if ('error' in input) return input;
+  const previousAsset = assets.find(asset => asset.id === input.assetId) ?? null;
+  return executeClaimedFinalize(args, ctx, input, uploadFinalizeTarget(previousAsset), assertActive);
 }
 
 export async function execFinalizeUpload(
@@ -390,8 +416,9 @@ export async function execFinalizeUpload(
   const projectId = ctx.getProjectId?.();
   if (!projectId) return { error: 'a persisted project is required to finalize an upload receipt' };
   const key = receiptCommitKey({ receipt: preliminary.receipt, projectId });
+  const assertActive = finalizeInvocationGuard(ctx, projectId);
   return withReceiptCommitLock(
     key,
-    () => execFinalizeUploadLocked(args, ctx, preliminary.receipt, projectId),
+    () => execFinalizeUploadLocked(args, ctx, preliminary.receipt, projectId, assertActive),
   );
 }
