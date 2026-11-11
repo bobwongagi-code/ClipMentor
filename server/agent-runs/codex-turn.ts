@@ -76,7 +76,9 @@ async function summarizeWithCodex(
   const requestId = `summary-${input.run.id}-${input.requestIndex}-${crypto.randomUUID().slice(0, 8)}`;
   let text = '';
   await input.activation.host?.beforeRequest();
-  await recordHandoffDispatch(input.run,'summary',{backend:'codex',system:systemPrompt,prompt,tools:[]});
+  const assertDispatch=await recordHandoffDispatch(input.run,'summary',{backend:'codex',system:systemPrompt,prompt,tools:[]},input.signal);
+  input.signal.throwIfAborted();
+  assertDispatch?.();
   await runServerCodexTurn(
     {
       requestId,
@@ -282,7 +284,9 @@ export async function executeServerCodexTurn(
   try {
     input.signal.throwIfAborted();
     await input.activation.host?.beforeRequest();
-    await recordHandoffDispatch(input.run,'author',{backend:'codex',model:input.model,system:input.instructions,prompt:serializeMessagesForPrompt([...prepared.messages]),tools:codexToolSpecs(schemas)});
+    const assertDispatch=await recordHandoffDispatch(input.run,'author',{backend:'codex',model:input.model,system:input.instructions,prompt:serializeMessagesForPrompt([...prepared.messages]),tools:codexToolSpecs(schemas)},input.signal);
+    input.signal.throwIfAborted();
+    assertDispatch?.();
     arm();
     if (input.signal.aborted) onAbort();
     await Promise.race([watchdog, runTurn(
