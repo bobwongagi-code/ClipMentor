@@ -3,7 +3,7 @@ import {registeredAudioBindings} from './production-readiness';
 import {deliveryAudio,deliverySectionsFromDoc} from '../../src/clipmentor/delivery-sections';
 
 type Row=Record<string,unknown>;
-type ReuseResult={status:'reusable';asset:MediaAsset;durationSeconds:number;reused:true}
+type ReuseResult={status:'reusable';asset:MediaAsset;durationSeconds:number;reused:true;audioHash?:string}
  |{status:'missing'|'unverified'|'conflict';reason:string;asset_ids:string[]};
 const defaults={speed:1,pitch:0,volume:1,languageBoost:'auto',sampleRate:32000,channel:1,audioFormat:'mp3'};
 /** Missing files and unknown/conflicting selected provenance are different outcomes.
@@ -52,7 +52,9 @@ export function reusableVoiceForRequest(doc:ProjectDoc,args:Row):ReuseResult{
    if(selected.size)return{status:'conflict',reason:'selected_audio_measurement_invalid',asset_ids:[asset.id]};unknown.push(asset.id);continue;
   }
   if(extra||keys.some(k=>meta[k]===undefined)){unknown.push(asset.id);continue;}
-  return{status:'reusable',asset,durationSeconds:duration,reused:true};
+  const delivery=sections.find(s=>s.voice.existing_audio?.assetId===asset.id);
+  const audioHash=typeof binding?.audioSha256==='string'?binding.audioSha256:delivery?.voice.existing_audio?.sha256??asset.sourceContentHash;
+  return{status:'reusable',asset,durationSeconds:duration,reused:true,audioHash};
  }
  return unknown.length?{status:'unverified',reason:'existing_audio_configuration_unverified',asset_ids:unknown}
   :{status:'missing',reason:'no_matching_audio',asset_ids:[]};

@@ -4,11 +4,39 @@ import {copyTeachingPacketFromDoc,copyReviewSubject,buildCopyTeachingReviewReque
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {diffDeliveryCheck} from '../../src/clipmentor/delivery-diff';
 import {digestValue} from '../agent-runs/store-values';
+import { stat } from 'node:fs/promises';
+import { isSafeUploadName, resolveUploadFile } from '../media-dir';
+import { sha256File } from '../../shared/node-content-hash';
 
 /** Structural binding only. Neither this nor a successful render certifies teaching quality. */
 export async function verifyProductionNarration(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){
  const packet=await copyTeachingPacketFromDoc(doc);
  return [...matchMeasuredNarration(packet.units.flatMap(u=>u.lines),doc.assets,voice,registeredAudioBindings(doc)),...deliverySectionsFromDoc(doc).map(s=>{const a=deliveryAudio(doc,s);return{lineId:s.line.line_id,assetId:a.asset.id,durationSeconds:a.frames/doc.timelines.find(t=>t.id===doc.activeTimelineId)!.fps};})];
+}
+export async function assertProductionAudioFile(asset:MediaAsset,expectedHash=asset.sourceContentHash){
+ const prefix='/media/uploads/';
+ const name=asset.src.startsWith(prefix)?asset.src.slice(prefix.length):'';
+ const file=isSafeUploadName(name)?resolveUploadFile(name):null;
+ if(!file)throw Error('production_audio_file_missing:'+asset.id);
+ const info=await stat(file);
+ if(!info.isFile()||info.size<=0)throw Error('production_audio_file_invalid:'+asset.id);
+ if(expectedHash&&await sha256File(file)!==expectedHash)throw Error('production_audio_file_changed:'+asset.id);
+}
+export async function verifyProductionNarrationFiles(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){
+ const narration=await verifyProductionNarration(doc,voice);
+ const bindings=registeredAudioBindings(doc),sections=deliverySectionsFromDoc(doc);
+ const checked=new Set<string>();
+ for(const {assetId,lineId} of narration){
+  const asset=doc.assets.find(a=>a.id===assetId)!;
+  const binding=bindings.find(b=>b.lineId===lineId&&b.assetId===assetId);
+  const section=sections.find(s=>s.line.line_id===lineId);
+  const hash=section?.voice.existing_audio?.sha256??(typeof binding?.audioSha256==='string'?binding.audioSha256:asset.sourceContentHash);
+  const identity=JSON.stringify([assetId,hash]);
+  if(checked.has(identity))continue;
+  await assertProductionAudioFile(asset,hash);
+  checked.add(identity);
+ }
+ return narration;
 }
 export function registeredAudioBindings(doc:ProjectDoc):Record<string,unknown>[] {
  const bindings:Record<string,unknown>[]=[];

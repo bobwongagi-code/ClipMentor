@@ -1,4 +1,4 @@
-import {ExternalHttpError,readSavedExternalResponse} from '../clipmentor/external-call.ts';
+import {ExternalCallError,ExternalHttpError,readSavedExternalResponse} from '../clipmentor/external-call.ts';
 import {externalFetch} from '../clipmentor/external-fetch.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
@@ -31,6 +31,9 @@ interface Dependencies {
   directory: string;
 }
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+// Only method/implementation refusal proves this fixed protocol unavailable.
+// A generic 400, 404 or 415 may describe the particular payload or its routing.
+const FUNASR_CAPABILITY={scope:{model:FUNASR_MODEL,method:'POST',audio:ASR_AUDIO,sse:'disable'},unsupportedStatuses:[405,501]} as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const sha = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 function parseRequest(v: unknown): SourceRequest {
@@ -92,9 +95,10 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     await writeFile(ledger, JSON.stringify({ fingerprint, identity, status: 'reserved', requests_attempted: 0 }), { flag: 'wx', mode: 0o600 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Could not reserve transcription operation');
-    const prior = JSON.parse(await readFile(ledger, 'utf8')) as { fingerprint: string; result?: SourceTranscription };
+    const originalText=await readFile(ledger,'utf8');
+    const prior = JSON.parse(originalText) as { fingerprint: string; result?: SourceTranscription };
     if (prior.fingerprint !== fingerprint) throw new Error('Operation ID already belongs to another source or configuration');
-    if (prior.result) return recoverSavedAsr(prior.result,ledger,fingerprint,deps.directory);
+    if (prior.result) return recoverSavedAsr(prior.result,ledger,originalText,fingerprint,deps.directory);
     throw new Error('Prior operation is running or outcome unknown; no automatic replay');
   }
   const result: SourceTranscription = {
@@ -147,6 +151,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
       let stage: 'network' | 'http' | 'json' | 'timestamps' = 'network';
       try {
         const response = await externalFetch({directory:deps.directory,kind:'asr',purpose:'fun-asr-chunk-v1',
+          sharedCapability:FUNASR_CAPABILITY,
           scope:{model:FUNASR_MODEL,source:sourceHash,language:request.language,range:[chunk.offset_seconds,chunk.end_seconds]},requestId:`${request.operationId}:${chunk.chunk_id}`,endpoint,fetch:deps.fetch,init:{
           method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-DashScope-SSE': 'disable' },
@@ -164,6 +169,14 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
         delete chunk.error; delete chunk.failure_stage;
         result.issues = result.issues.filter(issue => issue !== `${chunk.chunk_id}:provider_request_failed_or_invalid_timestamps`);
       } catch (error) {
+        if(error instanceof ExternalCallError&&error.code==='external_capability_unsupported'){
+          // Preflight refused a new transport reservation. Earlier attempts stay charged.
+          result.requests_attempted--;
+          chunk.status='not_requested';
+          delete chunk.error;delete chunk.failure_stage;
+          result.issues[result.issues.length-1]=`${chunk.chunk_id}:provider_endpoint_capability_unsupported`;
+          break;
+        }
         if(error instanceof ExternalHttpError){chunk.http_status=error.status;stage='http';}
         // Never expose upstream bodies, request headers, audio or credential-bearing exceptions.
         chunk.status = 'failed'; chunk.error = 'provider_request_failed_or_invalid_timestamps';
@@ -209,7 +222,7 @@ function settleAsr(result:SourceTranscription,duration:number){
     const completed = result.chunks.filter((c) => c.status === 'completed').length;
     result.status = completed === result.chunks.length ? 'completed' : completed ? 'partial' : 'failed';
 }
-async function recoverSavedAsr(original:SourceTranscription,ledger:string,fingerprint:string,directory:string,readLimits?:{maxBytes:number;maxRecords:number},signal?:AbortSignal){
+async function recoverSavedAsr(original:SourceTranscription,ledger:string,originalText:string,fingerprint:string,directory:string,readLimits?:{maxBytes:number;maxRecords:number},signal?:AbortSignal){
  if(original.status==='completed')return original;
  const result=structuredClone(original);let recovered=false;
  for(const chunk of result.chunks){
@@ -228,7 +241,6 @@ async function recoverSavedAsr(original:SourceTranscription,ledger:string,finger
  if(!recovered)return original;
  settleAsr(result,original.duration_seconds);
  if(readLimits&&!validSavedAsr(result))return original;
- const originalText=readLimits?(await readAsrLedger(ledger)).text:await readFile(ledger,'utf8');
  signal?.throwIfAborted();
  await atomicWriteFile(ledger+'.recovered-raw-v1.json',JSON.stringify({fingerprint,original_ledger_sha256:digest(Buffer.from(originalText)),provider_requests_sent:0,result}));
  return result;
@@ -302,7 +314,7 @@ export async function readClipMentorSourceAsr(input:unknown,deps:Pick<Dependenci
   ||record.result.requested_language!==identity.language||record.result.requests_attempted>identity.maxRequests)return outcome('invalid');
  const original=record.result;
  let result:SourceTranscription;
- try{result=await recoverSavedAsr(original,join(deps.directory,`${input.operationId}.json`),record.fingerprint,deps.directory,READ_LIMITS,signal);}
+ try{result=await recoverSavedAsr(original,join(deps.directory,`${input.operationId}.json`),saved.text,record.fingerprint,deps.directory,READ_LIMITS,signal);}
  catch{signal?.throwIfAborted();return outcome('invalid');}
  if(!validSavedAsr(result)||result.issues.includes('source_changed_during_transcription'))return outcome('stale');
  // A read racing an operation update never returns a mixed snapshot as current.

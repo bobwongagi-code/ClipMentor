@@ -15,7 +15,7 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
   if(cancellation?.aborted)return {error:'Independent review cancelled before submission',requestsSent:0};
   const snapshot=canonicalProjectJson(liveDoc),doc=JSON.parse(snapshot) as typeof liveDoc;
   const analysis=doc.clipMentorAnalysis;let requestSignal=cancellation;
-  const current=()=>canonicalProjectJson(ctx.getDoc())===snapshot&&ctx.getProjectId?.()===project
+  const current=(expected=snapshot)=>canonicalProjectJson(ctx.getDoc())===expected&&ctx.getProjectId?.()===project
     &&ctx.getAgentRunId?.()===author&&ctx.getAgentRunSignal?.()===cancellation&&!requestSignal?.aborted;
   if (!analysis || analysis.revision !== args.expectedRevision || !author || !project) return { error: 'Current revision and host project/run context required' };
   const asset = doc.assets.find((a) => a.id === analysis.source.asset_id);
@@ -54,7 +54,10 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
     const next = { ...doc, clipMentorAnalysis: { ...analysis, production_copy_review: receipt } };
     const gate = await checkCopyProduction(next, ctx.getCreativeMode());
     if (!current()) return { error: 'Project changed or run cancelled before saving review; no result applied' };
-    ctx.commands.applyDoc(next);
+    const unconfirmed={error:'Review received but project write could not be confirmed. Read the current project and saved receipt.',operationId:args.operationId,production_approved:false};
+    const expected=canonicalProjectJson(next);
+    try{ctx.commands.applyDoc(next);if(!current(expected))return unconfirmed;}
+    catch{return unconfirmed;}
     return { ok: true, operationId: result.operationId, requestsAttempted: result.requestsAttempted,
       cached: result.cached === true, requestsSent: result.cached ? 0 : result.requestsAttempted,
       revision: analysis.revision, verdict: receipt.verdict, units: receipt.units, production_gate: gate,

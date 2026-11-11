@@ -232,16 +232,25 @@ export async function waitForGenerationAcceptance(operationId: string): Promise<
   return job.acceptance.promise;
 }
 
+async function persistRecoveryStart(job: GenerationJob, changes: Partial<GenerationJob>): Promise<void> {
+  const previous = { ...job, expiryTimer: undefined };
+  clearTimeout(job.expiryTimer);
+  Object.assign(job, changes, { expiryTimer: undefined });
+  try { await persistJobs(); }
+  catch (error) {
+    Object.assign(job, previous);
+    scheduleExpiry(job);
+    throw error;
+  }
+}
+
 async function resumeWithRegisteredHandler(job: GenerationJob): Promise<boolean> {
   const resumer = resumers.get(resumerKey(job.toolName, job.provider));
   if (!resumer || job.resuming || !job.timestamps.acceptedAt) return false;
-  clearTimeout(job.expiryTimer);job.expiryTimer=undefined;
-  job.resuming = true;
-  job.status = 'queued';
-  job.progress = Math.min(job.progress, 99);
-  job.phase = 'recovering';
-  job.retryClass = 'restart-recoverable';
-  await persistJobs();
+  await persistRecoveryStart(job, {
+    resuming: true, status: 'queued', progress: Math.min(job.progress, 99),
+    phase: 'recovering', retryClass: 'restart-recoverable',
+  });
   void runGenerationJob(job, (_id, update, registerDownload, registerProviderTask) => (
     resumer(snapshotOf(job), update, registerDownload, registerProviderTask)
   ), {});
@@ -292,14 +301,11 @@ export async function resumeGenerationJobDownload(jobId: string): Promise<boolea
   if (!job || job.status !== 'failed') return false;
   if ((!job.resumeDownload || !job.pendingDownloadUrl) && await resumeWithRegisteredHandler(job)) return true;
   if (!job.resumeDownload || !job.pendingDownloadUrl) return false;
-  clearTimeout(job.expiryTimer);job.expiryTimer=undefined;
-  job.status = 'running';
-  job.progress = 99;
-  job.phase = 'downloading';
-  job.error = undefined;
-  job.updatedAt = Date.now();
-  job.timestamps.updatedAt = job.updatedAt;
-  await persistJobs();
+  const updatedAt = Date.now();
+  await persistRecoveryStart(job, {
+    status: 'running', progress: 99, phase: 'downloading', error: undefined,
+    updatedAt, timestamps: { ...job.timestamps, updatedAt },
+  });
   try {
     completeGenerationJob(job, await job.resumeDownload());
     return true;

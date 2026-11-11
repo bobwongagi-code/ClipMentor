@@ -6,7 +6,7 @@ import {getStoredEntry} from '../plugins/project-store';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {digestValue} from '../agent-runs/store-values';
-type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
+export type EntryPreconditions=Extract<ProjectStoreRequest,{operation:'agent-runtime-write'}>['entryPreconditions'];
 import {randomUUID,createHash} from 'node:crypto';
 import {agentRuntimeKey,appendAgentRunEvent,storeAgentArtifact,loadAgentArtifact,loadAgentRuntimeSidecar} from '../../src/persist/agentRuntimeStore';
 import {createRun,flushRunPersistence,setRunStatus,pushRunEvent,recoverServerRun} from '../agent-runs/store';
@@ -441,7 +441,7 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
   }finally{clearTimeout(timer);}
  });
 }
-export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,store=productionTaskStore){
+export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
  if(!task.input.humanBlueprintReview||task.status!=='awaiting_blueprint'||task.stage!=='copy_review')throw new Error('蓝图当前不在待确认状态');
  if(typeof displayedRevision!=='string'||displayedRevision!==task.projectRevision||displayedRevision!==savedRevision
   ||task.completed.copy_review?.artifact.revision!==displayedRevision
@@ -461,10 +461,12 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
   delete next.blueprintFeedbackSummary;
   next.stage='audio';
  }
- next.status='queued';await store.save(next);Object.assign(task,next);return task;
+ next.status='queued';
+ if(guards)await saveProductionControl(task,next,store,guards);else await store.save(next);
+ Object.assign(task,next);return task;
 }
 /** Accept business feedback while a saved draft waits for review, without spending effects or changing approval state. */
-export async function savePendingBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore){
+export async function savePendingBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
  if(!task.input.humanBlueprintReview||!(task.status==='blocked'
   ||task.status==='awaiting_blueprint'&&revision!==task.projectRevision)||!['blueprint','copy_review'].includes(task.stage)
   ||typeof revision!=='string'||!revision.trim()
@@ -473,13 +475,14 @@ export async function savePendingBlueprintFeedback(task:ProductionTask,revision:
  next.blueprintFeedback=feedback.trim();
  delete next.blueprintFeedbackSummary;
  next.repairContext={...next.repairContext,pending_blueprint_feedback:{text:feedback.trim(),revision}};
- await store.save(next);Object.assign(task,next);
+ if(guards)await saveProductionControl(task,next,store,guards);else await store.save(next);
+ Object.assign(task,next);
 }
 
 /** Control intents keep the preview they were based on, but may merge a
  * concurrently published immutable shared-body marker. Never overwrite another
  * worker's effects, counters, feedback or acceptance with an old control clone. */
-async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc){
+export async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc){
  const subject=(task:ProductionTask)=>{const {updatedAt:_at,sequence:_sequence,sharedProduction:_shared,...rest}=task;return digestValue(rest);};
  let contention:unknown=new Error('agent_runtime_precondition_changed');
  for(let attempt=0;attempt<3;attempt++){

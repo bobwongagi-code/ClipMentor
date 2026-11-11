@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import fixture from '../../src/clipmentor/fixtures/copy-review-r171-contract.json';
 import { observeSourceVideo, readSourceVideoReceipt, sourceVideoInput, type SourceVideoDependencies } from './source-video.ts';
 import { reviewClipMentorCopy, type CopyReviewDependencies } from './copy-review.ts';
@@ -17,6 +18,7 @@ const hash = (v: string | Buffer) => createHash('sha256').update(v).digest('hex'
 const video = Buffer.from('local-source-video-fixture');
 function requestFor(kind: Kind): CopyReviewRequest {
   const request = structuredClone(fixture.request) as CopyReviewRequest;
+  request.projectId='offline-project';
   request.operationId = kind === 'source' ? 'ac981860-1614-4c3e-a665-f2427522e43c' : '6490827e-74bc-4cf0-a93e-8066b85a6f74';
   if (kind === 'source') request.source.hash = hash(video);
   for (const unit of request.packet.units) unit.source_context = {
@@ -58,18 +60,57 @@ async function assertBlocked(kind: Kind, request: CopyReviewRequest, deps: Retur
   } else await assert.rejects(reviewClipMentorCopy(request, deps.copy, undefined, true), /review_cancelled_or_timed_out/);
 }
 
+async function resumeSourceThroughHost(request:CopyReviewRequest,source:SourceVideoDependencies) {
+  const {clipMentorSourceVideoPlugin}=await import('../plugins/clipmentor-source-video');
+  const {openHeadlessEditor}=await import('./headless-editor');
+  const {MemoryPersistence,projectDoc}=await import('../external-agent/offline-runtime.verify-fixtures');
+  let handler:((req:IncomingMessage,res:ServerResponse)=>void)|undefined;
+  const configure=clipMentorSourceVideoPlugin(source).configureServer;
+  assert.equal(typeof configure,'function');
+  if(typeof configure!=='function')throw Error('Missing route');
+  configure({middlewares:{use:(_path:string,fn:typeof handler)=>{handler=fn;}}} as never);
+  const server=createServer((req,res)=>handler!(req,res));
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const origin=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
+  try{
+    const actions:unknown[]=[];
+    const editor=await openHeadlessEditor({projectId:request.projectId,runId:request.authorRunId,origin,
+      review:{provider:'openai',model:'fixture',origin,apiMode:'responses'},persistence:new MemoryPersistence(projectDoc()),browserConnected:()=>false,
+      fetch:async(url,init)=>{actions.push(JSON.parse(String(init?.body)).action);return fetch(url,init);},
+      effect:async(_kind,key,_work,recover)=>{assert.equal(key,request.operationId);assert(recover);return recover(key);}});
+    try{
+      const response=await editor.context.hostFetch!('/api/clipmentor/observe-video',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+      assert.equal(response.status,200);
+      assert.deepEqual(actions,['read_receipt','resume_preparation']);
+      return await response.json();
+    }finally{await editor.close();}
+  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+}
+
 const workerKind = process.argv[2];
-if (workerKind === 'source-crash-worker' || workerKind === 'copy-crash-worker') {
-  const kind: Kind = workerKind === 'source-crash-worker' ? 'source' : 'copy';
+if (workerKind?.endsWith('-crash-worker')) {
+  const kind: Kind = workerKind.startsWith('source-') ? 'source' : 'copy';
   const directory = process.argv[3], request = requestFor(kind);
   await mkdir(directory, { recursive: true });
   let hashReads = 0;
-  const deps = dependencies(directory, request, async () => { await appendFile(join(directory, 'dispatch.ndjson'), 'local-fixture\n'); }, () => {
+  const deps = dependencies(directory, request, async () => {
+    await appendFile(join(directory, 'dispatch.ndjson'), 'local-fixture\n');
+    if(workerKind.includes('-sent-'))process.kill(process.pid,'SIGKILL');
+  }, () => {
     hashReads++;
     // The raw envelope and reserved parent have been saved, but no completed
     // receipt exists. Exit bypasses catch/finally in the real adapter.
     if (hashReads === (kind === 'source' ? 2 : 3)) process.exit(73);
   });
+  if(workerKind.includes('-prepare-')){
+    deps.source.read=async()=>{process.kill(process.pid,'SIGKILL');return video;};
+    deps.copy.frame=async(_file,_seconds,output)=>{
+      await writeFile(output,'interrupted fixture frame');
+      process.kill(process.pid,'SIGKILL');
+      return '';
+    };
+  }
   if (kind === 'source') await observeSourceVideo(request, deps.source);
   else await reviewClipMentorCopy(request, deps.copy);
   process.exit(74);
@@ -78,6 +119,66 @@ if (workerKind === 'source-crash-worker' || workerKind === 'copy-crash-worker') 
 const root = await mkdtemp(join(tmpdir(), 'clipmentor-saved-model-read-'));
 try {
   for (const kind of ['source', 'copy'] as const) {
+    {
+    const prepareDirectory=join(root,`${kind}-prepare-crash`),prepareRequest=requestFor(kind);
+    const preparing=spawnSync(process.execPath,['--import','tsx',fileURLToPath(import.meta.url),`${kind}-prepare-crash-worker`,prepareDirectory],
+      {cwd:process.cwd(),encoding:'utf8',timeout:20_000});
+    assert.equal(preparing.signal,'SIGKILL',preparing.stderr);
+    const prepareLedger=join(prepareDirectory,`${prepareRequest.operationId}.json`);
+    const interrupted=await readFile(prepareLedger,'utf8');
+    assert.equal(JSON.parse(interrupted).status,'preparing');
+    assert.equal(JSON.parse(interrupted).requests_attempted,0);
+    await assert.rejects(readFile(join(prepareDirectory,'dispatch.ndjson')), {code:'ENOENT'});
+    let preparedCalls=0;
+    const prepareDeps=dependencies(prepareDirectory,prepareRequest,async()=>{preparedCalls++;});
+    const submit=(request=prepareRequest)=>kind==='source'?observeSourceVideo(request,prepareDeps.source,undefined,true)
+      :reviewClipMentorCopy(request,prepareDeps.copy,undefined,'resume_preparation');
+    await assert.rejects(submit({...prepareRequest,operationId:'557ee016-1bdd-4f8f-a46f-17cd60362092'}));
+    await assert.rejects(submit({...prepareRequest,authorRunId:'different-author'}));
+    assert.equal(await readFile(prepareLedger,'utf8'),interrupted);
+    if(kind==='source'){
+      await assert.rejects(observeSourceVideo(prepareRequest,{...prepareDeps.source,key:'different-account'},undefined,true));
+    }else{
+      await writeFile(prepareLedger,JSON.stringify({...JSON.parse(interrupted),criteria_digest:'f'.repeat(64)}));
+      await assert.rejects(submit());
+      await writeFile(prepareLedger,interrupted);
+    }
+    const legacy=JSON.parse(interrupted);delete legacy.preparation_protocol;
+    await writeFile(prepareLedger,JSON.stringify(legacy));
+    await assert.rejects(submit());
+    assert.equal(preparedCalls,0);
+    await writeFile(prepareLedger,interrupted);
+    const entered=Promise.withResolvers<void>(),releasePrep=Promise.withResolvers<void>();
+    const readSource=prepareDeps.source.read,readFrame=prepareDeps.copy.frame;
+    prepareDeps.source.read=async()=>{entered.resolve();await releasePrep.promise;return readSource('local');};
+    prepareDeps.copy.frame=async(...args)=>{entered.resolve();await releasePrep.promise;return readFrame(...args);};
+    const pending=kind==='source'?resumeSourceThroughHost(prepareRequest,prepareDeps.source):submit();
+    await Promise.race([entered.promise,pending.then(()=>{throw Error('Preparation did not wait for its owner');})]);
+    try{
+      await assert.rejects(submit());
+      assert.equal(preparedCalls,0);
+      assert.equal(await readFile(prepareLedger,'utf8'),interrupted);
+    }finally{releasePrep.resolve();}
+    const resumed=await pending;
+    assert.equal(resumed.requestsAttempted,1);
+    assert.equal(preparedCalls,1);
+    await submit();
+    assert.equal(preparedCalls,1);
+    assert.equal((await readdir(prepareDirectory)).some(name=>name.startsWith('frames-')),false);
+
+    const sentDirectory=join(root,`${kind}-sent-crash`);
+    const sent=spawnSync(process.execPath,['--import','tsx',fileURLToPath(import.meta.url),`${kind}-sent-crash-worker`,sentDirectory],
+      {cwd:process.cwd(),encoding:'utf8',timeout:20_000});
+    assert.equal(sent.signal,'SIGKILL',sent.stderr);
+    const sentLedger=join(sentDirectory,`${prepareRequest.operationId}.json`),sentBefore=await readFile(sentLedger,'utf8');
+    const sentDeps=dependencies(sentDirectory,prepareRequest,async()=>{preparedCalls++;});
+    assert.equal(JSON.parse(sentBefore).status,'reserved');
+    await assert.rejects(kind==='source'?observeSourceVideo(prepareRequest,sentDeps.source,undefined,true)
+      :reviewClipMentorCopy(prepareRequest,sentDeps.copy,undefined,'resume_preparation'));
+    assert.equal(await readFile(sentLedger,'utf8'),sentBefore);
+    assert.equal(preparedCalls,1);
+    }
+
     const request = requestFor(kind), directory = join(root, `${kind}-late`);
     const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
     let calls = 0;
@@ -158,5 +259,5 @@ try {
     assert.equal(await readFile(crashParent, 'utf8'), crashed);
     assert.equal((await readFile(join(crashDirectory, 'dispatch.ndjson'), 'utf8')).trim().split('\n').length, 1);
   }
-  console.log('Saved source/copy response recovery: cancelled late raw, real subprocess crash, immutable original attempts/judgments, missing/corrupt/wrong-identity/source-drift/refused reads and zero repeated dispatch/extraction passed');
+  console.log('Saved source/copy response recovery: SIGKILL before/after dispatch, real source host/HTTP resume, concurrent owner, legacy/wrong/missing binding, late raw and immutable original verdicts passed');
 } finally { await rm(root, { recursive: true, force: true }); }

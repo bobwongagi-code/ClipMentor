@@ -185,7 +185,7 @@ function updatedProjectIndex(value: unknown, projectId: string, now: number): un
 }
 
 async function restoreEntries(
-  store: LockedProjectStore,
+  store: Pick<LockedProjectStore, 'writeEntry'|'removeEntry'>,
   written: readonly string[],
   originals: Readonly<Record<string, StoredEntryValue>>,
 ): Promise<void> {
@@ -196,8 +196,8 @@ async function restoreEntries(
   }
 }
 
-async function writeCommitEntries(
-  store: LockedProjectStore,
+export async function writeCommitEntries(
+  store: Pick<LockedProjectStore, 'writeEntry'|'removeEntry'>,
   changes: Readonly<Record<string, unknown>>,
   originals: Readonly<Record<string, StoredEntryValue>>,
   canCommit: () => boolean,
@@ -206,8 +206,9 @@ async function writeCommitEntries(
   try {
     for (const [key, value] of Object.entries(changes)) {
       if (!canCommit()) throw new BrowserTakeoverError();
-      await store.writeEntry(key, value);
+      // A durable write can replace its file and then fail while syncing the directory.
       written.push(key);
+      await store.writeEntry(key, value);
     }
     if (!canCommit()) throw new BrowserTakeoverError();
   } catch (error) {

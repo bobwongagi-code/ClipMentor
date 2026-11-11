@@ -55,6 +55,23 @@ try{
  const registered=await bind();assert.equal(registered.status,200,JSON.stringify(registered.body));const digest=String(registered.body.digest);
  const admitted=await post(input);assert.equal(admitted.status,201,JSON.stringify(admitted.body));const run=getRun(runId)!;assert(run);
  await assertRunHandoff(run);
+ {
+  const before=(await readHandoffPolicy(projectId))!,deadline=before.startedAt!+before.brief.budget.maxElapsedMs;
+  const realNow=Date.now;let pastPreflight=false;
+  try{
+   Date.now=()=>{
+    if(pastPreflight)return deadline;
+    if(new Error().stack?.includes('at assertRunHandoff')){pastPreflight=true;return deadline-1;}
+    return realNow();
+   };
+   await assert.rejects(reserveHandoff(run,'tool','expired-before-write','edit_item',{}),/handoff_deadline_exceeded/);
+  }finally{Date.now=realNow;}
+  assert(pastPreflight);
+  assert.deepEqual(await readHandoffPolicy(projectId),before,'a queued reservation cannot spend after the deadline');
+  const assertDispatch=await reserveHandoff(run,'tool','read-deadline','read_timeline',{});
+  try{Date.now=()=>deadline;assert.throws(()=>assertDispatch?.(),/handoff_deadline_exceeded/);}
+  finally{Date.now=realNow;}
+ }
  const storedBinding=(await getStoredEntry(handoffRunKey(projectId,runId))).value as {payloadArtifactId:string};
  const artifact=(await loadAgentArtifact(projectId,storedBinding.payloadArtifactId))!;assert(artifact);
  const packet=JSON.parse(artifact.body);assert(packet.sent.instructions.includes(HANDOFF_TEMPLATE_VERSION));

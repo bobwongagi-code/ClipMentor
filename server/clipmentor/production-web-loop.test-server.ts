@@ -16,8 +16,9 @@ const {runtimeProfile}=await import('../runtime-profile');assert.equal(runtimePr
 const {setStoredEntry}=await import('../plugins/project-store');
 const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
 const {activateOfflineAgentRuntimeBackend}=await import('../external-agent/agent-runtime-persistence');activateOfflineAgentRuntimeBackend();
-const {createProductionTask,productionTaskStore,latestPanelProductionTask}=await import('./production-task');
+const {createProductionTask,productionTaskStore,latestPanelProductionTask,advanceProductionTask,cancelProductionTask}=await import('./production-task');
 const {createProductionPanel}=await import('./production-panel');
+const {createMaterialIntakeHandler}=await import('./material-intake');
 const {copyReviewSubject,copyTeachingPacketFromDoc,bindCopyProductionReview,checkCopyProduction}=await import('../../src/clipmentor/production-gate');
 const {reviewClipMentorCopy}=await import('./copy-review');
 const {feedbackProjectDigest}=await import('./production-feedback');
@@ -32,7 +33,7 @@ const media=uploadDir();await mkdir(media,{recursive:true});
 // Keep the historical packet structure; replace every media identity with generated test bytes.
 for(const asset of doc.assets.filter((a:any)=>a.kind==='video'||a.kind==='image')){
  const file=join(media,asset.src.split('/').at(-1));
- if(asset.kind==='video')execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i','testsrc2=s=96x160:r=30','-t',String(asset.durationInFrames/30),'-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p',file]);
+ if(asset.kind==='video')execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i','testsrc2=s=96x160:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t',String(asset.durationInFrames/30),'-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-c:a','aac',file]);
  else execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i',`color=c=navy:s=${asset.width}x${asset.height}`,'-frames:v','1',file]);
  const old=asset.sourceContentHash,replacement=hash(await readFile(file));
  if(old)doc=JSON.parse(JSON.stringify(doc).replaceAll(old,replacement));
@@ -40,7 +41,11 @@ for(const asset of doc.assets.filter((a:any)=>a.kind==='video'||a.kind==='image'
 // Supplement only the historical test fixture's display timeline. It does not alter execution phases.
 const ir=doc.clipMentorAnalysis.blueprint[0].internal_review,phases=ir[ir.current_picture_plan].phases;
 doc.estimated_picture_timeline={rows:[{unit_id:doc.clipMentorAnalysis.blueprint[0].unit_id,kind:'original',source_range_seconds:[0,doc.clipMentorAnalysis.source.duration_seconds],line_ids:[],picture:'合成原片协议样本'},...phases.map((p:any)=>({unit_id:doc.clipMentorAnalysis.blueprint[0].unit_id,kind:'explanation',source_range_seconds:p.source_seconds,line_ids:[p.line_id],picture:p.picture}))]};
-const original=doc.assets.find((a:any)=>a.id===doc.clipMentorAnalysis.source.asset_id);
+let original=doc.assets.find((a:any)=>a.id===doc.clipMentorAnalysis.source.asset_id);
+const inputs={source:join(media,original.src.split('/').at(-1)),product:join(root,'product.png'),sales:join(root,'sales.png'),cta:join(root,'cta.png')};
+for(const [key,color] of [['product','red'],['sales','blue'],['cta','green']] as const){
+ execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i',`color=c=${color}:s=64x64`,'-frames:v','1',inputs[key]]);
+}
 let fakeReviewerCalls=0,providerCalls=0;const actions:any[]=[],workerEvents:any[]=[],activeIds=new Set<string>();
 // Any accidental external service call is a hard failure. Local test HTTP uses node:http, not fetch.
 globalThis.fetch=async()=>{providerCalls++;throw Error('Real network/provider calls forbidden in web-loop fixture');};
@@ -55,19 +60,61 @@ async function bindOfflineReview(){
  doc.clipMentorAnalysis.production_copy_review=await bindCopyProductionReview(doc,result.receipt);
  const gate=await checkCopyProduction(doc,'clipmentor');assert.equal(gate.allowed,true,JSON.stringify(gate));
 }
-await bindOfflineReview();
-const project='web-loop-fixture';await setStoredEntry('project:'+project,doc);
+const project='web-loop-fixture';
+const initial=structuredClone(doc);delete initial.clipMentorAnalysis;delete initial.estimated_picture_timeline;
+initial.assets=[];for(const timeline of initial.timelines)timeline.items=[];
+await setStoredEntry('project:'+project,initial);
 const input={projectId:project,sourceAssetId:original.id,product:{name:'网页闭环测试',category:'test'},brief:'Synthetic protocol replay only',author:{provider:'openai',model:'offline-fixture',apiMode:'responses'},reviewer:{provider:'openai',model:'offline-fixture',apiMode:'responses'},budget:{model:20,review:0,observation:0,tts:0,render:0,maxElapsedMs:600000,maxRepairs:1},humanBlueprintReview:true};
-const parent=await createProductionTask(input as any);
-async function readyBlueprint(task:any){task.status='awaiting_blueprint';task.stage='copy_review';task.projectRevision=(await loadOfflineStoredProject(project))!.revision;task.completed.copy_review={at:Date.now(),artifact:{revision:task.projectRevision,authorSelfCheck:'passed',gate:await checkCopyProduction(doc,'clipmentor')}};await productionTaskStore.save(task);}
-await readyBlueprint(parent);
-const preview=join(media,'web-loop-synthetic-preview.mp4');execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i','color=c=navy:s=720x1280:r=10','-t','1','-c:v','libx264','-pix_fmt','yuv420p',preview]);
+async function readyBlueprint(task:any){task.status='awaiting_blueprint';task.stage='copy_review';delete task.error;task.projectRevision=(await loadOfflineStoredProject(project))!.revision;task.completed.copy_review={at:Date.now(),artifact:{revision:task.projectRevision,authorSelfCheck:'passed',gate:await checkCopyProduction(doc,'clipmentor')}};await productionTaskStore.save(task);}
+const intake=createMaterialIntakeHandler();
+let bootstrap:Promise<void>|undefined;
+let cancelledState='',recoveredEffects=0;
+async function prepareUploadedFixture(){
+ const uploaded=(await loadOfflineStoredProject(project))!.doc.assets;
+ assert.equal(uploaded.length,4);
+ const master=uploaded[0];
+ assert.equal(master.sourceContentHash,original.sourceContentHash);
+ assert.equal(master.sourceContentHash,hash(await readFile(inputs.source)));
+ doc=JSON.parse(JSON.stringify(doc).replaceAll(JSON.stringify(original.id),JSON.stringify(master.id))
+  .replaceAll(JSON.stringify(original.src),JSON.stringify(master.src)));
+ doc.assets=[...uploaded,...doc.assets.filter((asset:any)=>asset.id!==master.id)];
+ original=master;input.sourceAssetId=master.id;
+ const cancelled=await createProductionTask(input as any);
+ const entered=Promise.withResolvers<void>();
+ const running=advanceProductionTask(cancelled,async(_task,stage)=>{
+  entered.resolve();
+  await new Promise<void>((_,reject)=>stage.signal.addEventListener('abort',()=>reject(stage.signal.reason),{once:true}));
+  throw Error('cancel fixture should never continue');
+ });
+ await entered.promise;await cancelProductionTask(cancelled);
+ cancelledState=(await running).status;assert.equal(cancelledState,'cancelled');
+ const parent=await createProductionTask(input as any);
+ const operation=randomUUID();
+ parent.status='running';parent.attempts.model=1;
+ parent.effects['analysis:initial:0:fixture-author']={kind:'model',operationId:operation,status:'reserved'};
+ await productionTaskStore.save(parent);
+ const cold=await productionTaskStore.load(project,parent.taskId);
+ await advanceProductionTask(cold,async(task,stage)=>{
+  if(task.stage!=='analysis')throw Error('fixture handoff to deterministic blueprint');
+  const saved=await stage.effect('model','fixture-author',async()=>{throw Error('duplicate provider submission');},async id=>{
+   assert.equal(id,operation);recoveredEffects++;return 'saved fixture result';
+  });
+  return {artifact:{saved}};
+ });
+ assert.equal(recoveredEffects,1);assert.equal(cold.attempts.model,1);
+ await bindOfflineReview();
+ await setStoredEntry('project:'+project,doc);
+ await readyBlueprint(cold);
+}
+for(const [audience,color] of [['existing_partner','navy'],['new_contact','maroon']] as const)
+ execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i',`color=c=${color}:s=720x1280:r=10`,'-t','1','-c:v','libx264','-pix_fmt','yuv420p',join(media,`web-loop-synthetic-${audience}.mp4`)]);
 let previewSequence=0;
 async function readyPreview(task:any){
  const saved=(await loadOfflineStoredProject(task.projectId))!;
+ const file=`web-loop-synthetic-${task.input.panelDelivery.audience}.mp4`,path='/media/uploads/'+file;
  task.status='awaiting_review';task.stage='self_check';task.projectRevision=saved.revision;
- task.completed.export={at:Date.now(),artifact:{revision:saved.revision,renderId:'fixture-'+task.taskId+'-'+(++previewSequence),path:'/media/uploads/web-loop-synthetic-preview.mp4',feedback_project_digest:feedbackProjectDigest(saved.doc),facts_digest:'a'.repeat(64)}};
- task.completed.self_check={at:Date.now(),artifact:{preview:'/media/uploads/web-loop-synthetic-preview.mp4',receipt:{projectId:task.projectId,videoSha256:hash(await readFile(preview)),status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}}}};
+ task.completed.export={at:Date.now(),artifact:{revision:saved.revision,renderId:'fixture-'+task.taskId+'-'+(++previewSequence),path,feedback_project_digest:feedbackProjectDigest(saved.doc),facts_digest:'a'.repeat(64)}};
+ task.completed.self_check={at:Date.now(),artifact:{preview:path,receipt:{projectId:task.projectId,videoSha256:hash(await readFile(join(media,file))),status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}}}};
  await productionTaskStore.save(task);
 }
 function launch(task:any){activeIds.add(task.taskId);void(async()=>{
@@ -110,9 +157,23 @@ const server=createServer(async(req,res)=>{try{
   }else{const {withSerializedProjectStore}=await import('../plugins/project-store');await withSerializedProjectStore(store=>store.removeEntry(handoffKey(project)));}
   res.setHeader('content-type','application/json');res.end(JSON.stringify({fixtureOnly:true}));return;
  }
- if(url.pathname==='/audit'){res.setHeader('content-type','application/json');res.end(JSON.stringify({project,root,providerCalls,fakeReviewerCalls,actions,workerEvents}));return;}
- if(url.pathname==='/api/clipmentor/intake'){assert.equal(req.method,'GET');res.setHeader('content-type','application/json');res.end(JSON.stringify({receipt:{projectId:project,assets:['source.mp4','product.png','sales.png','cta.png'].map((name,i)=>({id:String(i),name}))}}));return;}
+ if(url.pathname==='/audit'){res.setHeader('content-type','application/json');res.end(JSON.stringify({project,root,inputs,providerCalls,fakeReviewerCalls,actions,workerEvents,cancelledState,recoveredEffects}));return;}
+ if(url.pathname==='/api/clipmentor/intake'){
+  req.url='/api/clipmentor/material-intake?projectId='+project;
+  const uploaded=intake(req,res);
+  if(req.method==='POST'&&!bootstrap){
+   const prepared=uploaded.then(async()=>{
+    if(res.statusCode===200)await prepareUploadedFixture();
+    else if(bootstrap===prepared)bootstrap=undefined;
+   });
+   bootstrap=prepared;
+   void prepared.catch(error=>console.error('Fixture preparation failed',error));
+  }
+  await uploaded;
+  return;
+ }
  assert.equal(url.pathname,'/api/clipmentor/production');
+ await bootstrap;
  let body:Record<string,unknown>|undefined;
  const readBody=async()=>{if(body)return body;let text='';for await(const chunk of req)text+=chunk;return body=JSON.parse(text);};
  if(req.method==='POST'){const payload=await readBody(),current=await latestPanelProductionTask(project),target=current?.productionChildren?.find(child=>child.audience===url.searchParams.get('audience'));const action={project:target?.projectId??project,taskId:target?.taskId??current?.taskId,query:url.search,action:payload.action,revision:payload.revision,renderId:payload.renderId,status:0};actions.push(action);res.once('finish',()=>{action.status=res.statusCode;});}

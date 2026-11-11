@@ -19,11 +19,13 @@ process.env.OPENCHATCUT_DATA_DIR=root;let network=0;globalThis.fetch=async()=>{n
 const {productionAuthorTaskData}=await import('./production-worker');
 const {productionFeedback}=await import('./production-task');
 const {openHeadlessEditor}=await import('./headless-editor');
+const {materializeHandoffVoice}=await import('./handoff-voice.verify-fixture');
 const {MemoryPersistence,projectId}=await import('../external-agent/offline-runtime.verify-fixtures');
 const {copyReviewSubject,copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest}=await import('../../src/clipmentor/production-gate');
 const {productionPreviewFacts,previewFactsDigest}=await import('./production-preview-facts');
 const {revisionOf}=await import('../../src/agent/external-edit-session');
-assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,root,'profile must resolve AFTER temporary data dir is set');
+const profile=(await import('../runtime-profile')).runtimeProfile();
+assert.equal(profile.rootDir,root,'profile must resolve AFTER temporary data dir is set');
 const cases:Array<{name:string;passed:boolean;error?:string}>=[];
 async function test(name:string,work:()=>Promise<void>){try{await work();cases.push({name,passed:true});console.log('PASS',name);}catch(error){cases.push({name,passed:false,error:String(error).slice(0,300)});console.log('FAIL',name,String(error).slice(0,300));}}
 const doc=()=>structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
@@ -58,6 +60,7 @@ try{
   const d=doc(),line=(await copyTeachingPacketFromDoc(d)).units[0].lines[0],a=d.assets.find(a=>a.kind==='audio')!;
   const request={text:line.narration_ms,provider:'minimax',voiceId:'fixture-voice',speed:1,pitch:0,volume:1,languageBoost:'Malay',sampleRate:32000,channel:1,audioFormat:'mp3'};
   a.props={...a.props,generation:{...request,durationSeconds:a.durationInFrames/30}};
+  await materializeHandoffVoice(d,a,profile.mediaDir);
   let effects=0;const e=await openHeadlessEditor(options(new MemoryPersistence(d),{voice:{provider:'minimax',voiceId:'fixture-voice'},effect:async()=>{effects++;throw Error('Forbidden synth');}}));
   try{const reused=await e.execute('submit_voice',request,'reuse') as any;assert.equal(reused.reused,true);assert.equal(reused.asset.id,a.id);assert.equal(effects,0);}finally{await e.close();}
  });

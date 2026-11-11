@@ -142,8 +142,9 @@ try{
     if(hashes===2)Object.assign(line,originalLine);
     return digest.apply(this,args);
    };
-   const ctx={getDoc:()=>f.doc,getProjectId:()=> 'source-context',getAgentRunId:()=>f.run,getCreativeMode:()=> 'clipmentor',templates:[],audio:[],
-    commands:{applyDoc:()=>{}},hostFetch:async(_url:unknown,init?:RequestInit)=>{dispatches++;wire=JSON.parse(String(init?.body));return Response.json(f.response);}} as unknown as AgentContext;
+   let currentDoc=f.doc;
+   const ctx={getDoc:()=>currentDoc,getProjectId:()=> 'source-context',getAgentRunId:()=>f.run,getCreativeMode:()=> 'clipmentor',templates:[],audio:[],
+    commands:{applyDoc:(next:ProjectDoc)=>{currentDoc=next;}},hostFetch:async(_url:unknown,init?:RequestInit)=>{dispatches++;wire=JSON.parse(String(init?.body));return Response.json(f.response);}} as unknown as AgentContext;
    const value=await invoke[name](f.args,ctx) as any;
    assert(hashes>=2,'both real asynchronous derivations must be reached');assert.equal(JSON.stringify(f.doc),initial,'live document really returned to A');
    assert.equal(dispatches,1);assert.equal(value.ok,true,JSON.stringify(value));
@@ -188,6 +189,18 @@ try{
  for(const name of ['asr-read','observe-read'] as const)await record(`${name}/optional-run`,async()=>{
   const f=await fixture(name),ctx={getDoc:()=>f.doc,getProjectId:()=> 'source-context',hostFetch:async()=>Response.json(f.response)} as unknown as AgentContext;
   assert.equal((await invoke[name](f.args,ctx) as any).ok,true,'saved read does not require a new run identity');
+ });
+ for(const name of ['copy','asr-init'] as const)for(const change of ['ignored','switched','threw'])await record(`${name}/write-readback/${change}`,async()=>{
+  const f=await fixture(name);let doc=f.doc,project='source-context',calls=0;
+  const ctx={getDoc:()=>doc,getProjectId:()=>project,getAgentRunId:()=>f.run,getCreativeMode:()=> 'clipmentor',
+   commands:{applyDoc:(next:ProjectDoc)=>{if(change==='ignored')return;doc=next;
+    if(change==='switched')project='another-project';else throw Error('post-write subscriber');}},
+   hostFetch:async()=>{calls++;return Response.json(f.response);}} as unknown as AgentContext;
+  const value=await invoke[name](f.args,ctx) as {ok?:boolean;error?:string;operationId?:string};
+  assert.equal(value.ok,undefined);
+  assert.match(value.error??'',/write could not be confirmed/);
+  assert.equal(value.operationId,f.args.operationId);
+  assert.equal(calls,1);
  });
  assert.equal(external,0);
  assert.deepEqual(failures,[]);

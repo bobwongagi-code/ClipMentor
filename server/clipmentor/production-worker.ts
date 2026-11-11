@@ -25,7 +25,7 @@ import {recoverProductionGateway,type GatewayRecoveryDecision} from './productio
 import {checkProductionAuthorBlueprint} from './production-author-self-check';
 import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence} from './production-panel-delivery';
 import {assertCreatorDocumentEdit,currentCreatorDocument} from './creator-storyboard-document';
-import {createProductionPreparation,verifyProductionNarration,verifyProductionEditing,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
+import {createProductionPreparation,verifyProductionNarrationFiles,verifyProductionEditing,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
 import {openHeadlessEditor} from './headless-editor';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -446,12 +446,13 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(ready){
     const saved=await loadOfflineStoredProject(task.projectId);
     if(!saved||saved.revision!==editor.revision)throw new Error('production_saved_readback_mismatch');
-    await verifyProductionNarration(saved.doc,task.input.voice);
+    await verifyProductionNarrationFiles(saved.doc,task.input.voice);
     return {artifact:{revision:saved.revision,analysisRevision:a.revision,reusedSavedAudio:true,
      blueprintReadiness:await productionBlueprintReadiness(saved.doc,task.input.voice),semantic_quality:'not_certified_by_structure'}};
    }
   }
   if(task.stage==='export'){
+   await verifyProductionNarrationFiles(doc,task.input.voice);
    const facts=productionPreviewFacts(doc,editor.context.getState(),await copyTeachingPacketFromDoc(doc));
    const exportedRevision=editor.revision,factsDigest=previewFactsDigest(facts);
    const result=await editor.execute('submit_render_job',{format:'video',codec:'h264',resolution:'720p',videoBitrate:3000000,name:'ClipMentor-review-preview.mp4'},'export') as {renderId:string};
@@ -636,7 +637,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     return {artifact:{revision:saved.revision,blueprint_structure_issue:issue},repair:'blueprint'};
    }
   }
-  if(task.stage==='audio')await verifyProductionNarration(next,task.input.voice);
+  if(task.stage==='audio')await verifyProductionNarrationFiles(next,task.input.voice);
   if(task.stage==='edit'){
    if(task.input.panelDelivery)assertProductionCanvas(next);
    try{await verifyProductionEditing(next,task.input.voice);}catch(error){
@@ -725,5 +726,5 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
 export async function savedProductionAudioReady(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){
  const gate=await checkCopyProduction(doc,'clipmentor');
  if(!gate.allowed)throw new Error('Current review no longer authorizes audio');
- try{return (await verifyProductionNarration(doc,voice)).length>0;}catch{return false;}
+ try{return (await verifyProductionNarrationFiles(doc,voice)).length>0;}catch{return false;}
 }

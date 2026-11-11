@@ -2,13 +2,14 @@ import {externalCall,readSavedExternalResponse} from './external-call';
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
 import {deliveryReview} from '../../src/clipmentor/delivery-sections';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CopyReviewRequest, CopyReviewResult, CopyReviewFailure } from '../../shared/clipmentor-copy-review';
 import { COPY_REVIEW_INPUT_POLICY, COPY_REVIEW_FAILURES, isCopyReviewFailure } from '../../shared/clipmentor-copy-review';
 import { assessTeachingReview, buildCopyTeachingReviewRequest, COPY_REVIEW_PROTOCOL, isCopyProductionReview,
   type CopyProductionReview, type TeachingEnvelope, assessNarrationChecks, assessGroupReview, normalizeGroupReview, GroupReviewContractError, checkCopyFindingQuotes } from '../../src/clipmentor/production-gate';
 import { atomicWriteFile } from '../plugins/project-store-durable';
+import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from './local-operation-lock';
 import { sourceRelationsShape } from '../../src/clipmentor/source-alignment';
 import { isSafeUploadName, resolveUploadFile } from '../media-dir';
 import { sha256File } from '../../shared/node-content-hash';
@@ -390,7 +391,8 @@ async function recoverArchivedCopyReview(request:CopyReviewRequest,fingerprint:s
   }catch{signal?.throwIfAborted();return;}
 }
 
-export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDependencies, outerSignal?: AbortSignal, readOnly=false): Promise<CopyReviewResult> {
+export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDependencies, outerSignal?: AbortSignal,
+  mode:boolean|'resume_preparation'=false): Promise<CopyReviewResult> {
   let request: CopyReviewRequest;
   const operationId = object(value) && typeof value.operationId === 'string'
     && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.operationId) ? value.operationId : undefined;
@@ -398,6 +400,22 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   catch (error) { throw failure(error instanceof Error && error.message === 'picture_plan_shape_invalid' ? 'picture_plan_shape_invalid' : error instanceof Error && error.message === 'source_review_scope_missing' ? 'source_review_scope_missing' : 'request_invalid', 0, operationId); }
   const fingerprint = digest((deps.runtime ? JSON.stringify(deps.runtime) : METHOD) + JSON.stringify(request));
   const ledger = join(deps.directory, `${request.operationId}.json`);
+  if(mode===true)return runCopyReviewOperation(request,deps,outerSignal,mode,ledger,fingerprint);
+  if(outerSignal?.aborted)throw failure('review_cancelled_or_timed_out',0,request.operationId);
+  let release:(()=>void)|undefined;
+  try {
+    await mkdir(deps.directory,{recursive:true,mode:0o700});
+    release=tryLocalOperationLock(ledger+'.owner');
+  } catch { throw failure('review_storage_failed',0,request.operationId); }
+  if(!release)throw failure('operation_unavailable',null,request.operationId);
+  try {return await runCopyReviewOperation(request,deps,outerSignal,mode,ledger,fingerprint);}
+  finally {release();}
+}
+
+async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewDependencies,
+  outerSignal:AbortSignal|undefined,mode:boolean|'resume_preparation',ledger:string,fingerprint:string):Promise<CopyReviewResult> {
+  const readOnly=mode===true;
+  let preparing:Row|undefined;
   const previous = async (): Promise<CopyReviewResult | undefined> => {
     let prior: Row, original:string;
     try {
@@ -410,6 +428,7 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
       throw failure('operation_unavailable', null, request.operationId);
     }
     if (prior.fingerprint !== fingerprint) throw failure('operation_unavailable', null, request.operationId);
+    if(!readOnly&&isResumablePreparation(prior)){preparing=prior;return;}
     const recovered=await recoverArchivedCopyReview(request,fingerprint,prior,original,deps,outerSignal);
     if(recovered)return recovered;
     if (prior.status === 'failed' && isCopyReviewFailure(prior.diagnostic)
@@ -422,6 +441,10 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   // must not relabel a historical consumed attempt as a fresh zero-attempt error.
   const prior = await previous();
   if(readOnly){if(prior)return prior;throw failure('operation_unavailable',0,request.operationId);}
+  if(mode==='resume_preparation'){
+    if(prior)return prior;
+    if(!preparing)throw failure('operation_unavailable',0,request.operationId);
+  }
   const allCriteria=await deps.visualCriteria?.(request.projectId);
   assertVisualCriteriaPlan(allCriteria,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
   const criteria=plannedVisualCriteria(allCriteria);
@@ -436,13 +459,13 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
   let positions: ReturnType<typeof reviewSourceSamples>;
   try { positions = reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
   const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria);
-  try { await mkdir(deps.directory, { recursive: true, mode: 0o700 }); } catch { throw failure('review_storage_failed', 0, request.operationId); }
-  try { await writeFile(ledger, JSON.stringify({ fingerprint, status: 'preparing', requests_attempted: 0 }), { flag: 'wx', mode: 0o600 }); }
+  const criteriaDigest=criteria?.digest??null;
+  if(preparing&&preparing.criteria_digest!==criteriaDigest)throw failure('operation_unavailable',0,request.operationId);
+  if(outerSignal?.aborted)throw failure('review_cancelled_or_timed_out',0,request.operationId);
+  try { if(!preparing)await publishOperationPreparation(ledger,{fingerprint,criteria_digest:criteriaDigest}); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw failure('review_storage_failed', 0, request.operationId);
-    const raced = await previous();
-    if (!raced) throw failure('operation_unavailable', null, request.operationId);
-    return raced;
+    if((error as NodeJS.ErrnoException).code==='EEXIST')throw failure('operation_unavailable',null,request.operationId);
+    throw failure('review_storage_failed',0,request.operationId);
   }
   let attempts: 0 | 1 = 0, temporary: string | undefined, raw: unknown;
   let rawReceived = false;
@@ -460,7 +483,10 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     return base64;
   };
   try {
-    temporary = await mkdtemp(join(deps.directory, 'frames-'));
+    const workspace=join(deps.directory,`frames-${request.operationId}`);
+    if(preparing)await rm(workspace,{recursive:true,force:true});
+    await mkdir(workspace,{mode:0o700});
+    temporary=workspace;
     stage = 'frames_unavailable';
     const frames: ReviewFrame[] = [];
     const packedPositions=fitReviewSourceSamples(positions,(criteria?.entries.length??0)+(request.packet.delivery_sections??[]).reduce((n,s)=>n+(s.picture.layout?deliveryLayoutStages(s.picture).length:s.picture.crop?2:1),0));
@@ -492,6 +518,9 @@ export async function reviewClipMentorCopy(value: unknown, deps: CopyReviewDepen
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed');
     stage = 'review_storage_failed';
     inspection = frameInspection(frames);
+    await rm(temporary,{recursive:true,force:true});
+    temporary=undefined;
+    outerSignal?.throwIfAborted();
     attempts = 1;
     await atomicWriteFile(ledger, JSON.stringify({ fingerprint, status: 'reserved', requests_attempted: attempts,
       source_hash:request.source.hash,prompt_sha256:digest(prompt),image_inspection:inspection }));

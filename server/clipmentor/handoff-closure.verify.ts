@@ -1,6 +1,6 @@
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,unlink,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';import {tmpdir} from 'node:os';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {AgentContext} from '../../src/agent/context';
@@ -11,12 +11,14 @@ const {openHeadlessEditor}=await import('./headless-editor');
 const {MemoryPersistence,projectId,projectDoc}=await import('../external-agent/offline-runtime.verify-fixtures');
 const {executeTool}=await import('../../src/agent/tools');
 const {copyTeachingPacketFromDoc,checkCopyProduction,buildCopyTeachingReviewRequest}=await import('../../src/clipmentor/production-gate');
+const {materializeHandoffVoice}=await import('./handoff-voice.verify-fixture');
 const {currentReviewRepair}=await import('./execution-view');
 const {productionAuthorTaskData}=await import('./production-worker');
 const {reusableVoiceForRequest}=await import('./audio-reuse');
 const {deliverySectionsFromDoc,deliveryAudio}=await import('../../src/clipmentor/delivery-bindings');
 const {default:deliveryFixture}=await import('./fixtures/blueprint-review-board-20261031.json');
-assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,root);
+const profile=(await import('../runtime-profile')).runtimeProfile();
+assert.equal(profile.rootDir,root);
 const doc=()=>structuredClone(saved.cases[0].doc) as ProjectDoc;
 const settings={provider:'minimax',voiceId:'fixture-voice',speed:1,pitch:0,volume:1,languageBoost:'Malay',sampleRate:32000,channel:1,audioFormat:'mp3'};
 const opts=(p:InstanceType<typeof MemoryPersistence>,extra:Record<string,unknown>={})=>({projectId,runId:'fixture-run',origin:'http://127.0.0.1:5199',review:{provider:'openai' as const,model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'responses' as const},persistence:p,browserConnected:()=>false,effect:async()=>{throw Error('No provider effects');},...extra});
@@ -71,12 +73,19 @@ try{
   const e=await openHeadlessEditor(opts(new MemoryPersistence(d),{voice:{provider:settings.provider,voiceId:settings.voiceId},effect:async()=>{effects++;throw Error('Unexpected synthesis effect');}}));
   try{let r:unknown;try{r=await e.execute('submit_voice',{...settings,text:line.narration_ms},'unknown');}catch(error){r={error:String(error)};}assert.equal(effects,0,'unknown is not permission to synthesize');assert.match(String((r as {error?:string}).error),/voice_reuse_unverified/);}finally{await e.close();}
  });
- await test('exact selected audio reuses; conflicting selected config never synthesizes',async()=>{
+ await test('exact selected audio reuses; changed, missing or conflicting audio never synthesizes',async()=>{
   const d=doc(),line=(await copyTeachingPacketFromDoc(d)).units[0].lines[0],asset=d.assets.find(a=>a.kind==='audio')!;
   asset.props={...asset.props,generation:{...settings,text:line.narration_ms,durationSeconds:asset.durationInFrames/30}};
+  const {file,bytes}=await materializeHandoffVoice(d,asset,profile.mediaDir);
   let effects=0;const e=await openHeadlessEditor(opts(new MemoryPersistence(d),{voice:{provider:settings.provider,voiceId:settings.voiceId},effect:async()=>{effects++;throw Error('Unexpected synthesis effect');}}));
-  try{const r=await e.execute('submit_voice',{...settings,text:line.narration_ms},'exact') as {reused?:boolean};assert.equal(r.reused,true);assert.equal(effects,0);
-   let conflict:unknown;try{conflict=await e.execute('submit_voice',{...settings,text:line.narration_ms,pitch:1},'conflict');}catch(error){conflict={error:String(error)};}assert.equal(effects,0);assert.match(String((conflict as {error?:string}).error),/voice_reuse_conflict/);
+  try{const request={...settings,text:line.narration_ms};
+   const r=await e.execute('submit_voice',request,'exact') as {reused?:boolean;error?:string};assert.equal(r.reused,true,r.error);
+   const conflict=await e.execute('submit_voice',{...request,pitch:1},'conflict') as {error?:string};assert.match(String(conflict.error),/voice_reuse_conflict/);
+   await writeFile(file,Buffer.alloc(bytes.length));
+   await assert.rejects(e.execute('submit_voice',request,'changed'),/production_audio_file_changed/);
+   await unlink(file);
+   await assert.rejects(e.execute('submit_voice',request,'missing'),/production_audio_file_missing/);
+   assert.equal(effects,0);
   }finally{await e.close();}
  });
  await test('first delivery synthesis is missing, explicit broken selection remains conflict',async()=>{

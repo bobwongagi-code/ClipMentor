@@ -133,6 +133,9 @@ export async function saveHandoffRun(run:ServerRun,prepared:PreparedHandoff,pers
  await flushRunPersistence(run);
 }
 function digestText(text:string):string{return createHash('sha256').update(text).digest('hex');}
+function assertHandoffDeadline(policy:HandoffPolicy){
+ if(policy.startedAt===null||Date.now()>=policy.startedAt+policy.brief.budget.maxElapsedMs)throw new Error('handoff_deadline_exceeded');
+}
 export async function assertRunHandoff(run:ServerRun):Promise<HandoffPolicy|null>{
  const policy=await readHandoffPolicy(run.projectId);if(!policy)return null;
  const entry=await getStoredEntry(handoffRunKey(run.projectId,run.id));const v=entry.value;
@@ -141,16 +144,20 @@ export async function assertRunHandoff(run:ServerRun):Promise<HandoffPolicy|null
  await assertHandoffSubject(policy,snapshot.doc);
  assertVisualApproval(policy,snapshot.doc);
  const artifact=await loadAgentArtifact(run.projectId,String(v.payloadArtifactId));if(!artifact)throw new Error('handoff_payload_missing');
- if(policy.startedAt===null||Date.now()>=policy.startedAt+policy.brief.budget.maxElapsedMs)throw new Error('handoff_deadline_exceeded');
+ assertHandoffDeadline(policy);
  return policy;
 }
-export async function reserveHandoff(run:ServerRun,kind:'model'|'tool',callId?:string,name?:string,args:Record<string,unknown>={}):Promise<void>{
+export async function reserveHandoff(run:ServerRun,kind:'model'|'tool',callId?:string,name?:string,args:Record<string,unknown>={},signal=run.abort?.signal){
+ signal?.throwIfAborted();
  const policy=await assertRunHandoff(run);if(!policy)return;
+ const assertDispatch=()=>{signal?.throwIfAborted();assertHandoffDeadline(policy);};
  const access=kind==='tool'?handoffToolAccess(policy.brief,name!,args,true):null;
- if(access==='read')return;
+ if(access==='read')return assertDispatch;
  await withSerializedProjectStore(async store=>{
   const entry=await store.readEntry(handoffKey(run.projectId));const p=parseHandoffPolicy(entry.value);
   if(p.digest!==policy.digest)throw new Error('handoff_binding_changed');
+  signal?.throwIfAborted();
+  assertHandoffDeadline(p);
   const b=p.brief.budget;
   if(kind==='model'){if(p.modelTurns>=b.maxModelTurns)throw new Error('handoff_model_budget_exhausted');p.modelTurns++;}
   else{
@@ -162,6 +169,7 @@ export async function reserveHandoff(run:ServerRun,kind:'model'|'tool',callId?:s
   }
   await store.writeEntry(handoffKey(run.projectId),p);
  });
+ return assertDispatch;
 }
 
 export async function assertHandoffInput(run:ServerRun,input:Pick<ServerRunInput,'instructions'|'messages'>):Promise<void>{
@@ -172,12 +180,12 @@ export async function assertHandoffInput(run:ServerRun,input:Pick<ServerRunInput
  if(digestValue({instructions:input.instructions,messages:input.messages})!==payload.sent.digest)throw new Error('handoff_runtime_input_mismatch');
 }
 /** Archive the actual post-context-preparation request before contacting a provider. */
-export async function recordHandoffDispatch(run:ServerRun,kind:'author'|'summary',request:Record<string,unknown>):Promise<void>{
+export async function recordHandoffDispatch(run:ServerRun,kind:'author'|'summary',request:Record<string,unknown>,signal=run.abort?.signal){
  const policy=await assertRunHandoff(run);if(!policy)return;
  const body=JSON.stringify({version:1,kind,bindingDigest:policy.digest,templateVersion:HANDOFF_TEMPLATE_VERSION,request,digest:digestValue(request)});
  const artifactId=`hs_${randomUUID().replaceAll('-','').slice(0,17)}`;
  const ok=await storeAgentArtifact({version:1,artifactId,projectId:run.projectId,runId:run.id,kind:'checkpoint-source',toolName:'clipmentor-handoff-dispatch',body,
   bodySha256:digestText(body),originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false});
  if(!ok)throw new Error('handoff_dispatch_not_saved');
- await reserveHandoff(run,'model');
+ return reserveHandoff(run,'model',undefined,undefined,{},signal);
 }

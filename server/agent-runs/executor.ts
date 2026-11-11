@@ -153,7 +153,7 @@ async function runServerTurnOnce(
 }> {
   const schemas = input.activation.current.schemas();
   const prepared = await prepareServerContext({ ...input, schemas,beforeRequest:input.activation.host?.beforeRequest,
-    beforeSummaryRequest:request=>recordHandoffDispatch(input.run,'summary',request) });
+    beforeSummaryRequest:request=>recordHandoffDispatch(input.run,'summary',request,input.signal) });
   const tools = createServerTools(
     input.run,
     schemas,
@@ -162,7 +162,9 @@ async function runServerTurnOnce(
   pushRunEvent(input.run, 'text-start', {});
   const options = serverProviderOptions(input.provider, input.apiMode, input.cacheMode);
   await input.activation.host?.beforeRequest();
-  await recordHandoffDispatch(input.run,'author',{backend:'api',model:input.run.model,instructions:input.instructions,messages:prepared.messages,schemas});
+  const assertDispatch=await recordHandoffDispatch(input.run,'author',{backend:'api',model:input.run.model,instructions:input.instructions,messages:prepared.messages,schemas},input.signal);
+  input.signal.throwIfAborted();
+  assertDispatch?.();
   const result = streamText({
     model: input.model,
     instructions: input.instructions,
