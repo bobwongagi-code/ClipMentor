@@ -20,6 +20,7 @@ import { INLINE_REQUEST_MAX_BYTES, PREVIEW_REVIEW_MODEL, PREVIEW_REVIEW_TIMEOUT_
 import { inspectSourceObservation, SourceObservationValidationError } from './source-video-validation';
 export { inspectSourceObservation, validateSourceObservation } from './source-video-validation';
 import { postSourceVideoTransport, safeSourceTransportDiagnostic, SourceVideoTransportError } from './source-video-transport';
+import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from './local-operation-lock';
 const VERSION = 'source-continuous-observation-v1';
 const MATERIAL_VERSION = 'source-continuous-observation-v2';
 const hash = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
@@ -154,7 +155,7 @@ export interface SourceVideoDependencies {
   prepareObservation?(file:string,sha256:string,duration:number,range:[number,number]|null,signal:AbortSignal):Promise<{file:string;binding:ObservationMaterial}>;
   post(body:string,key:string,signal:AbortSignal,operationId:string):Promise<{status:number;body:unknown;diagnostic?:SourceVideoTransportDiagnostic}>;
 }
-export async function observeSourceVideo(value: unknown, deps: SourceVideoDependencies, outer?: AbortSignal): Promise<SourceVideoResult> {
+export async function observeSourceVideo(value: unknown, deps: SourceVideoDependencies, outer?: AbortSignal, resumePreparationOnly=false): Promise<SourceVideoResult> {
   const request = value as SourceVideoRequest, input = sourceVideoInput(request);
   const name = decodeURIComponent(request.source.src.slice('/media/uploads/'.length));
   if (!isSafeUploadName(name)) throw new Error('Invalid source');
@@ -164,13 +165,26 @@ export async function observeSourceVideo(value: unknown, deps: SourceVideoDepend
   const fingerprint = hash(VERSION + JSON.stringify(request));
   await mkdir(deps.directory,{recursive:true,mode:0o700});
   const ledger = join(deps.directory,`${request.operationId}.json`);
-  try { await writeFile(ledger,JSON.stringify({fingerprint,status:'preparing',requests_attempted:0,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash}),{flag:'wx',mode:0o600}); }
-  catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Reservation failed');
-    const old = JSON.parse(await readFile(ledger,'utf8'));
-    if (old.fingerprint !== fingerprint || old.status !== 'completed') throw new Error('Operation consumed or unknown; no retry');
-    return {...publicTransportRecord(old.result,request.operationId),cached:true};
-  }
+  outer?.throwIfAborted();
+  const release=tryLocalOperationLock(ledger+'.owner');
+  if(!release)throw Error('Source observation operation is in progress; read its receipt');
+  try {
+    const saved=await readFile(ledger,'utf8').catch(error=>{if(error.code==='ENOENT')return;throw error;});
+    if(saved===undefined){
+      if(resumePreparationOnly)throw Error('Original observation preparation unavailable; no submission');
+      await publishOperationPreparation(ledger,{fingerprint,projectId:request.projectId,subject:request.subject,source_hash:request.source.hash,account:hash(deps.key)});
+    }
+    else {
+      const old=JSON.parse(saved);
+      if(!object(old)||old.fingerprint!==fingerprint)throw Error('Operation consumed or unknown; no retry');
+      if(old.status==='completed')return {...publicTransportRecord(old.result,request.operationId),cached:true};
+      if(!isResumablePreparation(old)||old.account!==hash(deps.key))throw Error('Operation consumed or unknown; no retry');
+    }
+    return await runSourceObservation(request,deps,outer,input,file,ledger,fingerprint);
+  } finally {release();}
+}
+async function runSourceObservation(request:SourceVideoRequest,deps:SourceVideoDependencies,outer:AbortSignal|undefined,
+  input:ReturnType<typeof sourceVideoInput>,file:string,ledger:string,fingerprint:string):Promise<SourceVideoResult> {
   const retryPolicy=deps.prepareMedia?'no_automatic_retry' as const:undefined;
   let attempts = 0;
   let phase = 'prepare';

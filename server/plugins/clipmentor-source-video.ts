@@ -33,7 +33,9 @@ export function clipMentorSourceVideoPlugin(deps?: SourceVideoDependencies): Plu
             heartbeat.unref();
             try{return await dependencies.post(...args);}finally{clearInterval(heartbeat);}
           }};
-          send(200,await observeSourceVideo(body,waiting,abort.signal));
+          const resume=body?.action==='resume_preparation';
+          if(resume)delete body.action;
+          send(200,await observeSourceVideo(body,waiting,abort.signal,resume));
         }
       } catch (error) {
         if (error instanceof SourceVideoOperationError) {

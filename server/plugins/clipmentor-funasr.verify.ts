@@ -37,6 +37,38 @@ const deps = {
 const args = () => ({ src: '/media/uploads/master.mp4', expectedSourceHash: hash, language: 'auto', operationId: randomUUID(), maxRequests: 10 });
 try {
   await verifyAsrCrashRecovery(directory);
+  {
+    let submissions=0,status=200;
+    const scoped={...deps,directory:join(directory,'capability'),
+      fetch:(async()=>{
+        submissions++;
+        return status===200?Response.json({output:{sentence:{words:[{text:'hello',begin_time:10,end_time:100}]}}})
+          :new Response(null,{status});
+      }) as typeof fetch};
+    assert.equal((await transcribeClipMentorSource(args(),scoped)).status,'completed');
+    status=405;
+    const first=await transcribeClipMentorSource({...args(),language:'vi'},scoped);
+    assert.equal(first.requests_attempted,1);
+    assert.equal(first.chunks[0].http_status,405);
+    const otherHash='b'.repeat(64);
+    const other={...scoped,hash:async()=>otherHash,probe:async()=>({duration:130,fps:30,bytes:123})};
+    const next=await transcribeClipMentorSource({...args(),expectedSourceHash:otherHash,language:'ms'},other);
+    assert.equal(submissions,2,'known endpoint capability survives a different source, range and language');
+    assert.equal(next.requests_attempted,0);
+    assert.equal(next.chunks[0].status,'not_requested');
+    assert(isSourceTranscription(next));
+    assert.equal((await transcribeClipMentorSource(args(),scoped)).status,'completed');
+    assert.equal(submissions,2,'an already saved result remains reusable during the outage');
+    status=404;
+    const ambiguous={...other,directory:join(directory,'ambiguous-capability')};
+    await transcribeClipMentorSource({...args(),expectedSourceHash:otherHash},ambiguous);
+    status=400;
+    await transcribeClipMentorSource({...args(),language:'vi'}, {...ambiguous,hash:deps.hash});
+    assert.equal(submissions,4,'ambiguous 404 does not blacklist a different payload');
+    status=405;
+    await transcribeClipMentorSource({...args(),expectedSourceHash:otherHash}, {...other,key:()=> 'different-account'});
+    assert.equal(submissions,5,'capability cache is isolated by account');
+  }
   assert.equal(parseFunAsrResponse({ output: { sentence: { words: [
     { text: 'hello', begin_time: 0, end_time: 200 }, { text: ' ', begin_time: 200, end_time: 250 },
   ] } } }, 0).words.length, 1, 'provider whitespace separators are not spoken words');

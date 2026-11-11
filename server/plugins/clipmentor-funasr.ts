@@ -1,4 +1,4 @@
-import {ExternalHttpError,readSavedExternalResponse} from '../clipmentor/external-call.ts';
+import {ExternalCallError,ExternalHttpError,readSavedExternalResponse} from '../clipmentor/external-call.ts';
 import {externalFetch} from '../clipmentor/external-fetch.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
@@ -31,6 +31,9 @@ interface Dependencies {
   directory: string;
 }
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+// Only method/implementation refusal proves this fixed protocol unavailable.
+// A generic 400, 404 or 415 may describe the particular payload or its routing.
+const FUNASR_CAPABILITY={scope:{model:FUNASR_MODEL,method:'POST',audio:ASR_AUDIO,sse:'disable'},unsupportedStatuses:[405,501]} as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const sha = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 function parseRequest(v: unknown): SourceRequest {
@@ -148,6 +151,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
       let stage: 'network' | 'http' | 'json' | 'timestamps' = 'network';
       try {
         const response = await externalFetch({directory:deps.directory,kind:'asr',purpose:'fun-asr-chunk-v1',
+          sharedCapability:FUNASR_CAPABILITY,
           scope:{model:FUNASR_MODEL,source:sourceHash,language:request.language,range:[chunk.offset_seconds,chunk.end_seconds]},requestId:`${request.operationId}:${chunk.chunk_id}`,endpoint,fetch:deps.fetch,init:{
           method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-DashScope-SSE': 'disable' },
@@ -165,6 +169,14 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
         delete chunk.error; delete chunk.failure_stage;
         result.issues = result.issues.filter(issue => issue !== `${chunk.chunk_id}:provider_request_failed_or_invalid_timestamps`);
       } catch (error) {
+        if(error instanceof ExternalCallError&&error.code==='external_capability_unsupported'){
+          // Preflight refused a new transport reservation. Earlier attempts stay charged.
+          result.requests_attempted--;
+          chunk.status='not_requested';
+          delete chunk.error;delete chunk.failure_stage;
+          result.issues[result.issues.length-1]=`${chunk.chunk_id}:provider_endpoint_capability_unsupported`;
+          break;
+        }
         if(error instanceof ExternalHttpError){chunk.http_status=error.status;stage='http';}
         // Never expose upstream bodies, request headers, audio or credential-bearing exceptions.
         chunk.status = 'failed'; chunk.error = 'provider_request_failed_or_invalid_timestamps';

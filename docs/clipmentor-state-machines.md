@@ -109,7 +109,11 @@
 | 4 | 反馈与确认在提交时核对实际看过的板，版本变化不覆盖当前反馈。输出清单绑定两版各自的子任务。旧成片的迟到响应不清掉新确认，也不触发旧文件下载。前端 13 个浏览器用例通过。 |
 | 5 | 合成视频与三张图片走实际上传 HTTP、项目存储、人审版、反馈、确认、取消和接续，两版成片经各自的页面确认并下载。两份测试 MP4 的字节不同，下载逐版比对。模型、配音和成片审核使用本地替身，验证覆盖产品状态转换与交付，不作为真实媒体质量或远端服务可用性的证据。 |
 
-后续审计队列有两个独立边界。SM42/44 在本地备料阶段进程终止时，`preparing` 可能阻止原 operation ID 接续，即使尚未派发。需要独立的崩溃回归区分尚未派发与派发未知。SM40 的 Fun-ASR 能力缓存把片段范围和源哈希纳入键，同一入口换片段时可能重复遇到已知能力错误。需要先区分端点不支持与单个素材不合法，再决定能共享的缓存范围。两项仍待实现，不改变本轮的恢复保护或已用计数。
+### 补充收口
+
+- SM42/44 原片观察和独立审核保留同一个操作 ID。只有受跨进程锁保护、身份完全匹配且标明零派发的备料记录才可接续。制作端接回原额度和回执入口。结果未知保留原登记，现有的原始返回回读照常使用。缺少所有权标记的旧备料记录保持阻断。审核备料的中断目录在该操作接续时清理，进入外部派发前删除本地抽帧副本。
+- SM40 Fun-ASR 能力范围按账户、入口、模型及固定协议隔离。HTTP 405 和 501 在原有效期内可共享到不同源片、片段和语言。普通 400、404、415 保留各自的请求结果。输入和原始返回的哈希绑定沿用原协议。命中入口能力时，新片段标为未提交，已保存结果仍先回读。
+- 本地子进程回归分别在备料、派发后和收到原始结果后中断。核对同任务接续、并发拒绝、错身份和旧标记拒绝、原始判定和次数保持，以及收到结果后零补发。源片观察经过实际制作宿主与 HTTP 路由复核。
 
 ## 原盘点逐项归属
 
@@ -156,11 +160,11 @@
 | SM37 | Creator-document authoring and evidence binding | 保留现有 | `server/clipmentor/creator-storyboard-document.ts` |
 | SM38 | Governed external call journal | 保留现有 | `server/clipmentor/external-call.ts` |
 | SM39 | Deadline versus late response | 本轮修补 | `server/clipmentor/external-call.ts` |
-| SM40 | Endpoint capability TTL | 保留现有 | `server/clipmentor/external-call.ts` |
+| SM40 | Endpoint capability TTL | Fun-ASR 按端点协议复用确定的能力错误，原始结果身份保留 | `server/clipmentor/external-fetch.ts`、`server/plugins/clipmentor-funasr.ts` |
 | SM41 | Gateway bounded recovery | 保留现有 | `server/clipmentor/production-recovery.ts` |
-| SM42 | Source-video observation operation | 本轮修补 | `server/clipmentor/source-video.ts` |
+| SM42 | Source-video observation operation | 匹配的新备料记录可接续，未知提交只回读 | `server/clipmentor/source-video.ts` |
 | SM43 | Source-video derived recovery | 保留现有 | `server/clipmentor/source-video.ts` |
-| SM44 | Independent copy-review operation | 本轮修补 | `server/clipmentor/copy-review.ts` |
+| SM44 | Independent copy-review operation | 锁内接续同请求与审核要求；保留原始判定 | `server/clipmentor/copy-review.ts` |
 | SM45 | Copy-review contract/scope reinterpretation | 保留现有 | `server/clipmentor/copy-review.ts` |
 | SM46 | Preview subprocess request recovery | 保留现有 | `server/plugins/clipmentor-preview-review.ts` |
 | SM47 | Preview effective approval projection | 保留现有 | `server/plugins/clipmentor-preview-review.ts` |

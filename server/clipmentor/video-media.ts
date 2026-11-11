@@ -1,6 +1,5 @@
 // Server-only, shared by source observation and actual-export review. No model calls or media conversions.
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
 import { mkdir, open, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -15,6 +14,7 @@ import { runtimeProfile } from '../runtime-profile';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import { sha256File } from '../../shared/node-content-hash';
 import { sealVideo, videoInput, VIDEO_URL_MAX_BYTES, VIDEO_REQUEST_MAX_BYTES, type PreparedVideo, type MediaTransferReceipt } from './video-input';
+import { tryLocalOperationLock } from './local-operation-lock';
 
 const PART_BYTES = 8 * 1024 * 1024;
 const MAX_ATTEMPTS = 3;
@@ -60,20 +60,12 @@ function missing(error: unknown) {
     || ['NotFound','NoSuchKey'].includes((error as {name?:string})?.name??'');
 }
 async function lock(path: string, signal: AbortSignal) {
-  // A SQLite transaction is an OS-backed cross-process lock. A killed process releases it;
-  // no empty lockfile window, PID reuse or stale-owner unlink can steal another writer's lock.
-  const db=new DatabaseSync(path+'.sqlite');
-  db.exec('PRAGMA busy_timeout=0');
-  try {
-    while(true) {
-      signal.throwIfAborted();
-      try {db.exec('BEGIN IMMEDIATE');return async()=>{try{db.exec('COMMIT');}finally{db.close();}};}
-      catch(e) {
-        if((e as {errcode?:number}).errcode!==5 && !String((e as Error).message).includes('database is locked'))throw e;
-        await delay(50,undefined,{signal});
-      }
-    }
-  } catch(e) {db.close();throw e;}
+  while(true) {
+    signal.throwIfAborted();
+    const release=tryLocalOperationLock(path);
+    if(release)return release;
+    await delay(50,undefined,{signal});
+  }
 }
 
 /** Deliver the selected file's exact bytes; upstream observation selection owns any declared excerpt. */
@@ -83,7 +75,7 @@ export async function prepareR2Video(options: MediaOptions): Promise<PreparedVid
   let stage:Stage='local_read'; const started=Date.now();
   let transferReceipt: MediaTransferReceipt | undefined;
   const handle=await open(file,'r');
-  let release:(()=>Promise<void>)|undefined;
+  let release:(()=>void)|undefined;
   try {
     signal.throwIfAborted();
     const size=(await handle.stat()).size;

@@ -64,12 +64,12 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
    const result=await options.effect('review',body.operationId,async()=>{
     try{return {body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined),status:200};}
     catch(e){const error=e as {status?:number;diagnostic?:unknown};return {body:{error:'Independent API review failed',diagnostic:error.diagnostic},status:error.status??500};}
-   },async()=>({body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined,true),status:200}));
+   },async()=>({body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined,'resume_preparation'),status:200}));
    return Response.json(result.body,{status:result.status});
   }
   if(body.action==='read'||path==='/api/clipmentor/observe-video'&&body.action==='read_receipt')return local(path,init);
   if(path.includes('observe-video')||path.includes('transcribe-source')||path.includes('review-preview')){
-   const readReceipt=async(operationId:string)=>{
+   const readReceipt=async(operationId:string,resumePreparation=false)=>{
     const isSource=path==='/api/clipmentor/observe-video';
     const receiptDeadline=AbortSignal.timeout(10_000);
     const signal=options.signal?AbortSignal.any([options.signal,receiptDeadline]):receiptDeadline;
@@ -78,6 +78,12 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     if(!response.ok)throw new Error('Original receipt unavailable; outcome unknown, no resubmission');
     const receipt=await response.json();
     if(receipt.operationId!==body.operationId||receipt.projectId!==body.projectId)throw new Error('Original receipt binding mismatch');
+    if(isSource&&resumePreparation&&receipt.status==='preparing'&&receipt.requestsAttempted===0){
+     const resumed=await local(path,{...init,body:JSON.stringify({...body,action:'resume_preparation'})});
+     const data=await resumed.json();
+     if((!resumed.ok||data?.error)&&!data?.receipt)throw new Error('Original observation preparation did not complete; retain its operation ID');
+     return {status:resumed.status,body:data};
+    }
     if(isSource)return receipt.status==='completed'&&receipt.result
      ?{status:200,body:{...receipt.result,cached:true}}
      :{status:409,body:{error:'Original observation is failed or unknown; no resubmission',receipt}};
@@ -94,7 +100,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
      if(!options.retryGateway||path.includes('transcribe-source')||options.signal?.aborted)throw error;
      return readReceipt(operationId);
     }
-   },readReceipt);
+   },operationId=>readReceipt(operationId,true));
    return Response.json(result.body,{status:result.status});
   }
   return local(path,init);
