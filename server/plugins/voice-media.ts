@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { uploadDir } from '../media-dir.ts';
 import { fetchGeneratedResult } from './result-download.ts';
 import {sha256File} from '../../shared/node-content-hash.ts';
+import {atomicWriteFile} from './project-store-durable.ts';
 
 function rawFormat(codec: string): string | undefined {
   if (codec === 'pcm') return 's16le';
@@ -80,7 +81,14 @@ export async function saveVoiceAudio(bytes: Buffer, codec: string, sampleRate: n
   else {
     const expected=createHash('sha256').update(bytes).digest('hex');
     file = join(dir, `${pitch?randomUUID():`voice-${expected}`}.${extension(codec)}`);
-    try{await writeFile(file,bytes,{flag:'wx'});}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+    if(pitch)await writeFile(file,bytes,{flag:'wx'});
+    else {
+      const saved=await sha256File(file).catch(error=>{
+        if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+        throw error;
+      });
+      if(saved!==expected)await atomicWriteFile(file,bytes);
+    }
     if(await sha256File(file)!==expected)throw Error('saved voice bytes changed; repair locally, do not regenerate');
   }
   await pitchShift(file, pitch, sampleRate);

@@ -51,7 +51,24 @@ try {
     loadOfflineEditCheckpoint,
     loadOfflineStoredProject,
     saveOfflineEditCheckpoint,
+    writeCommitEntries,
   } = await import('./offline-project-store.ts');
+  for(const failedKey of ['project','ownership']){
+    const initial={project:'old document',versions:'old versions'};
+    const storage=new Map(Object.entries(initial));
+    const keys=['versions','project','ownership'];
+    const originals=Object.fromEntries(keys.map(key=>[key,storage.has(key)?{found:true,value:storage.get(key)}:{found:false}]));
+    const next=Object.fromEntries(keys.map(key=>[key,`new ${key}`]));
+    let failed=false;
+    await assert.rejects(writeCommitEntries({
+      writeEntry:async (key,value)=>{
+        storage.set(key,String(value));
+        if(key===failedKey&&!failed){failed=true;throw Error('directory fsync failed after publish');}
+      },
+      removeEntry:async key=>{storage.delete(key);},
+    },next,originals,()=>true),/directory fsync failed/);
+    assert.deepEqual(Object.fromEntries(storage),initial,'failure after replacing a row must roll back that row and the preceding writes');
+  }
   const {
     claimBrowserProjectOwnership,
     claimOfflineProjectOwnership,

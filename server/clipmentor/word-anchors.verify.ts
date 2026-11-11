@@ -220,7 +220,16 @@ try{
   const samples=16000,wav=Buffer.alloc(44+samples*2);
   wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);
   wav.writeUInt16LE(1,22);wav.writeUInt32LE(32000,24);wav.writeUInt32LE(64000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(samples*2,40);
-  const result=await saveVoiceAudio(wav,'wav',32000);
+  const path=join(uploadDir(),`voice-${sha(wav)}.wav`);
+  await writeFile(path,wav.subarray(0,50));
+  const {assertProductionAudioFile}=await import('./production-readiness');
+  const asset={id:'fixture-wave',kind:'audio',src:`/media/uploads/voice-${sha(wav)}.wav`,sourceContentHash:sha(wav)} as ProjectDoc['assets'][number];
+  await assert.rejects(assertProductionAudioFile(asset),/production_audio_file_changed/);
+  const [result,concurrent]=await Promise.all([saveVoiceAudio(wav,'wav',32000),saveVoiceAudio(wav,'wav',32000)]);
+  assert.deepEqual(concurrent,result);
+  await assertProductionAudioFile(asset);
+  assert.deepEqual(await readFile(path),wav);
+  await assert.rejects(assertProductionAudioFile({...asset,src:'/media/uploads/missing-wave.wav'}),/production_audio_file_missing/);
   assert.equal(result.sha256,sha(await readFile(join(uploadDir(),result.path.split('/').pop()!))));assert.equal(result.durationSeconds,0.5);
   const f=await fixture();
   const binding=await bindMinimaxWordSubtitle(f.line.narration_ms,result,String(f.asset.props!.minimaxSubtitlePath));

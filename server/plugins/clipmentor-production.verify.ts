@@ -3,6 +3,7 @@ import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {once} from 'node:events';
 import {createMiniConnect} from '../../desktop/mini-connect';
 import {mkdtemp,rm,mkdir,writeFile,readFile} from 'node:fs/promises';
+import {readdirSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import sharp from 'sharp';
 import {tmpdir} from 'node:os';
@@ -137,6 +138,25 @@ try{
  assert.deepEqual(await readFile(join(media,'fixture-attachment.png')),png,'delivery never rewrites source files');
  // Exercise final acceptance itself, with a synthetic portrait MP4 and fake local review evidence.
  execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=720x1280:r=10','-frames:v','1','-c:v','libx264','-pix_fmt','yuv420p',join(media,'fixture-preview.mp4')]);
+ const videoFile=join(media,'fixture-preview.mp4');
+ const originalVideo=Buffer.concat([await readFile(videoFile),Buffer.from([0,0,0,9,102,114,101,101,1])]);
+ await writeFile(videoFile,originalVideo);
+ {
+  const {openHeadlessEditor}=await import('../clipmentor/headless-editor');
+  const {MemoryPersistence,projectDoc:blank,projectId:fixtureProject}=await import('../external-agent/offline-runtime.verify-fixtures');
+  const candidate=blank();
+  candidate.assets.push({id:'source-frame-fixture',kind:'video',name:'fixture.mp4',src:'/media/uploads/fixture-preview.mp4',
+   durationInFrames:3,width:720,height:1280,sourceContentHash:createHash('sha256').update(originalVideo).digest('hex')});
+  const persistence=new MemoryPersistence(candidate),generated=()=>readdirSync(media).filter(name=>name.startsWith('clipmentor-frame-'));
+  let sawPrivateFrame=false;
+  const editor=await openHeadlessEditor({projectId:fixtureProject,runId:'source-frame-owner-fixture',origin,
+   review:{provider:'openai',apiMode:'responses',model:'fixture',origin},persistence,
+   browserConnected:()=>{if(generated().length)sawPrivateFrame=true;return sawPrivateFrame;},
+   effect:async()=>{throw Error('No external effects allowed');}});
+  try{await assert.rejects(editor.execute('save_clipmentor_source_frame',{assetId:'source-frame-fixture',seconds:0},'frame'),/project_busy_browser/);}
+  finally{await editor.close();}
+  assert(sawPrivateFrame);assert.equal(persistence.commitCount,0);assert.deepEqual(generated(),[]);
+ }
  await setStoredEntry('project:'+panelTask.projectId,deliveryDoc);panelTask.projectRevision=(await loadOfflineStoredProject(panelTask.projectId))!.revision;
  panelTask.completed.export!.artifact.revision=panelTask.projectRevision;
  panelTask.input.panelDelivery={productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:pngHash};await productionTaskStore.save(panelTask);
@@ -150,6 +170,16 @@ try{
  assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).status,'completed');
  const finalVideo=await fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view:'panel_download',projectId:panelTask.projectId,renderId:'delivery-fixture'})}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
  assert.equal(finalVideo.status,200);assert.match(finalVideo.headers.get('content-disposition')!,/filename\*=UTF-8''/);assert.deepEqual(Buffer.from(await finalVideo.arrayBuffer()),await readFile(join(media,'fixture-preview.mp4')),'confirmed download contains actual saved MP4 bytes');
+ const videoGet=(view:string,range?:string)=>fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view,projectId:panelTask.projectId,renderId:'delivery-fixture'})}`,
+  {headers:{Origin:origin,'Sec-Fetch-Site':'same-origin',...(range?{Range:range}:{})}});
+ const part=await videoGet('panel_video','bytes=0-15');
+ assert.equal(part.status,206);assert.deepEqual(Buffer.from(await part.arrayBuffer()),originalVideo.subarray(0,16));
+ const sameSizeReplacement=Buffer.from(originalVideo);sameSizeReplacement[sameSizeReplacement.length-1]=2;
+ await writeFile(videoFile,sameSizeReplacement);
+ assert.equal((await videoGet('panel_download')).status,409,'accepted render ID cannot serve changed bytes');
+ assert.equal((await videoGet('panel_video','bytes=0-15')).status,409,'Range cannot bypass preview identity');
+ await writeFile(videoFile,originalVideo);
+ const restored=await videoGet('panel_download');assert.equal(restored.status,200);await restored.arrayBuffer();
  delete panelTask.input.panelDelivery; // Complete requirement identity and atomic publication use the real canonical store.
  const requirementProject='required-final-fixture';await setStoredEntry('project:'+requirementProject,deliveryDoc);
  const required=await createProductionTask({...panelTask.input,projectId:requirementProject,panelDelivery:{productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:'f'.repeat(64)}});
@@ -256,6 +286,27 @@ try{
  const outputDoc=(await loadOfflineStoredProject(output.projectId))!.doc;
  assert.equal((await checkCopyProduction(outputDoc,'clipmentor')).allowed,false,'a user confirmation never manufactures production approval');
  assert.equal((await loadOfflineStoredProject(panelTask.projectId))!.revision,sourceSnapshot.revision,'source project remains unchanged');
+ {
+  await productionTaskStore.save(confirmationParent);
+  const {getStoredEntry}=await import('./project-store');
+  const {digestValue:hashValue}=await import('../agent-runs/store-values');
+  const key='project:'+confirmationParent.projectId,guarded=await getStoredEntry(key);
+  const save=productionTaskStore.save;let interrupted=false;
+  productionTaskStore.save=async(task,preconditions)=>{
+   if(!interrupted&&task.taskId===confirmationParent.taskId&&preconditions){
+    interrupted=true;await setStoredEntry(key,{...full,name:'concurrent project edit'});
+   }
+   await save(task,preconditions);
+  };
+  try{
+   await assert.rejects(createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin,
+    [{key,digest:hashValue(guarded.value)}]),/precondition_changed/);
+   assert(interrupted);
+   assert.equal((await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId)).productionChildren,undefined);
+   const prepared=await createBlueprintContinuation(confirmationParent,sourceSnapshot,'new_contact',variantRequirements,origin);
+   assert.equal(prepared.status,'awaiting_blueprint','stale confirmation may prepare but cannot release a child');
+  }finally{productionTaskStore.save=save;await setStoredEntry(key,guarded.value);}
+ }
  const batch=await createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin);
  const replayedBatch=await createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin);
  assert.deepEqual(batch.map(t=>t.taskId),replayedBatch.map(t=>t.taskId),'one confirmation always creates the same two outputs');

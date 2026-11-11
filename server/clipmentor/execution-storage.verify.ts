@@ -1,6 +1,6 @@
 // Real persisted transactions, isolated from the user's profile and production projects.
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import fixture from '../../src/agent/tools/fixtures/barely-there-mg-replacement-20261030.json';
@@ -48,8 +48,16 @@ try{
  // Exercise the actual production export stage, using an existing approved
  // project and a fake local job transport. No rendering or provider request.
  const {productionStageWorker}=await import('./production-worker');
+ const {materializeHandoffVoice}=await import('./handoff-voice.verify-fixture');
+ const profile=(await import('../runtime-profile')).runtimeProfile();
+ assert.equal(profile.rootDir,root);
  const {default:compositions}=await import('../../src/clipmentor/fixtures/production-saved-projects-20261028.json');
- const savedPlan=compositions.cases[0]!.doc as unknown as ProjectDoc;
+ const savedPlan=structuredClone(compositions.cases[0]!.doc) as unknown as ProjectDoc;
+ const audioFiles=[];
+ for(const asset of savedPlan.assets.filter(asset=>asset.kind==='audio')){
+  audioFiles.push(await materializeHandoffVoice(savedPlan,asset,profile.mediaDir));
+ }
+ const firstAudio=audioFiles[0]!;
  await setStoredEntry(`project:${id}`,savedPlan);
  const accepted=(await loadOfflineStoredProject(id))!.doc;
  for(const failExport of [false,true]){
@@ -71,11 +79,17 @@ try{
   const task={taskId:'export-fixture',projectId:id,stage:'export',input:{sourceAssetId:accepted.clipMentorAnalysis!.source.asset_id,
    author:{origin:'http://127.0.0.1:5199'},reviewer:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'responses'}}} as import('./production-task').ProductionTask;
   const stage={signal:new AbortController().signal,effect:async<T>(_kind:unknown,_key:string,work:(id:string)=>Promise<T>)=>work('fixture-job')};
+  if(!failExport){
+   await unlink(firstAudio.file);
+   await assert.rejects(productionStageWorker(task,stage),/production_audio_file_missing/);
+   assert.equal(posts,0);
+   await writeFile(firstAudio.file,firstAudio.bytes);
+  }
   if(failExport)await assert.rejects(productionStageWorker(task,stage),/committed editing retained/);
   else{const result=await productionStageWorker(task,stage);assert.equal(result.artifact.revision,(await loadOfflineStoredProject(id))!.revision);assert.equal(typeof result.artifact.facts_digest,'string');}
   assert.equal(posts,1);assert.equal(polls,1);assert.deepEqual((await loadOfflineStoredProject(id))!.doc,accepted,'success/failure leaves the saved project unchanged');
  }
- console.log('Actual production export stage: saved approved fixture, releases project before polling, retains committed edits after job failure, snapshot revision/digest returned; fake jobs, zero renders');
+ console.log('Actual production export stage: missing narration blocks submission, restored approved fixture exports, releases project before polling, retains committed edits after job failure; fake jobs, zero renders');
  console.log('Execution storage: native preservation enforced at real commit for every entry, normal save/cold read, in-write rollback keeps document and versions; zero network/model/media changes');
 }finally{
  globalThis.fetch=fetchBefore;if(previous===undefined)delete process.env.OPENCHATCUT_DATA_DIR;else process.env.OPENCHATCUT_DATA_DIR=previous;

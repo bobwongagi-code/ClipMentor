@@ -108,6 +108,23 @@ try{
   const first=api.deleteGenerationJob(j.id);await entered.promise;const second=api.deleteGenerationJob(j.id);release.resolve();
   assert.deepEqual(await Promise.all([first,second]),[true,true]);assert.equal(cleaned,1,'concurrent deletion cannot run destructive cleanup twice');assert.equal(api.getGenerationJobSnapshot(j.id),undefined);
  });
+ await test('a failed download recovery write restores the original recoverable job',async()=>{
+  let downloads=0;
+  const j=await start(async(id,_progress,register)=>{
+   await register('https://fixture.invalid/retained',async()=>{downloads++;return result(id);});
+   throw new ResultDownloadError('https://fixture.invalid/retained','fixture');
+  });
+  await j.done;
+  const before=api.getGenerationJobSnapshot(j.id),backup=storePath+'.download-backup';
+  await rename(storePath,backup);await mkdir(storePath);
+  try{await assert.rejects(api.resumeGenerationJobDownload(j.id));}
+  finally{await rm(storePath,{recursive:true,force:true});await rename(backup,storePath);}
+  assert.deepEqual(api.getGenerationJobSnapshot(j.id),before);
+  assert.equal(downloads,0);
+  assert.equal(await api.resumeGenerationJobDownload(j.id),true);
+  assert.equal(downloads,1);
+  assert.equal((await disk(j.id)).status,'succeeded');
+ });
  await test('retention check excludes download recovery and operation reuse',async()=>{
   const entered=deferred(),release=deferred();let cleaned=0,resumes=0,reused=0;
   store.registerGenerationRetentionGuard('server-export',async()=>{entered.resolve();await release.promise;return false;});

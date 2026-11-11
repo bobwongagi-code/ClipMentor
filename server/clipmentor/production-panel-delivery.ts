@@ -47,8 +47,7 @@ export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):P
  const registered=doc.assets.find(a=>storyboardSourceMatches(doc,a,times)&&a.props?.clipmentorCreatorDocumentHash===contentHash);
  if(registered){
   const file=resolveUploadFile(`${registered.id}.jpg`);
-  if(file&&await sha256File(file)===registered.sourceContentHash)return;
-  throw Error('panel_storyboard_asset_unavailable');
+  if(file&&await sha256File(file).catch(()=>null)===registered.sourceContentHash){signal.throwIfAborted();return;}
  }
  const asset=doc.assets.find(a=>a.id===source.asset_id);
  const file=asset?.kind==='video'&&resolveUploadFile(asset.src.replace(/^\/media\/uploads\//,''));
@@ -57,8 +56,11 @@ export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):P
  const document=await creatorStoryboard(doc,signal);
  signal.throwIfAborted();
  const bytes=document.preview,hash=createHash('sha256').update(bytes).digest('hex'),id=`clipmentor-storyboard-${hash}`;
+ if(registered&&registered.sourceContentHash!==hash)throw Error('storyboard_document_cover_recovery_mismatch');
  const target=join(uploadDir(),`${id}.jpg`),temp=`${target}.${randomUUID()}.tmp`;
- try{await writeFile(temp,bytes,{flag:'wx'});await rename(temp,target);}finally{await rm(temp,{force:true});}
+ try{await writeFile(temp,bytes,{flag:'wx'});signal.throwIfAborted();await rename(temp,target);}finally{await rm(temp,{force:true});}
+ signal.throwIfAborted();
+ if(registered)return;
  return {id,name:'Storyboard video asal · Rootify',kind:'image',src:`/media/uploads/${id}.jpg`,sourceContentHash:hash,
   width:1190,height:1684,durationInFrames:1,props:{clipmentorStoryboardSource:source.asset_id,
    clipmentorStoryboardHash:source.sourceContentHash,clipmentorStoryboardTimes:times,clipmentorStoryboardDocument:2,clipmentorCreatorDocumentHash:contentHash}};

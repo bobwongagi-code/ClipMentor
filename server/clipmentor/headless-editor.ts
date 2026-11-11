@@ -3,8 +3,9 @@ import {voiceAssetProvenance} from '../../shared/voice-word-timing';
 import {assertFrozenParameterChanges} from '../../src/clipmentor/execution-parameters';
 import {assertLocalFeedbackPreservation} from './production-feedback';
 import {reusableVoiceForRequest} from './audio-reuse';
+import {assertProductionAudioFile} from './production-readiness';
 import {randomUUID} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {makeDraft} from '../../src/editor/store';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
@@ -116,9 +117,9 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   const renewed=await persistence.renewOwnership(ownership,revision);active();if(renewed.status!=='renewed')throw new Error('Project ownership lost');ownership=renewed.claim;
  }
  const validate=()=>withLease(renew);
- async function commitDraft(){return withLease(async()=>{
+ async function commitDraft(onWrite?:()=>void){return withLease(async()=>{
   await renew();const doc=migrateProjectDoc(engine.getDoc());if(!doc)throw new Error('Invalid saved project');
-  if(revisionOf(doc)!==revision){options.assertCanvas?.(doc);assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
+  if(revisionOf(doc)!==revision){options.assertCanvas?.(doc);assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);onWrite?.();const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
    if(result.status!=='applied'||!result.revision)throw new Error(`Project commit ${result.status}`);revision=result.revision;ownership=result.ownership??{...ownership,baseRevision:revision};
   }
   committed=doc;engine=makeDraft(doc);sync();return {saved:true,revision,projectId:options.projectId};
@@ -153,17 +154,32 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     if(!asset||asset.kind!=='video'||typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0||seconds>=asset.durationInFrames/engine.getState().fps)throw new Error('Invalid source frame');
     const file=resolveUploadFile(asset.src.replace(/^\/media\/uploads\//,''));if(!file||!asset.sourceContentHash||await sha256File(file)!==asset.sourceContentHash)throw new Error('Source changed');
     const name=`clipmentor-frame-${randomUUID()}.png`,target=join(uploadDir(),name);
-    await extractOneFrame(file,sourceFrameSeekMs(seconds*1000),target,true);
-    const image:MediaAsset={id:randomUUID(),name,kind:'image',src:`/media/uploads/${name}`,durationInFrames:1,width:asset.width,height:asset.height,
-     sourceContentHash:await sha256File(target),props:{sourceAssetId:asset.id,sourceSeconds:seconds,sourceHash:asset.sourceContentHash}};
-    ctx.commands.applyDoc({...before,assets:[...before.assets,image]});await commitDraft();return savedResult({asset:image});
+    let commitStarted=false;
+    try{
+     await extractOneFrame(file,sourceFrameSeekMs(seconds*1000),target,true,undefined,options.signal);
+     const image:MediaAsset={id:randomUUID(),name,kind:'image',src:`/media/uploads/${name}`,durationInFrames:1,width:asset.width,height:asset.height,
+      sourceContentHash:await sha256File(target),props:{sourceAssetId:asset.id,sourceSeconds:seconds,sourceHash:asset.sourceContentHash}};
+     active();
+     ctx.commands.applyDoc({...before,assets:[...before.assets,image]});
+     await commitDraft(()=>{commitStarted=true;});
+     return savedResult({asset:image});
+    }catch(error){
+     if(!commitStarted)await rm(target,{force:true}).catch(()=>undefined);
+     throw error;
+    }
    }
    if(name==='submit_voice'){
     const voice=options.voice;
     if(!voice||args.provider!==voice.provider||args.voiceId!==voice.voiceId||(args.speed??1)!==1||(args.speedRatio??1)!==1)throw new Error('Task-confirmed voice and normal speed required');
     const packet=await copyTeachingPacketFromDoc(before);
     if(!packet.units.some(u=>u.lines.some(l=>l.narration_ms===args.text))&&!packet.delivery_sections?.some(s=>s.line.narration_ms===args.text))throw new Error('Voice text does not match current reviewed copy');
-    const reusable=reusableVoiceForRequest(before,args);if(reusable.status==='reusable')return savedResult(reusable);
+    const reusable=reusableVoiceForRequest(before,args);
+    if(reusable.status==='reusable'){
+     const {audioHash,...result}=reusable;
+     await assertProductionAudioFile(result.asset,audioHash);
+     active();
+     return savedResult(result);
+    }
     if(reusable.status!=='missing')return{error:`voice_reuse_${reusable.status}:${reusable.reason}`,voice_reuse:reusable,production_approved:false};
     const obtainVoice=async(operationId:string,readOnly=false)=>{
     const res=await local('/generate/voice',{method:'POST',headers:{'Content-Type':'application/json','X-ClipMentor-Project':options.projectId,'X-ClipMentor-Operation':operationId,...(readOnly?{'X-ClipMentor-Recover':'1'}:{})},body:JSON.stringify(args)}),data=await res.json();

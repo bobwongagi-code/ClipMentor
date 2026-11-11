@@ -3,7 +3,8 @@
 // and legacy-copy behavior. Isolated development profiles use only their profile media
 // directory: no legacy fallback, legacy copy, MEDIA_DIR override, or R2 read-through.
 import { createReadStream, existsSync } from 'node:fs';
-import { copyFile, mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -262,8 +263,8 @@ export function mimeFor(name: string): string {
 }
 
 /** GET/HEAD A disk file, supports single segment Range (206/416, video seek dependent). */
-export async function serveDiskFile(req: IncomingMessage, res: ServerResponse, file: string): Promise<void> {
-  const info = await stat(file);
+export async function serveDiskFile(req: IncomingMessage, res: ServerResponse, file: string, opened?: FileHandle): Promise<void> {
+  const info = await (opened ? opened.stat() : stat(file));
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
   let start = 0;
   let end = info.size - 1;
@@ -297,6 +298,12 @@ export async function serveDiskFile(req: IncomingMessage, res: ServerResponse, f
   if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${info.size}`;
   res.writeHead(status, headers);
   if (req.method === 'HEAD') { res.end(); return; }
+  if (opened) {
+    // Headers were sent. A failed stream terminates the response instead of
+    // asking its caller to write a second response on the same socket.
+    await pipeline(opened.createReadStream({ start, end, autoClose: false }), res).catch(() => res.destroy());
+    return;
+  }
   createReadStream(file, { start, end }).pipe(res);
 }
 

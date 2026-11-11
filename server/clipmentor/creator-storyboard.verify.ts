@@ -70,6 +70,14 @@ try{
  assert.equal((await preparePanelStoryboardForAuthor(tooLong,new AbortController().signal)).issue,'storyboard_document_layout_overflow','recovery also exposes the same author-repairable issue');
  assert((await preparePanelStoryboardForAuthor(doc,new AbortController().signal)).asset,'corrected author copy can resume local generation');
  const first=await createPanelStoryboard(doc,new AbortController().signal);assert(first);doc.assets.push(first!);
+ const coverPath=join(media,first.src.split('/').at(-1)!);
+ const originalCover=await readFile(coverPath);
+ await rm(coverPath);
+ assert.equal(await createPanelStoryboard(doc,new AbortController().signal),undefined,'a recovered cover retains the registered asset');
+ assert.deepEqual(await readFile(coverPath),originalCover);
+ await writeFile(coverPath,'damaged cover');
+ assert.equal(await createPanelStoryboard(doc,new AbortController().signal),undefined);
+ assert.deepEqual(await readFile(coverPath),originalCover,'recovery restores the exact approved bytes');
  (doc.assets[0].props!.clipmentorCreatorStoryboard as CreatorStoryboardDocument).rows[0].shot_ms='Dia memegang palet di hadapan kamera.';
  assert.equal(panelStoryboardAsset(doc),undefined,'an old cover is not current after author-copy changes');
  const fresh=await createPanelStoryboard(doc,new AbortController().signal);assert(fresh);doc.assets.push(fresh!);assert.equal(panelStoryboardAsset(doc)?.id,fresh!.id,'old assets remain saved but cannot shadow the new cover');

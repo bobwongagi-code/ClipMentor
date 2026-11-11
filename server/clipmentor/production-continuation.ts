@@ -12,7 +12,7 @@ import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../
 import {productionFeedbackAnchor} from './production-feedback';
 import type {ProjectDoc} from '../../src/editor/types';
 import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
-import {createProductionTask,latestPanelProductionTask,productionTaskStore,type ProductionTask} from './production-task';
+import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionControl,type EntryPreconditions,type ProductionTask} from './production-task';
 
 export type ProductionAudience='new_contact'|'existing_partner';
 
@@ -99,7 +99,7 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
 }
 
 /** Persist both outputs before dispatch. A duplicate click or restart reuses the same children. */
-export async function createBlueprintContinuations(parent:ProductionTask,source:{doc:ProjectDoc;revision:string},requirements:HandoffPolicy|null,origin:string){
+export async function createBlueprintContinuations(parent:ProductionTask,source:{doc:ProjectDoc;revision:string},requirements:HandoffPolicy|null,origin:string,guards?:EntryPreconditions){
  // Validate BOTH scopes before creating either output.
  selectProductionAudience(source.doc,'existing_partner');selectProductionAudience(source.doc,'new_contact');
  const first=await createBlueprintContinuation(parent,source,'existing_partner',requirements,origin);
@@ -109,9 +109,13 @@ export async function createBlueprintContinuations(parent:ProductionTask,source:
   second.sharedProduction={projectId:first.projectId,taskId:first.taskId};
   await productionTaskStore.save(second);
  }
- parent.productionChildren=[first,second].map(task=>({projectId:task.projectId,taskId:task.taskId,audience:task.input.panelDelivery!.audience!}));
+ const next=structuredClone(parent);
+ next.productionChildren=[first,second].map(task=>({projectId:task.projectId,taskId:task.taskId,audience:task.input.panelDelivery!.audience!}));
+ delete next.productionChild;
+ if(guards)await saveProductionControl(parent,next,productionTaskStore,guards);
+ else await productionTaskStore.save(next);
  delete parent.productionChild;
- await productionTaskStore.save(parent);
+ Object.assign(parent,next);
  return queueBlueprintContinuations(parent);
 }
 
