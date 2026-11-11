@@ -5,10 +5,10 @@ import { isSourceTranscription } from '../../shared/clipmentor-asr';
 
 /** Asset-only ASR. No clip placement, caption edits, model-written claims or automatic approvals. */
 export async function transcribeClipMentorAsset(args: Record<string, unknown>, ctx: AgentContext): Promise<unknown> {
-  const doc = ctx.getDoc(), projectId=ctx.getProjectId?.(), runId=ctx.getAgentRunId?.(), signal=ctx.getAgentRunSignal?.();
+  const liveDoc = ctx.getDoc(), projectId=ctx.getProjectId?.(), runId=ctx.getAgentRunId?.(), signal=ctx.getAgentRunSignal?.();
   if(signal?.aborted)return {error:'Source ASR cancelled before submission',requestsSent:0};
-  const snapshot=canonicalProjectJson(doc);
-  const current=()=>canonicalProjectJson(ctx.getDoc())===snapshot&&ctx.getProjectId?.()===projectId
+  const snapshot=canonicalProjectJson(liveDoc),doc=JSON.parse(snapshot) as typeof liveDoc;
+  const current=(expected=snapshot)=>canonicalProjectJson(ctx.getDoc())===expected&&ctx.getProjectId?.()===projectId
     &&ctx.getAgentRunId?.()===runId&&ctx.getAgentRunSignal?.()===signal&&!signal?.aborted;
   if (doc.clipMentorAnalysis) return { error: 'Analysis already exists; source transcription initialization will not overwrite it' };
   if (args.expectedRevision !== 0 || !isAnalysisActor(args.actor) || typeof args.reason !== 'string' || !args.reason.trim()) return { error: 'Fresh analysis, declared actor and reason required' };
@@ -43,7 +43,10 @@ export async function transcribeClipMentorAsset(args: Record<string, unknown>, c
   const next = { ...doc, assets: doc.assets.map((a) => a.id === asset.id ? { ...a, sourceContentHash: result.source_hash } : a), clipMentorAnalysis: analysis };
   const handoff = await checkAnalysisHandoff(next);
   if (!current()) return { error: 'Project changed or run cancelled during analysis write; no stale result applied' };
-  ctx.commands.applyDoc(next);
+  const unconfirmed={error:'ASR received but project write could not be confirmed. Read the current project and saved receipt.',operationId:result.operation_id};
+  const expected=canonicalProjectJson(next);
+  try{ctx.commands.applyDoc(next);if(!current(expected))return unconfirmed;}
+  catch{return unconfirmed;}
   return { ok: true, revision: 1, operationId: result.operation_id, status: result.status, requestsAttempted: result.requests_attempted,
     wordCount: result.words.length, chunks: result.chunks.length, conflicts: result.conflicts, issues: result.issues,
     handoff, listeningVerified: false, sellingPointsExtracted: false };

@@ -53,7 +53,7 @@ function upload(src:string,deps:PreviewEditDeps) {
 async function readJson(path:string) {return JSON.parse(await readFile(path,'utf8'));}
 /** Publish complete bytes without replacing an earlier winner. Exact orphaned
  * material from a crash is reusable; different bytes still require local repair. */
-async function publishExactPreviewFile(path:string,body:string):Promise<string> {
+export async function publishExactPreviewFile(path:string,body:string):Promise<string> {
   const staging=`${path}.${randomUUID()}.tmp`;
   try {
     await atomicWriteFile(staging,body);

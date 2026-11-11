@@ -27,7 +27,7 @@ function fake() {
     head:async key=>{const v=objects.get(key);return v?{bytes:v.data.length,etag:v.etag}:null;},
     pending:async key=>[...uploadKeys].filter(([,k])=>k===key).map(([id])=>id),
     create:async(key)=>{calls.create++;const id=randomUUID();uploads.set(id,new Map());uploadKeys.set(id,key);if(failure==='create_after'){failure='none';throw {code:'ECONNRESET'};}return id;},
-    list:async(_key,id)=>[...uploads.get(id)!].map(([number,data])=>({number,etag:hash(data),bytes:data.length})),
+    list:async(_key,id)=>{const parts=uploads.get(id);if(!parts)throw {name:'NoSuchUpload'};return [...parts].map(([number,data])=>({number,etag:hash(data),bytes:data.length}));},
     part:async(_key,id,n,body)=>{
       calls.part++;
       const b:Buffer[]=[];for await(const chunk of body)b.push(chunk);const bytes=Buffer.concat(b);
@@ -44,7 +44,7 @@ function fake() {
       return Readable.from([failure==='corrupt'?Buffer.alloc(data.length,33):failure==='truncate'?data.subarray(0,-1):data]);},
     sign:async key=>{calls.sign++;return `https://account.r2.cloudflarestorage.com/bucket/${key}?signature=${calls.sign}`;},
   };
-  return {store,calls,objects,uploads,set failure(v:typeof failure){failure=v;}};
+  return {store,calls,objects,uploads,uploadKeys,set failure(v:typeof failure){failure=v;}};
 }
 let cases=0;
 const run=async(name:string,check:()=>Promise<void>)=>{await check();cases++;console.log(`PASS ${name}`);};
@@ -86,6 +86,18 @@ try {
  await run('changed verified object rejected, not silently repaired or reuploaded',async()=>{
   const f=fake(),o=options(f,'changed');await prepareR2Video(o);for(const v of f.objects.values())v.etag='changed';
   await assert.rejects(prepareR2Video(o),/verified_object_changed/);assert.equal(f.calls.sign,1);assert.equal(f.calls.create,1);
+ });
+ await run('confirmed object deletion or multipart expiry recovers original bytes',async()=>{
+  for(const expired of ['object','multipart'] as const){
+   const f=fake(),o=options(f,'expired-'+expired);
+   if(expired==='object'){await prepareR2Video(o);f.objects.clear();}
+   else {f.failure='auth';await assert.rejects(prepareR2Video(o));f.failure='none';f.uploads.clear();f.uploadKeys.clear();}
+   const recovered=await prepareR2Video(o);
+   assert.equal(f.calls.create,2);
+   assert.deepEqual([...f.objects.values()][0].data,data);
+   assert.equal(recovered.receipt.reused,false);
+   assert.equal(recovered.receipt.model_fetch_verified,false);
+  }
  });
  await run('wrong source hash / aborted / oversized / unverified reference rejected before dispatch',async()=>{
   const f=fake();await assert.rejects(prepareR2Video({...options(f,'wrong'),sha256:'b'.repeat(64)}),/source_hash_mismatch/);

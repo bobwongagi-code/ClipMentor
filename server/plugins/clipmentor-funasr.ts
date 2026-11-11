@@ -92,9 +92,10 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     await writeFile(ledger, JSON.stringify({ fingerprint, identity, status: 'reserved', requests_attempted: 0 }), { flag: 'wx', mode: 0o600 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Could not reserve transcription operation');
-    const prior = JSON.parse(await readFile(ledger, 'utf8')) as { fingerprint: string; result?: SourceTranscription };
+    const originalText=await readFile(ledger,'utf8');
+    const prior = JSON.parse(originalText) as { fingerprint: string; result?: SourceTranscription };
     if (prior.fingerprint !== fingerprint) throw new Error('Operation ID already belongs to another source or configuration');
-    if (prior.result) return recoverSavedAsr(prior.result,ledger,fingerprint,deps.directory);
+    if (prior.result) return recoverSavedAsr(prior.result,ledger,originalText,fingerprint,deps.directory);
     throw new Error('Prior operation is running or outcome unknown; no automatic replay');
   }
   const result: SourceTranscription = {
@@ -209,7 +210,7 @@ function settleAsr(result:SourceTranscription,duration:number){
     const completed = result.chunks.filter((c) => c.status === 'completed').length;
     result.status = completed === result.chunks.length ? 'completed' : completed ? 'partial' : 'failed';
 }
-async function recoverSavedAsr(original:SourceTranscription,ledger:string,fingerprint:string,directory:string,readLimits?:{maxBytes:number;maxRecords:number},signal?:AbortSignal){
+async function recoverSavedAsr(original:SourceTranscription,ledger:string,originalText:string,fingerprint:string,directory:string,readLimits?:{maxBytes:number;maxRecords:number},signal?:AbortSignal){
  if(original.status==='completed')return original;
  const result=structuredClone(original);let recovered=false;
  for(const chunk of result.chunks){
@@ -228,7 +229,6 @@ async function recoverSavedAsr(original:SourceTranscription,ledger:string,finger
  if(!recovered)return original;
  settleAsr(result,original.duration_seconds);
  if(readLimits&&!validSavedAsr(result))return original;
- const originalText=readLimits?(await readAsrLedger(ledger)).text:await readFile(ledger,'utf8');
  signal?.throwIfAborted();
  await atomicWriteFile(ledger+'.recovered-raw-v1.json',JSON.stringify({fingerprint,original_ledger_sha256:digest(Buffer.from(originalText)),provider_requests_sent:0,result}));
  return result;
@@ -302,7 +302,7 @@ export async function readClipMentorSourceAsr(input:unknown,deps:Pick<Dependenci
   ||record.result.requested_language!==identity.language||record.result.requests_attempted>identity.maxRequests)return outcome('invalid');
  const original=record.result;
  let result:SourceTranscription;
- try{result=await recoverSavedAsr(original,join(deps.directory,`${input.operationId}.json`),record.fingerprint,deps.directory,READ_LIMITS,signal);}
+ try{result=await recoverSavedAsr(original,join(deps.directory,`${input.operationId}.json`),saved.text,record.fingerprint,deps.directory,READ_LIMITS,signal);}
  catch{signal?.throwIfAborted();return outcome('invalid');}
  if(!validSavedAsr(result)||result.issues.includes('source_changed_during_transcription'))return outcome('stale');
  // A read racing an operation update never returns a mixed snapshot as current.

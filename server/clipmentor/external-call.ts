@@ -98,8 +98,10 @@ export async function externalCall<T,R=T>(o:CallOptions<T,R>):Promise<R> {
       try{raw=await readFile(rawFile,'utf8');}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT'){await event('duplicate_prevented');throw new ExternalCallError('external_result_pending_or_unknown',row.failure??'transport_unknown',file);}throw e;}
       value=decodeEnvelope(raw,inputHash,row.response_sha256) as T;
       // Crash after response commit but before its ledger link: recover locally.
-      row={...row,response_sha256:hash(raw),status:'returned'};
-      await atomicWriteFile(file,JSON.stringify(row));
+      if(!row.response_sha256&&!o.readOnly){
+        row={...row,response_sha256:hash(raw),status:'returned'};
+        await atomicWriteFile(file,JSON.stringify(row));
+      }
     }catch(e){if(e instanceof ExternalCallError)throw e;throw new ExternalCallError('external_saved_result_invalid','local_storage',file);}
     reused=true;await event('raw_reused');
   }
@@ -146,14 +148,18 @@ export async function externalCall<T,R=T>(o:CallOptions<T,R>):Promise<R> {
   try {
     o.signal?.throwIfAborted();
     result=o.consume?await o.consume(value!):value! as unknown as R;
+    o.signal?.throwIfAborted();
   }catch(error){
+    if(o.signal?.aborted||o.readOnly||row.status==='used')throw error;
     const failure=error instanceof ExternalHttpError?externalFailure(error):'local_validation';
     row={...row,failure,recovery:externalRecovery(failure),...(error instanceof ExternalHttpError?{http_status:error.status}:{})};
     await atomicWriteFile(file,JSON.stringify(row));
     throw error;
   }
+  if(o.readOnly||row.status==='used')return result;
   row={...row,status:'used'};
   try{await atomicWriteFile(file,JSON.stringify(row));}catch{throw new ExternalCallError('external_consumption_record_failed','local_storage',file);}
+  o.signal?.throwIfAborted();
   return result;
 }
 

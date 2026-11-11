@@ -136,15 +136,29 @@ export async function prepareR2Video(options: MediaOptions): Promise<PreparedVid
         ||!p.etag||p.bytes!==expectedSize(p.number)))throw new VideoMediaError('r2_upload','remote_parts_invalid');
       return parts;
     };
-    if(!head) {
-      if(state.verified)throw new VideoMediaError('r2_upload','verified_object_missing');
-      if(!state.upload) {
+    const startUpload=async()=>{
         // Recover a lost CreateMultipart acknowledgement before creating another upload of the same bytes.
         const pending=await call(()=>store.pending(key,signal));
         if(pending.length>1||pending.some(id=>typeof id!=='string'||!id||id.length>4096))throw new VideoMediaError('r2_upload','pending_upload_ambiguous');
         state.upload=pending[0]??await call(()=>store.create(key,signal));await save();
+    };
+    if(!head) {
+      if(state.verified){
+        state={version:1,identity,sha256,bytes:size,parts:[],attempts:{}};
+        await save();
       }
-      state.parts=await list();await save();
+      if(!state.upload)await startUpload();
+      try{state.parts=await list();}
+      catch(error){
+        if((error as {name?:string})?.name!=='NoSuchUpload')throw error;
+        head=await call(()=>store.head(key,signal));
+        state={version:1,identity,sha256,bytes:size,parts:[],attempts:{}};
+        await save();
+        if(!head){await startUpload();state.parts=await list();}
+      }
+    }
+    if(!head) {
+      await save();
       const upload=async(number:number)=>{
         if(state.parts.some(p=>p.number===number))return;
         while((state.attempts[number]??0)<MAX_ATTEMPTS) {

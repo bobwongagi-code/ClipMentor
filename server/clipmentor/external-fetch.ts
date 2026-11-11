@@ -10,6 +10,7 @@ export async function externalFetch(o:{directory:string;kind:ExternalKind;purpos
   const headers=new Headers(o.init.headers);
   const account=sha(headers.get('authorization')??'');
   const capability={endpoint:o.endpoint,account,scope:o.scope,protocol:headers.get('content-type')};
+  let fresh=false;
   const value=await externalCall({directory:o.directory,kind:o.kind,purpose:o.purpose,requestId:o.requestId,
     identity:{capability,method:o.init.method??'GET',body:sha(o.init.body??''),headers:[...headers].map(([k,v])=>[k,sha(v)])},
     capability,readOnly:o.readOnly,signal:o.init.signal??undefined,timeoutMs:o.timeoutMs,maxResponseBytes:o.maxResponseBytes,
@@ -25,9 +26,10 @@ export async function externalFetch(o:{directory:string;kind:ExternalKind;purpos
       const credential=headers.get('authorization')?.replace(/^Bearer\s+/i,'');
       if(credential&&text.includes(credential))throw new ExternalCallError('external_credential_echo_rejected','local_validation','');
       // Body is persisted by externalCall before any status/JSON validation.
+      fresh=true;
       return {status:response.status,text,contentType:response.headers.get('content-type')};
     },consume:async raw=>{
-      await recordExternalCapability(o.directory,capability,raw.status).catch(()=>{console.warn('[clipmentor] external capability cache unavailable');});
+      if(fresh)await recordExternalCapability(o.directory,capability,raw.status).catch(()=>{console.warn('[clipmentor] external capability cache unavailable');});
       if(raw.status<200||raw.status>=300)throw new ExternalHttpError(raw.status);
       return raw;
     }});

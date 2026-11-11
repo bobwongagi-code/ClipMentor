@@ -91,6 +91,16 @@ try {
     assert.equal(confirmedUnsubmittedGateway('preview_review',{body:reply},failed.operationId,failed.projectId),op===failed.operationId);
   }
   assert.equal(calls,attempts,'reading transport diagnostics never launches a process');
+  const interrupted=body();
+  await assert.rejects(previewBridge(interrupted,deps,AbortSignal.abort(Error('stopped before launch'))),/stopped before launch/);
+  const preparedDir=join(deps.directory,interrupted.projectId,interrupted.operationId);
+  await rm(join(preparedDir,'input.json'));
+  const pending=await previewBridge({action:'read',projectId:interrupted.projectId,operationId:interrupted.operationId},deps);
+  assert.equal(pending.requestsAttempted,0);
+  assert.equal(calls,attempts);
+  await Promise.all([previewBridge(interrupted,deps),previewBridge(interrupted,deps)]);
+  assert.equal((await previewBridge({action:'read',projectId:interrupted.projectId,operationId:interrupted.operationId},deps)).status,'completed');
+  assert.equal(calls,attempts+1,'exact local preparation can recover with one launch owner');
 
   assert.deepEqual(policyForTool('review_clipmentor_preview',{action:'request'}),{effect:'irreversible_external',recovery:'outcome_unknown'});
   assert.deepEqual(policyForTool('review_clipmentor_preview',{action:'read'}),{effect:'read',recovery:'pure'});

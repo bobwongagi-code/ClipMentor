@@ -3,14 +3,15 @@ import { getKey } from '../keystore';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { open, readFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { editorCredentialAuthorized } from '../editor-auth';
 import { resolveUploadFile, isSafeUploadName, uploadDir } from '../media-dir';
-import { previewEditBridge, executePreviewMaterial, type PreviewEditDeps } from '../clipmentor/preview-edit';
+import { previewEditBridge, executePreviewMaterial, publishExactPreviewFile, type PreviewEditDeps } from '../clipmentor/preview-edit';
+import { syncDirectory } from './project-store-durable';
 import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
@@ -71,6 +72,12 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const directory = join(deps.directory, body.projectId, operationId);
   const bindingFile = join(directory, 'binding.json'), output = join(directory, 'result.json');
   const manifestFile = join(directory, 'execution-manifest.json');
+  const launchClaim = join(directory, 'launch.claim');
+  const ledgerFile = join(directory, `${operationId}.operation.json`);
+  const exists=(file:string)=>stat(file).then(()=>true,error=>{
+    if((error as NodeJS.ErrnoException).code==='ENOENT')return false;
+    throw error;
+  });
   const read = async () => {
     const binding = JSON.parse(await readFile(bindingFile, 'utf8'));
     if (binding.projectId !== body.projectId || binding.operationId !== body.operationId) throw new Error('Invalid binding');
@@ -160,7 +167,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       cut_checks: u.cut_checks.map(({ matching_observation_paths: _paths, ...fact }) => fact),
       scheduled_audio_gaps: u.scheduled_audio_gaps, issues: u.issues,
     })) };
-    const ledger = await readFile(join(directory, `${body.operationId}.operation.json`), 'utf8').then(JSON.parse).catch(() => null);
+    const ledger = await readFile(ledgerFile, 'utf8').then(JSON.parse).catch(() => null);
     let visualComparison:unknown;
     // Local evidence uses frozen inputs, never a current author-selected substitute.
     // Failed extraction does not alter or manufacture an independent verdict.
@@ -184,7 +191,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     }catch(error){visualComparison=visualEvidenceFailure(error);}}
     const gatewayFailure=ledger?.status==='failed'&&typeof ledger.error==='string'
       ? /^Preview review HTTP ([0-9]{3}); attempt consumed, no automatic retry$/.exec(ledger.error) : null;
-    const attempted = ledger?.requests_attempted === 0 ? 0 : 1;
+    const unlaunched=binding.launchProtocol===1&&!result&&!await exists(launchClaim)&&!await exists(ledgerFile);
+    const attempted = ledger?.requests_attempted === 0||unlaunched ? 0 : 1;
     const failed = !result && ledger?.status === 'failed' && [0,1].includes(ledger.requests_attempted);
     const diagnostic = failed ? safeSourceTransportDiagnostic(ledger.transport_diagnostic,'',operationId) : undefined;
     return { operationId: body.operationId, projectId: body.projectId, videoSha256: binding.videoSha256,
@@ -234,19 +242,34 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const fingerprint = digest({ src: body.src, videoSha256: body.videoSha256, input,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) });
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  try { await writeFile(bindingFile, JSON.stringify({ projectId: body.projectId, operationId: body.operationId,src:body.src,
+  const bound={projectId:body.projectId,operationId:body.operationId,src:body.src,launchProtocol:1,
     fingerprint, videoSha256: body.videoSha256, inputSha256: prepared.input_sha256,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
-    ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) }), { flag: 'wx', mode: 0o600 }); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    const prior = JSON.parse(await readFile(bindingFile, 'utf8'));
+    ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) };
+  const prior=await readFile(bindingFile,'utf8').then(JSON.parse,error=>{
+    if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+    throw error;
+  });
+  if(prior){
     if (prior.fingerprint !== fingerprint) throw new Error('Operation belongs to another input');
-    return { ...await read(), cached: true }; // Never re-launch a failed/unknown operation.
-  }
+    if(prior.launchProtocol!==1||(await Promise.all([launchClaim,ledgerFile,output].map(exists))).some(Boolean))
+      return { ...await read(), cached: true }; // Older operations have no proof of pre-launch interruption.
+  }else await publishExactPreviewFile(bindingFile,JSON.stringify(bound));
   const inputFile = join(directory, 'input.json');
-  await writeFile(inputFile, JSON.stringify(input), { flag: 'wx', mode: 0o600 });
-  if (manifestHash !== undefined) await writeFile(manifestFile, JSON.stringify(body.executionManifest), { flag: 'wx', mode: 0o600 });
-  try { await deps.run(['--video',video,'--expected-video-sha256',body.videoSha256 as string,'--input',inputFile,'--out',output,'--operation',body.operationId], signal); }
+  await publishExactPreviewFile(inputFile,JSON.stringify(input));
+  if(manifestHash!==undefined)await publishExactPreviewFile(manifestFile,JSON.stringify(body.executionManifest));
+  signal?.throwIfAborted();
+  try{
+    const claim=await open(launchClaim,'wx',0o600);
+    try{await claim.sync();}finally{await claim.close();}
+    await syncDirectory(directory);
+  }catch(error){
+    if((error as NodeJS.ErrnoException).code==='EEXIST')return { ...await read(), cached: true };
+    throw error;
+  }
+  try {
+    signal?.throwIfAborted();
+    await deps.run(['--video',video,'--expected-video-sha256',body.videoSha256 as string,'--input',inputFile,'--out',output,'--operation',body.operationId], signal);
+  }
   catch {
     const saved=await read();
     return saved.requestsAttempted===0 ? {...saved,requestsSent:0,requestOutcome:'not_submitted',error:'Media preparation failed; no model request sent'}

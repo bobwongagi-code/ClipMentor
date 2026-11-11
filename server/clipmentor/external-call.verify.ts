@@ -90,5 +90,29 @@ try{
  const noRecordCount=(await readdir(join(directory,'external-calls'))).length;
  await assert.rejects(externalCall({...base,purpose:'never-paid',readOnly:true}),/saved_result_missing/);assert.equal((await readdir(join(directory,'external-calls'))).length,noRecordCount);pass('read-only lookup never reserves a new request');
  const report=await summarizeExternalCalls(directory);assert.ok(report.records>0);assert.ok(report.late_responses>0);assert.ok(report.attempts>=report.records);assert.ok(report.unreadable_records>=2);assert.ok(report.raw_reuses>0);assert.ok(report.duplicate_submissions_prevented>0);pass('nonempty measured wait/failure summary');
+ const consuming=new AbortController(),entered=Promise.withResolvers<void>(),releaseConsume=Promise.withResolvers<void>();
+ const consumingCase={...base,purpose:'abort-while-consuming',requestId:'abort-while-consuming'};
+ const processing=externalCall({...consumingCase,signal:consuming.signal,consume:async value=>{
+   entered.resolve();await releaseConsume.promise;return value;
+ }});
+ await entered.promise;consuming.abort(Error('consumption cancelled'));releaseConsume.resolve();
+ await assert.rejects(processing,/consumption cancelled/);
+ assert.deepEqual(await readSavedExternalResponse(directory,'abort-while-consuming'),{answer:'raw'});
+ const clock=Date.now,capabilityTime=clock();
+ try{
+  const old={...f,endpoint:'https://expiry.offline.invalid',fetch:async()=>new Response('unsupported',{status:404})};
+  await assert.rejects(externalFetch(old),/external_http_404/);
+  Date.now=()=>capabilityTime+601_000;
+  await assert.rejects(externalFetch({...old,readOnly:true}),/external_http_404/);
+  const fresh=await externalFetch({...old,init:{...old.init,body:'new'},fetch:async()=>new Response('supported')});
+  assert.equal(await fresh.text(),'supported');
+ }finally{Date.now=clock;}
+ const used={...base,purpose:'used-read-replay'};
+ await externalCall(used);
+ const usedHash=createHash('sha256').update(JSON.stringify({version:1,kind:used.kind,purpose:used.purpose,identity:used.identity})).digest('hex');
+ const usedPath=join(directory,'external-calls',usedHash+'.json'),usedBefore=await readFile(usedPath,'utf8');
+ await externalCall({...used,readOnly:true,consume:async value=>{assert.equal(await readFile(usedPath,'utf8'),usedBefore);return value;}});
+ assert.equal(await readFile(usedPath,'utf8'),usedBefore);
+ pass('cancelled consumers preserve raw and replay cannot reset capabilities or used state');
  console.log(`${tests} external-call regression groups passed; external network/model calls 0`);
 }finally{await rm(directory,{recursive:true,force:true});}
