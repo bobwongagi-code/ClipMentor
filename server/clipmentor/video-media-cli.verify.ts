@@ -18,6 +18,7 @@ try {
  return new Response(JSON.stringify({success:true,result:{status:'active',id:'b'.repeat(32)}}),{status:200});};
  const {S3Client}=require('@aws-sdk/client-s3');let object,parts=[];
  S3Client.prototype.send=async function(command){const name=command.constructor.name;appendFileSync(process.env.TEST_TRACE,name+'\\n');
+ if(name==='HeadObjectCommand'&&process.env.TEST_KILL_PREPARING==='1')process.kill(process.pid,'SIGKILL');
  if(process.env.TEST_LEGACY_R2==='1'){
  const keys=await this.config.credentials();if(keys.accessKeyId!=='b'.repeat(32))throw Error('Legacy key not used');
  const {computeCaps}=await import(${JSON.stringify(resolve('server/keystore.ts'))});if(computeCaps().storage)throw Error('Video credentials must not enable generic storage');}
@@ -60,6 +61,18 @@ try {
  const wrongCached=spawnSync(process.execPath,args.map(v=>v===frozenHash?'f'.repeat(64):v),{cwd:process.cwd(),env,encoding:'utf8',timeout:15_000});
  assert.equal(wrongCached.status,1);assert.match(wrongCached.stderr,/Preview source binding mismatch/);assert.equal(await readFile(trace,'utf8'),history);
  assert.equal(JSON.parse(await readFile(join(root,operation+'.operation.json'),'utf8')).status,'completed','Wrong expected hash must not rewrite the prior successful record');
+ const stoppedId=randomUUID(),stoppedOut=join(root,'stopped-result.json'),stoppedTrace=join(root,'stopped-trace');
+ const stoppedArgs=args.map(v=>v===operation?stoppedId:v===output?stoppedOut:v);
+ const stop=(extra:NodeJS.ProcessEnv)=>spawnSync(process.execPath,stoppedArgs,{cwd:process.cwd(),env:{...env,TEST_TRACE:stoppedTrace,...extra},encoding:'utf8',timeout:15_000});
+ assert.equal(stop({TEST_KILL_PREPARING:'1'}).signal,'SIGKILL');
+ const stoppedLedger=join(root,stoppedId+'.operation.json'),interrupted=await readFile(stoppedLedger,'utf8');
+ assert.equal(JSON.parse(interrupted).status,'preparing');assert.equal(JSON.parse(interrupted).requests_attempted,0);
+ assert.equal((await readFile(stoppedTrace,'utf8')).includes('mock-model-post'),false);
+ assert.notEqual(stop({ROOTIFY_GATEWAY_API_KEY:'different-account'}).status,0);
+ assert.equal(await readFile(stoppedLedger,'utf8'),interrupted);
+ const resumed=stop({});assert.equal(resumed.status,0,resumed.stderr);
+ assert.equal(stop({}).status,0);
+ assert.equal((await readFile(stoppedTrace,'utf8')).split('mock-model-post').length-1,1);
  // A missing storage credential fails before model accounting and the original failed attempt cannot replay.
  env.R2_ACCESS_KEY_ID='';const failedId=randomUUID(),failedOut=join(root,'failed-result.json');
  const failArgs=args.map(v=>v===operation?failedId:v===output?failedOut:v);

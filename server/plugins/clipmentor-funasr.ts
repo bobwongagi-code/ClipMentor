@@ -3,7 +3,7 @@ import {externalFetch} from '../clipmentor/external-fetch.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { editorCredentialAuthorized } from '../editor-auth.ts';
 import { getKey } from '../keystore.ts';
@@ -12,9 +12,10 @@ import { runtimeProfile } from '../runtime-profile.ts';
 import { ffmpegBin, ffprobeBin } from '../media-binaries.ts';
 import { spawnMediaProcess, ffmpegThreadArgs } from '../media-process.ts';
 import { atomicWriteFile } from './project-store-durable.ts';
+import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from '../clipmentor/local-operation-lock';
 import { sha256File } from '../../shared/node-content-hash.ts';
 import { ASR_AUDIO, ASR_MAX_BYTES, FUNASR_MODEL, isSourceTranscription, planAsrChunks, stitchAsrChunks } from '../../shared/clipmentor-asr.ts';
-import type { SourceAsrRead, SourceTranscription, SourceWord } from '../../shared/clipmentor-asr.ts';
+import type { AsrChunk, SourceAsrRead, SourceTranscription, SourceWord } from '../../shared/clipmentor-asr.ts';
 
 interface SourceRequest {
   src: string; expectedSourceHash?: string; sourceSize?: number;
@@ -36,6 +37,9 @@ const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest(
 const FUNASR_CAPABILITY={scope:{model:FUNASR_MODEL,method:'POST',audio:ASR_AUDIO,sse:'disable'},unsupportedStatuses:[405,501]} as const;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const sha = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+const chunkArchiveScope=(configuration:string,result:SourceTranscription,chunk:AsrChunk)=>digest(Buffer.from(JSON.stringify([
+  configuration,result.source_hash,result.requested_language,chunk.offset_seconds,chunk.end_seconds,chunk.audio_sha256,chunk.audio_bytes,
+])));
 function parseRequest(v: unknown): SourceRequest {
   if (!object(v) || typeof v.src !== 'string' || !/^\/media\/uploads\/[^/?#]+$/.test(v.src)
     || typeof v.operationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(v.operationId)
@@ -73,7 +77,7 @@ export function parseFunAsrResponse(value: unknown, offset: number): { words: So
 }
 
 /** One reserved operation, no automatic retries. Ambiguous prior attempts never replay. */
-export async function transcribeClipMentorSource(input: unknown, deps: Dependencies, signal?: AbortSignal): Promise<SourceTranscription> {
+export async function transcribeClipMentorSource(input: unknown, deps: Dependencies, signal?: AbortSignal, resumePreparationOnly=false): Promise<SourceTranscription> {
   const request = parseRequest(input);
   const key = deps.key(), endpoint = deps.endpoint();
   if (!key) throw new Error('ClipMentor Fun-ASR server credential is not configured');
@@ -91,31 +95,51 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
   const fingerprint = digest(new TextEncoder().encode(JSON.stringify(fingerprintInput)));
   await mkdir(deps.directory, { recursive: true, mode: 0o700 });
   const ledger = join(deps.directory, `${request.operationId}.json`);
+  signal?.throwIfAborted();
+  const release=tryLocalOperationLock(ledger+'.owner');
+  if(!release)throw Error('Prior transcription is in progress');
   try {
-    await writeFile(ledger, JSON.stringify({ fingerprint, identity, status: 'reserved', requests_attempted: 0 }), { flag: 'wx', mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Could not reserve transcription operation');
-    const originalText=await readFile(ledger,'utf8');
-    const prior = JSON.parse(originalText) as { fingerprint: string; result?: SourceTranscription };
-    if (prior.fingerprint !== fingerprint) throw new Error('Operation ID already belongs to another source or configuration');
-    if (prior.result) return recoverSavedAsr(prior.result,ledger,originalText,fingerprint,deps.directory);
-    throw new Error('Prior operation is running or outcome unknown; no automatic replay');
-  }
+    const configuration=digest(Buffer.from(JSON.stringify([endpoint,key,FUNASR_MODEL,ASR_AUDIO,metadata.duration,metadata.fps])));
+    const originalText=await readFile(ledger,'utf8').catch(error=>{if(error.code==='ENOENT')return;throw error;});
+    if(originalText===undefined){
+      if(resumePreparationOnly)throw Error('Original ASR preparation unavailable; no submission');
+      await publishOperationPreparation(ledger,{fingerprint,identity,configuration});
+    }else{
+      const prior=JSON.parse(originalText);
+      if(!object(prior)||prior.fingerprint!==fingerprint)throw Error('Operation ID already belongs to another source or configuration');
+      if(prior.result!==undefined){
+        if(!validSavedAsr(prior.result)||prior.result.operation_id!==request.operationId||prior.result.source_hash!==sourceHash
+          ||prior.result.requested_language!==request.language||prior.result.requests_attempted>request.maxRequests)throw Error('Invalid saved ASR');
+        return await recoverSavedAsr(prior.result,ledger,originalText,fingerprint,deps.directory,signal);
+      }
+      if(!isResumablePreparation(prior)||prior.configuration!==configuration)throw Error('Prior operation is running or outcome unknown; no automatic replay');
+    }
+    const workspace=join(deps.directory,`audio-${request.operationId}`);
+    if(originalText!==undefined)await rm(workspace,{recursive:true,force:true});
+    await mkdir(workspace,{mode:0o700});
+    try{return await runSourceTranscription(request,deps,signal,{file,sourceHash,metadata,key,endpoint,ledger,identity,fingerprint,workspace,configuration});}
+    finally{await rm(workspace,{recursive:true,force:true});}
+  }finally{release();}
+}
+
+async function runSourceTranscription(request:SourceRequest,deps:Dependencies,signal:AbortSignal|undefined,
+  operation:{file:string;sourceHash:string;metadata:{duration:number;fps:number};key:string;endpoint:string;
+   ledger:string;identity:Record<string,unknown>;fingerprint:string;workspace:string;configuration:string}):Promise<SourceTranscription>{
+  const {file,sourceHash,metadata,key,endpoint,ledger,identity,fingerprint,workspace,configuration}=operation;
   const result: SourceTranscription = {
     schema_version: 1, operation_id: request.operationId, provider: 'fun-asr', model: FUNASR_MODEL,
     requested_language: request.language, detected_language: null, source_hash: sourceHash,
     duration_seconds: metadata.duration, fps: metadata.fps, audio: ASR_AUDIO,
     status: 'failed', requests_attempted: 0, chunks: [], words: [], conflicts: [], issues: [],
   };
-  const save = (status?: 'prepared' | 'request_reserved', final = false) => {
+  const save = (status?: 'request_reserved', final = false) => {
     // The complete plan and every consumed chunk survive a process crash. An
     // attempted chunk stays failed/unknown until a retained response proves it.
     const snapshot = structuredClone(result);
     if (!final && snapshot.chunks.length) settleAsr(snapshot, metadata.duration);
-    return atomicWriteFile(ledger, JSON.stringify({ fingerprint, identity,
+    return atomicWriteFile(ledger, JSON.stringify({ fingerprint, identity, archive_binding_protocol:1, configuration,
       ...(status ? { status, requests_attempted: snapshot.requests_attempted } : {}), result: snapshot }));
   };
-  const temporary = await mkdtemp(join(deps.directory, 'audio-'));
   try {
     const ranges = planAsrChunks(metadata.duration);
     if (ranges.length > request.maxRequests) throw new Error('Planned chunks exceed request budget');
@@ -124,7 +148,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     for (let i = 0; i < ranges.length; i++) {
       signal?.throwIfAborted();
       const [start, end] = ranges[i];
-      const bytes = await deps.encode(file, start, end, join(temporary, `${i}.mp3`));
+      const bytes = await deps.encode(file, start, end, join(workspace, `${i}.mp3`));
       if (bytes.length > ASR_MAX_BYTES) {
         if (end - start <= 4) throw new Error('Encoded audio exceeds byte limit at minimum chunk length');
         const middle = (start + end) / 2;
@@ -139,7 +163,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     }
     if (encoded.length > request.maxRequests) throw new Error('Planned chunks exceed the explicitly supplied request budget; no provider request sent');
     if (await deps.hash(file) !== sourceHash) throw new Error('Source changed during extraction');
-    await save('prepared');
+    await rm(workspace,{recursive:true,force:true});
     for (let i = 0; i < result.chunks.length; i++) {
       signal?.throwIfAborted();
       const chunk = result.chunks[i];
@@ -151,7 +175,7 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
       let stage: 'network' | 'http' | 'json' | 'timestamps' = 'network';
       try {
         const response = await externalFetch({directory:deps.directory,kind:'asr',purpose:'fun-asr-chunk-v1',
-          sharedCapability:FUNASR_CAPABILITY,
+          sharedCapability:FUNASR_CAPABILITY,archiveScopeSha256:chunkArchiveScope(configuration,result,chunk),
           scope:{model:FUNASR_MODEL,source:sourceHash,language:request.language,range:[chunk.offset_seconds,chunk.end_seconds]},requestId:`${request.operationId}:${chunk.chunk_id}`,endpoint,fetch:deps.fetch,init:{
           method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-DashScope-SSE': 'disable' },
@@ -192,7 +216,6 @@ export async function transcribeClipMentorSource(input: unknown, deps: Dependenc
     result.status = result.chunks.some((c) => c.status === 'completed') ? 'partial' : 'failed';
   } finally {
     await save(undefined, true);
-    await rm(temporary, { recursive: true, force: true });
   }
   return result;
 }
@@ -222,15 +245,20 @@ function settleAsr(result:SourceTranscription,duration:number){
     const completed = result.chunks.filter((c) => c.status === 'completed').length;
     result.status = completed === result.chunks.length ? 'completed' : completed ? 'partial' : 'failed';
 }
-async function recoverSavedAsr(original:SourceTranscription,ledger:string,originalText:string,fingerprint:string,directory:string,readLimits?:{maxBytes:number;maxRecords:number},signal?:AbortSignal){
+async function recoverSavedAsr(original:SourceTranscription,ledger:string,originalText:string,fingerprint:string,directory:string,signal?:AbortSignal){
  if(original.status==='completed')return original;
+ const parent=JSON.parse(originalText);
+ const boundArchive=parent.archive_binding_protocol===1;
+ if(boundArchive&&!sha(parent.configuration))return original;
  const result=structuredClone(original);let recovered=false;
  for(const chunk of result.chunks){
   signal?.throwIfAborted();
   if(chunk.status!=='failed')continue;
   try{
-   const saved=await readSavedExternalResponse(directory,`${original.operation_id}:${chunk.chunk_id}`,readLimits);
+   const saved=await readSavedExternalResponse(directory,`${original.operation_id}:${chunk.chunk_id}`,
+    {...READ_LIMITS,requireOriginalRequestId:!boundArchive});
    if(!object(saved)||saved.status!==200||typeof saved.text!=='string')continue;
+   if(boundArchive&&saved.scope_sha256!==chunkArchiveScope(parent.configuration,original,chunk))continue;
    const parsed=parseFunAsrResponse(JSON.parse(saved.text),chunk.offset_seconds);
    chunk.words=parsed.words;chunk.detected_language=parsed.language;chunk.request_id=parsed.requestId;chunk.separator_entries_skipped=parsed.separators;
    chunk.status='completed';delete chunk.error;delete chunk.failure_stage;
@@ -240,7 +268,7 @@ async function recoverSavedAsr(original:SourceTranscription,ledger:string,origin
  signal?.throwIfAborted();
  if(!recovered)return original;
  settleAsr(result,original.duration_seconds);
- if(readLimits&&!validSavedAsr(result))return original;
+ if(!validSavedAsr(result))return original;
  signal?.throwIfAborted();
  await atomicWriteFile(ledger+'.recovered-raw-v1.json',JSON.stringify({fingerprint,original_ledger_sha256:digest(Buffer.from(originalText)),provider_requests_sent:0,result}));
  return result;
@@ -269,7 +297,7 @@ function safeSavedAsr(value:SourceTranscription):SourceTranscription{
    ...(c.failure_stage===undefined?{}:{failure_stage:c.failure_stage}),...(c.separator_entries_skipped===undefined?{}:{separator_entries_skipped:c.separator_entries_skipped}),
    ...(c.error?{error:'provider_request_failed_or_invalid_timestamps'}:{})})),words:value.words.map(word),
   conflicts:value.conflicts.map(c=>({range_seconds:[...c.range_seconds],chunk_ids:[...c.chunk_ids]})),
-  issues:value.issues.map(i=>/^(?:overlap_conflict|source_time_out_of_bounds|detected_language_disagreement|extraction_budget_or_operation_failed|source_changed_during_transcription|chunk-[1-9][0-9]{0,2}:(?:word_outside_chunk|provider_request_failed_or_invalid_timestamps))$/.test(i)?i:'unrecognized_saved_issue')};
+  issues:value.issues.map(i=>/^(?:overlap_conflict|source_time_out_of_bounds|detected_language_disagreement|extraction_budget_or_operation_failed|source_changed_during_transcription|chunk-[1-9][0-9]{0,2}:(?:word_outside_chunk|provider_request_failed_or_invalid_timestamps|provider_endpoint_capability_unsupported))$/.test(i)?i:'unrecognized_saved_issue')};
 }
 
 async function readAsrLedger(file:string){
@@ -307,18 +335,21 @@ export async function readClipMentorSourceAsr(input:unknown,deps:Pick<Dependenci
  try{if(await deps.hash(file)!==input.expectedSourceHash)return outcome('stale');}catch{return outcome('unavailable');}
  signal?.throwIfAborted();
  if(record.result===undefined){
-  if(!['reserved','request_reserved'].includes(String(record.status))||!Number.isSafeInteger(record.requests_attempted)||Number(record.requests_attempted)<0||Number(record.requests_attempted)>identity.maxRequests)return outcome('invalid');
+  if(!isResumablePreparation(record)&&(!['reserved','request_reserved'].includes(String(record.status))||!Number.isSafeInteger(record.requests_attempted)||Number(record.requests_attempted)<0||Number(record.requests_attempted)>identity.maxRequests))return outcome('invalid');
+  try{if((await readAsrLedger(join(deps.directory,`${input.operationId}.json`))).text!==saved.text)return outcome('stale');}
+  catch{return outcome('unavailable');}
+  signal?.throwIfAborted();
   return {...outcome('pending_or_unknown'),requestsAttempted:Number(record.requests_attempted)};
  }
  if(!validSavedAsr(record.result)||record.result.operation_id!==input.operationId||record.result.source_hash!==input.expectedSourceHash
   ||record.result.requested_language!==identity.language||record.result.requests_attempted>identity.maxRequests)return outcome('invalid');
  const original=record.result;
  let result:SourceTranscription;
- try{result=await recoverSavedAsr(original,join(deps.directory,`${input.operationId}.json`),saved.text,record.fingerprint,deps.directory,READ_LIMITS,signal);}
+ try{result=await recoverSavedAsr(original,join(deps.directory,`${input.operationId}.json`),saved.text,record.fingerprint,deps.directory,signal);}
  catch{signal?.throwIfAborted();return outcome('invalid');}
  if(!validSavedAsr(result)||result.issues.includes('source_changed_during_transcription'))return outcome('stale');
  // A read racing an operation update never returns a mixed snapshot as current.
- try{if((await readAsrLedger(join(deps.directory,`${input.operationId}.json`))).text!==saved.text||await deps.hash(file)!==input.expectedSourceHash)return outcome('stale');}
+ try{if(await deps.hash(file)!==input.expectedSourceHash||(await readAsrLedger(join(deps.directory,`${input.operationId}.json`))).text!==saved.text)return outcome('stale');}
  catch{return outcome('unavailable');}
  signal?.throwIfAborted();
  return {...base,state:result.status,requestsAttempted:original.requests_attempted,original_status:original.status,
@@ -360,10 +391,12 @@ export function clipMentorFunAsrPlugin(deps?: Dependencies): Plugin {
         const parts: Buffer[] = []; let size = 0;
         for await (const part of req) { size += part.length; if (size > 8192) throw new Error('Body too large'); parts.push(Buffer.from(part)); }
         const input=JSON.parse(Buffer.concat(parts).toString('utf8'));
-        if(object(input)&&input.action!==undefined&&input.action!=='read')throw Error('Invalid ASR action');
+        if(object(input)&&input.action!==undefined&&input.action!=='read'&&input.action!=='resume_preparation')throw Error('Invalid ASR action');
+        const resume=object(input)&&input.action==='resume_preparation';
+        if(resume)delete input.action;
         const result = object(input)&&input.action==='read'
           ? await readClipMentorSourceAsr(input,deps??clipMentorAsrDependencies(),abort.signal)
-          : await transcribeClipMentorSource(input,deps??clipMentorAsrDependencies(),abort.signal);
+          : await transcribeClipMentorSource(input,deps??clipMentorAsrDependencies(),abort.signal,resume);
         send(200, result);
       } catch {
         send(400, { error: 'Source transcription unavailable or invalid input; check server configuration, original source and operation record. No automatic retry.' });

@@ -5,7 +5,7 @@ import {externalCall, ExternalHttpError, ExternalCallError, readExternalCapabili
  * Account identity is hashed to prevent replay across credentials sharing an endpoint. */
 export async function externalFetch(o:{directory:string;kind:ExternalKind;purpose:string;scope:unknown;requestId?:string;
   endpoint:string;init:RequestInit;fetch:typeof fetch;readOnly?:boolean;maxResponseBytes?:number;timeoutMs?:number;
-  sharedCapability?:{scope:unknown;unsupportedStatuses:readonly number[]}}):Promise<Response>{
+  sharedCapability?:{scope:unknown;unsupportedStatuses:readonly number[]};archiveScopeSha256?:string}):Promise<Response>{
   const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
   if(o.init.body!==undefined&&typeof o.init.body!=='string')throw Error('external_body_must_be_frozen_string');
   const headers=new Headers(o.init.headers);
@@ -30,7 +30,8 @@ export async function externalFetch(o:{directory:string;kind:ExternalKind;purpos
       if(credential&&text.includes(credential))throw new ExternalCallError('external_credential_echo_rejected','local_validation','');
       // Body is persisted by externalCall before any status/JSON validation.
       fresh=true;
-      return {status:response.status,text,contentType:response.headers.get('content-type')};
+      return {status:response.status,text,contentType:response.headers.get('content-type'),
+        ...(o.archiveScopeSha256?{scope_sha256:o.archiveScopeSha256}:{})};
     },consume:async raw=>{
       if(fresh&&(!o.sharedCapability||raw.status===200||o.sharedCapability.unsupportedStatuses.includes(raw.status)))
         await recordExternalCapability(o.directory,capability,raw.status).catch(()=>{console.warn('[clipmentor] external capability cache unavailable');});

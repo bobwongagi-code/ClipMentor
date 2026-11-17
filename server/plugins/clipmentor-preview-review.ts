@@ -12,6 +12,7 @@ import { editorCredentialAuthorized } from '../editor-auth';
 import { resolveUploadFile, isSafeUploadName, uploadDir } from '../media-dir';
 import { previewEditBridge, executePreviewMaterial, publishExactPreviewFile, type PreviewEditDeps } from '../clipmentor/preview-edit';
 import { syncDirectory } from './project-store-durable';
+import {isResumablePreparation,tryLocalOperationLock} from '../clipmentor/local-operation-lock';
 import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
@@ -67,7 +68,7 @@ export function previewEditDependencies(profile: RuntimeProfile = runtimeProfile
 /** Bind a single CLI operation to a project and immutable preview. No edits or approval writes. */
 export async function previewBridge(body: Record<string, unknown>, deps: PreviewBridgeDependencies, signal?: AbortSignal) {
   if (!project(body.projectId) || typeof body.operationId !== 'string' || !UUID.test(body.operationId)
-    || typeof body.action !== 'string' || !['request', 'read'].includes(body.action)) throw new Error('Invalid preview operation');
+    || typeof body.action !== 'string' || !['request', 'read', 'resume_preparation'].includes(body.action)) throw new Error('Invalid preview operation');
   const operationId = body.operationId;
   const directory = join(deps.directory, body.projectId, operationId);
   const bindingFile = join(directory, 'binding.json'), output = join(directory, 'result.json');
@@ -191,7 +192,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     }catch(error){visualComparison=visualEvidenceFailure(error);}}
     const gatewayFailure=ledger?.status==='failed'&&typeof ledger.error==='string'
       ? /^Preview review HTTP ([0-9]{3}); attempt consumed, no automatic retry$/.exec(ledger.error) : null;
-    const unlaunched=binding.launchProtocol===1&&!result&&!await exists(launchClaim)&&!await exists(ledgerFile);
+    const unlaunched=binding.launchProtocol===1&&!result&&!(await Promise.all([launchClaim,ledgerFile,output].map(exists))).some(Boolean);
+    const preparing=unlaunched||binding.launchProtocol===1&&!result&&object(ledger)&&isResumablePreparation(ledger)&&!await exists(output);
     const attempted = ledger?.requests_attempted === 0||unlaunched ? 0 : 1;
     const failed = !result && ledger?.status === 'failed' && [0,1].includes(ledger.requests_attempted);
     const diagnostic = failed ? safeSourceTransportDiagnostic(ledger.transport_diagnostic,'',operationId) : undefined;
@@ -199,7 +201,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       ...(visualComparison?{visual_comparison:visualComparison}:{}),
       ...(binding.visualCriteriaDigest?{visualCriteriaDigest:binding.visualCriteriaDigest}:{}),
       ...(failed?{receipt_persisted:true}:{}), ...(diagnostic?{transport_diagnostic:diagnostic}:{}),
-      status: result ? 'completed' : ledger?.status ?? 'reserved',...(locallyRecovered?{local_response_recovery:true,original_operation_status:ledger?.status}:{}),
+      status: result ? 'completed' : preparing?'preparing':ledger?.status==='preparing'?'reserved':ledger?.status ?? 'reserved',...(locallyRecovered?{local_response_recovery:true,original_operation_status:ledger?.status}:{}),
       ...(gatewayFailure&&!result?{upstream_http_status:Number(gatewayFailure[1])}:{}), effective_review: effectiveReview, timeline_check: timelineReadback, result,
       requestsAttempted: attempted, model_retry_policy:ledger?.model_retry_policy, requestsSent: 0, full_film_accepted: false, scope: 'rendered_preview_continuous_review' };
   };
@@ -249,16 +251,29 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
     throw error;
   });
+  const childPreparing=async()=>{
+    const ledger=await readFile(ledgerFile,'utf8').then(JSON.parse).catch(()=>null);
+    return object(ledger)&&isResumablePreparation(ledger)&&!await exists(output);
+  };
+  let resumeChild=false;
   if(prior){
     if (prior.fingerprint !== fingerprint) throw new Error('Operation belongs to another input');
-    if(prior.launchProtocol!==1||(await Promise.all([launchClaim,ledgerFile,output].map(exists))).some(Boolean))
+    resumeChild=body.action==='resume_preparation'&&prior.launchProtocol===1&&await exists(launchClaim)&&await childPreparing();
+    if(prior.launchProtocol!==1||(!resumeChild&&(await Promise.all([launchClaim,ledgerFile,output].map(exists))).some(Boolean)))
       return { ...await read(), cached: true }; // Older operations have no proof of pre-launch interruption.
-  }else await publishExactPreviewFile(bindingFile,JSON.stringify(bound));
+  }else {
+    if(body.action==='resume_preparation')throw Error('Original preview preparation unavailable; no submission');
+    await publishExactPreviewFile(bindingFile,JSON.stringify(bound));
+  }
   const inputFile = join(directory, 'input.json');
   await publishExactPreviewFile(inputFile,JSON.stringify(input));
   if(manifestHash!==undefined)await publishExactPreviewFile(manifestFile,JSON.stringify(body.executionManifest));
   signal?.throwIfAborted();
-  try{
+  let releaseResume:(()=>void)|undefined;
+  if(resumeChild){
+    releaseResume=tryLocalOperationLock(join(directory,'resume-launch'));
+    if(!releaseResume)return {...await read(),cached:true};
+  }else try{
     const claim=await open(launchClaim,'wx',0o600);
     try{await claim.sync();}finally{await claim.close();}
     await syncDirectory(directory);
@@ -267,6 +282,12 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     throw error;
   }
   try {
+    if(resumeChild){
+      if(!await childPreparing())return {...await read(),cached:true};
+      const releaseChild=tryLocalOperationLock(ledgerFile+'.owner');
+      if(!releaseChild)return {...await read(),cached:true};
+      releaseChild();
+    }
     signal?.throwIfAborted();
     await deps.run(['--video',video,'--expected-video-sha256',body.videoSha256 as string,'--input',inputFile,'--out',output,'--operation',body.operationId], signal);
   }
@@ -275,6 +296,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     return saved.requestsAttempted===0 ? {...saved,requestsSent:0,requestOutcome:'not_submitted',error:'Media preparation failed; no model request sent'}
       : {...saved,requestsSent:null,requestOutcome:'unknown',error:'Continuous review failed or unknown; attempt consumed, no retry'};
   }
+  finally {releaseResume?.();}
   return { ...await read(), requestsSent: 1 };
 }
 

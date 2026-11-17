@@ -97,10 +97,70 @@ try {
   await rm(join(preparedDir,'input.json'));
   const pending=await previewBridge({action:'read',projectId:interrupted.projectId,operationId:interrupted.operationId},deps);
   assert.equal(pending.requestsAttempted,0);
+  assert.equal(pending.status,'preparing');
   assert.equal(calls,attempts);
+  await assert.rejects(previewBridge({...body(),action:'resume_preparation'},deps),/preparation unavailable/);
+  await assert.rejects(previewBridge({...interrupted,action:'resume_preparation',input:{...input,duration_seconds:11}},deps));
+  await previewBridge({...failed,action:'resume_preparation'},failedDeps);
+  assert.equal(calls,attempts,'resume cannot start missing, mismatched or already claimed operations');
   await Promise.all([previewBridge(interrupted,deps),previewBridge(interrupted,deps)]);
   assert.equal((await previewBridge({action:'read',projectId:interrupted.projectId,operationId:interrupted.operationId},deps)).status,'completed');
   assert.equal(calls,attempts+1,'exact local preparation can recover with one launch owner');
+
+  {
+    const child=body(),childDir=join(deps.directory,child.projectId,child.operationId);
+    const childLedger=join(childDir,`${child.operationId}.operation.json`);
+    const stopped=await previewBridge(child,{...deps,run:async()=>{
+      await writeFile(childLedger,JSON.stringify({status:'preparing',requests_attempted:0,preparation_protocol:1}));
+      throw Error('child interrupted');
+    }});
+    assert.equal(stopped.status,'preparing');
+    const {tryLocalOperationLock}=await import('../clipmentor/local-operation-lock');
+    const unlock=tryLocalOperationLock(childLedger+'.owner');assert(unlock);
+    const before=calls;
+    const recover=()=>previewBridge({...child,action:'resume_preparation'},deps);
+    try{
+      assert.equal((await recover()).status,'preparing');
+      assert.equal(calls,before,'a live child retains its operation');
+    }finally{unlock();}
+    await Promise.all([recover(),recover()]);
+    assert.equal((await recover()).status,'completed');
+    assert.equal(calls,before+1);
+  }
+
+  {
+    const {openHeadlessEditor}=await import('../clipmentor/headless-editor');
+    const {projectDoc,projectId,MemoryPersistence}=await import('../external-agent/offline-runtime.verify-fixtures');
+    const request={...body(),projectId};
+    await assert.rejects(previewBridge(request,deps,AbortSignal.abort(Error('interrupted before CLI launch'))),/interrupted before CLI launch/);
+    const actions:string[]=[];
+    let recoverExisting=false;
+    const editor=await openHeadlessEditor({projectId,runId:'fixture-preview-recovery',origin,
+      review:{provider:'openai',model:'fixture',origin,apiMode:'responses'},persistence:new MemoryPersistence(projectDoc()),browserConnected:()=>false,retryGateway:true,
+      fetch:async(url,init)=>{
+        assert.equal(new URL(String(url)).origin,origin);
+        const action=JSON.parse(String(init?.body)).action;
+        actions.push(action);
+        if(action==='request')throw Error('simulated loss of initial connection');
+        return originalFetch(url,init);
+      },
+      effect:async(kind,key,work,recover)=>{
+        assert.equal(kind,'preview_review');assert.equal(key,request.operationId);assert(recover);
+        return recoverExisting?recover(key):work(key);
+      }});
+    try{
+      const before=calls;
+      const send=()=>editor.context.hostFetch!('/api/clipmentor/review-preview',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+      await assert.rejects(send(),/still pending or unknown/);
+      assert.equal(calls,before,'an interrupted initial connection must not be settled as an effect result');
+      recoverExisting=true;
+      assert.equal((await (await send()).json()).status,'completed');
+      assert.equal((await (await send()).json()).status,'completed');
+      assert.deepEqual(actions,['request','read','read','resume_preparation','read']);
+      assert.equal(calls,before+1);
+    }finally{await editor.close();}
+  }
 
   assert.deepEqual(policyForTool('review_clipmentor_preview',{action:'request'}),{effect:'irreversible_external',recovery:'outcome_unknown'});
   assert.deepEqual(policyForTool('review_clipmentor_preview',{action:'read'}),{effect:'read',recovery:'pure'});
@@ -175,7 +235,7 @@ try {
     assert.equal(lightweight.requestsSent,0);assert.equal(extractions,0,'ten-second result recovery must never start frame extraction');
     const comparisonRead={action:'read',projectId:comparisonProject,operationId:comparisonRun.operationId,includeVisualEvidence:true};
     const collected=await previewBridge(comparisonRead,comparisonDeps);
-    assert.equal((collected.visual_comparison as any).status,'collected');assert.equal(extractions,3);
+    assert.equal((collected.visual_comparison as any).status,'collected',JSON.stringify(collected.visual_comparison));assert.equal(extractions,3);
     let clientCalls=0;
     const localContext={...ctx,getProjectId:()=>comparisonProject,hostFetch:async(_url:unknown,init?:RequestInit)=>{clientCalls++;return Response.json(await previewBridge(JSON.parse(String(init?.body)),comparisonDeps));}} as AgentContext;
     const throughClient=await execClipMentorAnalysisTool('review_clipmentor_preview',{action:'read',operationId:comparisonRun.operationId,includeVisualEvidence:true},localContext) as any;

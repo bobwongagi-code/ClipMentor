@@ -6,7 +6,7 @@ const input:ProductionInput={projectId:'preparation-fixture',sourceAssetId:'sour
 const fresh=():ProductionTask=>({version:1,taskId:crypto.randomUUID(),projectId:input.projectId,input:structuredClone(input),stage:'copy_review',status:'queued',createdAt:Date.now(),updatedAt:Date.now(),sequence:0,
  feedbackUsed:false,repairs:0,completed:{},effects:{},attempts:{model:0,review:0,observation:0,tts:0,render:0}});
 let saved:ProductionTask|undefined,workers=0;
-const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){assert(saved);return structuredClone(saved);}};
+const store:TaskStore={async save(t){saved=structuredClone(t);},async load(projectId,taskId){assert(saved?.projectId===projectId&&saved.taskId===taskId);return structuredClone(saved);}};
 const worker=async()=>{workers++;return {artifact:{saved:true}};};
 const waiting=fresh(),before=structuredClone(waiting);
 await runProductionWithRecovery(waiting,worker,async()=>{},store,async()=>{
@@ -20,14 +20,21 @@ for(const status of ['completed','cancelled','awaiting_blueprint','awaiting_revi
 }
 assert.equal(workers,0,'terminal tasks never enter a new preparatory operation');
 const expired=fresh();expired.createdAt=Date.now()-20000;let expiredPreparations=0;
+await store.save(expired);
 await runProductionWithRecovery(expired,worker,async()=>{},store,async()=>{expiredPreparations++;return true;});
 assert.equal(expiredPreparations,0);assert.equal(expired.status,'blocked');assert.match(expired.error!,/deadline/);
+const settled={...structuredClone(expired),status:'completed' as const,sequence:expired.sequence+1};
+delete settled.error;await store.save(settled);
+await runProductionWithRecovery(expired,worker,async()=>{},store,async()=>{expiredPreparations++;return true;});
+assert.equal(expired.status,'completed');assert.deepEqual(saved,settled);assert.equal(expiredPreparations,0);
 const during=fresh();during.input.budget.maxElapsedMs=20;
+await store.save(during);
 await runProductionWithRecovery(during,worker,async()=>{},store,async signal=>{
  await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}));return true;
 });
 assert.equal(during.status,'blocked');assert.match(during.error!,/deadline/);assert.equal(workers,0);
 const cancelling=fresh();let enter!:()=>void,release!:()=>void;
+await store.save(cancelling);
 const entered=new Promise<void>(resolve=>{enter=resolve;}),held=new Promise<void>(resolve=>{release=resolve;});
 const pending=runProductionWithRecovery(cancelling,worker,async()=>{},store,async()=>{enter();await held;return true;});
 await entered;assert(cancelActiveProductionTask(cancelling.projectId,cancelling.taskId));

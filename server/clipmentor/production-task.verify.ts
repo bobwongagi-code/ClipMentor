@@ -10,6 +10,36 @@ const fresh=():ProductionTask=>({version:1,taskId:'test',projectId:'test',input:
  completed:{},effects:{},attempts:{model:0,review:0,observation:0,tts:0,render:0},repairs:0,feedbackUsed:false});
 let saved:ProductionTask;
 const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){return structuredClone(saved);}};
+for(const committed of [false,true]){
+ const checkpointTask=fresh();
+ let dispatched=0, lostReservationAck=false, lostReviewAck=false;
+ const checkpointStore:TaskStore={
+  async save(next){
+   const reserving=!lostReservationAck&&Object.values(next.effects).some(effect=>effect.status==='reserved');
+   if(reserving&&!committed){
+    lostReservationAck=true;
+    throw Error('fixture: reservation failed before writing');
+   }
+   next.sequence++;
+   saved=structuredClone(next);
+   if(reserving){lostReservationAck=true;throw Error('fixture: reservation committed before disconnect');}
+   if(next.status==='awaiting_review'&&!lostReviewAck){
+    lostReviewAck=true;
+    throw Error('fixture: awaiting review committed before disconnect');
+   }
+  },
+  load:store.load,
+ };
+ await advanceProductionTask(checkpointTask,async(task,ctx)=>{
+  if(task.stage==='analysis')await ctx.effect('model','fixture',async()=>++dispatched);
+  return {artifact:{saved:true}};
+ },checkpointStore);
+ assert.equal(dispatched,committed?1:0,'dispatch needs proof of the reserved checkpoint');
+ assert.equal(checkpointTask.status,committed?'awaiting_review':'blocked');
+ assert.equal((await checkpointStore.load('test','test')).status,checkpointTask.status);
+ assert(lostReservationAck);
+ assert.equal(lostReviewAck,committed);
+}
 const pending=fresh();pending.input.humanBlueprintReview=true;pending.status='blocked';pending.stage='copy_review';
 const budgetBefore=structuredClone(pending.attempts);
 for(const [reviewedDigest,allowed,requirementsDigest,expected] of [['approved',true,'requirements','awaiting_review'],['changed',true,'requirements','awaiting_blueprint'],['approved',true,'new-requirements','awaiting_blueprint'],['approved',false,'requirements','blocked']] as const){
@@ -327,10 +357,22 @@ console.log('Focused blueprint continuation: only new or strictly shrinking know
 
 
 const {runProductionWithRecovery}=await import('./production-task');
+{
+ const stale=fresh();
+ const settled={...structuredClone(stale),sequence:1,status:'completed' as const};
+ await store.save(settled);
+ await runProductionWithRecovery(stale,async()=>{throw Error('stale launch must not run');},async()=>{},store,async()=>{
+  assert(cancelActiveProductionTask(stale.projectId,stale.taskId));
+  throw Error('checkpoint temporarily unreadable during preparation');
+ });
+ assert.equal(stale.status,'completed');
+ assert.deepEqual(await store.load(stale.projectId,stale.taskId),settled,'cancellation during preparation cannot rewrite terminal work');
+}
 for(const waiting of ['awaiting_review','awaiting_blueprint'] as const){
  const freshened=fresh();let workerVisits=0;
  await runProductionWithRecovery(freshened,async()=>{workerVisits++;return{artifact:{saved:true}};},async()=>{},store,async()=>{
   freshened.status=waiting;
+  await store.save(freshened);
   assert(cancelActiveProductionTask(freshened.projectId,freshened.taskId));
   return true;
  });
@@ -479,6 +521,52 @@ for(const name of ['observe_clipmentor_source_video','review_clipmentor_preview'
  },async()=>{throw Error('governed model request cannot be resubmitted');},6);assert.equal(calls,1);
 }
 console.log('Bound zero-request preparations remain free; unknown/wrong bindings remain charged; governed model failures do not retry.');
+
+{
+ const old=fresh();old.stage='self_check';old.input.humanBlueprintReview=true;
+ old.attempts.review=1;
+ const id='self_check:initial:0:'+originalOperation,released='self_check:initial:0:old-free';
+ old.effects[id]={kind:'review',operationId:originalOperation,status:'reserved'};
+ old.effects[released]={kind:'review',operationId:'old-free',status:'completed',transportUnsubmitted:true};
+ let remainingBefore:number|undefined,found=false;
+ await advanceProductionTask(old,async(_t,c)=>{
+  remainingBefore=c.remaining!('preview_review');
+  found=c.hasEffect!('preview_review',originalOperation);
+  await c.effect('preview_review',originalOperation,async()=>assert.fail('Legacy effect must not redispatch'),async()=>({body:preview}));
+  return {artifact:{saved:true}};
+ },store);
+ assert.equal(found,true);
+ assert.equal(remainingBefore,2);
+ assert.equal(old.effects[released].kind,'preview_review');
+ assert.equal(old.attempts.review,0);
+ assert.equal(old.attempts.preview_review,0);
+ assert.equal(old.status,'awaiting_review');
+}
+{
+ const old=fresh(),id='analysis:initial:0:original-review';
+ old.attempts.review=1;
+ old.effects[id]={kind:'review',operationId:'original-review',status:'reserved'};
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+ let recovered=0;
+ await advanceProductionTask(old,async(task,c)=>{
+  if(task.stage==='analysis'){
+   const work=()=>c.effect('review','original-review',async()=>assert.fail('No provider submission'),async()=>{
+    recovered++;entered.resolve();await release.promise;return {saved:true};
+   });
+   const first=work();await entered.promise;
+   try{
+    await assert.rejects(c.effect('observation','original-review',async()=>assert.fail('No kind substitution')),/kind/);
+    await assert.rejects(c.effect('review','original-review',async()=>assert.fail('No provider submission'),async()=>{recovered++;return {};}),/in_progress/);
+   }
+   finally{release.resolve();}
+   await first;
+   await assert.rejects(c.effect('observation','original-review',async()=>assert.fail('No cached wrong-kind result')),/kind/);
+  }
+  return {artifact:{saved:true}};
+ },store);
+ assert.equal(recovered,1);
+ assert.equal(old.status,'awaiting_review',old.error);
+}
 
 // Output variants inherit the confirmed visual requirements without a child handoff-policy row.
 const {boundVisualCriteria}=await import('./visual-done-criteria');
