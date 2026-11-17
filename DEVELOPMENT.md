@@ -40,6 +40,22 @@ Keep original playback, evidence samples and explanation ranges distinct. Review
 
 Task records should identify the planner, executor, source, output scope, preserved content and permitted budget. Use configured services only within the task's authorization. Do not make paid analysis, voice, review or rendering requests to validate a documentation-only change.
 
+## Export and Reference Comparison
+
+When a saved preview review contains frozen visual criteria, the paid request and ordinary receipt reads return saved judgments promptly with `visual_comparison.status=deferred`, without extracting frames. The production worker then automatically performs a separate zero-provider `read` with `includeVisualEvidence:true` to return an internal, local HTML link pairing the frozen reference with hash-checked actual export frames.
+
+Each bound unit and native text instance is sampled; more than 64 distinct export frames or 128 comparison pairs reports an uncollected comparison rather than dropping units.
+
+This separate local read preserves the existing 660/680-second request deadlines and ten-second recovery read. Local extraction failures do not replace the saved model judgment. Evidence invalidation found by a reread still downgrades the derived gate; only negative updates are merged, never an upgrade from local images.
+
+Local extraction has a 90-second deadline, is cached by export/input/manifest/version identity, and makes no provider request.
+
+Concurrent identical reads share extraction; local processing failures are held for 30 seconds to avoid repeated polling work. Cancellation removes only that requester; shared extraction stops when no requester remains.
+
+Legacy receipts without a frozen export locator remain uncollected; no historical filename is guessed. Missing media or extraction failure does not rewrite the independent verdict.
+
+`collected` means evidence exists, never visual approval. Screenshot dimensions are measured; fonts, shadows, backing, stage identity and motion are not automatically recognized. Open the comparison to inspect them and retain video-based checks where required. No new blueprint format, generated B-roll, automatic effect or approval step is introduced.
+
 ## Verification
 
 ```bash
