@@ -270,6 +270,20 @@ export async function releaseAgentRunLease(
   if (result.authoritative) notify(projectId);
   return result.accepted;
 }
+async function prepareImmutableArtifactBody(record:AgentArtifactRecord,key:string,generation:string):Promise<boolean>{
+  const existing=await kvGetAuthoritative<AgentArtifactRecord>(key);
+  if(existing!==undefined){
+    if(JSON.stringify(existing)!==JSON.stringify(record))return false;
+    const current=normalizeSidecar(record.projectId,await kvGetAuthoritative(runtimeKey(record.projectId,generation)));
+    return !current.artifacts.some(item=>item.artifactId===record.artifactId);
+  }
+  try{await kvSet(key,record);}
+  catch(error){
+    const saved=await kvGetAuthoritative<AgentArtifactRecord>(key).catch(()=>undefined);
+    if(JSON.stringify(saved)!==JSON.stringify(record))throw error;
+  }
+  return true;
+}
 export async function storeAgentArtifact(record: AgentArtifactRecord,entryPreconditions?:EntryPreconditions): Promise<boolean> {
   requireProjectId(record.projectId);
   if (!ARTIFACT_ID.test(record.artifactId) || record.originalBytes > MAX_ARTIFACT_BYTES
@@ -279,8 +293,7 @@ export async function storeAgentArtifact(record: AgentArtifactRecord,entryPrecon
   return enqueue(record.projectId, () => withProjectLock(record.projectId, async () => {
     const generation = await agentSessionWriteGeneration(record.projectId);
     const key = agentArtifactKey(record.projectId, record.artifactId, generation);
-    if (await kvGet(key) !== undefined) return false;
-    await kvSet(key, record);
+    if(!await prepareImmutableArtifactBody(record,key,generation))return false;
     try {
       const mutation = await mutateOnce(record.projectId, (current) => {
         if (!current.runs.some((run) => run.runId === record.runId)) return [current, false];
@@ -324,10 +337,9 @@ export async function archiveAgentArtifacts(record:AgentArtifactRecord, expected
   ||new TextEncoder().encode(record.body).byteLength!==record.originalBytes||await sha256Text(record.body)!==record.bodySha256)return false;
  return enqueue(record.projectId,()=>withProjectLock(record.projectId,async()=>{
   const generation=await agentSessionWriteGeneration(record.projectId),key=agentArtifactKey(record.projectId,record.artifactId,generation);
-  if(await kvGet(key)!==undefined)return false;
   for(const e of expected){const actual=await kvGet<AgentArtifactRecord>(agentArtifactKey(record.projectId,e.artifactId,generation));
    if(!actual||JSON.stringify(actual)!==JSON.stringify(e))return false;}
-  await kvSet(key,record);
+  if(!await prepareImmutableArtifactBody(record,key,generation))return false;
   let committed=false;
   try{
    const mutation=await mutateOnce(record.projectId,current=>{

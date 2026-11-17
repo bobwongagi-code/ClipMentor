@@ -286,6 +286,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     if((error as NodeJS.ErrnoException).code==='EEXIST')return { ...await read(), cached: true };
     throw error;
   }
+  let childDispatched=false;
   try {
     if(resumeChild){
       if(!await childPreparing())return {...await read(),cached:true};
@@ -298,9 +299,11 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       if(claimedHere){await rm(launchClaim);await syncDirectory(directory);}
       return {...await read(),requestsAttempted:0,requestsSent:0,requestOutcome:'not_submitted',error:'Preview preparation configuration changed; original preparation retained'};
     }
+    childDispatched=true;
     await deps.run(['--video',video,'--expected-video-sha256',body.videoSha256 as string,'--input',inputFile,'--out',output,'--operation',body.operationId], signal);
   }
   catch {
+    if(claimedHere&&!childDispatched){await rm(launchClaim);await syncDirectory(directory);}
     const saved=await read();
     return saved.requestsAttempted===0 ? {...saved,requestsSent:0,requestOutcome:'not_submitted',error:'Media preparation failed; no model request sent'}
       : {...saved,requestsSent:null,requestOutcome:'unknown',error:'Continuous review failed or unknown; attempt consumed, no retry'};
