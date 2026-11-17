@@ -24,5 +24,24 @@ try{
   await editor.context.hostFetch!(path,{method:'POST',body:JSON.stringify({action:'read',projectId,operationId:'saved-operation'})});
   assert.equal(effects,before,'existing zero-effect read behavior preserved');
  }
+ // A receipt read can wait while the parent loses publication authority.
+ for(const path of ['/api/clipmentor/observe-video','/api/clipmentor/transcribe-source','/api/clipmentor/review-preview'])for(const current of [true,false]){
+  let allowed=true,resumes=0;const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+  const guarded=await openHeadlessEditor({projectId,runId:'preparation-fixture',origin:'http://127.0.0.1:5199',review:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'responses'},persistence:new MemoryPersistence(projectDoc()),browserConnected:()=>false,
+   assertCurrent:async()=>{if(!allowed)throw Error('publication_withdrawn');},
+   effect:async(_kind,_key,_work,recovery)=>recovery!('bound-preparation'),
+   fetch:async(_url,init)=>{
+    const body=JSON.parse(String(init?.body));
+    if(body.action==='read_receipt'||body.action==='read'){entered.resolve();await release.promise;return Response.json({projectId,operationId:'bound-preparation',status:'preparing',state:'pending_or_unknown',source_hash:'source-hash',requestsAttempted:0});}
+    assert.equal(body.action,'resume_preparation');resumes++;
+    return Response.json({operationId:'bound-preparation',status:'completed',scope:'source_windows_and_planned_capacity_only'});
+   }});
+  try{
+   const request=guarded.context.hostFetch!(path,{method:'POST',body:JSON.stringify({projectId,operationId:'bound-preparation',expectedSourceHash:'source-hash',videoSha256:'video-hash'})});
+   await entered.promise;allowed=current;release.resolve();
+   if(current)assert.equal((await request).status,200);else await assert.rejects(request,/publication_withdrawn/);
+   assert.equal(resumes,current?1:0,'revoked preparation cannot dispatch after receipt read');
+  }finally{release.resolve();await guarded.close();}
+ }
  console.log('headless source receipt: direct read bypasses effects, recovery uses read_receipt, other read paths preserved; zero provider calls');
 }finally{await editor.close();}
