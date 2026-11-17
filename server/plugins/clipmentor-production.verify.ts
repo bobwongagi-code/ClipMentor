@@ -35,7 +35,18 @@ const input={projectId:'production-fixture',sourceAssetId:'source',product:{name
 const post=(body:unknown,authorized=true)=>fetch(`${origin}/api/clipmentor/production-task`,{method:'POST',headers:{'Content-Type':'application/json',...(authorized?{Origin:origin,'Sec-Fetch-Site':'same-origin'}:{})},body:JSON.stringify(body)});
 try{
  assert.equal((await post({action:'create',input},false)).status,403);
- const res=await post({action:'create',input});assert.equal(res.status,202);const created=await res.json();await entered;
+ const saveInitial=productionTaskStore.save;
+ let lostInitialAck=false;
+ productionTaskStore.save=async(task,guards)=>{
+  await saveInitial(task,guards);
+  if(task.projectId===input.projectId&&task.status==='queued'&&!lostInitialAck){
+   lostInitialAck=true;
+   throw Error('fixture: lost initial checkpoint acknowledgement');
+  }
+ };
+ let res:Response;
+ try{res=await post({action:'create',input});}finally{productionTaskStore.save=saveInitial;}
+ assert(lostInitialAck);assert.equal(res.status,202);const created=await res.json();await entered;
  // HTTP submit has finished. No SSE consumer or browser-tool result ever exists.
  const running=await productionTaskStore.load(input.projectId,created.taskId);assert.equal(running.status,'running');
  assert.equal((await post({action:'resume',projectId:input.projectId,taskId:created.taskId})).status,409);
@@ -52,7 +63,22 @@ try{
  assert.equal(readback.blueprintReadiness.code,'project_missing');assert.equal(readback.blueprintReadiness.next,'blueprint');
  assert.equal(readback.blueprintReadiness.complete_film_accepted,false,'a completed mocked task cannot certify a missing project');
  assert.equal((await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:false})).status,409);
- const accepted=await post({action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:true});assert.equal(accepted.status,200,JSON.stringify(await accepted.json()));
+ const finalAcceptance={action:'accept',projectId:input.projectId,taskId:created.taskId,malayDeliveryConfirmed:true};
+ const saveAcceptance=productionTaskStore.save;
+ try{
+  productionTaskStore.save=async(next,guards)=>{
+   if(next.taskId===created.taskId&&next.status==='completed')throw Error('fixture: failed before acceptance write');
+   await saveAcceptance(next,guards);
+  };
+  assert.equal((await post(finalAcceptance)).status,409);
+  assert.equal((await productionTaskStore.load(input.projectId,created.taskId)).status,'awaiting_review');
+  productionTaskStore.save=async(next,guards)=>{
+   await saveAcceptance(next,guards);
+   if(next.taskId===created.taskId&&next.status==='completed')throw Error('fixture: lost acceptance acknowledgement');
+  };
+  const accepted=await post(finalAcceptance);
+  assert.equal(accepted.status,200,JSON.stringify(await accepted.json()));
+ }finally{productionTaskStore.save=saveAcceptance;}
  // A saved queue/start snapshot may be stale by the time it is dispatched.
  // Re-read under the execution owner so it cannot resurrect a completed run.
  const lateSnapshot=structuredClone(running),readCurrentTask=productionTaskStore.load;
@@ -66,6 +92,28 @@ try{
  }
  assert.equal(steps.length,stepsBeforeStaleLaunch,'a stale dispatch snapshot must not execute completed stages again');
  assert.equal((await productionTaskStore.load(input.projectId,created.taskId)).status,'completed','stale dispatch cannot revoke final acceptance');
+ {
+  const pending=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>();
+  let reads=0;
+  productionTaskStore.load=async(project,id)=>{
+   if(project===input.projectId&&id===created.taskId){
+    if(++reads===1)return structuredClone(lateSnapshot);
+    if(reads===2){entered.resolve();await pending.promise;throw Error('temporary checkpoint read failure');}
+   }
+   return readCurrentTask(project,id);
+  };
+  try{
+   assert.equal((await post({action:'resume',projectId:input.projectId,taskId:created.taskId})).status,202);
+   await entered.promise;pending.resolve();
+   for(let i=0;i<200;i++){
+    const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${input.projectId}&taskId=${created.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+    if(!(await response.json()).executionActive)break;
+    await new Promise(resolve=>setTimeout(resolve,5));
+   }
+   assert.equal((await readCurrentTask(input.projectId,created.taskId)).status,'completed','a launch read failure cannot rewrite a newer terminal checkpoint');
+   assert.equal(steps.length,stepsBeforeStaleLaunch);
+  }finally{pending.resolve();productionTaskStore.load=readCurrentTask;}
+ }
  const panelTask=await createProductionTask({...input,author:{...input.author,origin},reviewer:{...input.reviewer,origin},humanBlueprintReview:true} as Parameters<typeof createProductionTask>[0]);
  const panelGet=async()=>await (await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}})).json();
  for(const [error,reason] of [
@@ -322,7 +370,25 @@ try{
  // the first release has already returned and a worker checkpoint is saved.
  const beforeConcurrentRelease=await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId)));
  for(const child of beforeConcurrentRelease){child.status='awaiting_blueprint';await productionTaskStore.save(child);}
- const normalSave=productionTaskStore.save;let queuedWrites=0,releaseSecondWrite!:()=>void;
+ const normalSave=productionTaskStore.save;
+ let lostQueueAck=false;
+ productionTaskStore.save=async(child,conditions)=>{
+  await normalSave(child,conditions);
+  if(child.taskId===batch[0].taskId&&child.status==='queued'&&!lostQueueAck){
+   lostQueueAck=true;
+   throw Error('fixture: lost queue acknowledgement');
+  }
+ };
+ try{
+  const released=await queueBlueprintContinuations(confirmationParent);
+  assert(lostQueueAck);
+  assert.deepEqual(released.map(child=>child.status),['queued','queued']);
+ }finally{productionTaskStore.save=normalSave;}
+ for(const child of batch){
+  const saved=await productionTaskStore.load(child.projectId,child.taskId);
+  saved.status='awaiting_blueprint';await normalSave(saved);
+ }
+ let queuedWrites=0,releaseSecondWrite!:()=>void;
  const secondWriteHeld=new Promise<void>(resolve=>{releaseSecondWrite=resolve;});
  productionTaskStore.save=async(child,conditions)=>{
   if(child.taskId===batch[0].taskId&&child.status==='queued'&&++queuedWrites===2)await secondWriteHeld;
@@ -342,6 +408,32 @@ try{
   releaseSecondWrite();if(concurrentRelease)await concurrentRelease;productionTaskStore.save=normalSave;
  }
  for(const before of beforeConcurrentRelease){const latest=await productionTaskStore.load(before.projectId,before.taskId);before.sequence=latest.sequence;before.updatedAt=latest.updatedAt;before.status='queued';await productionTaskStore.save(before);}
+ {
+  const child=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+  child.status='awaiting_blueprint';await productionTaskStore.save(child);
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+  productionTaskStore.save=async(next,conditions)=>{
+   if(next.taskId===child.taskId&&next.status==='queued'){entered.resolve();await release.promise;}
+   await normalSave(next,conditions);
+  };
+  const queue=queueBlueprintContinuations(confirmationParent);
+  try{
+   await Promise.race([entered.promise,queue.then(()=>assert.fail('Queue must attempt the child publication'))]);
+   assert.equal((await post({action:'cancel',projectId:child.projectId,taskId:child.taskId})).status,202);
+   assert.equal((await productionTaskStore.load(child.projectId,child.taskId)).status,'cancelled');
+   release.resolve();
+   const outputs=await queue;
+   assert.equal(outputs[1].status,'cancelled');
+   const savedCancellation=await productionTaskStore.load(child.projectId,child.taskId);
+   assert.equal(savedCancellation.status,'cancelled','a delayed batch launch cannot resurrect a cancelled output');
+   assert.deepEqual(savedCancellation.attempts,child.attempts);
+  }finally{
+   release.resolve();await queue.catch(()=>undefined);
+   productionTaskStore.save=normalSave;
+   const latest=await productionTaskStore.load(child.projectId,child.taskId);
+   latest.status='queued';await normalSave(latest);
+  }
+ }
  const migrated=structuredClone(batch[0]);
  migrated.input.brief=confirmationParent.input.brief+'\n用户已确认含两种结尾的完整蓝图。本执行任务负责其中的existing_partner输出；两版共用片头、教学主体与同文配音，仅片尾不同。从独立审核接续，不重新分析原片。片尾使用独立时间线实例，片头和教学主体的实例在片尾起点前闭合，便于直接复用实际剪辑。';
  const oldAttempts=structuredClone(migrated.attempts),oldApproval=structuredClone(migrated.blueprintApproval);
@@ -435,8 +527,10 @@ try{
  const enteredPreparation=new Promise<void>(resolve=>{preparationEntered=resolve;});
  const heldPreparation=new Promise<void>(resolve=>{releasePreparation=resolve;});
  let cancellationReply:{status?:string}|undefined;
+ let producerReads=0;
  productionTaskStore.load=async(projectId,id)=>{
-  if(projectId===batch[0].projectId&&id===batch[0].taskId){preparationEntered();await heldPreparation;}
+  // The first two reads validate the manifest before and inside execution.
+  if(projectId===batch[0].projectId&&id===batch[0].taskId&&++producerReads===3){preparationEntered();await heldPreparation;}
   return originalLoad(projectId,id);
  };
  try{
@@ -464,6 +558,24 @@ try{
  const reverseProducerDoc=(await loadOfflineStoredProject(batch[0].projectId))!.doc;
  const {productionFeedback}=await import('../clipmentor/production-task');
  const reverseAnchor=await productionFeedbackAnchor(reverseBeforeProducer,reverseProducerDoc);
+ {
+  const parent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+  const invalid=structuredClone(parent);delete invalid.productionChildren;
+  await productionTaskStore.save(invalid);
+  try{
+   const orphanFeedback=await post({action:'feedback',projectId:reverseBeforeProducer.projectId,taskId:reverseBeforeProducer.taskId,
+    feedback:{kind:'content',text:'只核片尾说明',preview:reverseAnchor.preview,unit_ids:[],item_ids:[]}});
+   assert.equal(orphanFeedback.status,409,'direct feedback cannot rewrite a detached output even when its preview is valid');
+   const orphanPanelFeedback=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${reverseBeforeProducer.projectId}`,{
+    method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
+    body:JSON.stringify({action:'revise_preview',renderId:reverseAnchor.preview.renderId,text:'只核片尾说明'}),
+   });
+   assert.equal(orphanPanelFeedback.status,409,'the standalone child panel cannot write feedback either');
+   assert.deepEqual(await productionTaskStore.load(reverseBeforeProducer.projectId,reverseBeforeProducer.taskId),reverseBeforeProducer);
+  }finally{
+   parent.sequence=invalid.sequence;parent.updatedAt=invalid.updatedAt;await productionTaskStore.save(parent);
+  }
+ }
  let feedbackSaveEntered!:()=>void,releaseFeedbackSave!:()=>void,feedbackHeld=false;
  const feedbackSaveWait=new Promise<void>(resolve=>{feedbackSaveEntered=resolve;}),feedbackSaveRelease=new Promise<void>(resolve=>{releaseFeedbackSave=resolve;});
  const feedbackOriginalSave=productionTaskStore.save;
@@ -528,7 +640,18 @@ try{
  await assert.rejects(prepareSharedProduction(coldShared),/shared_output_changed_during_preparation/,'recovery cannot overwrite an edit made after the partial commit');
  assert.deepEqual((await loadOfflineStoredProject(batch[1].projectId))!.doc,editedShared);
  await setStoredEntry('project:'+batch[1].projectId,sharedCommitted);
- assert.equal(await prepareSharedProduction(coldShared),true,'a matching committed preparation recovers without a model call or a guessed timeline');
+ let lostSharedAck=false;
+ productionTaskStore.save=async(t,conditions)=>{
+  await sharedNormalSave(t,conditions);
+  if(t.taskId===batch[1].taskId&&t.sharedProduction?.prepared&&!lostSharedAck){
+   lostSharedAck=true;
+   throw Error('fixture: lost shared preparation acknowledgement');
+  }
+ };
+ try{
+  assert.equal(await prepareSharedProduction(coldShared),true,'a matching committed preparation recovers without a model call or a guessed timeline');
+  assert(lostSharedAck);
+ }finally{productionTaskStore.save=sharedNormalSave;}
  assert.deepEqual(coldShared.attempts,spentBeforeShared);Object.assign(batch[1],coldShared);
 
  assert.equal(batch[1].sharedProduction!.prepared,true);
@@ -542,15 +665,14 @@ try{
  // A corrupt label cannot dispatch the other ending or erase the saved producer.
  const invalidWakeParent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
  invalidWakeParent.productionChildren![0].audience='new_contact';await productionTaskStore.save(invalidWakeParent);
- assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,202);
- for(let i=0;i<200;i++){
-  const response=await fetch(`${origin}/api/clipmentor/production-task?projectId=${readyFirst.projectId}&taskId=${readyFirst.taskId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
-  if(!(await response.json()).executionActive)break;
-  await new Promise(resolve=>setTimeout(resolve,5));
- }
- assert.equal((await productionTaskStore.load(readyFirst.projectId,readyFirst.taskId)).status,'awaiting_review');
+ await assert.rejects(queueBlueprintContinuations(confirmationParent),/production_outputs_binding_invalid/,
+  'an older valid-looking parent snapshot cannot release its children');
+ const wrongAudience=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${confirmationParent.projectId}&audience=new_contact`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+ assert.equal(wrongAudience.status,409,'the wrong audience cannot open another version');
+ assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,409,'direct recovery cannot bypass a corrupt parent manifest');
+ assert.deepEqual(await productionTaskStore.load(readyFirst.projectId,readyFirst.taskId),readyFirst);
  assert.equal((await productionTaskStore.load(batch[1].projectId,batch[1].taskId)).status,'queued');
- assert.equal(batchSteps.filter(step=>step.startsWith('new_contact:')).length,0);
+ assert.equal(batchSteps.length,0);
  const restoredWakeParent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
  restoredWakeParent.productionChildren=structuredClone(confirmationParent.productionChildren);await productionTaskStore.save(restoredWakeParent);
  assert.equal((await post({action:'resume',projectId:readyFirst.projectId,taskId:readyFirst.taskId})).status,202);
@@ -639,10 +761,47 @@ try{
  const cancelled=await makeCheckpoint('cancel-fixture','cancelled');
  const blockedTask=await makeCheckpoint('blocked-fixture','blocked');
  const deleted=await makeCheckpoint('deleted-fixture','queued');
+ const legacyParent=await makeCheckpoint('legacy-output-parent','awaiting_blueprint');
+ const removedParent=await makeCheckpoint('removed-output-parent','awaiting_blueprint');
+ const supersededParent=await makeCheckpoint('superseded-output-parent','awaiting_blueprint');
+ const badManifest=await makeCheckpoint('bad-output-parent','awaiting_blueprint');
+ const partialParent=await makeCheckpoint('partially-deleted-parent','awaiting_blueprint');
+ const bindOutput=async(parent:typeof panelTask,id:string,audience:'existing_partner'|'new_contact')=>{
+  const child=await makeCheckpoint(id,'queued');
+  child.stage='copy_review';
+  child.input.panelDelivery={...suppliedScope,audience};
+  child.input.brief=continuationBrief(child.input.product.name,audience);
+  child.blueprintApproval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:'cold-source-r1',
+   digest:'confirmed',requirementsDigest:'requirements',confirmedAt:Date.now()};
+  return child;
+ };
+ const legacyOutput=await bindOutput(legacyParent,'legacy-output-child','existing_partner');
+ const removedOutput=await bindOutput(removedParent,'removed-output-child','existing_partner');
+ const supersededOutput=await bindOutput(supersededParent,'superseded-output-child','existing_partner');
+ const wrongExisting=await bindOutput(badManifest,'bad-existing-child','existing_partner');
+ const wrongNew=await bindOutput(badManifest,'bad-new-child','new_contact');
+ const liveOutput=await bindOutput(partialParent,'live-output-child','existing_partner');
+ const deletedOutput=await bindOutput(partialParent,'deleted-output-child','new_contact');
+ deletedOutput.status='awaiting_blueprint';
+ const outputRef=(task:typeof panelTask)=>({projectId:task.projectId,taskId:task.taskId,audience:task.input.panelDelivery!.audience!});
+ legacyParent.productionChild=outputRef(legacyOutput);
+ removedParent.productionChild=outputRef(removedOutput);
+ supersededParent.productionChild=outputRef(supersededOutput);
+ badManifest.productionChildren=[{...outputRef(wrongExisting),audience:'new_contact'},outputRef(wrongNew)];
+ wrongNew.sharedProduction={projectId:wrongExisting.projectId,taskId:wrongExisting.taskId};
+ partialParent.productionChildren=[outputRef(liveOutput),outputRef(deletedOutput)];
+ deletedOutput.sharedProduction={projectId:liveOutput.projectId,taskId:liveOutput.taskId};
+ const outputFixtures=[legacyParent,legacyOutput,removedParent,removedOutput,supersededParent,supersededOutput,badManifest,wrongExisting,wrongNew,partialParent,liveOutput,deletedOutput];
+ for(const item of outputFixtures)await productionTaskStore.save(item);
+ const newParent=await makeCheckpoint(supersededParent.projectId,'awaiting_blueprint');await productionTaskStore.save(newParent);
  const prior=await makeCheckpoint(panelTask.projectId,'running');
- // A later human-review checkpoint for the same project takes precedence.
- await productionTaskStore.save(prior);
+ // Reproduce an older task saving a late checkpoint after the current one.
+ prior.createdAt=panelTask.createdAt-1000;
  await productionTaskStore.save(panelTask);
+ await productionTaskStore.save(prior);
+ const {latestPanelProductionTask}=await import('../clipmentor/production-task');
+ assert.equal((await latestPanelProductionTask(panelTask.projectId))?.taskId,panelTask.taskId,
+  'a late checkpoint from an earlier task must not reclaim the current panel');
  for(const item of [resumed,unknown]){
   item.stage='blueprint';
   item.completed.analysis={at:Date.now(),artifact:{verifiedFixture:true}};
@@ -650,10 +809,10 @@ try{
   item.attempts.model=1;
  }
  for(const item of [resumed,unknown,cancelled,blockedTask])await productionTaskStore.save(item);
- const indexed=[panelTask,queued,resumed,unknown,cancelled,blockedTask,deleted];
+ const indexed=[...outputFixtures,panelTask,queued,resumed,unknown,cancelled,blockedTask,deleted];
  for(const item of indexed)await setStoredEntry(`project:${item.projectId}`,projectDoc());
  await setStoredEntry('projects',indexed.map(item=>({
-  id:item.projectId,name:'Cold recovery fixture',updatedAt:Date.now(),...(item===deleted?{deletedAt:Date.now()}:{}),
+  id:item.projectId,name:'Cold recovery fixture',updatedAt:Date.now(),...([deleted,removedParent,deletedOutput].includes(item)?{deletedAt:Date.now()}:{}),
  })));
  await flushServerRunPersistence();resetServerRunStoreForTest();resetAgentRuntimeStoreMemory();
  const visited:string[]=[];
@@ -667,14 +826,14 @@ try{
   if(item.stage==='blueprint'&&item.taskId===resumed.taskId&&++leaseAttempts===1)throw Error('project_busy');
   if(item.stage==='blueprint'&&item.taskId!==queued.taskId)await stage.effect('model','fixture',async()=>{newSubmissions++;},item.taskId===resumed.taskId
    ?async id=>{replayed=id;return {saved:true};}:undefined);
-  return {artifact:{verifiedFixture:true,revision:'recovered',authorSelfCheck:'passed',gate:{allowed:true}}};
+  return {artifact:{verifiedFixture:true,revision:'recovered',authorSelfCheck:'passed',gate:{allowed:true},panelDeliveryVerified:true}};
  });
  (coldPlugin.configureServer as (s:unknown)=>void)({httpServer:coldServer,config:{server:{}},middlewares:{use:(route:string,fn:(req:IncomingMessage,res:ServerResponse)=>void)=>coldApp.use(route,fn)}});
  coldServer.listen(0,'127.0.0.1');await once(coldServer,'listening');
  try{
   // No browser or HTTP request is needed to resume a production task.
   for(let n=0;n<400;n++){
-   const results=await Promise.all([queued,resumed,unknown].map(item=>productionTaskStore.load(item.projectId,item.taskId)));
+   const results=await Promise.all([queued,resumed,unknown,legacyOutput,liveOutput].map(item=>productionTaskStore.load(item.projectId,item.taskId)));
    if(results.every(item=>['awaiting_blueprint','blocked'].includes(item.status)))break;
    await new Promise(r=>setTimeout(r,5));
   }
@@ -688,7 +847,16 @@ try{
   assert.equal(leaseAttempts,2);
   assert.equal(unresolved.status,'blocked');assert.match(unresolved.error!,/no automatic resubmission/);
   assert.equal(unresolved.attempts.model,1);assert.equal(newSubmissions,0);
-  assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId]));
+  assert.equal((await productionTaskStore.load(legacyOutput.projectId,legacyOutput.taskId)).status,'awaiting_blueprint','a valid historical manifest can still resume');
+  assert.equal((await productionTaskStore.load(liveOutput.projectId,liveOutput.taskId)).status,'awaiting_blueprint','an available sibling can still resume');
+  const coldPost=(task:typeof panelTask)=>fetch(`http://127.0.0.1:${coldAddress.port}/api/clipmentor/production-task`,{method:'POST',
+   headers:{Origin:`http://127.0.0.1:${coldAddress.port}`,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
+   body:JSON.stringify({action:'resume',projectId:task.projectId,taskId:task.taskId})});
+  for(const item of [removedOutput,supersededOutput,wrongExisting,wrongNew,deletedOutput]){
+   assert.equal((await coldPost(item)).status,409);
+   assert.deepEqual(await productionTaskStore.load(item.projectId,item.taskId),item,'a separately indexed child cannot write or dispatch without a live and matching parent');
+  }
+  assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId,legacyOutput.taskId,liveOutput.taskId]));
  }finally{await new Promise<void>((r,e)=>coldServer.close(err=>err?e(err):r()));}
  console.log('production cold start: resumes queued/running tasks, reuses a reserved effect, keeps unknown outcomes, skips prior versions, review gates and deleted projects');
  console.log('production HTTP: origin guard, async no-page execution, duplicate launch refusal, canonical artifact cold recovery/read and final human acceptance passed; mocked stages, zero provider calls');

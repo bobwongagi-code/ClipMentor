@@ -194,7 +194,7 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
     } catch (error) {
       const message = error instanceof Error && /[\u3400-\u9fff]/u.test(error.message)
         ? error.message : '上传或媒体检查失败，请检查文件是否完整';
-      send(409, { error: message });
+      send(409, { error: message, ...(commitUncertain ? { commitUncertain: true } : {}) });
     } finally {
       await Promise.allSettled(written.filter(file => !commitUncertain || !retained.includes(file)).map(file => unlink(file)));
       if (ownership?.status === 'claimed') await releaseProjectEditOwnership(ownership.claim).catch(() => undefined);

@@ -115,6 +115,46 @@
 - SM40 Fun-ASR 能力范围按账户、入口、模型及固定协议隔离。HTTP 405 和 501 在原有效期内可共享到不同源片、片段和语言。普通 400、404、415 保留各自的请求结果。输入和原始返回的哈希绑定沿用原协议。命中入口能力时，新片段标为未提交，已保存结果仍先回读。
 - 本地子进程回归分别在备料、派发后和收到原始结果后中断。核对同任务接续、并发拒绝、错身份和旧标记拒绝、原始判定和次数保持，以及收到结果后零补发。源片观察经过实际制作宿主与 HTTP 路由复核。
 
+### 制作端接续与片段回读
+
+基线为已合并的 `4f58502`，与本地 `f24436c` 内容相同。复查了原片观察、ASR、独立文案审核、成片复核与制作任务之间的接续入口。以原任务 ID、持久状态、实际发出次数和回读内容为验收依据。
+
+| 边界 | 故障与修复 | 验证 |
+| --- | --- | --- |
+| SM46 成片复核 | 制作宿主遇到启动前中断只读到待定回执。复核子进程在准备媒体时被终止也会卡住。两条路径都能接续有零派发证明的原任务。正在执行的子进程保留所有权，已登记派发的任务只回读结果。 | 实际制作宿主与 HTTP 路由、启动前中断、真实子进程在假 R2 准备时强制终止、并发启动与错输入拦截。 |
+| SM50 ASR | 零调用的抽音频阶段被终止后，旧实现无法用原任务接续。制作宿主的回读漏传来源身份，也把回读包装对象交给只接受转写正文的工具。现沿原入口继续备料，已保存结果返回转写正文，未知或部分派发不补调。 | 实际子进程中断、真实本地 HTTP 与制作宿主回读、错账户与无准备记录拒绝。 |
+| SM51 ASR 回执 | 一条可解析的旧索引指向另一片段的完整返回时，旧代码会套用当前片段的时间偏移。新回执检查配置、原片、范围和音频字节绑定。历史未绑定的原始结果仅按原请求 ID 读取。 | 将第二片段的索引指向第一片段的完整返回，旧逻辑会错误恢复，现保留原失败。正常 raw 恢复、时间偏移和原计数仍通过。 |
+| SM03 制作效果接续 | 初次连接中断后，临时回读的待定状态可能被当成已结算结果存住。待定读取保留原任务供后续接续。 | 断开初次连接，先读到待定，再用同一已登记任务接续，假 CLI 总启动一次。 |
+
+### 制作控制、双版排队与当前任务
+
+沿实际制作 HTTP 入口和持久检查点确认以下问题，修复与前一批未提交的回执接续修复共用 `4f58502` 基线。
+
+| 边界 | 旧行为与修复 | 回归 |
+| --- | --- | --- |
+| SM03/36 执行记录与预算 | 旧制作任务分离文案审核与成片复核计数时，仍保留旧执行类型，并把已经释放的额度当作已消耗。按有效消耗迁移，已有账本归类不再次迁移计数。相同执行记录的并发请求和跨类型复用在结算前拒绝。 | 当前旧复核记录可接续并正确归还已证实零派发的额度，已释放记录不会重复扣费。用挂起的恢复回调验证同类型竞发和不同类型复用都被拒绝。 |
+| SM18/21 双版排队与取消 | 排队命令读取子任务后被挂起，取消先持久化，迟到的队列更新再把任务改回待运行。两种控制都按当前检查点写入。确认后的排队读回已取消的子任务并保留该状态。 | 原 HTTP 取消和真实持久队列并发，修复前子任务回到 `queued`，修复后保留 `cancelled` 和原计数。 |
+| SM22 派发失败 | 旧派发快照遇到当前检查点读取故障时，错误处理会写回旧快照并撤销既有终审。错误只记在确认仍属自己的可执行检查点上，写入前再核对。 | 已终审任务注入旧派发读取和一次 I/O 故障，修复前被改成 `blocked`，修复后终审和工作次数保留。 |
+| SM22/77 当前任务 | 用最后一次写入时间选当前任务，旧任务迟到一次就能覆盖页面和冷恢复入口。改按任务创建时间，在检查点时间早于已找到的任务时结束搜索。 | 故意让更早的任务最后写入，再跑真实状态读取和冷启动，旧任务不接管页面也不运行。 |
+
+### 网页状态与持久化回执
+
+| 边界 | 旧行为与修复 | 回归 |
+| --- | --- | --- |
+| SM03/17/19 检查点确认 | 写入已提交但确认丢失时，普通任务可能留在待运行，双版排队或共用主体准备会断开，Worker 也可能把已就绪的预览改成阻断。仅在回读得到序号推进一位、内容完全一致的检查点后继续。 | 分别注入写入前失败与写入后断开。实际 HTTP 创建、双版排队与终审正常推进，已提交的共用主体安全接续，Worker 仅在持久保留得到确认后派发一次。 |
+| SM21/22 启动准备期间取消 | 读取失败与取消叠加时，准备流程会使用落后的派发快照写入取消状态。先读权威检查点，再处理取消或时限。 | 模拟已有终审且启动准备中取消，原终审检查点和步骤不变；仍在等待人工的任务可明确取消。 |
+| SM58/74/75 上传断开 | 素材已提交但页面没有收到回执时，页面无法区分已写入与未保存。回读四份素材并比对实际字节摘要，只恢复这次上传。 | 真实上传路由区分明确冲突与提交后无法回读；浏览器在连接断开后恢复同一批字节，拒绝同名内容不同的批次，均只有一次 POST。 |
+| SM65/79 实际本地代理 | 本地代理漏转审片板身份请求参数和响应头，网页不能打开实际上有效的板。沿现有代理白名单透传。 | 浏览器通过实际 Vite 代理读取本地假上游，正确身份可见且可确认，错误身份被拒绝。 |
+| SM77/78/81/83 页面刷新竞态 | 较早轮询的响应能覆盖后续任务状态，未提交的意见会随新稿或新预览继续显示。按请求发出顺序处理重叠读取，草稿绑定正在审阅的对象。 | 浏览器让旧轮询晚于操作后回读落地，仍显示新板；更换板或预览后旧草稿失效。终审回执返回前重开页面，读取已保存状态并显示下载入口，原动作只提交一次。 |
+
+继续核对原盘点中的状态边界时，区分已通过的反例、正常路径和未实测的组合。当前本机测试覆盖了受控的进程退出、并发、重开、迟到写入、持久化确认丢失，以及上述网页和代理边界。仍需继续核对组合恢复与多页面切换。
+
+### 双版本派发与冷启动组合
+
+验证时以当前持久化父清单和子任务真实身份为准。直接恢复、冷启动与兄弟唤醒都必须拒绝孤立子任务、错误受众和过期父任务。删除的工程不会因兄弟恢复重新派发。正确父清单仍能恢复两版，历史单版清单仍能恢复已登记的版本。用实际 HTTP 和冷启动检查派发次数、预算及原检查点；测试在独立存储运行。
+
+已通过实际 HTTP 和冷启动对照。错误受众、被替换或已删除的父任务、已删除的子任务均保留原子任务检查点。以有效预览向脱离父清单的子任务提交修改，直接 HTTP 和网页入口均拒绝写入。合法旧单结尾和有效兄弟任务仍可恢复。交接后还需测父清单在控制提交途中变化的组合。见 [交接说明](../CLIPMENTOR_STATE_HANDOFF.md)。
+
 ## 原盘点逐项归属
 
 “本轮修补”表示该协议至少一个已复现断点修复；“保留现有”表示检查后沿用原机制，不声称新写代码。“低风险保留”“演示保留”“休眠保留”明确不扩展。每行来源是维护入口；动态覆盖以以上具名测试为准，不能从整表推出 104 项均做了动态穷举。
@@ -123,7 +163,7 @@
 | --- | --- | --- | --- |
 | SM01 | Production lifecycle | 本轮修补 | `server/clipmentor/production-task.ts` |
 | SM02 | Checkpoint skip and repair invalidation | 本轮修补 | `server/clipmentor/production-task.ts` |
-| SM03 | Effect reservation and replay | 保留现有 | `server/clipmentor/production-task.ts` |
+| SM03 | Effect reservation and replay | 待定回读保留原效果的接续资格 | `server/clipmentor/headless-editor.ts`、`server/clipmentor/production-task.ts` |
 | SM04 | Repair-mode selection | 保留现有 | `server/clipmentor/production-task.ts` |
 | SM05 | Repair convergence allowance | 保留现有 | `server/clipmentor/production-task.ts` |
 | SM06 | Historical technical-epoch recognition | 保留现有 | `server/clipmentor/production-task.ts` |
@@ -166,12 +206,12 @@
 | SM43 | Source-video derived recovery | 保留现有 | `server/clipmentor/source-video.ts` |
 | SM44 | Independent copy-review operation | 锁内接续同请求与审核要求；保留原始判定 | `server/clipmentor/copy-review.ts` |
 | SM45 | Copy-review contract/scope reinterpretation | 保留现有 | `server/clipmentor/copy-review.ts` |
-| SM46 | Preview subprocess request recovery | 保留现有 | `server/plugins/clipmentor-preview-review.ts` |
+| SM46 | Preview subprocess request recovery | 复核启动前与子进程备料可接续，未知派发只回读 | `server/plugins/clipmentor-preview-review.ts`、`server/clipmentor/preview-review-cli.mts` |
 | SM47 | Preview effective approval projection | 保留现有 | `server/plugins/clipmentor-preview-review.ts` |
 | SM48 | Deferred visual comparison | 本轮修补 | `server/clipmentor/preview-visual-evidence.ts` |
 | SM49 | Shared visual-evidence job | 本轮修补 | `server/clipmentor/preview-visual-evidence.ts` |
-| SM50 | ASR operation/chunk aggregate | 本轮修补 | `server/plugins/clipmentor-funasr.ts` |
-| SM51 | ASR saved-result readability/recovery | 本轮修补 | `server/plugins/clipmentor-funasr.ts` |
+| SM50 | ASR operation/chunk aggregate | 零派发备料可接续，保留已有片段和原计数 | `server/plugins/clipmentor-funasr.ts` |
+| SM51 | ASR saved-result readability/recovery | 片段回读校验配置、范围和音频字节身份 | `server/plugins/clipmentor-funasr.ts` |
 | SM52 | R2 multipart transfer | 保留现有 | `server/clipmentor/video-media.ts` |
 | SM53 | R2 verified-object reuse | 保留现有 | `server/clipmentor/video-media.ts` |
 | SM54 | R2 credential single-flight | 保留现有 | `server/clipmentor/video-media.ts` |
@@ -197,7 +237,7 @@
 | SM74 | Aggregate upload admission | 保留现有 | `Chimera-Prototype-Mockup/src/pages/ClipMentorPage.tsx` |
 | SM75 | Saved-intake bootstrap | 保留现有 | `Chimera-Prototype-Mockup/src/pages/ClipMentorPage.tsx` |
 | SM76 | Business page-state projection | 保留现有 | `Chimera-Prototype-Mockup/src/pages/productionPanelState.ts` |
-| SM77 | Monotonic task hydration | 保留现有 | `Chimera-Prototype-Mockup/src/pages/ProductionPanel.tsx` |
+| SM77 | Monotonic task hydration | 本轮修补 | `Chimera-Prototype-Mockup/src/pages/ProductionPanel.tsx` |
 | SM78 | Status polling/reconnection | 本轮修补 | `Chimera-Prototype-Mockup/src/pages/ProductionPanel.tsx` |
 | SM79 | Revision-bound board loading | 本轮修补 | `Chimera-Prototype-Mockup/src/pages/ProductionPanel.tsx` |
 | SM80 | UI mutation and safe board-reload repost | 本轮修补 | `Chimera-Prototype-Mockup/src/pages/ProductionPanel.tsx` |

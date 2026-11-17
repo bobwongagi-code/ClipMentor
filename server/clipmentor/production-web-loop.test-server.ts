@@ -128,6 +128,7 @@ function launch(task:any){activeIds.add(task.taskId);void(async()=>{
    const childProject=project+'-'+audience;await setStoredEntry('project:'+childProject,doc);
    const child=await createProductionTask({...input,projectId:childProject,panelDelivery:{audience,productAssetId:'fixture-product',productAssetHash:'a'.repeat(64),salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:'b'.repeat(64)}} as any);
    child.blueprintApproval={sourceProjectId:project,sourceTaskId:task.taskId,sourceRevision:task.projectRevision,digest:'a'.repeat(64),requirementsDigest:'b'.repeat(64),confirmedAt:Date.now()};
+   if(audience==='new_contact')child.sharedProduction={projectId:children[0].projectId,taskId:children[0].taskId};
    child.stage='edit';child.status='running';await productionTaskStore.save(child);activeIds.add(child.taskId);children.push({projectId:childProject,taskId:child.taskId,audience});
    workerEvents.push({task:child.taskId,project:child.projectId,stage:'edit',fixtureWorker:true});
   }

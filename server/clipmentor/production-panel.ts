@@ -15,7 +15,7 @@ import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-boa
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
 import { productionFeedbackAnchor,blueprintFeedbackPoints } from './production-feedback';
 import { panelDeliveryIssues,panelSalesEvidence } from './production-panel-delivery';
-import { createBlueprintContinuations,queueBlueprintContinuations } from './production-continuation';
+import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {revisionOf} from '../../src/agent/external-edit-session';
@@ -174,13 +174,15 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const entry=task.productionChildren.find(child=>child.audience===audience);
       if(!entry)throw Error('制作输出不存在');
       const child=await productionTaskStore.load(entry.projectId,entry.taskId);
-      if(child.projectId===projectId||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
+      if(child.projectId===projectId||child.input.panelDelivery?.audience!==entry.audience
+        ||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
         throw Error('制作版本记录不匹配');
       return handler(child.projectId,origin,query,req,res,readBody,child);
     }
     if(task?.productionChild){
       const child=await productionTaskStore.load(task.productionChild.projectId,task.productionChild.taskId);
-      if(child.projectId===projectId||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
+      if(child.projectId===projectId||child.input.panelDelivery?.audience!==task.productionChild.audience
+        ||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
         throw Error('制作版本记录不匹配');
       return handler(child.projectId,origin,query,req,res,readBody,child);
     }
@@ -391,6 +393,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         launch(next);
       } else {
         if (!existing || active(existing.taskId,projectId)) throw new Error('制作任务尚未到达可操作阶段');
+        await publishedProductionParent(existing);
         if (body.action === 'continue_analysis') {
           const reuseAnalysis=canResumeSavedAnalysis(existing);
           if (!canResumeUndispatchedAnalysis(existing)&&!reuseAnalysis) throw new Error('这次暂停不能从分析入口继续');

@@ -63,6 +63,20 @@ export interface ProductionTask {
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
 }
 export interface TaskStore {save(task:ProductionTask,entryPreconditions?:EntryPreconditions):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
+
+export async function saveProductionCheckpoint(store:TaskStore,task:ProductionTask,guards?:EntryPreconditions){
+ const previousSequence=task.sequence;
+ try{await store.save(task,guards);}
+ catch(error){
+  // A write can commit before the caller receives its acknowledgement.
+  // Match the full new checkpoint, including the sequence assigned by the writer.
+  if(task.sequence===previousSequence+1){
+   const saved=await store.load(task.projectId,task.taskId).catch(()=>undefined);
+   if(saved?.sequence===task.sequence&&digestValue(saved)===digestValue(JSON.parse(JSON.stringify(task))))return;
+  }
+  throw error;
+ }
+}
 export const productionTaskStore:TaskStore={
  async save(task,entryPreconditions){
   for(let batch=0;batch<64&&await compactProductionTaskHistory(task.projectId,task.taskId);batch++){ /* bounded, lossless compaction to the existing low-water mark */ }
@@ -99,8 +113,19 @@ export const productionTaskStore:TaskStore={
 };
 export async function latestPanelProductionTask(projectId:string){
  const sidecar=await loadAgentRuntimeSidecar(projectId);
- const ids=[...new Set(newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task')).map(a=>a.runId))];
- for(const id of ids){const task=await productionTaskStore.load(projectId,id);if(task.input.humanBlueprintReview)return task;}
+ const records=newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task'));
+ const seen=new Set<string>();
+ let latest:ProductionTask|undefined;
+ for(const record of records){
+  // A task's first checkpoint cannot predate its creation. Older checkpoint
+  // timestamps cannot contain a newer task once this bound is crossed.
+  if(latest&&record.createdAt<=latest.createdAt)break;
+  if(seen.has(record.runId))continue;
+  seen.add(record.runId);
+  const task=await productionTaskStore.load(projectId,record.runId);
+  if(task.input.humanBlueprintReview&&(!latest||task.createdAt>latest.createdAt))latest=task;
+ }
+ return latest;
 }
 /** Host-owned requirements for a confirmed output variant, never an execution-role policy. */
 export async function productionReviewRequirements(projectId:string){
@@ -267,13 +292,17 @@ export function freezeProductionInput(input:ProductionInput):ProductionInput{
  return {...structuredClone(input),gatewayRecovery:input.gatewayRecovery
   ??(input.budget.routine&&!input.panelDelivery?.audience?'bounded':'none')};
 }
-export async function createProductionTask(input:ProductionInput,store=productionTaskStore):Promise<ProductionTask>{
+export async function createProductionTask(input:ProductionInput,store?:TaskStore):Promise<ProductionTask>{
  input=freezeProductionInput(input);
  const run=createRun({projectId:input.projectId,sessionGeneration:await currentAgentSessionGeneration(input.projectId),backend:input.authorBackend??'api',provider:input.author.provider,model:input.author.model,askOnly:false});
  await flushRunPersistence(run);
  const now=Date.now(),task:ProductionTask={version:1,taskId:run.id,projectId:input.projectId,input:structuredClone(input),stage:'analysis',status:'queued',createdAt:now,updatedAt:now,sequence:0,
   feedbackUsed:false,repairs:0,completed:{},effects:{},attempts:{model:0,review:0,observation:0,tts:0,render:0}};
- await store.save(task);return task;
+ // Continuations supply their own first-checkpoint publication transaction.
+ // For ordinary starts, reclaim an exact committed checkpoint before dispatch.
+ if(store)await store.save(task);
+ else await saveProductionCheckpoint(productionTaskStore,task);
+ return task;
 }
 export interface StageContext {
  effect<T>(kind:EffectKind,key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
@@ -304,23 +333,33 @@ export async function advanceProductionTask(task:ProductionTask,worker:StageWork
 async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,store:TaskStore,now:()=>number,abort:AbortController){
  if(['completed','cancelled'].includes(task.status)
   ||['awaiting_blueprint','awaiting_review'].includes(task.status)&&!abort.signal.aborted)return task;
+ const save=()=>saveProductionCheckpoint(store,task);
  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
  const timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-now()));
  const check=()=>{abort.signal.throwIfAborted();if(now()>=deadline)throw new Error('Production deadline exceeded');};
+ // Older tasks may already have split counters while still keeping review-kind
+ // preview effects. Normalize the effect kind even after the counter migration.
+ const legacyPreview=Object.entries(task.effects).filter(([id,e])=>id.startsWith('self_check:')&&e.kind==='review');
  // Older panel tasks counted preview review under review. Split historical
  // effects once without restoring spent attempts or changing their receipts.
  if(task.input.humanBlueprintReview&&task.input.budget.preview_review===undefined){
-  const prior=Object.entries(task.effects).filter(([id,e])=>id.startsWith('self_check:')&&e.kind==='review').length;
-  task.attempts.preview_review=prior;task.attempts.review-=prior;
+  const prior=legacyPreview.filter(([,effect])=>!effect.transportUnsubmitted).length;
+  task.attempts.preview_review=prior;task.attempts.review=Math.max(0,task.attempts.review-prior);
   task.input.budget.preview_review=3;
  }
+ if(task.input.humanBlueprintReview&&task.input.budget.preview_review!==undefined)for(const [,effect] of legacyPreview)effect.kind='preview_review';
  const budgetKind=(kind:EffectKind)=>kind==='preview_review'&&task.input.budget.preview_review===undefined?'review':kind;
  const remaining=(kind:EffectKind)=>Math.max(0,(task.input.budget[budgetKind(kind)]??0)-(task.attempts[budgetKind(kind)]??0));
  const effectKey=(name:string)=>`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:${name}`;
+ const activeEffects=new Set<string>();
  const ctx:StageContext={signal:abort.signal,remaining,
  hasEffect:(kind,name)=>task.effects[effectKey(name)]?.kind===budgetKind(kind),async effect<T>(kind:EffectKind,name:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>){
   check();const id=effectKey(name);
   const old=task.effects[id];
+  if(old&&old.kind!==budgetKind(kind))throw Error('production_effect_kind_mismatch');
+  if(activeEffects.has(id))throw Error('production_effect_in_progress');
+  activeEffects.add(id);
+  try{
   const decision=productionEffectDecision(old,!!recover,remaining(kind));
   if(decision.action!=='submit'){
    await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
@@ -331,7 +370,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    const unsubmitted=confirmedUnsubmittedGateway(kind,result,effect.operationId,task.projectId);
    task.effects[id]={...effect,status:'completed',result:structuredClone(result),...(unsubmitted?{transportUnsubmitted:true as const}:{})};
    if(unsubmitted&&!effect.transportUnsubmitted)task.attempts[effect.kind]=(task.attempts[effect.kind]??0)-1;
-   await store.save(task);
+   await save();
    return result;
   };
   if(decision.action==='recover'){
@@ -342,15 +381,16 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    throw new Error(`${kind} budget exhausted`);
   }
   const counter=budgetKind(kind);
-  const effect={kind:counter,operationId:/^[a-f0-9-]{36}$/.test(name)?name:randomUUID(),status:'reserved' as const};task.effects[id]=effect;task.attempts[counter]=(task.attempts[counter]??0)+1;await store.save(task);
+  const effect={kind:counter,operationId:/^[a-f0-9-]{36}$/.test(name)?name:randomUUID(),status:'reserved' as const};task.effects[id]=effect;task.attempts[counter]=(task.attempts[counter]??0)+1;await save();
   await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,operationId:effect.operationId});
   let result:T;
   try{check();result=await work(effect.operationId);check();}
-  catch(error){task.effects[id]={...effect,status:'failed',error:String(error).slice(0,1200)};await store.save(task);throw error;}
-  return settle(effect,result);
+  catch(error){task.effects[id]={...effect,status:'failed',error:String(error).slice(0,1200)};await save();throw error;}
+  return await settle(effect,result);
+  }finally{activeEffects.delete(id);}
  }};
  try{
-  check();task.status='running';delete task.error;await store.save(task);
+  check();task.status='running';delete task.error;await save();
   for(let index=PRODUCTION_STAGES.indexOf(task.stage);index<PRODUCTION_STAGES.length;){
    check();task.stage=PRODUCTION_STAGES[index]!;
    if(task.completed[task.stage]){index++;continue;}
@@ -373,7 +413,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
     }
     task.repairs++;task.stage=result.repair;index=PRODUCTION_STAGES.indexOf(result.repair);
     for(const stage of PRODUCTION_STAGES.slice(index))delete task.completed[stage];
-    await store.save(task);continue;
+    await save();continue;
    }
    if(!result.artifact||Object.keys(result.artifact).length===0)throw new Error('Stage has no verified artifact');
    task.completed[task.stage]={at:now(),artifact:result.artifact};
@@ -389,14 +429,14 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
     }
     if(!task.blueprintApproval||task.blueprintApproval.digest!==result.artifact.blueprint_digest
       ||typeof task.blueprintApproval.requirementsDigest!=='string'||task.blueprintApproval.requirementsDigest!==result.artifact.requirementsDigest){
-     task.status='awaiting_blueprint';await store.save(task);break;
+     task.status='awaiting_blueprint';await save();break;
     }
    }
-   await store.save(task);index++;
+   await save();index++;
   }
-  if(task.status==='running'){task.status='awaiting_review';await store.save(task);}
+  if(task.status==='running'){task.status='awaiting_review';await save();}
   if(abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user'))abort.signal.throwIfAborted();
- }catch(error){task.status=abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user')?'cancelled':'blocked';task.error=String(error).slice(0,1600);try{await store.save(task);}catch(persistenceError){task.error=`${task.error}; checkpoint_write_failed: ${String(persistenceError).slice(0,500)}; last persisted checkpoint is authoritative, do not resubmit unknown effects`;}}
+ }catch(error){task.status=abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user')?'cancelled':'blocked';task.error=String(error).slice(0,1600);try{await save();}catch(persistenceError){task.error=`${task.error}; checkpoint_write_failed: ${String(persistenceError).slice(0,500)}; last persisted checkpoint is authoritative, do not resubmit unknown effects`;}}
  finally{clearTimeout(timer);}
  const run=await recoverServerRun(task.projectId,task.taskId);
  if(run){run.error=task.error??null;pushRunEvent(run,'production-stage',{stage:task.stage,status:task.status,attempts:task.attempts,error:task.error});await setRunStatus(run,['awaiting_blueprint','awaiting_review'].includes(task.status)?'awaiting-user':task.status==='cancelled'?'cancelled':'failed');}
@@ -418,7 +458,15 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
     const ready=await prepare(controller.signal);
     checkPreparation();
     if(!ready)return task;
-   }catch(error){if(controller.signal.aborted)return advance();throw error;}
+   }catch(error){
+    if(!controller.signal.aborted)throw error;
+    // Preparation may have failed before it replaced the dispatch snapshot.
+    // A cancellation or deadline cannot use that snapshot to write a new state.
+    const saved=await store.load(task.projectId,task.taskId);
+    Object.assign(task,saved);
+    if(['awaiting_blueprint','awaiting_review'].includes(task.status)&&!String(controller.signal.reason).includes('cancelled by user'))return task;
+    return advance();
+   }
   }
   await advance();
   while(task.status==='blocked'){
@@ -430,7 +478,7 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
    try{await reconcile(task);}catch(error){
     if(controller.signal.aborted)return advance();
     task.error=`${task.error??'Production blocked'}; recovery: ${String(error).slice(0,500)}`.slice(0,1600);
-    await store.save(task);
+    await saveProductionCheckpoint(store,task);
     return controller.signal.aborted?advance():task;
    }
    if(controller.signal.aborted)return advance();
@@ -462,7 +510,7 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
   next.stage='audio';
  }
  next.status='queued';
- if(guards)await saveProductionControl(task,next,store,guards);else await store.save(next);
+ if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
  Object.assign(task,next);return task;
 }
 /** Accept business feedback while a saved draft waits for review, without spending effects or changing approval state. */
@@ -475,7 +523,7 @@ export async function savePendingBlueprintFeedback(task:ProductionTask,revision:
  next.blueprintFeedback=feedback.trim();
  delete next.blueprintFeedbackSummary;
  next.repairContext={...next.repairContext,pending_blueprint_feedback:{text:feedback.trim(),revision}};
- if(guards)await saveProductionControl(task,next,store,guards);else await store.save(next);
+ if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
  Object.assign(task,next);
 }
 
@@ -487,7 +535,7 @@ export async function saveProductionControl(base:ProductionTask,next:ProductionT
  let contention:unknown=new Error('agent_runtime_precondition_changed');
  for(let attempt=0;attempt<3;attempt++){
   const key=agentRuntimeKey(base.projectId,await currentAgentSessionGeneration(base.projectId)),entry=await getStoredEntry(key);
-  if(!entry.found){await store.save(next,guards);return;}
+  if(!entry.found){await saveProductionCheckpoint(store,next,guards);return;}
   const current=await productionTaskStore.load(base.projectId,base.taskId);
   if(subject(current)!==subject(base))throw Error('production_control_subject_changed');
   const a=base.sharedProduction,b=current.sharedProduction;
@@ -501,7 +549,7 @@ export async function saveProductionControl(base:ProductionTask,next:ProductionT
    conditions.push({key:'project:'+base.projectId,digest:digestValue(project.value)});
   }
   next.sequence=current.sequence;next.updatedAt=current.updatedAt;
-  try{await store.save(next,conditions);return;}
+  try{await saveProductionCheckpoint(store,next,conditions);return;}
   catch(error){
    if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;
    // Only a runtime checkpoint contest can be merged. Changed project or
@@ -576,5 +624,7 @@ export async function acceptProductionTask(task:ProductionTask,languageConfirmed
 export async function cancelProductionTask(task:ProductionTask,store=productionTaskStore){
  if(['completed','cancelled'].includes(task.status))throw new Error('Task is already terminal');
  if(cancelActiveProductionTask(task.projectId,task.taskId))return {taskId:task.taskId,status:'cancelling'};
- task.status='cancelled';await store.save(task);return task;
+ const next={...structuredClone(task),status:'cancelled' as const};
+ await saveProductionControl(task,next,store);
+ Object.assign(task,next);return task;
 }

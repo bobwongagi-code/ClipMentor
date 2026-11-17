@@ -191,7 +191,8 @@ export async function summarizeExternalCalls(directory:string) {
 }
 
 /** Read one saved response by its original request ID. No reservation, execution or approval. */
-export async function readSavedExternalResponse(directory:string,requestId:string,limits?:{maxBytes:number;maxRecords:number}):Promise<unknown|undefined>{
+export async function readSavedExternalResponse(directory:string,requestId:string,
+  limits?:{maxBytes:number;maxRecords:number;requireOriginalRequestId?:boolean}):Promise<unknown|undefined>{
   const dir=join(directory,'external-calls');let found:unknown,matched=false;
   if(limits&&(!Number.isSafeInteger(limits.maxBytes)||limits.maxBytes<1||!Number.isSafeInteger(limits.maxRecords)||limits.maxRecords<1))throw Error('external_read_limit_invalid');
   const read=async(file:string)=>{
@@ -208,6 +209,7 @@ export async function readSavedExternalResponse(directory:string,requestId:strin
     const binding=JSON.parse(alias);
     if(binding.version!==1||binding.request_id!==requestId||!/^[a-f0-9]{64}$/.test(binding.input_sha256))throw Error('external_saved_result_invalid');
     const row=JSON.parse(await read(join(dir,`${binding.input_sha256}.json`)));
+    if(limits?.requireOriginalRequestId&&row.request_id!==requestId)throw Error('external_saved_result_invalid');
     const raw=await read(join(dir,`${binding.input_sha256}.response`)).catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});
     if(raw===undefined)return undefined;
     if(row.version!==1||row.input_sha256!==binding.input_sha256)throw Error('external_saved_result_invalid');

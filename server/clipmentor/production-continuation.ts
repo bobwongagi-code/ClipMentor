@@ -12,7 +12,7 @@ import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../
 import {productionFeedbackAnchor} from './production-feedback';
 import type {ProjectDoc} from '../../src/editor/types';
 import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
-import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionControl,type EntryPreconditions,type ProductionTask} from './production-task';
+import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,type EntryPreconditions,type ProductionTask} from './production-task';
 
 export type ProductionAudience='new_contact'|'existing_partner';
 
@@ -127,17 +127,62 @@ export async function queueBlueprintContinuations(parent:ProductionTask){
  const key=`${parent.projectId}:${parent.taskId}`,previous=outputReleaseTurns.get(key);
  let release!:()=>void;const turn=new Promise<void>(resolve=>{release=resolve;});outputReleaseTurns.set(key,turn);
  await previous;
- try{return await queueConfirmedOutputs(parent);}
+ try{
+  const current=await latestPanelProductionTask(parent.projectId);
+  if(current?.taskId!==parent.taskId||digestValue(current.productionChildren)!==digestValue(parent.productionChildren))
+   throw Error('production_outputs_binding_invalid');
+  return await queueConfirmedOutputs(current);
+ }
  finally{release();if(outputReleaseTurns.get(key)===turn)outputReleaseTurns.delete(key);}
+}
+
+export async function readProductionOutputs(parent:ProductionTask):Promise<ProductionTask[]>{
+ if(parent.productionChildren?.length){
+  const children=await Promise.all(parent.productionChildren.map(entry=>productionTaskStore.load(entry.projectId,entry.taskId)));
+  if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
+  return children;
+ }
+ const entry=parent.productionChild;
+ if(!entry)return [];
+ const child=await productionTaskStore.load(entry.projectId,entry.taskId);
+ if(child.projectId===parent.projectId||child.input.panelDelivery?.audience!==entry.audience
+  ||child.blueprintApproval?.sourceProjectId!==parent.projectId||child.blueprintApproval.sourceTaskId!==parent.taskId
+  ||child.input.sourceAssetId!==parent.input.sourceAssetId)throw Error('production_outputs_binding_invalid');
+ return [child];
+}
+
+export async function publishedProductionParent(task:ProductionTask){
+ const approval=task.blueprintApproval;
+ if(!approval)return;
+ const index=(await getStoredEntry('projects')).value;
+ if(Array.isArray(index)&&index.some(row=>row?.deletedAt&&(row.id===task.projectId||row.id===approval.sourceProjectId)))
+  throw Error('production_output_project_deleted');
+ const parent=await latestPanelProductionTask(approval.sourceProjectId);
+ if(parent?.taskId!==approval.sourceTaskId||!(await readProductionOutputs(parent)).some(child=>child.taskId===task.taskId&&child.projectId===task.projectId))
+  throw Error('production_outputs_binding_invalid');
+ return parent;
 }
 
 /** Recover the narrow gap between persisting a confirmed batch and queueing its children. */
 async function queueConfirmedOutputs(parent:ProductionTask){
- const children=await Promise.all((parent.productionChildren??[]).map(entry=>productionTaskStore.load(entry.projectId,entry.taskId)));
- if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
- for(const child of children)if(child.status==='awaiting_blueprint'&&child.stage==='copy_review'&&!child.completed.copy_review){
-  child.status='queued';await productionTaskStore.save(child);
+ const children=await readProductionOutputs(parent);
+ if(children.length!==2)throw Error('production_outputs_binding_invalid');
+ const index=(await getStoredEntry('projects')).value;
+ const deleted=new Set(Array.isArray(index)?index.filter(row=>row?.deletedAt).map(row=>row.id):[]);
+ if(deleted.has(parent.projectId))throw Error('production_output_project_deleted');
+ for(const [index,child] of children.entries())if(child.status==='awaiting_blueprint'&&child.stage==='copy_review'&&!child.completed.copy_review){
+  if(deleted.has(child.projectId))continue;
+  const queued={...structuredClone(child),status:'queued' as const};
+  try{
+   await saveProductionControl(child,queued,productionTaskStore);
+   children[index]=queued;
+  }catch(error){
+   const current=await productionTaskStore.load(child.projectId,child.taskId);
+   if(current.status!=='cancelled')throw error;
+   children[index]=current;
+  }
  }
+ if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
  return children;
 }
 
@@ -253,7 +298,7 @@ async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;re
    throw Error('shared_producer_binding_changed');
   }
   current.sharedProduction={projectId:target.projectId,taskId:target.taskId,prepared:true,endFrame,digest};
-  try{await productionTaskStore.save(current,[{key,digest:digestValue(runtime.value)},{key:'project:'+first.projectId,digest:digestValue(project.value)}]);check();return current;}
+  try{await saveProductionCheckpoint(productionTaskStore,current,[{key,digest:digestValue(runtime.value)},{key:'project:'+first.projectId,digest:digestValue(project.value)}]);check();return current;}
   catch(error){if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;}
  }
  throw Error('shared_producer_checkpoint_contended');
@@ -263,7 +308,7 @@ async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;re
 export async function prepareSharedProduction(task:ProductionTask,signal?:AbortSignal){
  const check=()=>signal?.throwIfAborted();check();
  const upgraded=await upgradeContinuationBrief(task);check();
- if(upgraded)await productionTaskStore.save(task);check();
+ if(upgraded)await saveProductionCheckpoint(productionTaskStore,task);check();
  const shared=task.sharedProduction;if(!shared)return true;
  if(shared.prepared){const saved=await loadOfflineStoredProject(task.projectId);if(!saved)throw Error('shared_output_missing');assertSharedProduction(task,saved.doc);return true;}
  const first=await productionTaskStore.load(shared.projectId,shared.taskId);check();
@@ -310,7 +355,7 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
   task.completed.blueprint.artifact.shared_preparation=proposal;
   // Save the exact intended bytes before the project commit. This is a local
   // continuation permit, never an independent review or a second timeline.
-  check();await productionTaskStore.save(task);check();
+  check();await saveProductionCheckpoint(productionTaskStore,task);check();
  }
  if(!committed)await withSerializedProjectStore(async store=>{
   check();const current=await store.readEntry('project:'+task.projectId),producer=await store.readEntry('project:'+first.projectId);check();
@@ -328,5 +373,5 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
  task.input.budget.model=Math.min(task.input.budget.model,Math.max(0,currentProducer.input.budget.model-currentProducer.attempts.model));
  task.input.budget.tts=Math.min(task.input.budget.tts,Math.max(0,currentProducer.input.budget.tts-currentProducer.attempts.tts));
  if(task.input.budget.routine){task.input.budget.routine.model=Math.min(task.input.budget.routine.model,task.input.budget.model);task.input.budget.routine.tts=Math.min(task.input.budget.routine.tts,task.input.budget.tts);}
- await productionTaskStore.save(task);return true;
+ await saveProductionCheckpoint(productionTaskStore,task);return true;
 }

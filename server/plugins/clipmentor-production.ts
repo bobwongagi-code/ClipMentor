@@ -7,13 +7,13 @@ import {productionFeedbackAnchor} from '../clipmentor/production-feedback';
 import type {Plugin} from 'vite';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {editorCredentialAuthorized} from '../editor-auth';
-import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
+import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
 import {productionStageWorker,reconcileBlockedBlueprint} from '../clipmentor/production-worker';
 import {productionBlueprintReadiness} from '../clipmentor/production-readiness';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {createStoryboardHandler} from '../clipmentor/storyboard-api';
 import {createBlueprintReviewBoardHandler} from '../clipmentor/blueprint-review-board-api';
-import {prepareSharedProduction,queueBlueprintContinuations} from '../clipmentor/production-continuation';
+import {prepareSharedProduction,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs} from '../clipmentor/production-continuation';
 
 async function json(req:IncomingMessage){const parts:Buffer[]=[];let size=0;for await(const part of req){size+=part.length;if(size>128000)throw new Error('Production request exceeds 128KB');parts.push(Buffer.from(part));}return JSON.parse(Buffer.concat(parts).toString('utf8'));}
 /** Local service entry. Formal multi-user hosting remains a separate deployment task. */
@@ -40,6 +40,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    }
   };
   const localAuthorOrigin=task.input.author.origin,localReviewerOrigin=task.input.reviewer.origin;
+  let batchValidated=false;
   const work=(async()=>{
    try{
     await runProductionWithRecovery(task,restoring?resumeWorker:worker,worker===productionStageWorker?reconcileBlockedBlueprint:async()=>{},
@@ -51,15 +52,35 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
       task.input.author.origin=localAuthorOrigin;task.input.reviewer.origin=localReviewerOrigin;
       signal.throwIfAborted();
       if(['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return false;
+      if(task.blueprintApproval){
+       // A separately indexed child is not an independent production request.
+       await publishedProductionParent(task);
+       signal.throwIfAborted();
+       batchValidated=true;
+      }
       return prepareSharedProduction(task,signal);
      });
-   }catch(error){task.status='blocked';task.error=String(error);await productionTaskStore.save(task);throw error;}
+   }catch(error){
+    // Failure to read the authoritative checkpoint does not turn a stale launch
+    // snapshot into the authority for recording a failure.
+    const current=await productionTaskStore.load(task.projectId,task.taskId).catch(()=>undefined);
+    if(current){
+     const sameCheckpoint=current.sequence===task.sequence&&current.updatedAt===task.updatedAt;
+     Object.assign(task,current);
+     if(sameCheckpoint&&(!current.blueprintApproval||batchValidated)&&['queued','running','blocked'].includes(current.status)){
+      const next={...structuredClone(current),status:'blocked' as const,error:String(error).slice(0,1600)};
+      await saveProductionControl(current,next,productionTaskStore);
+      Object.assign(task,next);
+     }
+    }
+    throw error;
+   }
   })().finally(async()=>{
    active.delete(task.taskId);
    // The second output starts without another browser action, including after recovery.
    if(task.blueprintApproval&&['awaiting_review','completed'].includes(task.status)){
-    const approval=task.blueprintApproval;
-    const parent=await productionTaskStore.load(approval.sourceProjectId,approval.sourceTaskId);
+    const parent=await publishedProductionParent(task);
+    if(!parent)return;
     const siblings=parent.productionChildren?.length?await queueBlueprintContinuations(parent):[];
     for(const sibling of siblings){
      if(sibling.status==='queued'&&sibling.sharedProduction?.taskId===task.taskId&&!active.has(sibling.taskId))launch(sibling,true);
@@ -85,8 +106,10 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     for(const projectId of projectIds){
      try{
       const task=await currentPanelTask(projectId);
-      if(task?.productionChildren?.length){
-       for(const child of await queueBlueprintContinuations(task))if(['queued','running'].includes(child.status)&&!active.has(child.taskId)&&!productionExecutionActive(child.projectId,child.taskId)){
+      if(task?.blueprintApproval)continue;
+      if(task&&(task.productionChildren?.length||task.productionChild)){
+       const children=task.productionChildren?.length?await queueBlueprintContinuations(task):await readProductionOutputs(task);
+       for(const child of children)if(projectIds.has(child.projectId)&&['queued','running'].includes(child.status)&&!active.has(child.taskId)&&!productionExecutionActive(child.projectId,child.taskId)){
         child.input.author.origin=origin;child.input.reviewer.origin=origin;launch(child,true);
        }
        continue;
@@ -146,6 +169,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     const task=await productionTaskStore.load(String(body.projectId),String(body.taskId));
     if(body.action==='cancel'){send(202,await cancelProductionTask(task));return;}
     if(isActive(task.taskId,task.projectId))throw new Error('Production task already running');
+    if(['resume','feedback','accept'].includes(String(body.action)))await publishedProductionParent(task);
     if(body.action==='resume'){await reconcileBlockedBlueprint(task);launch(task);send(202,{taskId:task.taskId,status:'queued'});return;}
     if(body.action==='feedback'){const snapshot=await loadOfflineStoredProject(task.projectId);if(!snapshot)throw new Error('feedback_project_missing');await productionFeedback(task,body.feedback,productionTaskStore,snapshot.doc);launch(task);send(202,{taskId:task.taskId,status:'queued'});return;}
     if(body.action==='accept'){send(200,await acceptProductionTask(task,body.malayDeliveryConfirmed,undefined,

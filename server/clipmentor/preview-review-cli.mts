@@ -13,6 +13,8 @@ import {
   PREVIEW_REVIEW_ENDPOINT,
 } from './preview-review.ts';
 import { postSourceVideoTransport, SourceVideoTransportError } from './source-video-transport.ts';
+import {atomicWriteFile} from '../plugins/project-store-durable.ts';
+import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from './local-operation-lock.ts';
 import type { SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video.ts';
 
 const args = process.argv.slice(2);
@@ -40,22 +42,28 @@ const output = resolve(options['--out']);
 await mkdir(dirname(output), { recursive: true, mode: 0o700 });
 const ledger = join(dirname(output), `${options['--operation']}.operation.json`);
 const fingerprint = createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT + prepared.version + prepared.logical_request_sha256).digest('hex');
-if (await access(output).then(() => true, () => false)) {
-  const prior = await readFile(ledger, 'utf8').catch(() => null);
-  if (!prior) throw new Error('Output already exists; no request sent');
-}
-try {
-  await writeFile(ledger, JSON.stringify({ status: 'preparing', identity_version:'video-logical-v1', fingerprint, requests_attempted: 0, model_retry_policy:'no_automatic_retry' }), { flag: 'wx', mode: 0o600 });
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Could not reserve review operation');
-  if(!sourceBindingMatches)throw new Error('Preview source binding mismatch; no request sent');
-  const prior = JSON.parse(await readFile(ledger, 'utf8'));
+const account = createHash('sha256').update(key).digest('hex');
+const release=tryLocalOperationLock(ledger+'.owner');
+if(!release)throw Error('Preview review operation is in progress');
+try{await review();}finally{release();}
+
+async function review(){
+const outputExists=await access(output).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;});
+const original=await readFile(ledger,'utf8').catch(error=>{if(error.code==='ENOENT')return;throw error;});
+if(original===undefined){
+  if(outputExists)throw Error('Output already exists; no request sent');
+  await publishOperationPreparation(ledger,{identity_version:'video-logical-v1',fingerprint,account,model_retry_policy:'no_automatic_retry'});
+}else{
+  if(!sourceBindingMatches)throw Error('Preview source binding mismatch; no request sent');
+  const prior=JSON.parse(original);
   const expected=prior.identity_version==='video-logical-v1'?fingerprint:
     createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+prepared.version+buildPreviewReviewRequest(await readFile(file),input).request_sha256).digest('hex');
-  if (prior.fingerprint !== expected) throw new Error('Operation belongs to different review input');
-  if (prior.status !== 'completed') throw new Error('Prior attempt pending or failed; no automatic replay');
-  console.log(JSON.stringify({ status: 'cached', output: prior.output, requests_sent: 0 }));
-  process.exit(0);
+  if(prior.fingerprint!==expected)throw Error('Operation belongs to different review input');
+  if(prior.status==='completed'){
+    console.log(JSON.stringify({status:'cached',output:prior.output,requests_sent:0}));
+    return;
+  }
+  if(outputExists||!isResumablePreparation(prior)||prior.account!==account)throw Error('Prior attempt pending or failed; no automatic replay');
 }
 let diagnostic: SourceVideoTransportDiagnostic | undefined;
 let attempts = 0;
@@ -67,8 +75,8 @@ try {
   mediaTransfer=media.receipt;
   const result = await reviewClipMentorPreview(media, input, { key, signal, post: async (body, credential, signal) => {
     signal.throwIfAborted();
-    await writeFile(ledger, JSON.stringify({ status:'reserved',identity_version:'video-logical-v1',fingerprint,requests_attempted:1,model_retry_policy:'no_automatic_retry',media_transfer:mediaTransfer }),{mode:0o600});
     attempts=1;
+    await atomicWriteFile(ledger, JSON.stringify({ status:'reserved',identity_version:'video-logical-v1',fingerprint,requests_attempted:attempts,model_retry_policy:'no_automatic_retry',media_transfer:mediaTransfer }));
     try {
       const {body:_wire,input:_frozenInput,...requestInfo}=buildPreviewReviewRequest(media,input);
       const archived=await externalCall({directory:dirname(output),kind:'video',purpose:'preview-continuous-review-v1',requestId:options['--operation'],
@@ -84,14 +92,15 @@ try {
     }
   } });
   await writeFile(output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  await writeFile(ledger, JSON.stringify({ status: 'completed', identity_version:'video-logical-v1', fingerprint, requests_attempted: attempts, model_retry_policy:'no_automatic_retry', media_transfer:mediaTransfer, output }), { mode: 0o600 });
+  await atomicWriteFile(ledger, JSON.stringify({ status: 'completed', identity_version:'video-logical-v1', fingerprint, requests_attempted: attempts, model_retry_policy:'no_automatic_retry', media_transfer:mediaTransfer, output }));
   console.log(JSON.stringify({ status: result.status, output, requests_attempted: 1, full_film_accepted: false }));
 } catch (error) {
   const message = error instanceof Error && /^(Preview review|Invalid preview|Inline request)/.test(error.message)
     && !error.message.includes(key) ? error.message : 'Review failed; inspect operation record, no automatic retry';
-  await writeFile(ledger, JSON.stringify({ status: 'failed', identity_version:'video-logical-v1', fingerprint, requests_attempted: attempts, model_retry_policy:'no_automatic_retry', media_transfer:mediaTransfer, error: message,
+  await atomicWriteFile(ledger, JSON.stringify({ status: 'failed', identity_version:'video-logical-v1', fingerprint, requests_attempted: attempts, model_retry_policy:'no_automatic_retry', media_transfer:mediaTransfer, error: message,
     ...(options['--expected-video-sha256']?{expected_video_sha256:options['--expected-video-sha256'],actual_video_sha256:videoHash}:{}),
-    ...(error instanceof VideoMediaError?{media_failure:{stage:error.stage,code:error.code,metrics:error.metrics}}:{}), ...(diagnostic ? { transport_diagnostic: diagnostic } : {}) }), { mode: 0o600 });
+    ...(error instanceof VideoMediaError?{media_failure:{stage:error.stage,code:error.code,metrics:error.metrics}}:{}), ...(diagnostic ? { transport_diagnostic: diagnostic } : {}) }));
   console.error(message);
   process.exitCode = 1;
+}
 }

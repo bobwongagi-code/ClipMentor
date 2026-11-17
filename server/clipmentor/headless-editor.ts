@@ -71,22 +71,33 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   if(path.includes('observe-video')||path.includes('transcribe-source')||path.includes('review-preview')){
    const readReceipt=async(operationId:string,resumePreparation=false)=>{
     const isSource=path==='/api/clipmentor/observe-video';
+    const isAsr=path==='/api/clipmentor/transcribe-source';
     const receiptDeadline=AbortSignal.timeout(10_000);
     const signal=options.signal?AbortSignal.any([options.signal,receiptDeadline]):receiptDeadline;
     const response=await local(path,{...init,signal,body:JSON.stringify({action:isSource?'read_receipt':'read',operationId,projectId:body.projectId,
-     ...(path==='/api/clipmentor/review-preview'?{videoSha256:body.videoSha256}:{})})});
+     ...(isAsr?{src:body.src,expectedSourceHash:body.expectedSourceHash}:!isSource?{videoSha256:body.videoSha256}:{})})});
     if(!response.ok)throw new Error('Original receipt unavailable; outcome unknown, no resubmission');
     const receipt=await response.json();
-    if(receipt.operationId!==body.operationId||receipt.projectId!==body.projectId)throw new Error('Original receipt binding mismatch');
-    if(isSource&&resumePreparation&&receipt.status==='preparing'&&receipt.requestsAttempted===0){
+    // ASR read authenticates the project server-side and returns the source identity.
+    if(receipt.operationId!==operationId||(isAsr?receipt.source_hash!==body.expectedSourceHash:receipt.projectId!==body.projectId))
+     throw new Error('Original receipt binding mismatch');
+    if(resumePreparation&&receipt.requestsAttempted===0&&(isAsr?receipt.state==='pending_or_unknown':receipt.status==='preparing')){
      const resumed=await local(path,{...init,body:JSON.stringify({...body,action:'resume_preparation'})});
      const data=await resumed.json();
-     if((!resumed.ok||data?.error)&&!data?.receipt)throw new Error('Original observation preparation did not complete; retain its operation ID');
+     const previewFailure=!isAsr&&!isSource&&data?.status==='failed'&&data.operationId===operationId&&data.projectId===body.projectId;
+     if((!resumed.ok||data?.error)&&!data?.receipt&&!previewFailure)throw new Error('Original preparation did not complete; retain its operation ID');
+     if(data?.status==='preparing'||data?.status==='reserved')throw new Error('Original receipt is still pending or unknown; retain its operation ID');
      return {status:resumed.status,body:data};
     }
+    if(!isAsr&&(receipt.status==='preparing'||receipt.status==='reserved'))
+     throw new Error('Original receipt is still pending or unknown; retain its operation ID');
     if(isSource)return receipt.status==='completed'&&receipt.result
      ?{status:200,body:{...receipt.result,cached:true}}
      :{status:409,body:{error:'Original observation is failed or unknown; no resubmission',receipt}};
+    if(isAsr){
+     if(!receipt.result)throw new Error('Original ASR result unavailable; no resubmission');
+     return {status:response.status,body:receipt.result};
+    }
     return {status:response.status,body:receipt};
    };
    const result=await options.effect(path.includes('review-preview')?'preview_review':'observation',body.operationId,async(operationId)=>{

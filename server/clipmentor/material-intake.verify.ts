@@ -91,7 +91,9 @@ try {
   if (browser.status === 'claimed') await releaseProjectEditOwnership(browser.claim);
   assert.equal(repeat.status, 200);
   assert.deepEqual(await repeat.json(), receipt);
-  assert.equal((await submit(body(video, '不同销量.png'))).status, 409);
+  const conflicting=await submit(body(video, '不同销量.png'));
+  assert.equal(conflicting.status,409);
+  assert.equal((await conflicting.json()).commitUncertain,undefined);
   assert.equal((await loadOfflineStoredProject(id))?.revision, receipt.revision);
   assert.equal((await readdir(uploadDir())).length, 4);
   assert(saved);
@@ -294,6 +296,7 @@ try {
   afterHash = async () => { throw new Error('injected post-commit verification unavailable'); };
   const uncertain = await fetch(uncertainEndpoint, { method: 'POST', headers, body: body() });
   assert.equal(uncertain.status, 409);
+  assert.equal((await uncertain.json()).commitUncertain,true);
   const committed = (await loadOfflineStoredProject(uncertainId))!;
   assert.equal(committed.doc.assets.length, 4, 'The actual commit survives a readback failure');
   for (const asset of committed.doc.assets) assert.equal(await hashIntakeFile(join(uploadDir(), asset.src.split('/').at(-1)!)), asset.sourceContentHash);
