@@ -85,10 +85,11 @@ export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
      }
      images.push(frames);
     }
-    const logoImage=await sharp(logoBytes).trim().png().toBuffer();
+    if(await sha256File(file)!==model.source.sourceContentHash)throw Error('storyboard_original_source_changed');
+     const logoImage=await sharp(logoBytes).trim().png().toBuffer();
     const html=creatorDocumentHtml(model.title,document,images,'data:image/png;base64,'+logoImage.toString('base64'));
     const result=await renderCreatorDocument(html,deadline);
-    if(await sha256File(file)!==model.source.sourceContentHash)throw Error('storyboard_original_source_changed');
+    // Source identity is rechecked independently for each subscriber below.
     return {...result,pages:Math.ceil(document.rows.length/3)};
    }finally{await rm(work,{recursive:true,force:true});}
   })();
