@@ -45,7 +45,7 @@ ClipMentor 帮助创作者和内容团队看懂：**产品价值是怎样被拍�
 
 - **做一份拆解**：准备完整原片、商品资料、目标语言和交付范围，按[随应用分发的流程](src/agent/skills/clipmentor/SKILL.md)进行 Agent 辅助策划与制作。
 - **运行或开发编辑器**：阅读[开发说明](DEVELOPMENT.md)，查看环境、服务配置、命令和检查方式。
-- **核对产出物**：按[交付检查](src/agent/skills/clipmentor/references/delivery-checklist.md)检查实际视频，以及对应文字和工程。
+- **核对产出物**：观看成片，并按[交付检查](src/agent/skills/clipmentor/references/delivery-checklist.md)核对。提供了画面参照时，可用[并排对照](DEVELOPMENT.md#export-and-reference-comparison)检查导出的实际画面。
 
 ## 项目状态
 
