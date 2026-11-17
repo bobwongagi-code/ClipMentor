@@ -153,7 +153,17 @@
 
 验证时以当前持久化父清单和子任务真实身份为准。直接恢复、冷启动与兄弟唤醒都必须拒绝孤立子任务、错误受众和过期父任务。删除的工程不会因兄弟恢复重新派发。正确父清单仍能恢复两版，历史单版清单仍能恢复已登记的版本。用实际 HTTP 和冷启动检查派发次数、预算及原检查点；测试在独立存储运行。
 
-已通过实际 HTTP 和冷启动对照。错误受众、被替换或已删除的父任务、已删除的子任务均保留原子任务检查点。以有效预览向脱离父清单的子任务提交修改，直接 HTTP 和网页入口均拒绝写入。合法旧单结尾和有效兄弟任务仍可恢复。交接后还需测父清单在控制提交途中变化的组合。见 [交接说明](../CLIPMENTOR_STATE_HANDOFF.md)。
+已通过实际 HTTP 和冷启动对照。错误受众、被替换或已删除的父任务、已删除的子任务均保留原子任务检查点。以有效预览向脱离父清单的子任务提交修改，直接 HTTP 和网页入口均拒绝写入。合法旧单结尾和有效兄弟任务仍可恢复。2026-11-17接手批次已补实际HTTP控制保存中父清单替换、工程删除标记与兄弟绑定变化；检查点原子条件拒绝旧控制，合法父普通进度和脱离清单取消保留。见下方接续结论及[交接说明](../CLIPMENTOR_STATE_HANDOFF.md)。
+
+### 执行期间授权与会话接续（2026-11-17）
+
+启动校验不能代替后续派发授权。实际HTTP挂起Worker后撤回父清单，旧实现仍提交下一effect；现阶段进入、effect预留/派发、普通工具及项目commit前复核当前发布。阶段完成/返修/待终审保存使用父及兄弟运行索引与会话的原子条件。原已提交effect的result/计数仍保存，不能把结果保留误作阶段批准。阶段发布失败先恢复最近确认检查点，回读失败也不落盘内存中的未批准completed、revision或repair字段。
+
+实际HTTP包含入口前撤回、stage保存期间撤回、stage保存失败叠加reload失败和合法单结尾正控；headless测试包含lease等待后工具/commit撤回，移除hook后反例失败。production-session.verify.ts经既有production脚本注册：8例真实project-store轮换+制作HTTP，非legacy到非legacy，父/子/同时轮换拒绝旧控制、active clear保持拒绝、旧单结尾与cancel正控。SM54凭据ABA另用本地受控promise补测，旧entry finally不能清新entry，无产品修复。
+
+共享准备另有8例真实HTTP换代：父terminal可rotate时，旧准备在工程提交前必须零写；若工程已在轮换前提交则保留，之后不再发布producer/follower prepared标记或改预算。prepare入口冻结相关session，proposal/archive/marker/checkpoint都绑定当前父发布，工程写在同一本地store锁内核这些条件。同代正控和active父/子clear400边界保留。历史达到192项时，先执行原有无损压缩再捕获提交条件，避免压缩本身让刚捕获的runtime guard过期；191/192永久正控核brief成功保存、原计数/父任务保持且每个旧checkpoint仍在live或archive。production-coordinator.verify.ts补真实持久作者事件与reconcile：唯一匹配作者只开一epoch，错revision/重复作者拒绝；真实worker同epoch已有effect零作者请求，无effect正控到首个本地fake请求。
+
+104项均已逐项核对归属与现存断言，但不等于104项所有组合穷举。SM07/08独立入口已由上述验证补齐，SM27低风险预检TTL仍以静态保护为依据；剩余跨批组合限定为：实际handler下父清单变化与双标签旧动作回包、零派发恢复与制作配置变化、R2对象删除与未知模型结果、共享PDF取消/证据变化及板图片队列stale-stop。通用remote project-store的跨工程guard协议、Node24/多实例部署和真实服务仍未验证。演示与休眠原型不扩展为生产承诺。
 
 ## 原盘点逐项归属
 

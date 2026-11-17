@@ -576,6 +576,72 @@ try{
    parent.sequence=invalid.sequence;parent.updatedAt=invalid.updatedAt;await productionTaskStore.save(parent);
   }
  }
+ // Hold at the actual child checkpoint publication, after HTTP admission.
+ for(const drift of ['manifest','deleted_project','sibling'] as const){
+  const parentBefore=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+  const childBefore=await productionTaskStore.load(reverseBeforeProducer.projectId,reverseBeforeProducer.taskId);
+  const siblingBefore=await productionTaskStore.load(batch[1].projectId,batch[1].taskId);
+  const rawSave=productionTaskStore.save;
+  const projectsBefore=await (await import('./project-store')).getStoredEntry('projects');
+  let crossed=false;
+  productionTaskStore.save=async(next,guards)=>{
+   if(next.taskId===childBefore.taskId&&next.feedbackUsed&&!crossed){
+    crossed=true;
+    if(drift==='manifest'){
+     const changed=structuredClone(parentBefore);delete changed.productionChildren;
+     await rawSave(changed);
+    }else if(drift==='sibling'){
+     const changed=structuredClone(siblingBefore);delete changed.sharedProduction;await rawSave(changed);
+    }else{
+     const rows=Array.isArray(projectsBefore.value)?projectsBefore.value:[];
+     await (await import('./project-store')).withSerializedProjectStore(store=>store.writeEntry('projects',[...rows.filter(row=>row.id!==childBefore.projectId),{id:childBefore.projectId,deletedAt:Date.now()}]));
+    }
+   }
+   await rawSave(next,guards);
+  };
+  try{
+   const response=await post({action:'feedback',projectId:childBefore.projectId,taskId:childBefore.taskId,
+    feedback:{kind:'content',text:'只核片尾说明',preview:reverseAnchor.preview,unit_ids:[],item_ids:[]}});
+   assert(crossed,'the actual HTTP control must reach its child persistence boundary');
+   assert.equal(response.status,409,`a ${drift} change during control cannot authorize a detached child write`);
+   assert.deepEqual(await productionTaskStore.load(childBefore.projectId,childBefore.taskId),childBefore,
+    'rejected late controls preserve the original receipt, counters and feedback');
+  }finally{
+   productionTaskStore.save=rawSave;
+   if(drift==='deleted_project')await (await import('./project-store')).withSerializedProjectStore(store=>store.writeEntry('projects',projectsBefore.value));
+   if(drift==='sibling'){
+    const now=await productionTaskStore.load(siblingBefore.projectId,siblingBefore.taskId);
+    siblingBefore.sequence=now.sequence;siblingBefore.updatedAt=now.updatedAt;await rawSave(siblingBefore);
+   }
+   const now=await productionTaskStore.load(parentBefore.projectId,parentBefore.taskId);
+   parentBefore.sequence=now.sequence;parentBefore.updatedAt=now.updatedAt;await rawSave(parentBefore);
+  }
+ }
+ {
+  const {saveProductionControl,cancelProductionTask}=await import('../clipmentor/production-task');
+  const parent=await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId);
+  const before=await productionTaskStore.load(batch[0].projectId,batch[0].taskId);
+  const next=structuredClone(before),rawSave=productionTaskStore.save;next.feedback='local positive control';
+  let progressed=false;
+  productionTaskStore.save=async(t,guards)=>{
+   if(t.taskId===before.taskId&&!progressed){progressed=true;await rawSave(structuredClone(parent));}
+   await rawSave(t,guards);
+  };
+  try{await saveProductionControl(before,next,productionTaskStore);assert(progressed);}
+  finally{productionTaskStore.save=rawSave;}
+  const latest=await productionTaskStore.load(before.projectId,before.taskId);
+  assert.equal(latest.feedback,'local positive control','same-manifest parent progress permits bounded local retry');
+  before.sequence=latest.sequence;before.updatedAt=latest.updatedAt;await rawSave(before);
+  const detached=structuredClone(parent);delete detached.productionChildren;
+  const currentParent=await productionTaskStore.load(parent.projectId,parent.taskId);
+  detached.sequence=currentParent.sequence;detached.updatedAt=currentParent.updatedAt;await rawSave(detached);
+  try{
+   const cancelled=await cancelProductionTask(structuredClone(before));assert.equal(cancelled.status,'cancelled','a detached output can still be safely cancelled');
+  }finally{
+   const now=await productionTaskStore.load(before.projectId,before.taskId);before.sequence=now.sequence;before.updatedAt=now.updatedAt;await rawSave(before);
+   parent.sequence=detached.sequence;parent.updatedAt=detached.updatedAt;await rawSave(parent);
+  }
+ }
  let feedbackSaveEntered!:()=>void,releaseFeedbackSave!:()=>void,feedbackHeld=false;
  const feedbackSaveWait=new Promise<void>(resolve=>{feedbackSaveEntered=resolve;}),feedbackSaveRelease=new Promise<void>(resolve=>{releaseFeedbackSave=resolve;});
  const feedbackOriginalSave=productionTaskStore.save;
@@ -775,6 +841,61 @@ try{
    digest:'confirmed',requirementsDigest:'requirements',confirmedAt:Date.now()};
   return child;
  };
+ // Hold the actual HTTP worker before its next effect reservation.
+ for(const boundary of ['valid','before_effect','stage_publish','stage_reload_failure'] as const){
+  const p=await makeCheckpoint('mid-worker-parent-'+boundary,'awaiting_blueprint');
+  const c=await bindOutput(p,'mid-worker-child-'+boundary,'existing_partner');
+  p.productionChild={projectId:c.projectId,taskId:c.taskId,audience:'existing_partner'};
+  await productionTaskStore.save(p);await productionTaskStore.save(c);
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let submissions=0;
+  const midApp=createMiniConnect(error=>{throw error;});
+  const midServer=createServer((req,res)=>midApp.handle(req,res));
+  midServer.listen(0,'127.0.0.1');await once(midServer,'listening');
+  const address=midServer.address();assert(address&&typeof address==='object');const url=`http://127.0.0.1:${address.port}`;
+  const midPlugin=clipMentorProductionPlugin(async(item,context)=>{
+   entered.resolve();await release.promise;
+   await context.effect('model','held-author',async()=>{submissions++;return {fixture:true};});
+   return {artifact:{revision:'r1',blueprint_digest:'confirmed',requirementsDigest:'requirements',authorSelfCheck:'passed',gate:{allowed:true},panelDeliveryVerified:true}};
+  });
+  (midPlugin.configureServer as (s:unknown)=>void)({httpServer:midServer,config:{server:{}},middlewares:{use:(route:string,fn:(req:IncomingMessage,res:ServerResponse)=>void)=>midApp.use(route,fn)}});
+  const originalSave=productionTaskStore.save,originalLoad=productionTaskStore.load;let stageCrossed=false,failedReload=0;
+  productionTaskStore.load=async(project,id)=>{
+   if(boundary==='stage_reload_failure'&&stageCrossed&&project===c.projectId&&id===c.taskId&&failedReload<2){failedReload++;throw Error('fixture stage reload unavailable');}
+   return originalLoad(project,id);
+  };
+  productionTaskStore.save=async(next,guards)=>{
+   if(boundary.startsWith('stage_')&&next.taskId===c.taskId&&next.completed.copy_review&&!stageCrossed){
+    stageCrossed=true;delete p.productionChild;await originalSave(p);
+   }
+   await originalSave(next,guards);
+  };
+  try{
+   const response=await fetch(url+'/api/clipmentor/production-task',{method:'POST',headers:{Origin:url,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'resume',projectId:c.projectId,taskId:c.taskId})});
+   assert.equal(response.status,202);await entered.promise;
+   if(boundary==='before_effect'){delete p.productionChild;await productionTaskStore.save(p);}
+   release.resolve();
+   // Wait on the worker's completion rather than letting a GET consume the
+   // injected checkpoint-read failure intended for the stage publisher.
+   const {productionExecutionActive}=await import('../clipmentor/production-task');
+   for(let i=0;i<400&&productionExecutionActive(c.projectId,c.taskId);i++)await new Promise(resolve=>setTimeout(resolve,5));
+   assert.equal(productionExecutionActive(c.projectId,c.taskId),false);
+   let stopped=false;
+   for(let i=0;i<200;i++){
+    const res=await fetch(url+`/api/clipmentor/production-task?projectId=${c.projectId}&taskId=${c.taskId}`,{headers:{Origin:url,'Sec-Fetch-Site':'same-origin'}});
+    if(!(await res.json()).executionActive){stopped=true;break;}
+    await new Promise(resolve=>setTimeout(resolve,5));
+   }
+   assert(stopped,'held worker must finish before checking durable outcomes');
+   const saved=await originalLoad(c.projectId,c.taskId);
+   assert.equal(submissions,boundary==='before_effect'?0:1,'withdrawn publication cannot authorize a later worker effect');
+   assert.equal(saved.attempts.model,boundary==='before_effect'?0:1,'submitted work preserves its original effect count');
+   if(boundary.startsWith('stage_')){
+    assert(stageCrossed);if(boundary==='stage_reload_failure')assert.equal(failedReload,2,'both acknowledgement recovery and publisher reload must fail to exercise safe checkpoint fallback');
+    assert.equal(saved.projectRevision,c.projectRevision,'unpublished revision cannot survive checkpoint rollback');assert.equal(saved.completed.copy_review,undefined,'a withdrawn stage publication must not be recorded as completed');
+    assert.equal(Object.values(saved.effects)[0].status,'completed','the real original effect result remains saved');
+   }
+  }finally{productionTaskStore.save=originalSave;productionTaskStore.load=originalLoad;release.resolve();await new Promise<void>((r,e)=>midServer.close(err=>err?e(err):r()));}
+ }
  const legacyOutput=await bindOutput(legacyParent,'legacy-output-child','existing_partner');
  const removedOutput=await bindOutput(removedParent,'removed-output-child','existing_partner');
  const supersededOutput=await bindOutput(supersededParent,'superseded-output-child','existing_partner');

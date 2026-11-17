@@ -76,6 +76,21 @@ try{
  const plain=await renderTimelineStills({state:styleDoc.timelines[0],project:styleDoc,timelineId:styleDoc.activeTimelineId,frames:[5]});
  assert.notEqual(shadowed[0].base64,plain[0].base64,'shadow:none must change the real rendered result, not just metadata');
 
+ // Revalidate publication after asynchronous lease work.
+ for(const boundary of ['execute','commit'] as const){
+  const local=new MemoryPersistence(saved);let current=true;
+  const renew=local.renewOwnership.bind(local);
+  local.renewOwnership=async(...args)=>{const value=await renew(...args);current=false;return value;};
+  const scoped=await openHeadlessEditor({...opts,persistence:local,assertCurrent:async()=>{if(!current)throw Error('publication_withdrawn');}});
+  if(boundary==='commit')scoped.context.commands.applyDoc({...scoped.getDoc(),name:'Must not save'});
+  const before=JSON.stringify(local.current);
+  try{
+   if(boundary==='execute')await assert.rejects(scoped.execute('update_item_props',{itemId:item.id,props:{text:'WITHDRAWN'}},'late'),/publication_withdrawn/);
+   else await assert.rejects(scoped.commit(),/publication_withdrawn/);
+   assert.equal(JSON.stringify(local.current),before,'revoked publication must preserve the saved project');
+   assert.equal(local.commitCount,0);
+  }finally{await scoped.close();}
+ }
  await editor.close();
  const restarted=await openHeadlessEditor({...opts,persistence:new FilePersistence(saved)});
  assert.equal(restarted.getDoc().timelines[0].items[0].props.text,'AFTER');await restarted.close();

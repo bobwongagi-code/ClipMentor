@@ -235,7 +235,7 @@ try {
     assert.equal(lightweight.requestsSent,0);assert.equal(extractions,0,'ten-second result recovery must never start frame extraction');
     const comparisonRead={action:'read',projectId:comparisonProject,operationId:comparisonRun.operationId,includeVisualEvidence:true};
     const collected=await previewBridge(comparisonRead,comparisonDeps);
-    assert.equal((collected.visual_comparison as any).status,'collected');assert.equal(extractions,3);
+    assert.equal((collected.visual_comparison as any).status,'collected',JSON.stringify(collected.visual_comparison));assert.equal(extractions,3);
     let clientCalls=0;
     const localContext={...ctx,getProjectId:()=>comparisonProject,hostFetch:async(_url:unknown,init?:RequestInit)=>{clientCalls++;return Response.json(await previewBridge(JSON.parse(String(init?.body)),comparisonDeps));}} as AgentContext;
     const throughClient=await execClipMentorAnalysisTool('review_clipmentor_preview',{action:'read',operationId:comparisonRun.operationId,includeVisualEvidence:true},localContext) as any;

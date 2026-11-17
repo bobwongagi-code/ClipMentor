@@ -6,13 +6,14 @@ import {loadOfflineStoredProject} from '../external-agent/offline-project-store'
 import {copyReviewSubject,copyTeachingPacketFromDoc,checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {storeAgentArtifact,agentRuntimeKey} from '../../src/persist/agentRuntimeStore';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
+import {agentSessionGenerationKey} from '../../shared/agent-session-generation';
 import {createHash,randomUUID} from 'node:crypto';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
 import {productionFeedbackAnchor} from './production-feedback';
 import type {ProjectDoc} from '../../src/editor/types';
 import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
-import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,type EntryPreconditions,type ProductionTask} from './production-task';
+import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,type ProductionTask} from './production-task';
 
 export type ProductionAudience='new_contact'|'existing_partner';
 
@@ -163,6 +164,25 @@ export async function publishedProductionParent(task:ProductionTask){
  return parent;
 }
 
+/** Bind a child control to the same parent publication and session at commit. */
+export async function productionParentControlGuards(task:ProductionTask):Promise<NonNullable<EntryPreconditions>>{
+ const approval=task.blueprintApproval;
+ if(!approval)return [];
+ const source=approval.sourceProjectId;
+ const parent=await publishedProductionParent(task);
+ const projects=new Set([source,...(parent?.productionChildren??(parent?.productionChild?[parent.productionChild]:[])).map(child=>child.projectId)]);
+ const keys=['projects'];
+ for(const project of projects)keys.push(agentSessionGenerationKey(project),agentRuntimeKey(project,await currentAgentSessionGeneration(project)));
+ const guards=await Promise.all(keys.map(async key=>{const entry=await getStoredEntry(key);return {key,digest:entry.found?digestValue(entry.value):null};}));
+ const verified=await publishedProductionParent(task);
+ if(digestValue([parent?.taskId,parent?.productionChildren,parent?.productionChild])!==digestValue([verified?.taskId,verified?.productionChildren,verified?.productionChild]))throw Error('production_outputs_binding_invalid');
+ for(const guard of guards){
+  const entry=await getStoredEntry(guard.key);
+  if((entry.found?digestValue(entry.value):null)!==guard.digest)throw Error('production_outputs_binding_invalid');
+ }
+ return guards;
+}
+
 /** Recover the narrow gap between persisting a confirmed batch and queueing its children. */
 async function queueConfirmedOutputs(parent:ProductionTask){
  const children=await readProductionOutputs(parent);
@@ -282,10 +302,11 @@ function savedSharedPreparation(task:ProductionTask):SharedPreparation|undefined
 }
 /** Merge only the shared marker into a current producer checkpoint. An acceptance
  * arriving during preparation must not be overwritten by an older task clone. */
-async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;revision:string},target:ProductionTask,endFrame:number,digest:string,check:()=>void){
+async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;revision:string},target:ProductionTask,endFrame:number,digest:string,check:()=>void,authority?:()=>Promise<NonNullable<EntryPreconditions>>){
  for(let attempt=0;attempt<3;attempt++){
   check();
-  const generation=await currentAgentSessionGeneration(first.projectId),key=agentRuntimeKey(first.projectId,generation);
+  await compactProductionCheckpoints(first);check();
+   const generation=await currentAgentSessionGeneration(first.projectId),key=agentRuntimeKey(first.projectId,generation);
   const runtime=await getStoredEntry(key),project=await getStoredEntry('project:'+first.projectId);
   const current=await productionTaskStore.load(first.projectId,first.taskId);check();
   const doc=project.found?runProjectMigrations(project.value)?.doc:null;
@@ -298,7 +319,8 @@ async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;re
    throw Error('shared_producer_binding_changed');
   }
   current.sharedProduction={projectId:target.projectId,taskId:target.taskId,prepared:true,endFrame,digest};
-  try{await saveProductionCheckpoint(productionTaskStore,current,[{key,digest:digestValue(runtime.value)},{key:'project:'+first.projectId,digest:digestValue(project.value)}]);check();return current;}
+  const guards=await authority?.()??[];check();
+   try{await saveProductionCheckpoint(productionTaskStore,current,[...guards,{key,digest:digestValue(runtime.value)},{key:'project:'+first.projectId,digest:digestValue(project.value)}]);check();return current;}
   catch(error){if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;}
  }
  throw Error('shared_producer_checkpoint_contended');
@@ -307,8 +329,16 @@ async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;re
 /** Returns false while the first output is unfinished; no model or media request is made. */
 export async function prepareSharedProduction(task:ProductionTask,signal?:AbortSignal){
  const check=()=>signal?.throwIfAborted();check();
+ const initialGuards=await productionParentControlGuards(task);check();
+ const sessions=initialGuards.filter(guard=>guard.key.startsWith('agent-session-generation:'));
+ const authority=async()=>{
+  const guards=await productionParentControlGuards(task);check();
+  if(sessions.some(session=>guards.find(guard=>guard.key===session.key)?.digest!==session.digest))throw Error('shared_preparation_session_changed');
+  return guards;
+ };
+ const save=async()=>{await compactProductionCheckpoints(task);const guards=await authority();check();await saveProductionCheckpoint(productionTaskStore,task,guards);check();};
  const upgraded=await upgradeContinuationBrief(task);check();
- if(upgraded)await saveProductionCheckpoint(productionTaskStore,task);check();
+ if(upgraded)await save();check();
  const shared=task.sharedProduction;if(!shared)return true;
  if(shared.prepared){const saved=await loadOfflineStoredProject(task.projectId);if(!saved)throw Error('shared_output_missing');assertSharedProduction(task,saved.doc);return true;}
  const first=await productionTaskStore.load(shared.projectId,shared.taskId);check();
@@ -338,9 +368,9 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
    const aligned=await alignUnstartedSharedBlueprint(source.doc,next.doc);check();prepared=await sharedProductionDocument(source.doc,aligned);
    const body=JSON.stringify({type:'clipmentor-shared-blueprint-rebase/v1',sourceProjectId:first.projectId,sourceTaskId:first.taskId,
     sourceRevision:source.revision,sourceSubject:current,previousRevision:next.revision,previousProject:next.doc});
-   check();if(!await storeAgentArtifact({version:1,artifactId:'p_'+randomUUID().replaceAll('-','').slice(0,18),projectId:task.projectId,runId:task.taskId,
+   const archiveGuards=await authority();check();if(!await storeAgentArtifact({version:1,artifactId:'p_'+randomUUID().replaceAll('-','').slice(0,18),projectId:task.projectId,runId:task.taskId,
     kind:'checkpoint-source',toolName:'clipmentor-shared-blueprint-rebase',body,bodySha256:createHash('sha256').update(body).digest('hex'),
-    originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false}))throw Error('shared_rebase_archive_failed');
+    originalBytes:Buffer.byteLength(body),originalChars:body.length,createdAt:Date.now(),redacted:false,binaryOmitted:false},archiveGuards))throw Error('shared_rebase_archive_failed');
    rebased=true;
   }
   check();
@@ -355,23 +385,28 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
   task.completed.blueprint.artifact.shared_preparation=proposal;
   // Save the exact intended bytes before the project commit. This is a local
   // continuation permit, never an independent review or a second timeline.
-  check();await saveProductionCheckpoint(productionTaskStore,task);check();
+  check();await save();check();
  }
- if(!committed)await withSerializedProjectStore(async store=>{
+ const commitGuards=await authority();check();
+  if(!committed)await withSerializedProjectStore(async store=>{
   check();const current=await store.readEntry('project:'+task.projectId),producer=await store.readEntry('project:'+first.projectId);check();
   const producerDoc=producer.found?runProjectMigrations(producer.value)?.doc:null,currentDoc=current.found?runProjectMigrations(current.value)?.doc:null;
   if(!producerDoc||digestValue(producerDoc)!==digestValue(source.doc))throw Error('shared_producer_changed_during_preparation');
   if(!currentDoc||digestValue(currentDoc)!==digestValue(next.doc))throw Error('shared_output_changed_during_preparation');
-  await store.writeEntry('project:'+task.projectId,prepared.doc);
+  for(const guard of commitGuards){
+    const entry=await store.readEntry(guard.key);
+    if((entry.found?digestValue(entry.value):null)!==guard.digest)throw Error('shared_preparation_authority_changed');
+   }
+   check();await store.writeEntry('project:'+task.projectId,prepared.doc);
  });
  check();
  const saved=await loadOfflineStoredProject(task.projectId);if(!saved||digestValue(saved.doc)!==proposal.prepared_digest)throw Error('shared_preparation_result_mismatch');check();
- const currentProducer=await markSharedProducer(first,source,task,prepared.endFrame,prepared.digest,check);check();
+ const currentProducer=await markSharedProducer(first,source,task,prepared.endFrame,prepared.digest,check,authority);check();
  task.projectRevision=saved.revision;task.sharedProduction={...shared,prepared:true,endFrame:prepared.endFrame,digest:prepared.digest};
  if(rebased)task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,sharedFromProject:first.projectId,
   sharedFromTask:first.taskId,sharedSourceRevision:source.revision,ownEndingPreserved:true,formalReviewRequired:true,shared_preparation:proposal}};
  task.input.budget.model=Math.min(task.input.budget.model,Math.max(0,currentProducer.input.budget.model-currentProducer.attempts.model));
  task.input.budget.tts=Math.min(task.input.budget.tts,Math.max(0,currentProducer.input.budget.tts-currentProducer.attempts.tts));
  if(task.input.budget.routine){task.input.budget.routine.model=Math.min(task.input.budget.routine.model,task.input.budget.model);task.input.budget.routine.tts=Math.min(task.input.budget.routine.tts,task.input.budget.tts);}
- await saveProductionCheckpoint(productionTaskStore,task);return true;
+ await save();return true;
 }

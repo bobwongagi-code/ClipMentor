@@ -37,6 +37,7 @@ export interface HeadlessOptions {
  voice?:{provider:string;voiceId:string};signal?:AbortSignal;
  finalFeedback?:Record<string,unknown>;
  assertCanvas?:(doc:ProjectDoc)=>void;
+ assertCurrent?:()=>Promise<void>;
  effect<T>(kind:'review'|'observation'|'tts'|'render'|'preview_review',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
  persistence?:OfflineEditPersistence;browserConnected?:(id:string)=>boolean;fetch?:typeof fetch;
 }
@@ -135,7 +136,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  }
  const validate=()=>withLease(renew);
  async function commitDraft(onWrite?:()=>void){return withLease(async()=>{
-  await renew();const doc=migrateProjectDoc(engine.getDoc());if(!doc)throw new Error('Invalid saved project');
+  await renew();await options.assertCurrent?.();active();const doc=migrateProjectDoc(engine.getDoc());if(!doc)throw new Error('Invalid saved project');
   if(revisionOf(doc)!==revision){options.assertCanvas?.(doc);assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);onWrite?.();const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
    if(result.status!=='applied'||!result.revision)throw new Error(`Project commit ${result.status}`);revision=result.revision;ownership=result.ownership??{...ownership,baseRevision:revision};
   }
@@ -162,7 +163,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  }
  const execute=(name:string,args:Record<string,unknown>,callId:string)=>exclusive(()=>executeOperation(name,args,callId));
  async function executeOperation(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>{
-  await validate();const before=engine.getDoc(),beforeRevision=revision;
+  await validate();await options.assertCurrent?.();active();const before=engine.getDoc(),beforeRevision=revision;
   if(args.projectId!==undefined&&args.projectId!==options.projectId)throw new Error('Tool project binding mismatch');
   try{
    const blocked=await clipMentorProductionBlock(name,args,ctx);if(blocked)return {...blocked,issues:before.clipMentorAnalysis?checkSourceBreakdown(before,true).issues:[]};

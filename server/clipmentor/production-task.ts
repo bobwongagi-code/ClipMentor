@@ -77,9 +77,12 @@ export async function saveProductionCheckpoint(store:TaskStore,task:ProductionTa
   throw error;
  }
 }
+export async function compactProductionCheckpoints(task:ProductionTask){
+ for(let batch=0;batch<64&&await compactProductionTaskHistory(task.projectId,task.taskId);batch++){ /* bounded, lossless compaction to the existing low-water mark */ }
+}
 export const productionTaskStore:TaskStore={
  async save(task,entryPreconditions){
-  for(let batch=0;batch<64&&await compactProductionTaskHistory(task.projectId,task.taskId);batch++){ /* bounded, lossless compaction to the existing low-water mark */ }
+  await compactProductionCheckpoints(task);
   task.updatedAt=Math.max(Date.now(),task.updatedAt+1);task.sequence++;
   const body=JSON.stringify({type:'clipmentor-production-task/v1',task});
   const ok=await storeAgentArtifact({version:1,artifactId:`p_${randomUUID().replaceAll('-','').slice(0,18)}`,projectId:task.projectId,runId:task.taskId,
@@ -307,6 +310,7 @@ export async function createProductionTask(input:ProductionInput,store?:TaskStor
 export interface StageContext {
  effect<T>(kind:EffectKind,key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
  signal:AbortSignal;
+ assertCurrent?():Promise<void>;
  remaining?(kind:EffectKind):number;
  hasEffect?(kind:EffectKind,key:string):boolean;
 }
@@ -333,7 +337,28 @@ export async function advanceProductionTask(task:ProductionTask,worker:StageWork
 async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,store:TaskStore,now:()=>number,abort:AbortController){
  if(['completed','cancelled'].includes(task.status)
   ||['awaiting_blueprint','awaiting_review'].includes(task.status)&&!abort.signal.aborted)return task;
- const save=()=>saveProductionCheckpoint(store,task);
+ const published=async()=>{
+  if(task.blueprintApproval&&task.input.panelDelivery?.audience){
+   const {publishedProductionParent}=await import('./production-continuation');
+   await publishedProductionParent(task);
+  }
+ };
+ let safeCheckpoint=structuredClone(task);
+ const restoreSafe=()=>{for(const key of Object.keys(task))delete (task as unknown as Record<string,unknown>)[key];Object.assign(task,structuredClone(safeCheckpoint));};
+ const save=async()=>{await saveProductionCheckpoint(store,task);safeCheckpoint=structuredClone(task);};
+ const publishStage=async()=>{
+  try{
+   const {productionParentControlGuards}=await import('./production-continuation');
+   if(store===productionTaskStore)await compactProductionCheckpoints(task);
+   const guards=task.blueprintApproval&&task.input.panelDelivery?.audience?await productionParentControlGuards(task):undefined;
+   check();await saveProductionCheckpoint(store,task,guards);safeCheckpoint=structuredClone(task);
+  }
+  catch(error){
+   const saved=await store.load(task.projectId,task.taskId).catch(()=>undefined);
+   if(saved)safeCheckpoint=structuredClone(saved);
+   restoreSafe();throw error;
+  }
+ };
  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
  const timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-now()));
  const check=()=>{abort.signal.throwIfAborted();if(now()>=deadline)throw new Error('Production deadline exceeded');};
@@ -352,9 +377,9 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
  const remaining=(kind:EffectKind)=>Math.max(0,(task.input.budget[budgetKind(kind)]??0)-(task.attempts[budgetKind(kind)]??0));
  const effectKey=(name:string)=>`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:${name}`;
  const activeEffects=new Set<string>();
- const ctx:StageContext={signal:abort.signal,remaining,
+ const ctx:StageContext={signal:abort.signal,remaining,assertCurrent:async()=>{check();await published();check();},
  hasEffect:(kind,name)=>task.effects[effectKey(name)]?.kind===budgetKind(kind),async effect<T>(kind:EffectKind,name:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>){
-  check();const id=effectKey(name);
+  check();await published();check();const id=effectKey(name);
   const old=task.effects[id];
   if(old&&old.kind!==budgetKind(kind))throw Error('production_effect_kind_mismatch');
   if(activeEffects.has(id))throw Error('production_effect_in_progress');
@@ -365,7 +390,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
    check();
   }
-  if(decision.action==='reuse')return structuredClone(old!.result) as T;
+  if(decision.action==='reuse'){await published();check();return structuredClone(old!.result) as T;}
   const settle=async(effect:ProductionTask['effects'][string],result:T)=>{
    const unsubmitted=confirmedUnsubmittedGateway(kind,result,effect.operationId,task.projectId);
    task.effects[id]={...effect,status:'completed',result:structuredClone(result),...(unsubmitted?{transportUnsubmitted:true as const}:{})};
@@ -384,7 +409,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   const effect={kind:counter,operationId:/^[a-f0-9-]{36}$/.test(name)?name:randomUUID(),status:'reserved' as const};task.effects[id]=effect;task.attempts[counter]=(task.attempts[counter]??0)+1;await save();
   await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,operationId:effect.operationId});
   let result:T;
-  try{check();result=await work(effect.operationId);check();}
+  try{check();await published();check();result=await work(effect.operationId);check();}
   catch(error){task.effects[id]={...effect,status:'failed',error:String(error).slice(0,1200)};await save();throw error;}
   return await settle(effect,result);
   }finally{activeEffects.delete(id);}
@@ -392,9 +417,9 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
  try{
   check();task.status='running';delete task.error;await save();
   for(let index=PRODUCTION_STAGES.indexOf(task.stage);index<PRODUCTION_STAGES.length;){
-   check();task.stage=PRODUCTION_STAGES[index]!;
+   check();await published();check();task.stage=PRODUCTION_STAGES[index]!;
    if(task.completed[task.stage]){index++;continue;}
-   const result=await worker(task,ctx);check();
+   const result=await worker(task,ctx);check();await published();check();
    if(typeof result.artifact?.revision==='string')task.projectRevision=result.artifact.revision;
    if(result.repair){
     task.repairContext=productionRepairContext(task.repairContext,result.artifact);
@@ -413,7 +438,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
     }
     task.repairs++;task.stage=result.repair;index=PRODUCTION_STAGES.indexOf(result.repair);
     for(const stage of PRODUCTION_STAGES.slice(index))delete task.completed[stage];
-    await save();continue;
+    await publishStage();continue;
    }
    if(!result.artifact||Object.keys(result.artifact).length===0)throw new Error('Stage has no verified artifact');
    task.completed[task.stage]={at:now(),artifact:result.artifact};
@@ -429,12 +454,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
     }
     if(!task.blueprintApproval||task.blueprintApproval.digest!==result.artifact.blueprint_digest
       ||typeof task.blueprintApproval.requirementsDigest!=='string'||task.blueprintApproval.requirementsDigest!==result.artifact.requirementsDigest){
-     task.status='awaiting_blueprint';await save();break;
+     task.status='awaiting_blueprint';await publishStage();break;
     }
    }
-   await save();index++;
+   await publishStage();index++;
   }
-  if(task.status==='running'){task.status='awaiting_review';await save();}
+  if(task.status==='running'){task.status='awaiting_review';await publishStage();}
   if(abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user'))abort.signal.throwIfAborted();
  }catch(error){task.status=abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user')?'cancelled':'blocked';task.error=String(error).slice(0,1600);try{await save();}catch(persistenceError){task.error=`${task.error}; checkpoint_write_failed: ${String(persistenceError).slice(0,500)}; last persisted checkpoint is authoritative, do not resubmit unknown effects`;}}
  finally{clearTimeout(timer);}
@@ -475,7 +500,12 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
    if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs){await stop('cancelled_or_expired');return advance();}
    if(task.error?.includes('checkpoint_write_failed:')){await stop('checkpoint_unpersisted');return task;}
    const previousStage=task.stage,previousEpoch=task.repairs;
-   try{await reconcile(task);}catch(error){
+   try{
+     if(task.blueprintApproval&&task.input.panelDelivery?.audience){
+      const {publishedProductionParent}=await import('./production-continuation');await publishedProductionParent(task);
+     }
+     await reconcile(task);
+    }catch(error){
     if(controller.signal.aborted)return advance();
     task.error=`${task.error??'Production blocked'}; recovery: ${String(error).slice(0,500)}`.slice(0,1600);
     await saveProductionCheckpoint(store,task);
@@ -531,18 +561,21 @@ export async function savePendingBlueprintFeedback(task:ProductionTask,revision:
  * concurrently published immutable shared-body marker. Never overwrite another
  * worker's effects, counters, feedback or acceptance with an old control clone. */
 export async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc){
+ const {productionParentControlGuards}=await import('./production-continuation');
+ const bindParent=!!base.input.panelDelivery?.audience&&next.status!=='cancelled';
+ let parentGuards=bindParent?await productionParentControlGuards(base):[];
  const subject=(task:ProductionTask)=>{const {updatedAt:_at,sequence:_sequence,sharedProduction:_shared,...rest}=task;return digestValue(rest);};
  let contention:unknown=new Error('agent_runtime_precondition_changed');
  for(let attempt=0;attempt<3;attempt++){
   const key=agentRuntimeKey(base.projectId,await currentAgentSessionGeneration(base.projectId)),entry=await getStoredEntry(key);
-  if(!entry.found){await saveProductionCheckpoint(store,next,guards);return;}
+  if(!entry.found){await saveProductionCheckpoint(store,next,[...(guards??[]),...parentGuards]);return;}
   const current=await productionTaskStore.load(base.projectId,base.taskId);
   if(subject(current)!==subject(base))throw Error('production_control_subject_changed');
   const a=base.sharedProduction,b=current.sharedProduction;
   if(a&&b&&(a.projectId!==b.projectId||a.taskId!==b.taskId||a.prepared&&b.prepared&&(a.endFrame!==b.endFrame||a.digest!==b.digest)))throw Error('shared_producer_binding_changed');
   const marker=b?.prepared?b:a?.prepared?a:b??a;
   if(marker)next.sharedProduction=structuredClone(marker);
-  const conditions=[...(guards??[]),{key,digest:digestValue(entry.value)}];
+  const conditions=[...(guards??[]),...parentGuards,{key,digest:digestValue(entry.value)}];
   if(expectedDoc){
    const project=await getStoredEntry('project:'+base.projectId),doc=project.found?runProjectMigrations(project.value)?.doc:null;
    if(!doc||feedbackProjectDigest(doc)!==feedbackProjectDigest(expectedDoc))throw Error('feedback_project_changed');
@@ -554,13 +587,17 @@ export async function saveProductionControl(base:ProductionTask,next:ProductionT
    if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;
    // Only a runtime checkpoint contest can be merged. Changed project or
    // requirements guards still reject the original control immediately.
-   for(const guard of conditions.filter(guard=>guard.key!==key)){
+   for(const guard of conditions.filter(guard=>guard.key!==key&&!parentGuards.some(parent=>parent.key===guard.key))){
     const current=await getStoredEntry(guard.key);
     if((current.found?digestValue(current.value):null)!==guard.digest){
      const doc=expectedDoc&&guard.key==='project:'+base.projectId&&current.found?runProjectMigrations(current.value)?.doc:null;
      if(!doc||feedbackProjectDigest(doc)!==feedbackProjectDigest(expectedDoc!))throw error;
     }
    }
+   const refreshed=bindParent?await productionParentControlGuards(base):[];
+   const sessions=parentGuards.filter(guard=>guard.key.startsWith('agent-session-generation:'));
+   if(sessions.some(session=>refreshed.find(guard=>guard.key===session.key)?.digest!==session.digest))throw error;
+   parentGuards=refreshed;
    contention=error;
   }
  }

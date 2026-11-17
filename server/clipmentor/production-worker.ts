@@ -320,7 +320,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
  const editor=await openHeadlessEditor({projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
   ...(task.input.panelDelivery?{assertCanvas:(next:ProjectDoc)=>{assertProductionCanvas(next);if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);}}:{}),
-  effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
+  assertCurrent:stage.assertCurrent,effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
  const openedRevision=editor.revision;
  editor.context.getAgentRunSignal=()=>stage.signal;
  const executeWithRecovery=(name:string,args:Record<string,unknown>,id:string)=>{
