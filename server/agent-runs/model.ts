@@ -16,7 +16,7 @@ import {
   type OpenAiApiMode,
 } from '../../shared/llm-providers';
 
-function proxyOptions(provider: LlmProvider, origin: string): {
+function proxyOptions(provider: LlmProvider, origin: string, preparationIdentity?:string): {
   baseURL: string;
   apiKey: string;
   headers: Record<string, string>;
@@ -28,6 +28,7 @@ function proxyOptions(provider: LlmProvider, origin: string): {
       'x-openchatcut-provider': provider,
       origin,
       'sec-fetch-site': 'same-origin',
+      ...(preparationIdentity?{'x-openchatcut-preparation-identity':preparationIdentity}:{}),
     },
   };
 }
@@ -35,8 +36,9 @@ function proxyOptions(provider: LlmProvider, origin: string): {
 function providerFactory(
   provider: LlmProvider,
   origin: string,
+  preparationIdentity?:string,
 ): (modelId: string) => LanguageModel {
-  const options = proxyOptions(provider, origin);
+  const options = proxyOptions(provider, origin, preparationIdentity);
   switch (provider) {
     case 'anthropic': return createAnthropic(options);
     case 'gemini': return createGoogleGenerativeAI(options);
@@ -55,12 +57,13 @@ export function createServerLanguageModel(
   modelId: string,
   apiMode: OpenAiApiMode,
   origin: string,
+  preparationIdentity?:string,
 ): LanguageModel {
   if (protocolForProvider(provider) === 'openai') {
-    const openai = createOpenAI(proxyOptions(provider, origin));
+    const openai = createOpenAI(proxyOptions(provider, origin, preparationIdentity));
     return apiMode === 'chat' ? openai.chat(modelId) : openai.responses(modelId);
   }
-  return providerFactory(provider, origin)(modelId);
+  return providerFactory(provider, origin, preparationIdentity)(modelId);
 }
 
 export function serverProviderOptions(

@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import {createHash} from 'node:crypto';
 import type { Plugin } from 'vite';
 import { getKey, type KeyName } from '../keystore.ts';
 import {
@@ -62,17 +63,34 @@ export function llmErrorMessage(status: number, req?: IncomingMessage): string {
   return `${label} 请求失败（HTTP ${status}）。请检查“设置 → Agent 模型”中的连接配置。`;
 }
 
+export function llmPreparationIdentity(provider:LlmProvider,origin:string){
+  const config=resolveLlmProviderConfig(provider,keyReader);
+  const account=config.provider==='xai-oauth'?xaiOauthAccessToken():config.apiKey;
+  return createHash('sha256').update(JSON.stringify({version:1,origin,provider:config.provider,baseUrl:config.baseUrl,account:createHash('sha256').update(account??'').digest('hex')})).digest('hex');
+}
+
 /** One dynamic proxy implementation shared by Vite dev and Electron production. */
 export function llmProxyPlugin(): Plugin {
   return {
     name: 'openchatcut-llm-proxy',
     configureServer(server) {
-      server.middlewares.use('/llm', proxyMiddleware({
+      const proxy=proxyMiddleware({
         target: llmTarget,
         headers: llmHeaders,
         forceJsonContentType: true,
         errorMessage: llmErrorMessage,
-      }));
+      });
+      server.middlewares.use('/llm',(req,res)=>{
+        const expected=req.headers['x-openchatcut-preparation-identity'];
+        if(expected!==undefined){
+          const origin=typeof req.headers.origin==='string'?req.headers.origin:'';
+          if(typeof expected!=='string'||expected!==llmPreparationIdentity(llmProviderForRequest(req),origin)){
+            req.resume();res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Review preparation configuration changed'}));return;
+          }
+          delete req.headers['x-openchatcut-preparation-identity'];
+        }
+        proxy(req,res,()=>{});
+      });
     },
   };
 }

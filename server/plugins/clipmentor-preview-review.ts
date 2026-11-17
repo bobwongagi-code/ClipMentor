@@ -3,7 +3,7 @@ import { getKey } from '../keystore';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createHash } from 'node:crypto';
-import { open, readFile, mkdir, stat } from 'node:fs/promises';
+import { open, readFile, mkdir, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -38,6 +38,7 @@ const cli = fileURLToPath(new URL('../clipmentor/preview-review-cli.mts', import
 const loader = fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url));
 
 export interface PreviewBridgeDependencies {
+  preparationIdentity?():string;
   directory: string;
   resolve: (name: string) => string | null;
   run: (args: string[], signal?: AbortSignal) => Promise<void>;
@@ -45,16 +46,16 @@ export interface PreviewBridgeDependencies {
   visualEvidenceIO?:VisualEvidenceIO;
 }
 function dependencies(): PreviewBridgeDependencies {
-  return { directory: join(runtimeProfile().rootDir, 'clipmentor-preview-reviews'), resolve: resolveUploadFile,
+  const environment=()=>Object.fromEntries((['ROOTIFY_GATEWAY_API_KEY','CLIPMENTOR_VIDEO_TRANSPORT','CLIPMENTOR_R2_ACCOUNT_ID','CLIPMENTOR_R2_BUCKET','CLIPMENTOR_R2_API_TOKEN','PROXY_URL','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_BUCKET','R2_ENABLED'] as const).map(name=>[name,getKey(name)]));
+  return {preparationIdentity:()=>digest(environment()), directory: join(runtimeProfile().rootDir, 'clipmentor-preview-reviews'), resolve: resolveUploadFile,
     async visualCriteria(projectId){return boundVisualCriteria(await productionReviewRequirements(projectId));},
     visualEvidenceIO:{hash:sha256File,async frame(file,seconds,output,signal){
       await extractOneFrame(file,sourceFrameSeekMs(seconds*1000),output,false,undefined,signal);
       return (await readFile(output)).toString('base64');
     }},
-    run: async (args, signal) => { await execute(process.execPath, ['--import', loader, cli, ...args],
+    run: async (args, signal) => { const frozen=environment();await execute(process.execPath, ['--import', loader, cli, ...args],
       { signal, timeout: 660_000, maxBuffer: 64 * 1024, windowsHide: true,
-        env:{...process.env,...Object.fromEntries((['ROOTIFY_GATEWAY_API_KEY','CLIPMENTOR_VIDEO_TRANSPORT','CLIPMENTOR_R2_ACCOUNT_ID','CLIPMENTOR_R2_BUCKET','CLIPMENTOR_R2_API_TOKEN','PROXY_URL','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_BUCKET','R2_ENABLED'] as const)
-          .map(name=>[name,getKey(name)]))} }); } };
+        env:{...process.env,...frozen} }); } };
 }
 
 /** Reads honor references and configured roots; new files go to the writable root only. */
@@ -244,7 +245,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   const fingerprint = digest({ src: body.src, videoSha256: body.videoSha256, input,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) });
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const bound={projectId:body.projectId,operationId:body.operationId,src:body.src,launchProtocol:1,
+  const preparationIdentity=deps.preparationIdentity?.();
+  const bound={...(preparationIdentity?{preparationIdentity}:{}),projectId:body.projectId,operationId:body.operationId,src:body.src,launchProtocol:1,
     fingerprint, videoSha256: body.videoSha256, inputSha256: prepared.input_sha256,...(criteria?{visualCriteriaDigest:criteria.digest}:{}),
     ...(manifestHash === undefined ? {} : { executionManifestSha256: manifestHash }) };
   const prior=await readFile(bindingFile,'utf8').then(JSON.parse,error=>{
@@ -265,16 +267,19 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     if(body.action==='resume_preparation')throw Error('Original preview preparation unavailable; no submission');
     await publishExactPreviewFile(bindingFile,JSON.stringify(bound));
   }
+  if(prior&&prior.preparationIdentity!==preparationIdentity)throw Error('Preview preparation configuration changed');
   const inputFile = join(directory, 'input.json');
   await publishExactPreviewFile(inputFile,JSON.stringify(input));
   if(manifestHash!==undefined)await publishExactPreviewFile(manifestFile,JSON.stringify(body.executionManifest));
   signal?.throwIfAborted();
+  if(deps.preparationIdentity?.()!==preparationIdentity)throw Error('Preview preparation configuration changed');
+  let claimedHere=false;
   let releaseResume:(()=>void)|undefined;
   if(resumeChild){
     releaseResume=tryLocalOperationLock(join(directory,'resume-launch'));
     if(!releaseResume)return {...await read(),cached:true};
   }else try{
-    const claim=await open(launchClaim,'wx',0o600);
+    const claim=await open(launchClaim,'wx',0o600);claimedHere=true;
     try{await claim.sync();}finally{await claim.close();}
     await syncDirectory(directory);
   }catch(error){
@@ -289,6 +294,10 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       releaseChild();
     }
     signal?.throwIfAborted();
+    if(deps.preparationIdentity?.()!==preparationIdentity){
+      if(claimedHere){await rm(launchClaim);await syncDirectory(directory);}
+      return {...await read(),requestsAttempted:0,requestsSent:0,requestOutcome:'not_submitted',error:'Preview preparation configuration changed; original preparation retained'};
+    }
     await deps.run(['--video',video,'--expected-video-sha256',body.videoSha256 as string,'--input',inputFile,'--out',output,'--operation',body.operationId], signal);
   }
   catch {
