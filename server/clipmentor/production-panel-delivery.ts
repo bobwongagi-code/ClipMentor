@@ -5,7 +5,7 @@ import type {MediaAsset,ProjectDoc} from '../../src/editor/types';
 import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
 import {resolveUploadFile,uploadDir} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
-import {creatorStoryboard} from './creator-storyboard';
+import {creatorStoryboard,verifyCreatorStoryboardEvidence} from './creator-storyboard';
 import {loadCreatorStoryboardDocument,creatorDocumentHash,creatorDocumentFromSourceAsset,isCreatorDocumentIssue,type CreatorStoryboardDocument} from './creator-storyboard-document';
 import type {ProductionTask} from './production-task';
 import type {AnalysisEvidence} from '../../src/clipmentor/analysis';
@@ -47,7 +47,7 @@ export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):P
  const registered=doc.assets.find(a=>storyboardSourceMatches(doc,a,times)&&a.props?.clipmentorCreatorDocumentHash===contentHash);
  if(registered){
   const file=resolveUploadFile(`${registered.id}.jpg`);
-  if(file&&await sha256File(file).catch(()=>null)===registered.sourceContentHash){signal.throwIfAborted();return;}
+  if(file&&await sha256File(file).catch(()=>null)===registered.sourceContentHash){const verified=await verifyCreatorStoryboardEvidence(doc,signal);if(creatorDocumentHash(verified.document)!==contentHash)throw Error('storyboard_document_evidence_changed');signal.throwIfAborted();return;}
  }
  const asset=doc.assets.find(a=>a.id===source.asset_id);
  const file=asset?.kind==='video'&&resolveUploadFile(asset.src.replace(/^\/media\/uploads\//,''));

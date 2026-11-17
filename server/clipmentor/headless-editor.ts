@@ -83,6 +83,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     if(receipt.operationId!==operationId||(isAsr?receipt.source_hash!==body.expectedSourceHash:receipt.projectId!==body.projectId))
      throw new Error('Original receipt binding mismatch');
     if(resumePreparation&&receipt.requestsAttempted===0&&(isAsr?receipt.state==='pending_or_unknown':receipt.status==='preparing')){
+     await options.assertCurrent?.();options.signal?.throwIfAborted();
      const resumed=await local(path,{...init,body:JSON.stringify({...body,action:'resume_preparation'})});
      const data=await resumed.json();
      const previewFailure=!isAsr&&!isSource&&data?.status==='failed'&&data.operationId===operationId&&data.projectId===body.projectId;

@@ -24,9 +24,7 @@ export function creatorStoryboardSource(doc:ProjectDoc){
  return {title:a.product.name,source:s};
 }
 
-const running=new Map<string,Promise<{bytes:Buffer;preview:Buffer;pages:number}>>();
-/** Content-addressed reuse; callers still recheck actual source bytes before using cached output. */
-export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
+export async function verifyCreatorStoryboardEvidence(doc:ProjectDoc,signal?:AbortSignal){
  signal?.throwIfAborted();
  const model=creatorStoryboardSource(doc),asset=doc.assets.find(a=>a.id===model.source.asset_id);
  const document=await loadCreatorStoryboardDocument(doc);
@@ -57,6 +55,16 @@ export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
  const file=asset?.kind==='video'&&isSafeUploadName(name)?resolveUploadFile(name):null;
  if(!file||asset?.sourceContentHash!==model.source.sourceContentHash||await sha256File(file)!==model.source.sourceContentHash)
   throw Error('storyboard_original_source_changed');
+ signal?.throwIfAborted();
+ return {model,document,file};
+}
+
+const running=new Map<string,Promise<{bytes:Buffer;preview:Buffer;pages:number}>>();
+/** Content-addressed reuse; callers still recheck actual source bytes before using cached output. */
+export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
+ signal?.throwIfAborted();
+ const {model,document,file}=await verifyCreatorStoryboardEvidence(doc,signal);
+ const binding=JSON.stringify({model,document});
  const logo=resolveProductAsset('clipmentor/rootify-logo.png');
  if(!logo)throw Error('storyboard_logo_unavailable');
  const logoBytes=await readFile(logo),key=hash(JSON.stringify({version:2,model,document,logo:hash(logoBytes)}));
@@ -88,11 +96,13 @@ export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
   void job.catch(()=>{if(running.get(key)===job)running.delete(key);});
   if(running.size>8)running.delete(running.keys().next().value!);
  }
- if(!signal)return job;
- return new Promise<Awaited<typeof job>>((resolve,reject)=>{
+ const result=!signal?await job:await new Promise<Awaited<typeof job>>((resolve,reject)=>{
   const abort=()=>{signal.removeEventListener('abort',abort);reject(signal.reason);};
   signal.addEventListener('abort',abort,{once:true});
   job.then(v=>{signal.removeEventListener('abort',abort);resolve(v);},e=>{signal.removeEventListener('abort',abort);reject(e);});
   if(signal.aborted)abort();
  });
+ const verified=await verifyCreatorStoryboardEvidence(doc,signal);
+ if(JSON.stringify({model:verified.model,document:verified.document})!==binding)throw Error('storyboard_original_excerpt_changed');
+ return result;
 }
