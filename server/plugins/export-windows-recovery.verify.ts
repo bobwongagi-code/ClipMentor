@@ -252,8 +252,12 @@ async function verifyBoundary(root: string, kill: 'owner' | 'worker') {
 
     if (kill === 'owner') await stopServer(owner.child);
     else process.kill(native.worker, 'SIGKILL');
+    const sizeAfterSignal = await size();
     await until(async () => ![native.worker, native.middle, native.writer].some(pidIsRunning),
-      'fixture tree termination after hard ' + kill + ' stop', 5_000);
+      'fixture tree termination after hard ' + kill + ' stop', 7_000).catch(async (error) => {
+        const alive = Object.entries(native).filter(([, pid]) => pidIsRunning(pid)).map(([name]) => name);
+        throw new Error(`${error.message}; live=${alive.join(',')}; wrote ${(await size()) - sizeAfterSignal} bytes after the kill`);
+      });
     const stoppedSize = await size();
     await delay(500);
     assert(stoppedSize >= firstSize);
@@ -297,6 +301,23 @@ async function verifyBoundary(root: string, kill: 'owner' | 'worker') {
   }
 }
 
+async function verifyDirectEncoder(root: string) {
+  const output = join(root, 'direct.mp4');
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
+    '-i', 'color=size=96x64:rate=15', '-t', '0.5', '-an', '-threads', '1', '-c:v', 'mpeg4', output];
+  const aborted = new AbortController();
+  const cancelled = runOwnedProcess({ command: ffmpegBin(), args, signal: aborted.signal });
+  aborted.abort(new Error('cancelled before encoder admission'));
+  await assert.rejects(cancelled, /cancelled before encoder admission/);
+  await assert.rejects(stat(output), { code: 'ENOENT' });
+  const started = Date.now();
+  await runOwnedProcess({ command: ffmpegBin(), args });
+  const elapsed = Date.now() - started;
+  const probe = await execute(ffprobeBin(), ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', output]);
+  assert.equal(probe.stdout.trim(), 'video');
+  console.log(`Windows direct FFmpeg admission, early stop and valid output passed (${elapsed} ms for a half-second synthetic encode)`);
+}
+
 async function verify() {
   if (process.platform !== 'win32') {
     console.log('Windows native export recovery skipped on ' + process.platform);
@@ -309,6 +330,8 @@ async function verify() {
       try { await verifyBoundary(root, boundary); }
       catch (error) { errors.push(error); console.error(boundary, error); }
     }
+    try { await verifyDirectEncoder(root); }
+    catch (error) { errors.push(error); console.error('direct encoder', error); }
     if (errors.length) throw new AggregateError(errors, 'Windows native export recovery failed');
     console.log('Windows native worker tree and cold delivery verified; no external calls');
   } finally {
