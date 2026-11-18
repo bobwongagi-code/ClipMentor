@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 function vector(seed: number): number[] {
   // Unit vector biased toward `seed`: cosine/L2 ranking is deterministic.
@@ -34,7 +35,17 @@ async function main(): Promise<void> {
       upsertSemanticVectors,
     } = await import('./semantic-vectors.ts');
 
-    assert.equal(semanticVectorsAvailable(), true, 'the extension must load on this platform');
+    const exec = DatabaseSync.prototype.exec;
+    try {
+      DatabaseSync.prototype.exec = function (sql) {
+        if (sql === 'BEGIN IMMEDIATE') throw new Error('synthetic busy relocation fence');
+        return exec.call(this, sql);
+      };
+      assert.equal(semanticVectorsAvailable(), false, 'the write fence prevents initial vector setup');
+    } finally {
+      DatabaseSync.prototype.exec = exec;
+    }
+    assert.equal(semanticVectorsAvailable(), true, 'vector setup recovers after the write fence is released');
 
     // ── upsert two assets, one with multiple samples ──
     upsertSemanticVectors('project-a', 'asset-1', [

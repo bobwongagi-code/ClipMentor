@@ -9,8 +9,10 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation.ts';
 import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
-import { assertDataDirRelocationReady, assertLegacyProjectBulkComplete } from '../data-dir.ts';
-import { sqliteProjectStorePath } from '../project-store-paths.ts';
+import {
+  assertDataDirRelocationReady, assertLegacyProjectBulkComplete, canOpenDataDirSqlite, recoverDataDirSqlitePublication,
+} from '../data-dir.ts';
+import { sqliteProjectStorePath, SQLITE_STORE_ENV } from '../project-store-paths.ts';
 import { recoverLegacyProjectEdit } from '../plugins/project-store-edit-journal.ts';
 import { withProjectStoreProcessLock } from '../plugins/project-store-process-lock.ts';
 import {
@@ -29,7 +31,7 @@ export interface StoredEntryValue {
   value?: unknown;
 }
 
-export const SQLITE_STORE_ENV = 'OPENCHATCUT_SQLITE_STORE';
+export { SQLITE_STORE_ENV };
 
 export type SQLiteMigrationPhase = 'legacy' | 'migrating' | 'complete' | 'failed';
 
@@ -69,6 +71,9 @@ export function storePath(): string {
 }
 
 function openDatabase(): DatabaseSync {
+  const profile = runtimeProfile();
+  assertCurrentStorageProfile(profile);
+  if (!canOpenDataDirSqlite(profile.rootDir)) throw new Error('the data directory relocation is incomplete');
   if (database) return database;
   const path = storePath();
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -91,6 +96,7 @@ function openDatabase(): DatabaseSync {
 }
 
 function authoritativeReceipt(): ImportReceipt | null {
+  if (!canOpenDataDirSqlite(runtimeProfile().rootDir)) return null;
   if (!existsSync(storePath())) return null;
   try {
     return readAuthoritativeImportReceipt(openDatabase());
@@ -186,6 +192,11 @@ export function runStorageMigration(): Promise<ImportSummary> {
  */
 export function initializeSqliteProjectStore(): Promise<SQLiteMigrationStatus> {
   return withMigrationLease(async () => {
+    if (!canOpenDataDirSqlite(runtimeProfile().rootDir)) {
+      try { await recoverDataDirSqlitePublication(runtimeProfile().rootDir); }
+      catch { return sqliteMigrationStatus(); }
+    }
+    if (!canOpenDataDirSqlite(runtimeProfile().rootDir)) return sqliteMigrationStatus();
     const env = process.env[SQLITE_STORE_ENV];
     if (env !== undefined && env !== '1') {
       processPhase = 'legacy';
@@ -265,6 +276,12 @@ export function cleanupLegacyJson(): CleanupResult {
 
 /** Migration status for the UI. Receipt/state comes from SQLite, not sidecar. */
 export function sqliteMigrationStatus(): SQLiteMigrationStatus {
+  if (!canOpenDataDirSqlite(runtimeProfile().rootDir)) {
+    return {
+      enabled: false, phase: 'failed', receipt: null, jsonKeyCount: 0, sqliteKeyCount: 0,
+      error: 'the data directory relocation is incomplete',
+    };
+  }
   const receipt = authoritativeReceipt();
   const dir = runtimeProfile().projectStore.directory;
   let jsonKeyCount = 0;
@@ -336,13 +353,21 @@ function immediateStore(db: DatabaseSync): SQLiteImmediateStore {
 /** Execute a synchronous read/validate/write state transition under SQLite's writer lock. */
 export function sqliteImmediateTransaction<T>(work: (store: SQLiteImmediateStore) => T): T {
   const db = openDatabase();
+  return sqliteProfileWrite(db, () => work(immediateStore(db)));
+}
+
+/** Recheck directory authority after a writer has stopped waiting for SQLite. */
+export function sqliteProfileWrite<T>(db: DatabaseSync, work: () => T): T {
   db.exec('BEGIN IMMEDIATE');
   try {
-    const result = work(immediateStore(db));
+    const profile = runtimeProfile();
+    assertCurrentStorageProfile(profile);
+    if (!canOpenDataDirSqlite(profile.rootDir)) throw new Error('the data directory relocation is incomplete');
+    const result = work();
     db.exec('COMMIT');
     return result;
   } catch (error) {
-    db.exec('ROLLBACK');
+    if (db.isTransaction) db.exec('ROLLBACK');
     throw error;
   }
 }

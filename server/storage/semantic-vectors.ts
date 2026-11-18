@@ -9,7 +9,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { load as sqliteVecLoad } from 'sqlite-vec';
 import { SEMANTIC_INFERENCE_CONTRACT } from '../../shared/vector-inference-contract.ts';
-import { sqliteStoreEnabled, storePath } from './sqlite-store.ts';
+import { sqliteProfileWrite, sqliteStoreEnabled, storePath } from './sqlite-store.ts';
 
 const VEC_TABLE = 'semantic_vectors';
 const VEC_DIMENSION = SEMANTIC_INFERENCE_CONTRACT.embeddingDimension;
@@ -49,23 +49,29 @@ export function semanticVectorsAvailable(): boolean {
 }
 
 function openConnection(): DatabaseSync | null {
-  if (connection) return connection;
   if (extensionFailed || !sqliteStoreEnabled()) return null;
+  if (connection) return connection;
+  let db: DatabaseSync | undefined;
   try {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const db = new DatabaseSync(path, { allowExtension: true });
+    db = new DatabaseSync(path, { allowExtension: true });
     db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
-    sqliteVecLoad(db);
-    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${VEC_TABLE} USING vec0(
+    try { sqliteVecLoad(db); }
+    catch (error) {
+      extensionFailed = true;
+      throw error;
+    }
+    const candidate = db;
+    sqliteProfileWrite(candidate, () => candidate.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${VEC_TABLE} USING vec0(
       embedding float[${VEC_DIMENSION}], scope_id text, asset_id text, sample_time float,
       source_revision text, scene_id text, scene_start float, scene_end float, model_version text
-    )`);
-    connection = db;
-    return db;
+    )`));
+    connection = candidate;
+    return candidate;
   } catch {
-    // Extension missing / unsupported platform → degrade to browser-side index.
-    extensionFailed = true;
+    db?.close();
+    // A busy snapshot fence is transient. Retry on the next request.
     return null;
   }
 }
@@ -110,8 +116,7 @@ export function upsertSemanticVectors(
   const insert = db.prepare(`INSERT INTO ${VEC_TABLE}
     (embedding, scope_id, asset_id, sample_time, source_revision, scene_id, scene_start, scene_end, model_version)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  db.exec('BEGIN');
-  try {
+  sqliteProfileWrite(db, () => {
     db.prepare(`DELETE FROM ${VEC_TABLE} WHERE scope_id = ? AND asset_id = ?`).run(scopeId, assetId);
     for (const sample of samples) {
       // vec0 metadata columns do not accept NULL: use explicit defaults.
@@ -127,11 +132,7 @@ export function upsertSemanticVectors(
         MODEL_VERSION,
       );
     }
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
   return { inserted: samples.length };
 }
 
@@ -175,37 +176,40 @@ export function pruneSemanticVectors(
 ): PruneSemanticResult {
   if (!validAssetId(scopeId)) throw new Error('invalid semantic vector scope id');
   const db = requireConnection();
-  const rows = db.prepare(`SELECT rowid, asset_id, source_revision, model_version
-    FROM ${VEC_TABLE} WHERE scope_id = ?`).all(scopeId) as Array<{
-      rowid: number;
-      asset_id: string;
-      source_revision: string | null;
-      model_version: string;
-    }>;
-  const valid = new Set(validAssetIds);
-  let staleModelRemoved = false;
-  let staleSourceRemoved = false;
-  const remove = db.prepare(`DELETE FROM ${VEC_TABLE} WHERE rowid = ?`);
-  for (const row of rows) {
-    if (row.model_version !== MODEL_VERSION) {
-      staleModelRemoved = true;
-      remove.run(row.rowid);
-      continue;
+  return sqliteProfileWrite(db, () => {
+    const rows = db.prepare(`SELECT rowid, asset_id, source_revision, model_version
+      FROM ${VEC_TABLE} WHERE scope_id = ?`).all(scopeId) as Array<{
+        rowid: number;
+        asset_id: string;
+        source_revision: string | null;
+        model_version: string;
+      }>;
+    const valid = new Set(validAssetIds);
+    let staleModelRemoved = false;
+    let staleSourceRemoved = false;
+    const remove = db.prepare(`DELETE FROM ${VEC_TABLE} WHERE rowid = ?`);
+    for (const row of rows) {
+      if (row.model_version !== MODEL_VERSION) {
+        staleModelRemoved = true;
+        remove.run(row.rowid);
+        continue;
+      }
+      if (!valid.has(row.asset_id)) {
+        remove.run(row.rowid);
+        continue;
+      }
+      if (validSourceRevisions && row.source_revision !== validSourceRevisions.get(row.asset_id)) {
+        staleSourceRemoved = true;
+        remove.run(row.rowid);
+      }
     }
-    if (!valid.has(row.asset_id)) {
-      remove.run(row.rowid);
-      continue;
-    }
-    if (validSourceRevisions && row.source_revision !== validSourceRevisions.get(row.asset_id)) {
-      staleSourceRemoved = true;
-      remove.run(row.rowid);
-    }
-  }
-  return { staleModelRemoved, staleSourceRemoved };
+    return { staleModelRemoved, staleSourceRemoved };
+  });
 }
 
 /** Remove every vector of a scope. */
 export function clearSemanticVectors(scopeId: string): void {
   if (!validAssetId(scopeId)) throw new Error('invalid semantic vector scope id');
-  requireConnection().prepare(`DELETE FROM ${VEC_TABLE} WHERE scope_id = ?`).run(scopeId);
+  const db = requireConnection();
+  sqliteProfileWrite(db, () => db.prepare(`DELETE FROM ${VEC_TABLE} WHERE scope_id = ?`).run(scopeId));
 }

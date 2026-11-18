@@ -19,6 +19,7 @@ import {
   relocatedUploadDir,
   writeDataDirPointer,
 } from './data-dir.ts';
+import { sqliteProjectStorePath } from './project-store-paths.ts';
 
 const fixture = await mkdtemp(join(tmpdir(), 'openchatcut-data-dir-'));
 try {
@@ -100,27 +101,30 @@ try {
   const logs: string[] = [];
   const destination = join(fixture, 'destination');
   assert.deepEqual(
-    await relocateDataDir(source, destination, (msg) => logs.push(msg), false),
+    await relocateDataDir(source, destination, (msg) => logs.push(msg)),
     { copiedEntries: 2 },
   );
   assert.equal(await readFile(join(destination, 'project-store-v1', 'projects.json'), 'utf8'), '[]');
   assert.ok(existsSync(join(source, 'project-store-v1', 'projects.json')), 'the source is kept intact');
   assert.equal(existsSync(join(destination, 'export-cache.log')), false, 'regenerated files are not carried over');
   assert.deepEqual(
-    await relocateDataDir(source, source, () => { throw new Error('no log expected'); }, false),
+    await relocateDataDir(source, source, () => { throw new Error('no log expected'); }),
     { copiedEntries: 0 },
   );
 
-  // 5b. The SQLite store is the whole project store and cannot be copied file-wise while
-  // live: relocation refuses rather than producing a torn snapshot or an empty new root.
+  // 5b. An incomplete SQLite source cannot silently fall back to older JSON.
   const sqliteLogs: string[] = [];
   const sqliteTarget = join(fixture, 'sqlite-destination');
+  const orphanReceipt = sqliteProjectStorePath(source) + '.receipt.json';
+  await writeFile(orphanReceipt, '{}');
   assert.deepEqual(
-    await relocateDataDir(source, sqliteTarget, (msg) => sqliteLogs.push(msg), true),
+    await relocateDataDir(source, sqliteTarget, (msg) => sqliteLogs.push(msg)),
     { refused: 'sqlite-store-active', copiedEntries: 0 },
   );
-  assert.equal(existsSync(sqliteTarget), false, 'a refused relocation copies nothing at all');
+  assert.equal(existsSync(join(sqliteTarget, 'project-store-v1')), false);
+  assert.equal(await readFile(orphanReceipt, 'utf8'), '{}');
   assert.ok(sqliteLogs.some((msg) => msg.includes('refused')), 'the refusal is reported, never silent');
+  await rm(orphanReceipt);
 
   // 5c. The relocated upload directory is where the moved profile will resolve its
   // writable uploads, so the caller can copy media into the right place.
@@ -147,7 +151,7 @@ try {
     version: 1, source: await realpath(source), phase: 'copying', entries: ['project-store-v1'],
   }));
   assert.deepEqual(
-    await relocateDataDir(source, resumed, () => undefined, false),
+    await relocateDataDir(source, resumed, () => undefined),
     { copiedEntries: 2 },
   );
   assert.equal(
@@ -168,7 +172,7 @@ try {
 
   // 6. A second relocation into a populated destination overwrites nothing and says so.
   await writeFile(join(destination, 'deleted-projects-v1.json'), 'newer, must win');
-  const again = await relocateDataDir(source, destination, (msg) => logs.push(msg), false);
+  const again = await relocateDataDir(source, destination, (msg) => logs.push(msg));
   assert.deepEqual(again, { refused: 'target-contains-data', copiedEntries: 0 });
   assert.equal(await readFile(join(destination, 'deleted-projects-v1.json'), 'utf8'), 'newer, must win');
   assert.ok(logs.some((msg) => msg.includes('target already contains')), 'the conflict is reported');
@@ -177,28 +181,28 @@ try {
   await mkdir(pendingEditTarget);
   const pendingEdit = join(pendingEditTarget, 'project-edit-rollback-v1.json');
   await writeFile(pendingEdit, 'existing recovery evidence');
-  assert.equal((await relocateDataDir(source, pendingEditTarget, () => undefined, false)).refused, 'target-contains-data');
+  assert.equal((await relocateDataDir(source, pendingEditTarget, () => undefined)).refused, 'target-contains-data');
   assert.equal(await readFile(pendingEdit, 'utf8'), 'existing recovery evidence');
   assert.equal(existsSync(join(pendingEditTarget, 'project-store-v1')), false);
 
   const historicalOrphan = join(source, 'project-store-v1', 'project%3Aunindexed.json');
   await writeFile(historicalOrphan, '{}');
   await assert.rejects(
-    relocateDataDir(source, join(fixture, 'unindexed-target'), () => undefined, false),
+    relocateDataDir(source, join(fixture, 'unindexed-target'), () => undefined),
     /project index and saved documents disagree/,
   );
   await rm(historicalOrphan);
 
-  await assert.rejects(relocateDataDir(source, join(source, 'nested'), () => undefined, false), /must not contain each other/);
+  await assert.rejects(relocateDataDir(source, join(source, 'nested'), () => undefined), /must not contain each other/);
   if (process.platform !== 'win32') {
     const alias = join(fixture, 'alias-source');
     await symlink(source, alias, 'dir');
-    assert.deepEqual(await relocateDataDir(source, alias, () => undefined, false), { copiedEntries: 0 });
+    assert.deepEqual(await relocateDataDir(source, alias, () => undefined), { copiedEntries: 0 });
     const linked = join(fixture, 'linked-store');
     await mkdir(linked);
     await symlink(join(source, 'project-store-v1'), join(linked, 'project-store-v1'), 'dir');
     await assert.rejects(
-      relocateDataDir(linked, join(fixture, 'no-linked-store'), () => undefined, false),
+      relocateDataDir(linked, join(fixture, 'no-linked-store'), () => undefined),
       /unsupported project store directory/,
     );
   }
@@ -208,7 +212,7 @@ try {
   await mkdir(join(legacyRoot, 'project-store-v1'), { recursive: true });
   await writeFile(join(legacyRoot, 'project-store-v1', 'projects.json'), 'partial conversion');
   await writeFile(join(legacyRoot, 'project-store-v1.json'), '{"version":1,"entries":{"projects":[]}}');
-  assert.deepEqual(await relocateDataDir(legacyRoot, legacyTarget, () => undefined, false), { copiedEntries: 1 });
+  assert.deepEqual(await relocateDataDir(legacyRoot, legacyTarget, () => undefined), { copiedEntries: 1 });
   assert.equal(existsSync(join(legacyTarget, 'project-store-v1.json')), true);
   assert.equal(existsSync(join(legacyTarget, 'project-store-v1')), false);
 

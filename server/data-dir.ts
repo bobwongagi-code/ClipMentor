@@ -6,7 +6,7 @@
 // profile the keystore file itself sits inside the storage root, so reading it
 // would require already knowing the root. It is therefore recorded in a small
 // pointer file at a fixed location that never moves.
-import { mkdirSync, readFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { cp, lstat, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -16,6 +16,7 @@ import { projectEditRollbackPath, recoverLegacyProjectEdit } from './plugins/pro
 import { withProjectStoreProcessLock } from './plugins/project-store-process-lock.ts';
 import {
   legacyProjectBulkPendingPath, legacyProjectStoreEntryPath, PROJECT_STORE_DIRECTORY, sqliteProjectStorePath,
+  SQLITE_PROJECT_STORE_FILENAME, SQLITE_STORE_ENV,
 } from './project-store-paths.ts';
 
 /** Fixed pointer location — deliberately outside the movable storage root. */
@@ -97,6 +98,8 @@ const RELOCATED_ENTRIES = [
   'deleted-projects-v1.json',
   'generation-operations-v1.json',
 ] as const;
+const ALL_RELOCATABLE_ENTRIES = [...RELOCATED_ENTRIES, SQLITE_PROJECT_STORE_FILENAME] as const;
+const SQLITE_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal', '.receipt.json'] as const;
 
 /** Why a relocation was refused, so the caller can explain it to the user. */
 export type RelocationRefusal = 'sqlite-store-active' | 'target-contains-data';
@@ -106,7 +109,7 @@ export interface RelocationOutcome {
   copiedEntries: number;
 }
 
-type RelocatedEntry = typeof RELOCATED_ENTRIES[number];
+type RelocatedEntry = typeof ALL_RELOCATABLE_ENTRIES[number];
 interface RelocationRecord {
   version: 1;
   source: string;
@@ -122,13 +125,13 @@ interface RelocationPublication {
 
 const relocationRecordPath = (root: string) => join(root, '.data-dir-relocation-v1.json');
 
-async function readRelocationRecord(root: string): Promise<RelocationRecord | null> {
+function readRelocationRecord(root: string): RelocationRecord | null {
   let raw: string;
   try {
     const path = relocationRecordPath(root);
-    const stat = await lstat(path);
+    const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('invalid data directory relocation record');
-    raw = await readFile(path, 'utf8');
+    raw = readFileSync(path, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -139,22 +142,44 @@ async function readRelocationRecord(root: string): Promise<RelocationRecord | nu
   if (record?.version !== 1 || typeof record.source !== 'string' || !isAbsolute(record.source)
     || (record.phase !== 'copying' && record.phase !== 'ready')
     || !Array.isArray(record.entries) || new Set(record.entries).size !== record.entries.length
-    || record.entries.some((entry) => !RELOCATED_ENTRIES.includes(entry))) {
+    || record.entries.some((entry) => !ALL_RELOCATABLE_ENTRIES.includes(entry))) {
     throw new Error('invalid data directory relocation record');
   }
   return record as RelocationRecord;
 }
 
-async function targetIsConfigured(root: string): Promise<boolean> {
+function targetIsConfigured(root: string): boolean {
   const configured = readDataDirPointerAuthority() ?? join(homedir(), '.openchatcut');
-  return await canonicalRoot(configured) === await canonicalRoot(root);
+  try { return realpathSync(configured) === realpathSync(root); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/** SQLite probing must not open or create a database in an unpublished target. */
+export function canOpenDataDirSqlite(root: string): boolean {
+  try { return !readRelocationRecord(root); }
+  catch { return false; }
+}
+
+/** Settle a pointer published just before the previous process was killed. */
+export async function recoverDataDirSqlitePublication(root: string): Promise<void> {
+  const record = readRelocationRecord(root);
+  if (record?.phase === 'ready' && targetIsConfigured(root)) {
+    await withProjectStoreProcessLock(root, () => assertDataDirRelocationReady(root));
+  }
 }
 
 /** Called under the project store lock before opening or migrating a root. */
 export async function assertDataDirRelocationReady(root: string): Promise<void> {
-  const record = await readRelocationRecord(root);
+  const record = readRelocationRecord(root);
   if (!record) return;
-  if (record.phase === 'ready' && await targetIsConfigured(root)) {
+  if (record.phase === 'ready' && targetIsConfigured(root)) {
+    if (record.entries.includes(SQLITE_PROJECT_STORE_FILENAME)) {
+      const { verifyRelocatedSqliteSnapshot } = await import('./storage/sqlite-relocation.ts');
+      await verifyRelocatedSqliteSnapshot(sqliteProjectStorePath(root));
+    }
     // A killed settings process may have switched the pointer before cleanup.
     try { await durableRemove(relocationRecordPath(root)); }
     catch (error) { if (await present(relocationRecordPath(root))) throw error; }
@@ -207,13 +232,18 @@ async function checkProjectIndex(root: string): Promise<void> {
   if (!(await lstat(store)).isDirectory()) throw new Error('unsupported project store directory');
   const index = await readSnapshotJson(legacyProjectStoreEntryPath(root, 'projects')) ?? [];
   const deleted = await readSnapshotJson(join(root, 'deleted-projects-v1.json')) ?? {};
+  const ids = (await readdir(store)).flatMap((file) => {
+    const match = /^project%3a([A-Za-z0-9_-]{1,160})\.json$/i.exec(file);
+    return match ? [match[1]] : [];
+  });
+  assertProjectIndexCompleteness(index, ids, deleted);
+}
+
+export function assertProjectIndexCompleteness(index: unknown, ids: string[], deleted: unknown): void {
   if (!Array.isArray(index) || typeof deleted !== 'object' || deleted === null || Array.isArray(deleted)) {
     throw new Error('could not verify the project directory snapshot');
   }
-  const docs = new Set((await readdir(store)).flatMap((file) => {
-    const match = /^project%3a([A-Za-z0-9_-]{1,160})\.json$/i.exec(file);
-    return match && !Object.hasOwn(deleted, match[1]) ? [match[1]] : [];
-  }));
+  const docs = new Set(ids.filter((id) => !Object.hasOwn(deleted, id)));
   for (const entry of index) {
     const id = entry?.id;
     if (typeof id !== 'string' || (!Object.hasOwn(deleted, id) && !docs.delete(id))) {
@@ -223,12 +253,11 @@ async function checkProjectIndex(root: string): Promise<void> {
   if (docs.size) throw new Error('the project index and saved documents disagree; relocation is unavailable');
 }
 
-/** Copy one consistent legacy snapshot and leave the source available for recovery. */
+/** Publish one consistent snapshot and leave its source available for recovery. */
 export async function relocateDataDir(
   source: string,
   target: string,
   log: (msg: string) => void,
-  sqliteActive: boolean,
   publication?: RelocationPublication,
 ): Promise<RelocationOutcome> {
   const [from, to] = await Promise.all([canonicalRoot(resolve(source)), canonicalRoot(resolve(target))]);
@@ -244,27 +273,23 @@ export async function relocateDataDir(
   if (containsRoot(from, to) || containsRoot(to, from)) {
     throw new Error('source and target data directories must not contain each other');
   }
-  if (sqliteActive) {
-    log('[data-dir] relocation refused: the SQLite project store is active');
-    return { refused: 'sqlite-store-active', copiedEntries: 0 };
-  }
   const [first, second] = [from, to].sort();
   return withProjectStoreProcessLock(first, () => withProjectStoreProcessLock(second, async () => {
     if (publication?.shouldPublish() === false) return { copiedEntries: 0 };
     await assertDataDirRelocationReady(from);
-    // Recheck the physical paths after waiting for a possible SQLite migration.
-    if (await present(sqliteProjectStorePath(from)) || await present(sqliteProjectStorePath(to))) {
-      log('[data-dir] relocation refused: a SQLite project store exists');
-      return { refused: 'sqlite-store-active', copiedEntries: 0 };
-    }
-    const prior = await readRelocationRecord(to);
+    const prior = readRelocationRecord(to);
     const resumable = prior?.source === from
-      && (prior.phase === 'copying' || !await targetIsConfigured(to));
+      && (prior.phase === 'copying' || !targetIsConfigured(to));
     const staging = join(to, '.data-dir-relocation.incoming');
     if (await present(projectEditRollbackPath(to)) || await present(legacyProjectBulkPendingPath(to))) {
       return { refused: 'target-contains-data', copiedEntries: 0 };
     }
-    for (const entry of [...RELOCATED_ENTRIES, basename(staging)]) {
+    for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+      if (await present(sqliteProjectStorePath(to) + suffix)) {
+        return { refused: 'target-contains-data', copiedEntries: 0 };
+      }
+    }
+    for (const entry of [...ALL_RELOCATABLE_ENTRIES, basename(staging)]) {
       const owned = resumable && (entry === basename(staging) || prior.entries.includes(entry as RelocatedEntry));
       if (!owned && await present(join(to, entry))) {
         log('[data-dir] relocation refused: the target already contains storage data');
@@ -273,52 +298,79 @@ export async function relocateDataDir(
     }
     if (prior && !resumable) return { refused: 'target-contains-data', copiedEntries: 0 };
     await assertLegacyProjectBulkComplete(from);
-    await recoverLegacyProjectEdit(from);
-    if (resumable) {
-      for (const entry of prior.entries) await durableRemove(join(to, entry), true);
-      await durableRemove(staging, true);
-    }
-    const entries: RelocatedEntry[] = [];
-    for (const entry of RELOCATED_ENTRIES) {
-      if (await present(join(from, entry))) entries.push(entry);
-    }
-    const projectDirectory = entries.indexOf(PROJECT_STORE_DIRECTORY);
-    if (projectDirectory !== -1) {
-      if (entries.includes('project-store-v1.json') && !await present(join(from, PROJECT_STORE_DIRECTORY, '.ready'))) {
-        // Old one-file storage still owns the data until its upgrade finishes.
-        entries.splice(projectDirectory, 1);
-      } else {
-        await checkProjectIndex(from);
+
+    // The backend may have changed while waiting for the directory lock.
+    const sqliteSource = sqliteProjectStorePath(from);
+    if (await present(sqliteSource)) {
+      const configuredMode = process.env[SQLITE_STORE_ENV];
+      if ((configuredMode !== undefined && configuredMode !== '1') || !(await lstat(sqliteSource)).isFile()) {
+        return unavailableSqlite();
       }
+      const { withSqliteRelocationSnapshot } = await import('./storage/sqlite-relocation.ts');
+      return withSqliteRelocationSnapshot(sqliteSource, (save) => save ? publishSnapshot(save) : unavailableSqlite());
     }
-    const record: RelocationRecord = { version: 1, source: from, phase: 'copying', entries };
-    await atomicWriteJson(relocationRecordPath(to), record);
-    await mkdir(staging);
-    for (const entry of entries) {
-      await cp(join(from, entry), join(staging, entry), {
-        recursive: true, force: false, errorOnExist: true,
-        filter: async (path) => {
-          if (/\.\d+\.[\da-f-]{36}\.tmp$/i.test(basename(path))) return false;
-          const item = await lstat(path);
-          if (!item.isFile() && !item.isDirectory()) throw new Error('unsupported file in data directory relocation');
-          return true;
-        },
-      });
-      await durableRename(join(staging, entry), join(to, entry));
+    if ((await Promise.all(SQLITE_SIDECAR_SUFFIXES.map((suffix) => present(sqliteSource + suffix)))).some(Boolean)) {
+      return unavailableSqlite();
     }
-    await durableRemove(staging, true);
-    await publication?.prepareTarget();
-    if (publication) {
-      await atomicWriteJson(relocationRecordPath(to), { ...record, phase: 'ready' });
-      await publication.publishTarget();
-      await durableRemove(relocationRecordPath(to)).catch(() => {
-        log('[data-dir] relocation committed; could not remove its completion record');
-      });
-    } else {
-      await durableRemove(relocationRecordPath(to));
+    await recoverLegacyProjectEdit(from);
+    return publishSnapshot();
+
+    async function unavailableSqlite(): Promise<RelocationOutcome> {
+      log('[data-dir] relocation refused: SQLite authority could not be verified');
+      return { refused: 'sqlite-store-active', copiedEntries: 0 };
     }
-    if (entries.length > 0) log(`[data-dir] copied ${entries.length} entries: ${from} → ${to}`);
-    return { copiedEntries: entries.length };
+
+    async function publishSnapshot(saveSqlite?: (path: string) => Promise<void>): Promise<RelocationOutcome> {
+      if (resumable) {
+        for (const entry of prior.entries) await durableRemove(join(to, entry), true);
+        await durableRemove(staging, true);
+      }
+      const entries: RelocatedEntry[] = [];
+      for (const entry of saveSqlite ? ['project-store-auth-v1'] as const : RELOCATED_ENTRIES) {
+        if (await present(join(from, entry))) entries.push(entry);
+      }
+      if (saveSqlite) entries.push(SQLITE_PROJECT_STORE_FILENAME);
+      const projectDirectory = entries.indexOf(PROJECT_STORE_DIRECTORY);
+      if (projectDirectory !== -1) {
+        if (entries.includes('project-store-v1.json') && !await present(join(from, PROJECT_STORE_DIRECTORY, '.ready'))) {
+          // Old one-file storage still owns the data until its upgrade finishes.
+          entries.splice(projectDirectory, 1);
+        } else {
+          await checkProjectIndex(from);
+        }
+      }
+      const record: RelocationRecord = { version: 1, source: from, phase: 'copying', entries };
+      await atomicWriteJson(relocationRecordPath(to), record);
+      await mkdir(staging, { mode: 0o700 });
+      for (const entry of entries) {
+        const stagedEntry = join(staging, entry);
+        if (entry === SQLITE_PROJECT_STORE_FILENAME && saveSqlite) {
+          await saveSqlite(stagedEntry);
+        } else await cp(join(from, entry), stagedEntry, {
+          recursive: true, force: false, errorOnExist: true,
+          filter: async (path) => {
+            if (/\.\d+\.[\da-f-]{36}\.tmp$/i.test(basename(path))) return false;
+            const item = await lstat(path);
+            if (!item.isFile() && !item.isDirectory()) throw new Error('unsupported file in data directory relocation');
+            return true;
+          },
+        });
+        await durableRename(stagedEntry, join(to, entry));
+      }
+      await durableRemove(staging, true);
+      await publication?.prepareTarget();
+      if (publication) {
+        await atomicWriteJson(relocationRecordPath(to), { ...record, phase: 'ready' });
+        await publication.publishTarget();
+        await durableRemove(relocationRecordPath(to)).catch(() => {
+          log('[data-dir] relocation committed; could not remove its completion record');
+        });
+      } else {
+        await durableRemove(relocationRecordPath(to));
+      }
+      if (entries.length > 0) log(`[data-dir] copied ${entries.length} entries: ${from} → ${to}`);
+      return { copiedEntries: entries.length };
+    }
   }));
 }
 

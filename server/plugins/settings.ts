@@ -26,7 +26,6 @@ import {
   relocatedMediaDestination,
   writeDataDirPointer,
 } from '../data-dir.ts';
-import { sqliteStoreEnabled } from '../storage/sqlite-store.ts';
 
 const ISOLATED_R2_SETTINGS = [
   'R2_ACCOUNT_ID',
@@ -127,10 +126,9 @@ async function applyDataDirChange(
   const target = expandDataDir(raw);
   // Clearing the field is a relocation too: it sends the next launch back to the
   // default root, which is empty or stale for anyone who has been running
-  // elsewhere. Treating it as "no move" would skip both the SQLite refusal and
-  // the copy, and lose the projects exactly like the case this guards against.
+  // elsewhere. It needs the same consistency checks and copy as any other move.
   const destination = target ?? defaultRootDir(profile);
-  const outcome = await relocateDataDir(profile.rootDir, destination, log, sqliteStoreEnabled(), {
+  const outcome = await relocateDataDir(profile.rootDir, destination, log, {
     shouldPublish: () => {
       const configured = readDataDirPointerAuthority() ?? defaultRootDir(profile);
       if (destination !== profile.rootDir && configured === destination) {
@@ -148,7 +146,7 @@ async function applyDataDirChange(
     publishTarget: () => writeDataDirPointer(target),
   });
   if (outcome.refused === 'sqlite-store-active') {
-    throw new Error('the data directory contains a SQLite project store; relocation is unavailable');
+    throw new Error('the source SQLite project store could not be verified for relocation');
   }
   if (outcome.refused === 'target-contains-data') {
     throw new Error('the target already contains storage data; choose a different directory');

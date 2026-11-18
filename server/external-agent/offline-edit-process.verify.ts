@@ -3,7 +3,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync, writeSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { syncBuiltinESMExports } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { DatabaseSync, type StatementSync, type SQLInputValue } from 'node:sqlite';
@@ -13,6 +13,7 @@ import { historyReduce } from '../../src/editor/reducerHistory.ts';
 import { editSessionId, projectDoc } from './offline-runtime.verify-fixtures.ts';
 import type { ProjectEditOwnershipClaim } from './project-edit-ownership.ts';
 import type { ViteDevServer } from 'vite';
+import { sqliteProjectStorePath } from '../project-store-paths.ts';
 
 const project = 'offline-process-project';
 const sibling = 'offline-process-sibling';
@@ -29,13 +30,14 @@ const later = (time: number) => time + 180_000;
 type Pause = { key: string; when: 'before' | 'after' };
 interface Command {
   action: 'seed' | 'claim' | 'draft' | 'apply' | 'read' | 'browser' | 'reopen' | 'migration' | 'runs'
-    | 'relocate' | 'settings' | 'purge' | 'bulk' | 'generation-ledger';
+    | 'relocate' | 'settings' | 'purge' | 'bulk' | 'generation-ledger'
+    | 'sqlite-wal-write' | 'sqlite-contents' | 'sqlite-export-write';
   id?: string;
   name?: string;
   target?: string;
   extraSettings?: Record<string, unknown>;
   time?: number;
-  pause?: Pause | 'durable-commit' | 'before-action';
+  pause?: Pause | 'durable-commit' | 'before-action' | 'sqlite-backup';
   failCommitAcknowledgement?: boolean;
   failSearchIndex?: boolean;
 }
@@ -49,7 +51,7 @@ type Result = Record<string, unknown>;
 const row = (snapshot: Result, key: string): Row => (snapshot as Snapshot)[key];
 
 function send(event: string, value?: unknown): void {
-  process.send?.({ event, value });
+  if (process.connected) process.send?.({ event, value }, () => undefined);
 }
 
 function instrument(command: Command): void {
@@ -62,6 +64,26 @@ function instrument(command: Command): void {
   let committedProject = false;
   let reportedFault = false;
   const dbExec = DatabaseSync.prototype.exec;
+  if (command.pause === 'sqlite-backup' || command.name === 'damage-backup') {
+    const sqlite = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+    const nativeBackup = sqlite.backup;
+    sqlite.backup = async (source, path, options) => {
+      let paused = false;
+      const pages = await nativeBackup(source, path, {
+        ...options,
+        progress: (status) => {
+          options?.progress?.(status);
+          if (!paused && command.pause === 'sqlite-backup' && status.remainingPages < status.totalPages
+            && status.remainingPages > 0) {
+            paused = true;
+            hold();
+          }
+        },
+      });
+      if (command.name === 'damage-backup') await fs.writeFile(path, 'corrupted staged SQLite backup');
+      return pages;
+    };
+  }
   if (command.action === 'settings' && command.name === 'media-race') {
     const link = fs.link;
     fs.link = async (source, target) => {
@@ -73,7 +95,8 @@ function instrument(command: Command): void {
   }
   DatabaseSync.prototype.exec = function (sql) {
     try {
-      if (sql === 'BEGIN' && command.failSearchIndex && committedProject && !reportedFault) {
+      if ((sql === 'BEGIN' || sql === 'BEGIN IMMEDIATE')
+        && command.failSearchIndex && committedProject && !reportedFault) {
         reportedFault = true;
         send('post-commit-fault');
         throw new Error('synthetic search index failure');
@@ -168,15 +191,78 @@ async function execute(command: Command): Promise<unknown> {
   const id = command.id ?? project;
   if (command.time) Date.now = () => command.time!;
   instrument(command);
-  const { deleteStoredEntry, isStoredProjectDeleted, mergeStoredEntries, setStoredEntry, withSerializedProjectStore, writeProjectDocument } =
+  const { deleteStoredEntry, isStoredProjectDeleted, mergeStoredEntries, setStoredEntry, updateExportRecoveryLease,
+    withSerializedProjectStore, writeProjectDocument } =
     await import('../plugins/project-store.ts');
   const { initializeSqliteProjectStore, runStorageMigration, sqliteStoreEnabled } =
     await import('../storage/sqlite-store.ts');
   const { claimOfflineProjectOwnership, claimBrowserProjectOwnership, releaseProjectEditOwnership } =
     await import('./project-edit-ownership.ts');
   const { OfflineExternalEditRuntime } = await import('./offline-runtime.ts');
-  if (command.pause === 'before-action') hold();
+  if (command.pause === 'before-action') {
+    if (command.action === 'sqlite-export-write') await initializeSqliteProjectStore();
+    hold();
+  }
   if (command.action === 'settings') return saveSettings(command.target!, command.extraSettings);
+  if (command.action === 'sqlite-export-write') {
+    const renderId = '11111111-1111-4111-8111-111111111111';
+    return updateExportRecoveryLease({
+      operation: 'export-recovery-lease', key: `export-recovery:${renderId}`, action: 'claim',
+      renderId, ownerInstanceId: 'relocation-fixture', leaseMs: 10_000,
+    });
+  }
+  if (command.action === 'sqlite-wal-write' || command.action === 'sqlite-contents') {
+    const { runtimeProfile } = await import('../runtime-profile.ts');
+    const root = runtimeProfile().rootDir;
+    if (command.action === 'sqlite-contents' && !(await initializeSqliteProjectStore()).enabled) {
+      throw new Error('SQLite is not the authority at the requested data directory');
+    }
+    const { load } = await import('sqlite-vec');
+    const db = new DatabaseSync(sqliteProjectStorePath(root), { allowExtension: true });
+    try {
+      load(db);
+      const { GENERATION_JOBS_KV_KEY, DELETED_PROJECTS_KV_KEY } = await import('../storage/sqlite-migration.ts');
+      if (command.action === 'sqlite-contents') {
+        return {
+          project: JSON.parse(String(db.prepare('SELECT v FROM kv WHERE k = ?').get(projectKey(project))?.v)),
+          version: JSON.parse(String(db.prepare('SELECT v FROM kv WHERE k = ?').get(`versions:${project}`)?.v)),
+          draft: db.prepare('SELECT v FROM kv WHERE k = ?').get(checkpointKey(project))?.v,
+          index: JSON.parse(String(db.prepare("SELECT v FROM kv WHERE k = 'projects'").get()?.v)),
+          ledger: db.prepare('SELECT v FROM kv WHERE k = ?').get(GENERATION_JOBS_KV_KEY)?.v,
+          deleted: db.prepare('SELECT v FROM kv WHERE k = ?').get(DELETED_PROJECTS_KV_KEY)?.v,
+          fts: db.prepare("SELECT body FROM relocation_search WHERE relocation_search MATCH 'snapshot'").all(),
+          vec: db.prepare('SELECT rowid FROM relocation_vec').all(),
+          payload: db.prepare('SELECT length(bytes) AS length FROM relocation_payload').get()?.length,
+          integrity: db.prepare('PRAGMA quick_check').get()?.quick_check,
+        };
+      }
+      db.exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+        CREATE VIRTUAL TABLE IF NOT EXISTS relocation_search USING fts5(body);
+        CREATE VIRTUAL TABLE IF NOT EXISTS relocation_vec USING vec0(embedding float[2]);
+        CREATE TABLE IF NOT EXISTS relocation_payload (bytes BLOB);
+        PRAGMA wal_checkpoint(TRUNCATE); BEGIN IMMEDIATE;`);
+      const write = db.prepare('INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v');
+      const previous = command.name === 'new-base';
+      const name = previous ? 'wal-base' : 'wal-updated';
+      const previousIndex = JSON.parse(String(db.prepare("SELECT v FROM kv WHERE k = 'projects'").get()?.v));
+      if (command.name === 'unindexed') write.run(projectKey('unindexed-project'), JSON.stringify(base));
+      write.run(projectKey(project), JSON.stringify(previous ? base : portrait));
+      write.run(`versions:${project}`, JSON.stringify([{ id: `${name}-version`, doc: base }]));
+      write.run('projects', JSON.stringify(previousIndex.map((row: { id: string; name: string }) =>
+        row.id === project ? { ...row, name } : row)));
+      write.run(GENERATION_JOBS_KV_KEY, JSON.stringify({ version: 1, jobs: [{ id: name }] }));
+      write.run(DELETED_PROJECTS_KV_KEY, JSON.stringify({ [sibling]: oldTime }));
+      db.exec("DELETE FROM relocation_search; INSERT INTO relocation_search VALUES ('committed snapshot');");
+      db.exec('DELETE FROM relocation_vec; DELETE FROM relocation_payload; INSERT INTO relocation_payload VALUES (zeroblob(1048576));');
+      db.prepare('INSERT INTO relocation_vec (rowid, embedding) VALUES (?,?)').run(1n, new Float32Array([0, 1]));
+      if (command.name === 'pause-uncommitted') hold();
+      db.exec('COMMIT');
+      if (command.name === 'keep-wal') hold();
+      return { committed: true };
+    } finally {
+      db.close();
+    }
+  }
   if (command.action === 'purge') return deleteStoredEntry(projectKey(id)).then(() => ({ purged: true }));
   if (command.action === 'bulk') {
     return mergeStoredEntries({
@@ -192,7 +278,7 @@ async function execute(command: Command): Promise<unknown> {
   }
   if (command.action === 'relocate') {
     const { relocateDataDir } = await import('../data-dir.ts');
-    return relocateDataDir(process.env.OPENCHATCUT_DATA_DIR!, command.target!, () => undefined, false);
+    return relocateDataDir(process.env.OPENCHATCUT_DATA_DIR!, command.target!, () => undefined);
   }
   if (command.action === 'migration') return initializeSqliteProjectStore();
   if (command.action === 'runs') {
@@ -289,6 +375,7 @@ function launch(
     stdio: ['ignore', 'pipe', 'inherit', 'ipc'],
   });
   const paused = Promise.withResolvers<void>();
+  void paused.promise.catch(() => undefined);
   const waiting = Promise.withResolvers<void>();
   const postCommitFault = Promise.withResolvers<void>();
   const result = Promise.withResolvers<Result>();
@@ -302,14 +389,24 @@ function launch(
   child.on('message', (message: { event: string; value: unknown }) => {
     if (message.event === 'waiting') waiting.resolve();
     if (message.event === 'post-commit-fault') postCommitFault.resolve();
-    if (message.event === 'result') result.resolve(message.value as Result);
-    if (message.event === 'error') result.reject(new Error(String(message.value)));
+    if (message.event === 'result') {
+      paused.reject(new Error(`worker ${command.action} finished before its fault point: ${JSON.stringify(message.value)}`));
+      result.resolve(message.value as Result);
+    }
+    if (message.event === 'error') {
+      const error = new Error(String(message.value));
+      paused.reject(error);
+      result.reject(error);
+    }
   });
   child.once('exit', (code, signal) => {
-    result.reject(new Error(`worker ${command.action} exited before response (${code ?? signal})`));
+    const error = new Error(`worker ${command.action} exited before response (${code ?? signal})`);
+    paused.reject(error);
+    result.reject(error);
     exit.resolve(signal);
   });
   child.once('error', (error) => {
+    paused.reject(error);
     result.reject(error);
     exit.resolve(null);
   });
@@ -637,7 +734,7 @@ async function verifyRelocation(scenario?: string): Promise<void> {
       await migrating.release();
       assert.equal((await wait(migrating.result, 'completed SQLite migration')).enabled, true);
       assert.equal((await wait(unavailable.result, 'live SQLite source')).refused, 'sqlite-store-active');
-      assert.equal((await run({ action: 'relocate', target: source }, otherSource)).refused, 'sqlite-store-active');
+      assert.equal((await run({ action: 'relocate', target: source }, otherSource)).refused, 'target-contains-data');
       const importedId = 'bulk-orphan';
       const bulk = start({
         action: 'bulk', id: importedId, pause: { key: projectKey(importedId), when: 'after' },
@@ -747,6 +844,180 @@ async function verifyRelocation(scenario?: string): Promise<void> {
   console.log('data directory relocation across project writers passed');
 }
 
+async function verifySqliteRelocation(): Promise<void> {
+  const root = await fs.mkdtemp(join(tmpdir(), 'occ-sqlite-relocation-'));
+  const workers: Worker[] = [];
+  const source = join(root, 'sqlite-source');
+  const start = (command: Command, directory = source) => launch(directory, '1', command, workers);
+  const run = (command: Command, directory = source) => wait(start(command, directory).result, command.action);
+  async function waiting(worker: Worker, label: string): Promise<void> {
+    assert.equal(await wait(Promise.race([
+      worker.waiting.then(() => 'waiting'),
+      worker.result.then(() => 'completed'),
+    ]), label), 'waiting');
+  }
+  const marker = (directory: string) => join(directory, '.data-dir-relocation-v1.json');
+  function assertSnapshot(snapshot: Result, doc: unknown): void {
+    const name = doc === base ? 'wal-base' : 'wal-updated';
+    assert.equal(snapshot.integrity, 'ok');
+    assert.deepEqual(snapshot.project, doc);
+    assert.deepEqual(snapshot.version, [{ id: `${name}-version`, doc: base }]);
+    assert.equal((snapshot.index as { id: string; name: string }[]).find(({ id }) => id === project)?.name, name);
+    assert.deepEqual(snapshot.fts, [{ body: 'committed snapshot' }]);
+    assert.deepEqual(snapshot.vec, [{ rowid: 1 }]);
+    assert.equal(snapshot.payload, 1048576);
+    assert.deepEqual(JSON.parse(String(snapshot.ledger)), { version: 1, jobs: [{ id: name }] });
+    assert.deepEqual(JSON.parse(String(snapshot.deleted)), { [sibling]: oldTime });
+  }
+  try {
+    await run({ action: 'seed' });
+    const draft = await run({ action: 'draft', time: newTime });
+    assert.equal(typeof draft.editSessionId, 'string');
+    const wal = start({ action: 'sqlite-wal-write', name: 'keep-wal' });
+    await wait(wal.paused, 'committed WAL retained by an open connection');
+    assert((await fs.stat(sqliteProjectStorePath(source) + '-wal')).size > 0);
+    const mainOnly = join(root, 'unsafe-main-only.sqlite3');
+    await fs.copyFile(sqliteProjectStorePath(source), mainOnly);
+    const wrongCopy = new DatabaseSync(mainOnly, { readOnly: true });
+    try {
+      const previous = wrongCopy.prepare('SELECT v FROM kv WHERE k = ?').get(projectKey(project));
+      assert.deepEqual(JSON.parse(String(previous?.v)), base, 'a raw main file copy loses the committed update');
+    } finally {
+      wrongCopy.close();
+    }
+    const target = join(root, 'wal-target');
+    assert.equal((await run({ action: 'relocate', target })).copiedEntries, 1);
+    for (const suffix of ['-wal', '-shm', '-journal']) assert.equal(existsSync(sqliteProjectStorePath(target) + suffix), false);
+    if (process.platform !== 'win32') assert.equal((await fs.stat(sqliteProjectStorePath(target))).mode & 0o777, 0o600);
+    const snapshot = await run({ action: 'sqlite-contents' }, target);
+    assertSnapshot(snapshot, portrait);
+    assert.equal(JSON.parse(String(snapshot.draft)).sessionId, draft.editSessionId);
+    assert.equal((await run({ action: 'relocate', target })).refused, 'target-contains-data');
+    assert.deepEqual(await run({ action: 'sqlite-contents' }, target), snapshot);
+    await wal.release();
+    await wait(wal.result, 'finish the WAL witness');
+
+    for (const commit of [true, false]) {
+      await run({ action: 'sqlite-wal-write', name: 'new-base' });
+      const writer = start({ action: 'sqlite-wal-write', name: 'pause-uncommitted' });
+      await wait(writer.paused, 'SQLite writer transaction is still open');
+      const nextTarget = join(root, commit ? 'after-commit' : 'after-kill');
+      const move = start({ action: 'relocate', target: nextTarget });
+      await waiting(move, 'relocate waits on the SQLite writer');
+      if (commit) {
+        await writer.release();
+        await wait(writer.result, 'writer finishes its SQLite commit');
+      } else {
+        await kill(writer);
+      }
+      assert.equal((await wait(move.result, 'relocation after writer settled')).copiedEntries, 1);
+      assertSnapshot(await run({ action: 'sqlite-contents' }, nextTarget), commit ? portrait : base);
+    }
+
+    for (const sidecar of ['.receipt.json', '-wal']) {
+      const orphan = join(root, sidecar === '-wal' ? 'orphan-wal' : 'orphan-receipt');
+      const refused = join(root, 'refused-' + basename(orphan));
+      await fs.mkdir(orphan);
+      await fs.writeFile(sqliteProjectStorePath(orphan) + sidecar, 'fixture SQLite evidence');
+      assert.equal((await run({ action: 'relocate', target: refused }, orphan)).refused, 'sqlite-store-active');
+      assert.equal(existsSync(sqliteProjectStorePath(refused)), false);
+      assert.equal(await fs.readFile(sqliteProjectStorePath(orphan) + sidecar, 'utf8'), 'fixture SQLite evidence');
+    }
+    const noReceipt = join(root, 'missing-authority');
+    await fs.mkdir(noReceipt);
+    const unattributed = new DatabaseSync(sqliteProjectStorePath(noReceipt));
+    unattributed.exec('CREATE TABLE kv(k TEXT, v TEXT)');
+    unattributed.close();
+    assert.equal((await run({ action: 'relocate', target: join(root, 'refused-no-authority') }, noReceipt)).refused, 'sqlite-store-active');
+
+    const unindexed = join(root, 'sqlite-unindexed-source');
+    const unindexedTarget = join(root, 'refused-unindexed-source');
+    await run({ action: 'seed' }, unindexed);
+    await run({ action: 'sqlite-wal-write', name: 'unindexed' }, unindexed);
+    await assert.rejects(run({ action: 'relocate', target: unindexedTarget }, unindexed), /index and saved documents disagree/);
+    assert.equal(existsSync(sqliteProjectStorePath(unindexedTarget)), false);
+    const unchanged = new DatabaseSync(sqliteProjectStorePath(unindexed), { readOnly: true });
+    try {
+      assert(unchanged.prepare('SELECT 1 FROM kv WHERE k = ?').get(projectKey('unindexed-project')));
+    } finally {
+      unchanged.close();
+    }
+
+    const desktop = { home: join(root, 'home'), cwd: join(root, 'workspace') };
+    const desktopSource = join(desktop.home, '.openchatcut');
+    const desktopTarget = join(root, 'desktop-target');
+    const desktopStart = (command: Command) => launch(desktopSource, '1', command, workers, desktop);
+    const desktopRun = (command: Command) => wait(desktopStart(command).result, command.action);
+    const uploads = join(desktop.cwd, 'public', 'media', 'uploads');
+    const pointer = join(desktopSource, 'data-dir.json');
+    await fs.mkdir(uploads, { recursive: true });
+    await fs.writeFile(join(uploads, 'fixture.mp4'), 'in the SQLite app profile');
+    await desktopRun({ action: 'seed' });
+    await desktopRun({ action: 'sqlite-wal-write', name: 'new-base' });
+    const backupWorker = desktopStart({ action: 'settings', target: desktopTarget, pause: 'sqlite-backup' });
+    await wait(backupWorker.paused, 'actual online backup after copying some but not all pages');
+    await kill(backupWorker);
+    assert.equal(existsSync(pointer), false);
+    assert.equal(existsSync(sqliteProjectStorePath(desktopTarget)), false);
+    assert.equal((await run({ action: 'migration' }, desktopTarget)).enabled, false);
+    assert.equal(existsSync(sqliteProjectStorePath(desktopTarget)), false);
+    assert(existsSync(marker(desktopTarget)));
+    assert.equal((await desktopRun({ action: 'settings', target: desktopTarget, name: 'damage-backup' })).status, 400);
+    assert.equal(existsSync(pointer), false);
+    assert.equal(existsSync(sqliteProjectStorePath(desktopTarget)), false);
+    await desktopRun({ action: 'sqlite-wal-write' });
+
+    const prepared = desktopStart({ action: 'settings', target: desktopTarget, pause: { key: 'data-dir', when: 'before' } });
+    await wait(prepared.paused, 'database and media published before pointer');
+    await kill(prepared);
+    assert.equal(existsSync(pointer), false);
+    assert(existsSync(sqliteProjectStorePath(desktopTarget)));
+    assert.equal((await run({ action: 'migration' }, desktopTarget)).enabled, false);
+    await desktopRun({ action: 'sqlite-wal-write', name: 'new-base' });
+    const stale = desktopStart({ action: 'sqlite-export-write', pause: 'before-action' });
+    await wait(stale.paused, 'old process loaded before pointer publication');
+    const selected = desktopStart({ action: 'settings', target: desktopTarget, pause: { key: 'data-dir', when: 'after' } });
+    await wait(selected.paused, 'pointer written, just before process acknowledged');
+    await kill(selected);
+    assert.equal(JSON.parse(await fs.readFile(pointer, 'utf8')).dataDir, desktopTarget);
+    await stale.release();
+    await assert.rejects(wait(stale.result, 'old process trying to write after switch'), /data directory has changed/);
+
+    const dbPath = sqliteProjectStorePath(desktopTarget);
+    const heldSnapshot = join(root, 'held-verified-snapshot.sqlite3');
+    await fs.rename(dbPath, heldSnapshot);
+    await assert.rejects(desktopRun({ action: 'sqlite-contents' }), /SQLite is not the authority/);
+    assert(existsSync(marker(desktopTarget)), 'unknown snapshot must keep its recovery record');
+    assert.equal(existsSync(dbPath), false, 'reopen must not bootstrap an empty replacement');
+    await fs.rename(heldSnapshot, dbPath);
+    assertSnapshot(await desktopRun({ action: 'sqlite-contents' }), base);
+    assert.equal(existsSync(marker(desktopTarget)), false);
+    assert.equal(await fs.readFile(join(desktopTarget, 'media', 'uploads', 'fixture.mp4'), 'utf8'), 'in the SQLite app profile');
+
+    const nextDesktopTarget = join(root, 'desktop-queued-writer-target');
+    const queued = desktopStart({ action: 'sqlite-export-write', pause: 'before-action' });
+    await wait(queued.paused, 'old SQLite writer warmed before second relocation');
+    const switching = desktopStart({
+      action: 'settings', target: nextDesktopTarget, pause: { key: 'data-dir', when: 'before' },
+    });
+    await wait(switching.paused, 'second relocation ready while holding the source fence');
+    await queued.release();
+    await waiting(queued, 'old export writer waits before the pointer switches');
+    await switching.release();
+    assert.equal((await wait(switching.result, 'second Settings cutover')).status, 200);
+    await assert.rejects(wait(queued.result, 'queued export writer after cutover'), /data directory has changed/);
+    assert.equal(JSON.parse(await fs.readFile(pointer, 'utf8')).dataDir, nextDesktopTarget);
+    assertSnapshot(await desktopRun({ action: 'sqlite-contents' }), base);
+  } finally {
+    for (const worker of workers) {
+      if (worker.child.exitCode === null && worker.child.signalCode === null) worker.child.kill('SIGKILL');
+    }
+    await Promise.all(workers.map((worker) => worker.exit));
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10 });
+  }
+  console.log('SQLite data-directory relocation: WAL, contention, SIGKILL, Settings cutover and cold reopen passed');
+}
+
 if (process.argv[2] === '--worker') {
   try {
     const result = await execute(JSON.parse(process.argv[3]));
@@ -759,6 +1030,7 @@ if (process.argv[2] === '--worker') {
 } else {
   const mode = process.argv[2];
   if (mode === 'relocate') await verifyRelocation(process.argv[3]);
+  else if (mode === 'relocate-sqlite') await verifySqliteRelocation();
   else {
     for (const backend of ['0', '1'] as const) {
       if (!mode || mode === backend) await verify(backend, process.argv[3]);
@@ -766,6 +1038,7 @@ if (process.argv[2] === '--worker') {
     if (!mode) {
       await verifyRelocation('active');
       await verifyRelocation();
+      await verifySqliteRelocation();
     }
   }
 }
