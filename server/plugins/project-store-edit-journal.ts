@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { RuntimeProfile } from '../runtime-profile.ts';
+import { legacyProjectStoreEntryPath } from '../project-store-paths.ts';
 import { atomicWriteJson, durableRemove } from './project-store-durable.ts';
 import type { LockedProjectStore, StoredEntryValue } from './project-store-locked.ts';
 
@@ -12,7 +12,7 @@ export type CommitEditRows = (
   canCommit: () => boolean,
 ) => Promise<boolean>;
 
-const rollbackPath = (profile: RuntimeProfile) => join(profile.rootDir, 'project-edit-rollback-v1.json');
+export const projectEditRollbackPath = (rootDir: string) => join(rootDir, 'project-edit-rollback-v1.json');
 const editableKey = /^(?:project|versions|project-edit-ownership|offline-edit-session):([A-Za-z0-9_-]{1,160})$/;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -41,15 +41,9 @@ function editRows(value: unknown): EditRows {
   return value as EditRows;
 }
 
-function legacyEditRowPath(profile: RuntimeProfile, key: string): string {
-  return key === 'projects'
-    ? profile.projectStore.indexPath
-    : join(profile.projectStore.directory, `${encodeURIComponent(key)}.json`);
-}
-
 /** Replay the durable undo record while holding the common process lock. */
-export async function recoverLegacyProjectEdit(profile: RuntimeProfile): Promise<void> {
-  const path = rollbackPath(profile);
+export async function recoverLegacyProjectEdit(rootDir: string): Promise<void> {
+  const path = projectEditRollbackPath(rootDir);
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
@@ -67,7 +61,7 @@ export async function recoverLegacyProjectEdit(profile: RuntimeProfile): Promise
   const originals = editRows(journal.originals);
   if (journal.sha256 !== checksum(originals)) throw new Error('project edit rollback checksum mismatch');
   for (const [key, original] of Object.entries(originals).reverse()) {
-    const destination = legacyEditRowPath(profile, key);
+    const destination = legacyProjectStoreEntryPath(rootDir, key);
     if (original.found) await atomicWriteJson(destination, original.value);
     else await durableRemove(destination);
   }
@@ -120,14 +114,14 @@ export async function commitProjectEditRows(
 }
 
 export async function commitLegacyProjectEdit(
-  profile: RuntimeProfile,
+  rootDir: string,
   store: Pick<LockedProjectStore, 'writeEntry' | 'removeEntry'>,
   changes: EditRows,
   originals: EditRows,
   canCommit: () => boolean,
 ): Promise<boolean> {
   if (!canCommit()) return false;
-  const path = rollbackPath(profile);
+  const path = projectEditRollbackPath(rootDir);
   const before = editRows(originals);
   if (Object.keys(changes).length !== Object.keys(before).length
     || Object.keys(changes).some((key) => !Object.hasOwn(before, key))) {
@@ -138,11 +132,11 @@ export async function commitLegacyProjectEdit(
   try {
     applied = await writeRows(store, changes, canCommit);
   } catch (error) {
-    await recoverLegacyProjectEdit(profile);
+    await recoverLegacyProjectEdit(rootDir);
     throw error;
   }
   if (!applied) {
-    await recoverLegacyProjectEdit(profile);
+    await recoverLegacyProjectEdit(rootDir);
     return false;
   }
   try {
@@ -156,7 +150,7 @@ export async function commitLegacyProjectEdit(
       if ((readError as NodeJS.ErrnoException).code === 'ENOENT') return true;
       throw readError;
     }
-    await recoverLegacyProjectEdit(profile);
+    await recoverLegacyProjectEdit(rootDir);
     throw error;
   }
   return true;

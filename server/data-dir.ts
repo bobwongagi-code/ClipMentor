@@ -6,10 +6,17 @@
 // profile the keystore file itself sits inside the storage root, so reading it
 // would require already knowing the root. It is therefore recorded in a small
 // pointer file at a fixed location that never moves.
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { cp, mkdir, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { cp, lstat, mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { atomicWriteJson, durableRemove, durableRename } from './plugins/project-store-durable.ts';
+import { projectEditRollbackPath, recoverLegacyProjectEdit } from './plugins/project-store-edit-journal.ts';
+import { withProjectStoreProcessLock } from './plugins/project-store-process-lock.ts';
+import {
+  legacyProjectBulkPendingPath, legacyProjectStoreEntryPath, PROJECT_STORE_DIRECTORY, sqliteProjectStorePath,
+} from './project-store-paths.ts';
 
 /** Fixed pointer location — deliberately outside the movable storage root. */
 export function dataDirPointerPath(home: string = homedir()): string {
@@ -29,15 +36,22 @@ export function expandDataDir(raw: string, home: string = homedir()): string | n
  *  Synchronous: the runtime profile resolves at module load. A malformed
  *  pointer degrades to the default rather than blocking startup. */
 export function readDataDirPointer(home: string = homedir()): string | null {
-  const pointer = dataDirPointerPath(home);
-  if (!existsSync(pointer)) return null;
+  try { return readDataDirPointerAuthority(home); }
+  catch { return null; }
+}
+
+/** Only absence means default when deciding whether writes or a cutover are safe. */
+export function readDataDirPointerAuthority(home: string = homedir()): string | null {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(pointer, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return null;
+    const parsed: unknown = JSON.parse(readFileSync(dataDirPointerPath(home), 'utf8'));
+    if (!parsed || typeof parsed !== 'object') throw new Error('invalid data directory pointer');
     const value = (parsed as { dataDir?: unknown }).dataDir;
-    return typeof value === 'string' ? expandDataDir(value, home) : null;
-  } catch {
-    return null;
+    const path = typeof value === 'string' ? expandDataDir(value, home) : null;
+    if (!path) throw new Error('invalid data directory pointer');
+    return path;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error('could not verify the configured data directory', { cause: error });
   }
 }
 
@@ -45,11 +59,13 @@ export function readDataDirPointer(home: string = homedir()): string | null {
 export async function writeDataDirPointer(dir: string | null, home: string = homedir()): Promise<void> {
   const pointer = dataDirPointerPath(home);
   await mkdir(join(home, '.openchatcut'), { recursive: true });
-  if (!dir) {
-    await unlink(pointer).catch(() => undefined);
-    return;
+  try {
+    if (dir) await atomicWriteJson(pointer, { version: 1, dataDir: dir });
+    else await durableRemove(pointer);
+  } catch (error) {
+    // A directory sync can fail after rename/unlink already published the pointer.
+    if (dir ? readDataDirPointerAuthority(home) !== resolve(dir) : await present(pointer)) throw error;
   }
-  await writeFile(pointer, `${JSON.stringify({ version: 1, dataDir: dir }, null, 2)}\n`, { mode: 0o600 });
 }
 
 export interface DataDirProbe { ok: boolean; note?: string; error?: string; }
@@ -61,8 +77,8 @@ export async function checkDataDir(raw: string, currentDir: string): Promise<Dat
   if (!dir) return { ok: false, error: '必须是绝对路径（可用 ~/ 开头）' };
   try {
     await mkdir(dir, { recursive: true });
-    const probe = join(dir, `.cc-data-probe-${process.pid}`);
-    await writeFile(probe, 'ok');
+    const probe = join(dir, `.cc-data-probe-${randomUUID()}`);
+    await writeFile(probe, 'ok', { flag: 'wx' });
     await unlink(probe);
     return { ok: true, note: `目录可写 · ${dir}` };
   } catch (err) {
@@ -75,7 +91,7 @@ export async function checkDataDir(raw: string, currentDir: string): Promise<Dat
  *  or packaged `userData/...`), so it is copied separately from the resolved
  *  upload directory. Anything else in the root is regenerated and left behind. */
 const RELOCATED_ENTRIES = [
-  'project-store-v1',
+  PROJECT_STORE_DIRECTORY,
   'project-store-v1.json',
   'project-store-auth-v1',
   'deleted-projects-v1.json',
@@ -83,65 +99,227 @@ const RELOCATED_ENTRIES = [
 ] as const;
 
 /** Why a relocation was refused, so the caller can explain it to the user. */
-export type RelocationRefusal = 'sqlite-store-active';
+export type RelocationRefusal = 'sqlite-store-active' | 'target-contains-data';
 
 export interface RelocationOutcome {
   refused?: RelocationRefusal;
   copiedEntries: number;
 }
 
-/** Copy the current storage root into a newly chosen one. The source is left
- *  untouched: a relocation must never be the step that loses the projects.
- *
- *  Refuses outright while the SQLite store is the authority. That database is
- *  the whole project store (documents, FTS, semantic vectors) plus its import
- *  receipt, and copying a live WAL-mode database with a plain file copy can
- *  produce a torn snapshot. Moving it safely needs a quiesced backup taken
- *  under the store lock, which belongs in a follow-up rather than behind a
- *  settings field that looks harmless. */
+type RelocatedEntry = typeof RELOCATED_ENTRIES[number];
+interface RelocationRecord {
+  version: 1;
+  source: string;
+  phase: 'copying' | 'ready';
+  entries: RelocatedEntry[];
+}
+
+interface RelocationPublication {
+  shouldPublish(): boolean;
+  prepareTarget(): Promise<void>;
+  publishTarget(): Promise<void>;
+}
+
+const relocationRecordPath = (root: string) => join(root, '.data-dir-relocation-v1.json');
+
+async function readRelocationRecord(root: string): Promise<RelocationRecord | null> {
+  let raw: string;
+  try {
+    const path = relocationRecordPath(root);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('invalid data directory relocation record');
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  let record: Partial<RelocationRecord> | null;
+  try { record = JSON.parse(raw); }
+  catch { throw new Error('invalid data directory relocation record'); }
+  if (record?.version !== 1 || typeof record.source !== 'string' || !isAbsolute(record.source)
+    || (record.phase !== 'copying' && record.phase !== 'ready')
+    || !Array.isArray(record.entries) || new Set(record.entries).size !== record.entries.length
+    || record.entries.some((entry) => !RELOCATED_ENTRIES.includes(entry))) {
+    throw new Error('invalid data directory relocation record');
+  }
+  return record as RelocationRecord;
+}
+
+async function targetIsConfigured(root: string): Promise<boolean> {
+  const configured = readDataDirPointerAuthority() ?? join(homedir(), '.openchatcut');
+  return await canonicalRoot(configured) === await canonicalRoot(root);
+}
+
+/** Called under the project store lock before opening or migrating a root. */
+export async function assertDataDirRelocationReady(root: string): Promise<void> {
+  const record = await readRelocationRecord(root);
+  if (!record) return;
+  if (record.phase === 'ready' && await targetIsConfigured(root)) {
+    // A killed settings process may have switched the pointer before cleanup.
+    try { await durableRemove(relocationRecordPath(root)); }
+    catch (error) { if (await present(relocationRecordPath(root))) throw error; }
+    return;
+  }
+  throw new Error('the data directory relocation is incomplete; retry it from the source directory');
+}
+
+async function present(path: string): Promise<boolean> {
+  try { await lstat(path); return true; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/** Bulk JSON imports have to finish before the directory is treated as a snapshot. */
+export async function assertLegacyProjectBulkComplete(root: string): Promise<void> {
+  if (await present(legacyProjectBulkPendingPath(root))) {
+    throw new Error('a legacy project bulk write is incomplete; retry the original import');
+  }
+}
+
+async function canonicalRoot(path: string): Promise<string> {
+  try { return await realpath(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(path) === path) throw error;
+    return join(await canonicalRoot(dirname(path)), basename(path));
+  }
+}
+
+function containsRoot(parent: string, child: string): boolean {
+  const fragment = relative(parent, child);
+  return Boolean(fragment) && fragment !== '..' && !fragment.startsWith(`..${sep}`) && !isAbsolute(fragment);
+}
+
+async function readSnapshotJson(path: string): Promise<unknown> {
+  try {
+    if (!(await lstat(path)).isFile()) throw new Error('not a regular file');
+    return JSON.parse(await readFile(path, 'utf8')) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error('could not verify the project directory snapshot', { cause: error });
+  }
+}
+
+/** Do not publish an unindexed project left by a multi-request create/import. */
+async function checkProjectIndex(root: string): Promise<void> {
+  const store = join(root, PROJECT_STORE_DIRECTORY);
+  if (!(await lstat(store)).isDirectory()) throw new Error('unsupported project store directory');
+  const index = await readSnapshotJson(legacyProjectStoreEntryPath(root, 'projects')) ?? [];
+  const deleted = await readSnapshotJson(join(root, 'deleted-projects-v1.json')) ?? {};
+  if (!Array.isArray(index) || typeof deleted !== 'object' || deleted === null || Array.isArray(deleted)) {
+    throw new Error('could not verify the project directory snapshot');
+  }
+  const docs = new Set((await readdir(store)).flatMap((file) => {
+    const match = /^project%3a([A-Za-z0-9_-]{1,160})\.json$/i.exec(file);
+    return match && !Object.hasOwn(deleted, match[1]) ? [match[1]] : [];
+  }));
+  for (const entry of index) {
+    const id = entry?.id;
+    if (typeof id !== 'string' || (!Object.hasOwn(deleted, id) && !docs.delete(id))) {
+      throw new Error('the project index and saved documents disagree; relocation is unavailable');
+    }
+  }
+  if (docs.size) throw new Error('the project index and saved documents disagree; relocation is unavailable');
+}
+
+/** Copy one consistent legacy snapshot and leave the source available for recovery. */
 export async function relocateDataDir(
   source: string,
   target: string,
   log: (msg: string) => void,
   sqliteActive: boolean,
+  publication?: RelocationPublication,
 ): Promise<RelocationOutcome> {
-  if (source === target) return { copiedEntries: 0 };
+  const [from, to] = await Promise.all([canonicalRoot(resolve(source)), canonicalRoot(resolve(target))]);
+  if (from === to) {
+    return withProjectStoreProcessLock(from, async () => {
+      if (publication?.shouldPublish() === false) return { copiedEntries: 0 };
+      await assertDataDirRelocationReady(from);
+      await publication?.prepareTarget();
+      await publication?.publishTarget();
+      return { copiedEntries: 0 };
+    });
+  }
+  if (containsRoot(from, to) || containsRoot(to, from)) {
+    throw new Error('source and target data directories must not contain each other');
+  }
   if (sqliteActive) {
     log('[data-dir] relocation refused: the SQLite project store is active');
     return { refused: 'sqlite-store-active', copiedEntries: 0 };
   }
-  let copiedEntries = 0;
-  for (const entry of RELOCATED_ENTRIES) {
-    const from = join(source, entry);
-    if (!existsSync(from)) continue;
-    const to = join(target, entry);
-    if (existsSync(to)) {
-      const existing = await readdir(to).catch(() => ['?']);
-      if (existing.length > 0) {
-        log(`[data-dir] skipped ${entry}: already present in the new directory`);
-        continue;
+  const [first, second] = [from, to].sort();
+  return withProjectStoreProcessLock(first, () => withProjectStoreProcessLock(second, async () => {
+    if (publication?.shouldPublish() === false) return { copiedEntries: 0 };
+    await assertDataDirRelocationReady(from);
+    // Recheck the physical paths after waiting for a possible SQLite migration.
+    if (await present(sqliteProjectStorePath(from)) || await present(sqliteProjectStorePath(to))) {
+      log('[data-dir] relocation refused: a SQLite project store exists');
+      return { refused: 'sqlite-store-active', copiedEntries: 0 };
+    }
+    const prior = await readRelocationRecord(to);
+    const resumable = prior?.source === from
+      && (prior.phase === 'copying' || !await targetIsConfigured(to));
+    const staging = join(to, '.data-dir-relocation.incoming');
+    if (await present(projectEditRollbackPath(to)) || await present(legacyProjectBulkPendingPath(to))) {
+      return { refused: 'target-contains-data', copiedEntries: 0 };
+    }
+    for (const entry of [...RELOCATED_ENTRIES, basename(staging)]) {
+      const owned = resumable && (entry === basename(staging) || prior.entries.includes(entry as RelocatedEntry));
+      if (!owned && await present(join(to, entry))) {
+        log('[data-dir] relocation refused: the target already contains storage data');
+        return { refused: 'target-contains-data', copiedEntries: 0 };
       }
     }
-    // Copy aside, then rename into place. A relocation interrupted midway (disk
-    // full, power loss, quit) must never leave a half-copied store looking
-    // complete: the entry either exists whole or not at all, so the next attempt
-    // sees an absent destination and retries from scratch instead of adopting a
-    // partial one. Leftover staging directories are cleaned up on the retry.
-    const staging = `${to}.incoming`;
-    await rm(staging, { recursive: true, force: true });
-    await mkdir(dirname(to), { recursive: true });
-    try {
-      await cp(from, staging, { recursive: true, force: false, errorOnExist: false });
-      await rm(to, { recursive: true, force: true });
-      await rename(staging, to);
-    } catch (error) {
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
+    if (prior && !resumable) return { refused: 'target-contains-data', copiedEntries: 0 };
+    await assertLegacyProjectBulkComplete(from);
+    await recoverLegacyProjectEdit(from);
+    if (resumable) {
+      for (const entry of prior.entries) await durableRemove(join(to, entry), true);
+      await durableRemove(staging, true);
     }
-    copiedEntries += 1;
-  }
-  if (copiedEntries > 0) log(`[data-dir] copied ${copiedEntries} entries: ${source} → ${target}`);
-  return { copiedEntries };
+    const entries: RelocatedEntry[] = [];
+    for (const entry of RELOCATED_ENTRIES) {
+      if (await present(join(from, entry))) entries.push(entry);
+    }
+    const projectDirectory = entries.indexOf(PROJECT_STORE_DIRECTORY);
+    if (projectDirectory !== -1) {
+      if (entries.includes('project-store-v1.json') && !await present(join(from, PROJECT_STORE_DIRECTORY, '.ready'))) {
+        // Old one-file storage still owns the data until its upgrade finishes.
+        entries.splice(projectDirectory, 1);
+      } else {
+        await checkProjectIndex(from);
+      }
+    }
+    const record: RelocationRecord = { version: 1, source: from, phase: 'copying', entries };
+    await atomicWriteJson(relocationRecordPath(to), record);
+    await mkdir(staging);
+    for (const entry of entries) {
+      await cp(join(from, entry), join(staging, entry), {
+        recursive: true, force: false, errorOnExist: true,
+        filter: async (path) => {
+          if (/\.\d+\.[\da-f-]{36}\.tmp$/i.test(basename(path))) return false;
+          const item = await lstat(path);
+          if (!item.isFile() && !item.isDirectory()) throw new Error('unsupported file in data directory relocation');
+          return true;
+        },
+      });
+      await durableRename(join(staging, entry), join(to, entry));
+    }
+    await durableRemove(staging, true);
+    await publication?.prepareTarget();
+    if (publication) {
+      await atomicWriteJson(relocationRecordPath(to), { ...record, phase: 'ready' });
+      await publication.publishTarget();
+      await durableRemove(relocationRecordPath(to)).catch(() => {
+        log('[data-dir] relocation committed; could not remove its completion record');
+      });
+    } else {
+      await durableRemove(relocationRecordPath(to));
+    }
+    if (entries.length > 0) log(`[data-dir] copied ${entries.length} entries: ${from} → ${to}`);
+    return { copiedEntries: entries.length };
+  }));
 }
 
 /** Upload directory the relocated root will resolve to, so the caller can copy

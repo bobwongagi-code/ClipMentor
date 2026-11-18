@@ -11,6 +11,7 @@ import {
 } from '../media-dir.ts';
 import {
   DATA_DIR_ENV,
+  assertCurrentStorageProfile,
   defaultRootDir,
   isIsolatedDevProfile,
   runtimeProfile,
@@ -20,6 +21,7 @@ import {
   checkDataDir,
   expandDataDir,
   readDataDirPointer,
+  readDataDirPointerAuthority,
   relocateDataDir,
   relocatedMediaDestination,
   writeDataDirPointer,
@@ -111,6 +113,8 @@ async function applyDataDirChange(
   raw: string,
   profile: RuntimeProfile,
   log: (msg: string) => void,
+  saveOtherSettings: () => Promise<void>,
+  hasOtherSettings: boolean,
 ): Promise<void> {
   if (process.env[DATA_DIR_ENV]?.trim()) {
     throw new Error(`storage directory is pinned by ${DATA_DIR_ENV} and cannot be changed from settings`);
@@ -126,20 +130,29 @@ async function applyDataDirChange(
   // elsewhere. Treating it as "no move" would skip both the SQLite refusal and
   // the copy, and lose the projects exactly like the case this guards against.
   const destination = target ?? defaultRootDir(profile);
-  if (destination !== profile.rootDir) {
-    const outcome = await relocateDataDir(profile.rootDir, destination, log, sqliteStoreEnabled());
-    if (outcome.refused === 'sqlite-store-active') {
-      throw new Error(
-        'the project store has been migrated to SQLite and cannot be relocated yet: '
-        + 'moving a live database needs a quiesced snapshot, which this setting does not do',
-      );
-    }
-    // Uploads are addressed by name through uploadReadDirs(), so the copy must
-    // land where the relocated profile will resolve its writable upload dir.
-    const mediaDestination = relocatedMediaDestination(target, destination, DEFAULT_UPLOAD_DIR);
-    await syncUploadDirectories(uploadDir(profile), mediaDestination, log);
+  const outcome = await relocateDataDir(profile.rootDir, destination, log, sqliteStoreEnabled(), {
+    shouldPublish: () => {
+      const configured = readDataDirPointerAuthority() ?? defaultRootDir(profile);
+      if (destination !== profile.rootDir && configured === destination) {
+        if (hasOtherSettings) throw new Error('restart before saving other settings');
+        return false;
+      }
+      assertCurrentStorageProfile(profile);
+      return true;
+    },
+    prepareTarget: async () => {
+      const mediaDestination = relocatedMediaDestination(target, destination, DEFAULT_UPLOAD_DIR);
+      await syncUploadDirectories(uploadDir(profile), mediaDestination, log, true);
+      await saveOtherSettings();
+    },
+    publishTarget: () => writeDataDirPointer(target),
+  });
+  if (outcome.refused === 'sqlite-store-active') {
+    throw new Error('the data directory contains a SQLite project store; relocation is unavailable');
   }
-  await writeDataDirPointer(target);
+  if (outcome.refused === 'target-contains-data') {
+    throw new Error('the target already contains storage data; choose a different directory');
+  }
 }
 
 export function settingsPlugin(): Plugin {
@@ -166,29 +179,26 @@ export function settingsPlugin(): Plugin {
             assertProfileSensitiveSettingsPatch(patch, profile);
             // The storage root is not a keystore key (the keystore lives inside
             // it): handle and strip it before setKeys sees the patch.
-            let dataDirChanged = false;
-            if (Object.hasOwn(patch, DATA_DIR_ENV)) {
-              await applyDataDirChange(
-                String(patch[DATA_DIR_ENV] ?? ''),
-                profile,
-                (msg) => server.config.logger.info(msg),
-              );
-              delete patch[DATA_DIR_ENV];
-              dataDirChanged = true;
-            }
+            const dataDirChanged = Object.hasOwn(patch, DATA_DIR_ENV);
+            const dataDir = String(patch[DATA_DIR_ENV] ?? '');
+            delete patch[DATA_DIR_ENV];
             const previousMediaDir = uploadDir(profile);
+            let nextMediaDir: string | undefined;
             if ('MEDIA_DIR' in patch) {
               const rawMediaDir = String(patch.MEDIA_DIR ?? '');
               const checked = await checkMediaDir(rawMediaDir, profile);
               if (!checked.ok) throw new Error(checked.error ?? 'invalid media directory');
-              const nextMediaDir = expandMediaDir(rawMediaDir) ?? profile.mediaDir;
-              await syncUploadDirectories(
-                previousMediaDir,
-                nextMediaDir,
-                (msg) => server.config.logger.info(msg),
-              );
+              nextMediaDir = expandMediaDir(rawMediaDir) ?? profile.mediaDir;
             }
-            await setKeys(patch);
+            const log = (msg: string) => server.config.logger.info(msg);
+            const saveOtherSettings = async () => {
+              if (nextMediaDir) await syncUploadDirectories(previousMediaDir, nextMediaDir, log);
+              await setKeys(patch);
+            };
+            if (dataDirChanged) await applyDataDirChange(
+              dataDir, profile, log, saveOtherSettings, Object.keys(patch).length > 0,
+            );
+            else await saveOtherSettings();
             sendJson(res, 200, settingsBody(dataDirChanged));
             return;
           }

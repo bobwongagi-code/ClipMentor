@@ -8,7 +8,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:f
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation.ts';
-import { runtimeProfile } from '../runtime-profile.ts';
+import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
+import { assertDataDirRelocationReady, assertLegacyProjectBulkComplete } from '../data-dir.ts';
+import { sqliteProjectStorePath } from '../project-store-paths.ts';
 import { recoverLegacyProjectEdit } from '../plugins/project-store-edit-journal.ts';
 import { withProjectStoreProcessLock } from '../plugins/project-store-process-lock.ts';
 import {
@@ -63,7 +65,7 @@ export function storePath(): string {
   const profile = runtimeProfile();
   // Sits next to project-store-v1/ (never inside it: the JSON store scans its
   // own directory and must not see foreign files).
-  return join(profile.rootDir, 'project-store-v1.sqlite3');
+  return sqliteProjectStorePath(profile.rootDir);
 }
 
 function openDatabase(): DatabaseSync {
@@ -123,14 +125,10 @@ async function withMigrationLease<T>(task: () => T | Promise<T>): Promise<T> {
 }
 
 async function migrateUnderLease(): Promise<ImportSummary> {
-  const profile = runtimeProfile();
   processPhase = 'migrating';
   migrationError = undefined;
   try {
-    return await withProjectStoreProcessLock(profile.rootDir, async () => {
-      await recoverLegacyProjectEdit(profile);
-      return importUnderLease();
-    });
+    return await importUnderLease();
   } catch (error) {
     processPhase = 'failed';
     migrationError = error instanceof Error ? error.message : String(error);
@@ -145,17 +143,23 @@ async function importUnderLease(): Promise<ImportSummary> {
       const release = await barrier();
       if (release) releases.push(release);
     }
-    // Receipt-less imports re-read every live source after registered writers
-    // drain. Phase-1 authority upgrades only missing auxiliary rows and never
-    // replays project/chat JSON.
-    const db = openDatabase();
-    const summary = ensureJsonImported(db, runtimeProfile(), databaseHadKvTableAtOpen);
-    const receipt = synchronizeImportReceiptSidecar(db, runtimeProfile());
-    if (!receipt || receipt.phase < RECEIPT_PHASE) {
-      throw new Error('SQLite migration completed without a phase-2 authoritative receipt');
-    }
-    processPhase = 'complete';
-    return summary;
+    // A barrier may flush the generation ledger, which takes the directory
+    // lock. Drain those writers before taking it for the snapshot.
+    const profile = runtimeProfile();
+    return await withProjectStoreProcessLock(profile.rootDir, async () => {
+      assertCurrentStorageProfile(profile);
+      await assertDataDirRelocationReady(profile.rootDir);
+      await assertLegacyProjectBulkComplete(profile.rootDir);
+      await recoverLegacyProjectEdit(profile.rootDir);
+      const db = openDatabase();
+      const summary = ensureJsonImported(db, profile, databaseHadKvTableAtOpen);
+      const receipt = synchronizeImportReceiptSidecar(db, profile);
+      if (!receipt || receipt.phase < RECEIPT_PHASE) {
+        throw new Error('SQLite migration completed without a phase-2 authoritative receipt');
+      }
+      processPhase = 'complete';
+      return summary;
+    });
   } finally {
     for (const release of releases.reverse()) {
       try {

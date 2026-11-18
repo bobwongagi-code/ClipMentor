@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { readDataDirPointer } from './data-dir.ts';
+import { readDataDirPointer, readDataDirPointerAuthority } from './data-dir.ts';
+import { legacyProjectStoreEntryPath, PROJECT_STORE_DIRECTORY } from './project-store-paths.ts';
 
 export const DEV_PROFILE_ID_ENV = 'OPENCHATCUT_DEV_PROFILE_ID';
 export const DATA_DIR_ENV = 'OPENCHATCUT_DATA_DIR';
@@ -47,12 +48,12 @@ export interface RuntimeProfileLocations {
 
 function projectStorePaths(rootDir: string): ProjectStoreProfilePaths {
   const legacyStorePath = join(rootDir, 'project-store-v1.json');
-  const directory = join(rootDir, 'project-store-v1');
+  const directory = join(rootDir, PROJECT_STORE_DIRECTORY);
   return Object.freeze({
     legacyStorePath,
     legacyBackupPath: `${legacyStorePath}.migrated`,
     directory,
-    indexPath: join(directory, 'projects.json'),
+    indexPath: legacyProjectStoreEntryPath(rootDir, 'projects'),
     quarantineDir: join(directory, '.quarantine'),
     readyPath: join(directory, '.ready'),
     tombstonePath: join(rootDir, 'deleted-projects-v1.json'),
@@ -181,4 +182,15 @@ export function defaultRootDir(
   return isIsolatedDevProfile(profile)
     ? join(home, '.openchatcut', 'dev-profiles', profile.id)
     : join(home, '.openchatcut');
+}
+
+/** The configured path is the write fence for an ordinary app awaiting restart. */
+export function assertCurrentStorageProfile(profile: RuntimeProfile): void {
+  if (isIsolatedDevProfile(profile) || process.env[DATA_DIR_ENV]?.trim()) return;
+  const configured = readDataDirPointerAuthority();
+  const rootDir = configured ?? defaultRootDir(profile);
+  const mediaDir = configured ? join(rootDir, 'media', 'uploads') : join(process.cwd(), 'public', 'media', 'uploads');
+  if (resolve(rootDir) !== resolve(profile.rootDir) || resolve(mediaDir) !== resolve(profile.mediaDir)) {
+    throw new Error('the data directory has changed; restart before using the project store');
+  }
 }

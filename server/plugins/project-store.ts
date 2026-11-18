@@ -1,6 +1,6 @@
 import { isHandoffStoreKey } from '../../shared/clipmentor-handoff.ts';
-import { randomUUID } from 'node:crypto';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { access, lstat, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   isProjectStoreEntries,
@@ -9,7 +9,9 @@ import {
   projectIdFromProjectStoreKey,
 } from '../../shared/project-store-validation.ts';
 import type { ProjectStoreMutationResponse } from '../../shared/project-store-transport.ts';
-import { runtimeProfile } from '../runtime-profile.ts';
+import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
+import { assertDataDirRelocationReady } from '../data-dir.ts';
+import { legacyProjectBulkPendingPath } from '../project-store-paths.ts';
 import {
   mergeProjectEntries,
   mergeProjectIndex,
@@ -273,12 +275,42 @@ export async function mergeStoredEntries(incoming: Record<string, unknown>): Pro
       version: 1,
       entries: mergeProjectEntries(current, prepared, deletedIds),
     };
-    await writeEntries(next.entries);
+    if (sqliteStoreEnabled()) await writeEntries(next.entries);
+    else await writeLegacyMergedEntries(incoming, next.entries);
     for (const [key, value] of Object.entries(next.entries)) {
       if (key.startsWith('chat:') || key.startsWith('project:')) indexStoreKey(key, value);
     }
     return next;
   });
+}
+
+async function writeLegacyMergedEntries(
+  incoming: Record<string, unknown>,
+  entries: Record<string, unknown>,
+): Promise<void> {
+  const path = legacyProjectBulkPendingPath(profile.rootDir);
+  const sha256 = createHash('sha256').update(JSON.stringify(incoming)).digest('hex');
+  let pending: unknown;
+  try { pending = JSON.parse(await readFile(path, 'utf8')) as unknown; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error('could not verify the pending project bulk write', { cause: error });
+    }
+  }
+  if (pending === undefined) await atomicWriteJson(path, { version: 1, sha256 });
+  else if (!isProjectStoreRecord(pending) || pending.version !== 1 || pending.sha256 !== sha256) {
+    throw new Error('a different legacy project bulk write is incomplete; retry the original import');
+  }
+  await writeEntries(entries);
+  try { await durableRemove(path); }
+  catch (error) {
+    try { await lstat(path); }
+    catch (readError) {
+      if ((readError as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw readError;
+    }
+    throw error;
+  }
 }
 
 export async function setStoredEntry(key: string, value: unknown): Promise<void> {
@@ -416,10 +448,13 @@ export async function isStoredProjectDeleted(projectId: string): Promise<boolean
 let projectStoreTail = Promise.resolve();
 function serializeProjectStore<T>(task: () => Promise<T>): Promise<T> {
   const run = async () => {
+    assertCurrentStorageProfile(profile);
     // Migration uses the same process lock and must run before we acquire it.
     await initializeSqliteProjectStore();
     return withProjectStoreProcessLock(profile.rootDir, async () => {
-      if (!sqliteStoreEnabled()) await recoverLegacyProjectEdit(profile);
+      assertCurrentStorageProfile(profile);
+      await assertDataDirRelocationReady(profile.rootDir);
+      if (!sqliteStoreEnabled()) await recoverLegacyProjectEdit(profile.rootDir);
       return task();
     });
   };
@@ -469,7 +504,7 @@ export async function withSerializedProjectStore<T>(
       }
       return sqliteStoreEnabled()
         ? commitSqliteProjectEdit(changes, originals, canCommit)
-        : commitLegacyProjectEdit(profile, store, changes, originals, canCommit);
+        : commitLegacyProjectEdit(profile.rootDir, store, changes, originals, canCommit);
     };
     return work(store);
   });
@@ -485,6 +520,7 @@ const updateLegacyExportRecovery =
 export async function updateExportRecoveryLease(
   input: ExportRecoveryLeaseInput,
 ): Promise<ProjectStoreMutationResponse> {
+  assertCurrentStorageProfile(profile);
   await initializeSqliteProjectStore();
   if (!sqliteStoreEnabled()) return updateLegacyExportRecovery(input);
   return sqliteImmediateTransaction((store) => (

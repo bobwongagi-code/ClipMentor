@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { runtimeProfile } from '../runtime-profile.ts';
+import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
+import { assertDataDirRelocationReady } from '../data-dir.ts';
 import {
   initializeSqliteProjectStore,
   registerStorageMigrationBarrier,
@@ -10,6 +11,7 @@ import {
   sqliteWriteEntry,
 } from '../storage/sqlite-store.ts';
 import { GENERATION_JOBS_KV_KEY } from '../storage/sqlite-migration.ts';
+import { withProjectStoreProcessLock } from './project-store-process-lock.ts';
 import {
   TERMINAL,
   acceptanceOf,
@@ -32,7 +34,8 @@ export const resumers = new Map<string, GenerationJobResumer>();
 const cleanupPolicyHandlers = new Map<string, GenerationCleanupPolicyHandler>();
 const retentionGuards = new Map<string, GenerationRetentionGuard>();
 const MAX_JOB_AGE_MS = 60 * 60_000;
-const STORE_PATH = runtimeProfile().generationJobStore;
+const profile = runtimeProfile();
+const STORE_PATH = profile.generationJobStore;
 let persistenceHydrated = false;
 let persistenceQueue: Promise<void> = Promise.resolve();
 let persistenceMigrationGate: Promise<void> | null = null;
@@ -112,10 +115,11 @@ function queueLedgerWrite(reservation?: GenerationJob): Promise<void> {
     const rows = persistedRows();
     if (reservation) rows.push(snapshotOf(reservation));
     const ledger = { version: 1, jobs: rows };
-    if (sqliteStoreEnabled()) {
-      // SQLite backend: the whole jobs snapshot lives under one kv key.
-      await sqliteWriteEntry(GENERATION_JOBS_KV_KEY, ledger);
-    } else {
+    await withLedgerDirectory(async () => {
+      if (sqliteStoreEnabled()) {
+        await sqliteWriteEntry(GENERATION_JOBS_KV_KEY, ledger);
+        return;
+      }
       await mkdir(dirname(STORE_PATH), { recursive: true });
       const temporary = `${STORE_PATH}.${process.pid}.${randomUUID()}.tmp`;
       try {
@@ -125,11 +129,19 @@ function queueLedgerWrite(reservation?: GenerationJob): Promise<void> {
         await rm(temporary, { force: true }).catch(() => undefined);
         throw error;
       }
-    }
+    });
     if (reservation) jobs.set(reservation.id, reservation);
   });
   persistenceQueue = write.then(() => undefined, () => undefined);
   return write;
+}
+
+function withLedgerDirectory<T>(work: () => Promise<T>): Promise<T> {
+  return withProjectStoreProcessLock(profile.rootDir, async () => {
+    assertCurrentStorageProfile(profile);
+    await assertDataDirRelocationReady(profile.rootDir);
+    return work();
+  });
 }
 
 function normalizePersistedJob(value: unknown): GenerationJob | null {
@@ -182,17 +194,18 @@ function normalizePersistedJob(value: unknown): GenerationJob | null {
 
 export async function loadPersistedJobs(): Promise<void> {
   await initializeSqliteProjectStore();
-  let parsed: { version?: unknown; jobs?: unknown } | null | undefined;
-  if (sqliteStoreEnabled()) {
-    const row = await sqliteReadEntry(GENERATION_JOBS_KV_KEY);
-    if (row.found) parsed = row.value as typeof parsed;
-  } else {
+  type Ledger = { version?: unknown; jobs?: unknown } | null | undefined;
+  const parsed = await withLedgerDirectory<Ledger>(async () => {
+    if (sqliteStoreEnabled()) {
+      const row = await sqliteReadEntry(GENERATION_JOBS_KV_KEY);
+      return row.found ? row.value as Ledger : undefined;
+    }
     try {
-      parsed = JSON.parse(await readFile(STORE_PATH, 'utf8')) as { version?: unknown; jobs?: unknown };
+      return JSON.parse(await readFile(STORE_PATH, 'utf8')) as Ledger;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-  }
+  });
   if (parsed === undefined) {
     persistenceHydrated = true;
     return;

@@ -2,8 +2,9 @@
 // The default profile preserves MEDIA_DIR → worktree default → R2 read-through semantics
 // and legacy-copy behavior. Isolated development profiles use only their profile media
 // directory: no legacy fallback, legacy copy, MEDIA_DIR override, or R2 read-through.
+import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { copyFile, mkdir, readdir, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { copyFile, link, lstat, mkdir, readdir, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
@@ -16,6 +17,7 @@ import {
   type RuntimeProfile,
 } from './runtime-profile.ts';
 import { resolveMediaReference } from './media-references.ts';
+import { sha256File } from '../shared/node-content-hash.ts';
 
 export const DEFAULT_UPLOAD_DIR = join(process.cwd(), 'public', 'media', 'uploads');
 
@@ -309,12 +311,25 @@ export async function serveDiskFile(req: IncomingMessage, res: ServerResponse, f
 
 // ── Start synchronization ────────────────────────────────────────────────────────
 
+async function matchingUpload(source: string, target: string): Promise<boolean> {
+  const existing = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  if (!existing) return false;
+  if (!existing.isFile() || await sha256File(source) !== await sha256File(target)) {
+    throw new Error('the target contains a different upload with the same name');
+  }
+  return true;
+}
+
 /** Copy the missing assets in the old directory (the original files are retained;.sync transfer atoms are dropped).
  * Idempotent, skip existing files by file name; return the number of successful copies.*/
 export async function syncUploadDirectories(
   source: string,
   target: string,
   log: (msg: string) => void,
+  verifyExisting = false,
 ): Promise<number> {
   if (resolve(source) === resolve(target)) return 0;
   await mkdir(target, { recursive: true });
@@ -325,15 +340,24 @@ export async function syncUploadDirectories(
   let copied = 0;
   for (const entry of entries) {
     if (!entry.isFile() || !isSafeUploadName(entry.name)) continue;
-    if (existsSync(join(target, entry.name))) continue;
-    const part = join(target, `.${entry.name}.sync`);
+    const sourceFile = join(source, entry.name);
+    const targetFile = join(target, entry.name);
+    if (verifyExisting ? await matchingUpload(sourceFile, targetFile) : existsSync(targetFile)) continue;
+    const part = join(target, `.${entry.name}${verifyExisting ? `.${randomUUID()}` : ''}.sync`);
     try {
-      await copyFile(join(source, entry.name), part);
-      await rename(part, join(target, entry.name));
+      await copyFile(sourceFile, part);
+      if (verifyExisting) {
+        try { await link(part, targetFile); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !await matchingUpload(part, targetFile)) throw error;
+          continue;
+        }
+      } else {
+        await rename(part, targetFile);
+      }
       copied += 1;
-    } catch (err) {
+    } finally {
       await unlink(part).catch(() => undefined);
-      throw err;
     }
   }
   if (copied > 0) log(`[media-dir] 已迁移 ${copied} 个素材:${source} → ${target}`);
