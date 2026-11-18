@@ -230,6 +230,10 @@ export async function runOwnedProcess<T = void>({ command, args, input, signal, 
     const failSend = (error: unknown) => {
       failure ??= error instanceof Error ? error : new Error(String(error));
       if (owned.connected) owned.disconnect();
+      signal?.removeEventListener('abort', stop);
+      clearTimeout(timer);
+      // Node need not emit child 'close' after an initial serialization error.
+      reject(failure);
     };
     try {
       owned.send({ command, args, input }, (error) => { if (error) failSend(error); });
