@@ -20,8 +20,8 @@ import {
 } from './project-store-entries.ts';
 import { createAgentRuntimeStoreOperations } from './project-store-agent-runtime.ts';
 import {
-  createExportRecoveryLeaseOperation,
   executeImmediateExportRecoveryMutation,
+  executeStoredExportRecoveryMutation,
   type ExportRecoveryLeaseInput,
 } from './project-store-export-recovery.ts';
 import {
@@ -514,18 +514,12 @@ export const {
   writeAgentRuntime,
   updateStoredAgentRunLease,
 } = createAgentRuntimeStoreOperations(withSerializedProjectStore);
-const updateLegacyExportRecovery =
-  createExportRecoveryLeaseOperation(withSerializedProjectStore);
-
 export async function updateExportRecoveryLease(
   input: ExportRecoveryLeaseInput,
 ): Promise<ProjectStoreMutationResponse> {
-  assertCurrentStorageProfile(profile);
-  await initializeSqliteProjectStore();
-  if (!sqliteStoreEnabled()) return updateLegacyExportRecovery(input);
-  return sqliteImmediateTransaction((store) => (
-    executeImmediateExportRecoveryMutation(store, input)
-  ));
+  return withSerializedProjectStore(async (store) => sqliteStoreEnabled()
+    ? sqliteImmediateTransaction((db) => executeImmediateExportRecoveryMutation(db, input))
+    : executeStoredExportRecoveryMutation(store, input));
 }
 
 export const writeProjectDocument =

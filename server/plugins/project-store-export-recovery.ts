@@ -11,7 +11,6 @@ export type ExportRecoveryLeaseInput = Extract<
   ProjectStoreRequest,
   { operation: 'export-recovery-lease' }
 >;
-type WithStoreLock = <T>(work: (store: LockedProjectStore) => Promise<T>) => Promise<T>;
 interface StoredEntry { found: boolean; value?: unknown }
 export interface ExportRecoveryImmediateStore {
   readEntry(key: string): StoredEntry;
@@ -241,14 +240,21 @@ export function executeImmediateExportRecoveryMutation(
   return mutation.response;
 }
 
-export function createExportRecoveryLeaseOperation(withStoreLock: WithStoreLock) {
-  return async (input: ExportRecoveryLeaseInput): Promise<ProjectStoreMutationResponse> => {
-    requireLeaseDuration(input);
-    return withStoreLock(async (store) => {
-      const stored = await store.readEntry(input.key);
-      const result = reduceExportRecoveryMutation(stored, input, Date.now());
-      if (result.next) await store.writeEntry(input.key, result.next);
-      return result.response;
-    });
-  };
+export async function executeStoredExportRecoveryMutation(
+  store: Pick<LockedProjectStore, 'readEntry' | 'writeEntry'>,
+  input: ExportRecoveryLeaseInput,
+): Promise<ProjectStoreMutationResponse> {
+  requireLeaseDuration(input);
+  const stored = await store.readEntry(input.key);
+  const result = reduceExportRecoveryMutation(stored, input, Date.now());
+  if (result.next) await store.writeEntry(input.key, result.next);
+  return result.response;
+}
+
+export function createExportRecoveryLeaseOperation(
+  withStoreLock: <T>(work: (store: LockedProjectStore) => Promise<T>) => Promise<T>,
+) {
+  return (input: ExportRecoveryLeaseInput): Promise<ProjectStoreMutationResponse> => (
+    withStoreLock((store) => executeStoredExportRecoveryMutation(store, input))
+  );
 }

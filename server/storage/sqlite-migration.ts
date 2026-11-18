@@ -177,7 +177,9 @@ export function ensureMigrationSchema(db: DatabaseSync): void {
 
 /** Read the committed marker; callers decide which receipt phase they require. */
 export function readAuthoritativeImportReceipt(db: DatabaseSync): ImportReceipt | null {
-  ensureMigrationSchema(db);
+  if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'storage_migration_state'").get()) {
+    return null;
+  }
   const row = db.prepare(
     'SELECT receipt FROM storage_migration_state WHERE singleton = ? AND state = ?'
   ).get(MIGRATION_ROW_ID, 'complete') as { receipt: string } | undefined;

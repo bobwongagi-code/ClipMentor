@@ -8,7 +8,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { sqliteStoreEnabled, storePath } from './sqlite-store.ts';
+import { sqliteProfileWrite, sqliteStoreEnabled, storePath } from './sqlite-store.ts';
 import { segmentForIndex } from './search-tokenizer.ts';
 
 const FTS_TABLE = 'search_fts';
@@ -25,23 +25,26 @@ export interface SearchHit {
 let connection: DatabaseSync | null = null;
 
 function openSearchConnection(): DatabaseSync | null {
-  if (connection) return connection;
   if (!sqliteStoreEnabled()) return null;
+  if (connection) return connection;
+  let db: DatabaseSync | undefined;
   try {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const db = new DatabaseSync(path);
-    db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
-    db.exec(`CREATE TABLE IF NOT EXISTS ${STATE_TABLE} (
+    const candidate = new DatabaseSync(path);
+    db = candidate;
+    candidate.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+    sqliteProfileWrite(candidate, () => candidate.exec(`CREATE TABLE IF NOT EXISTS ${STATE_TABLE} (
       k TEXT PRIMARY KEY,
       sha256 TEXT NOT NULL
-    )`);
-    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
       kind, project_id, content, ref, tokenize = 'unicode61'
-    )`);
-    connection = db;
-    return db;
+    )`));
+    connection = candidate;
+    return candidate;
   } catch {
+    db?.close();
     // Search is an enhancement; never break the store when unavailable.
     return null;
   }
@@ -111,41 +114,38 @@ export function indexStoreKey(key: string, value: unknown): void {
   const db = openSearchConnection();
   if (!db) return;
   if (!key.startsWith('chat:') && !key.startsWith('project:')) return;
-  const digest = sha256(JSON.stringify(value ?? null));
-  const state = db.prepare(`SELECT sha256 FROM ${STATE_TABLE} WHERE k = ?`).get(key) as
-    | { sha256: string }
-    | undefined;
-  if (state && state.sha256 === digest) return;
-
   const projectId = key.startsWith('chat:')
     ? key.slice('chat:'.length)
     : key.slice('project:'.length);
 
-  db.exec('BEGIN');
   try {
-    db.prepare(`DELETE FROM ${FTS_TABLE} WHERE project_id = ? AND ref LIKE ?`).run(projectId, `${key}%`);
-    const insert = db.prepare(
-      `INSERT INTO ${FTS_TABLE} (kind, project_id, content, ref) VALUES (?, ?, ?, ?)`,
-    );
-    if (key.startsWith('chat:')) {
-      for (const row of textOfChat(value)) {
-        const content = segmentForIndex(row.text);
-        if (content) insert.run('chat', projectId, content, `${key}:${row.ref}`);
+    const digest = sha256(JSON.stringify(value ?? null));
+    const state = db.prepare(`SELECT sha256 FROM ${STATE_TABLE} WHERE k = ?`).get(key);
+    if (state?.sha256 === digest) return;
+    sqliteProfileWrite(db, () => {
+      db.prepare(`DELETE FROM ${FTS_TABLE} WHERE project_id = ? AND ref LIKE ?`).run(projectId, `${key}%`);
+      const insert = db.prepare(
+        `INSERT INTO ${FTS_TABLE} (kind, project_id, content, ref) VALUES (?, ?, ?, ?)`,
+      );
+      if (key.startsWith('chat:')) {
+        for (const row of textOfChat(value)) {
+          const content = segmentForIndex(row.text);
+          if (content) insert.run('chat', projectId, content, `${key}:${row.ref}`);
+        }
+      } else {
+        const { captions, transcript } = textOfProject(value);
+        const captionContent = segmentForIndex(captions);
+        if (captionContent) insert.run('caption', projectId, captionContent, `${key}:captions`);
+        const transcriptContent = segmentForIndex(transcript);
+        if (transcriptContent) insert.run('transcript', projectId, transcriptContent, `${key}:transcript`);
       }
-    } else {
-      const { captions, transcript } = textOfProject(value);
-      const captionContent = segmentForIndex(captions);
-      if (captionContent) insert.run('caption', projectId, captionContent, `${key}:captions`);
-      const transcriptContent = segmentForIndex(transcript);
-      if (transcriptContent) insert.run('transcript', projectId, transcriptContent, `${key}:transcript`);
-    }
-    db.prepare(
-      `INSERT INTO ${STATE_TABLE} (k, sha256) VALUES (?, ?)
-       ON CONFLICT(k) DO UPDATE SET sha256 = excluded.sha256`,
-    ).run(key, digest);
-    db.exec('COMMIT');
+      db.prepare(
+        `INSERT INTO ${STATE_TABLE} (k, sha256) VALUES (?, ?)
+         ON CONFLICT(k) DO UPDATE SET sha256 = excluded.sha256`,
+      ).run(key, digest);
+    });
   } catch {
-    db.exec('ROLLBACK');
+    // The searchable projection may be rebuilt. It is not a project commit.
   }
 }
 
@@ -154,8 +154,10 @@ export function removeStoreKey(key: string): void {
   const db = openSearchConnection();
   if (!db) return;
   try {
-    db.prepare(`DELETE FROM ${FTS_TABLE} WHERE ref LIKE ?`).run(`${key}%`);
-    db.prepare(`DELETE FROM ${STATE_TABLE} WHERE k = ?`).run(key);
+    sqliteProfileWrite(db, () => {
+      db.prepare(`DELETE FROM ${FTS_TABLE} WHERE ref LIKE ?`).run(`${key}%`);
+      db.prepare(`DELETE FROM ${STATE_TABLE} WHERE k = ?`).run(key);
+    });
   } catch {
     // best-effort
   }
