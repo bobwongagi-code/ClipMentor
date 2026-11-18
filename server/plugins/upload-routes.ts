@@ -7,7 +7,7 @@ import {
   presignGetUpload, presignPutUpload, r2Config, r2PresignEnabled, UploadTooLargeError,
 } from '../r2.ts';
 import {
-  isSafeUploadName, resolveOrHydrateUploadFile, serveDiskFile, syncLegacyUploads,
+  isReservedExportAssetId, isSafeUploadName, resolveOrHydrateUploadFile, serveDiskFile, syncLegacyUploads,
   uploadReadDirs,
 } from '../media-dir.ts';
 import { isIsolatedDevProfile } from '../runtime-profile.ts';
@@ -190,6 +190,10 @@ async function handlePresignPost(req: IncomingMessage, res: ServerResponse): Pro
     name?: string; assetId?: string; contentType?: string;
   };
   const slot = uploadSlot(body);
+  if (isReservedExportAssetId(slot.base)) {
+    sendError(res, 400, 'upload asset ID is reserved for generated exports');
+    return;
+  }
   const proxyUrl = `/upload?name=${encodeURIComponent(slot.name)}&assetId=${encodeURIComponent(slot.base)}`;
   if (directR2UploadAllowed()) {
     const signed = await presignPutUpload(slot.name, slot.contentType);

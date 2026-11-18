@@ -13,12 +13,13 @@ import {
 } from '../../src/export/exportFailure.ts';
 import type { ExportPlan, ExportRequest } from './export-plan.ts';
 import { acceptExportSubmission, type AcceptedExportSubmission } from './export-submission.ts';
+import { runtimeProfile } from '../runtime-profile.ts';
 import {
   acquireExportPermit,
   assertNonEmptyExportBytes,
   cancelActiveExportJob,
   exportJobFilename,
-  exportJobResultName,
+  readExportJobResultFile,
   exportOutputSize,
   forgetExportJobController,
   promoteExportResult,
@@ -30,7 +31,7 @@ import {
   createGenerationJob,
   deleteGenerationJob,
   getGenerationJobSnapshot,
-  initializeGenerationJobs,
+  readGenerationJobSnapshot,
 } from './generation-jobs.ts';
 import {
   bindRequestAbort,
@@ -62,13 +63,8 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     const id = segments[0] ?? '';
     const action = segments[1] ?? '';
     const readJob = async (renderId: string) => {
-      let snapshot = getGenerationJobSnapshot(renderId);
-      if (!snapshot) {
-        try { await initializeGenerationJobs(); }
-        catch { sendError(res, 503, 'render status unavailable; query the same render ID'); return null; }
-        snapshot = getGenerationJobSnapshot(renderId);
-      }
-      return snapshot;
+      try { return await readGenerationJobSnapshot(renderId); }
+      catch { sendError(res, 503, 'render status unavailable; query the same render ID'); return null; }
     };
 
     if (req.method === 'POST' && action === 'promote' && segments.length === 2) {
@@ -79,7 +75,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
         sendError(res, 409, `render job ${id} is not complete`); return;
       }
       try {
-        sendJson(res, 200, await promoteExportResult(snapshot.result, uploadDir()));
+        sendJson(res, 200, await promoteExportResult(snapshot.result, uploadDir(), runtimeProfile()));
       } catch (error) {
         sendError(res, 500, error instanceof Error ? error.message : String(error));
       }
@@ -114,10 +110,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       if (snapshot === null) return;
       if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
       if (snapshot.status === 'succeeded') {
-        const result = snapshot.result;
-        const name = result && exportJobResultName(result.path, result.assetId);
-        const info = name ? await stat(join(uploadDir(), name)).catch(() => null) : null;
-        if (!info?.isFile() || !info.size || (result?.sizeBytes !== undefined && info.size !== result.sizeBytes)) {
+        if (!snapshot.result || !await readExportJobResultFile(snapshot.result, uploadDir()).catch(() => null)) {
           const failure = createExportFailure({stage:'destination',code:'export_output_unreadable',retryable:false,
             cleanupStatus:'not-required',targetPath:null,message:'Original render output is missing or incomplete'});
           // Keep the original receipt so the exact file can be recovered later.

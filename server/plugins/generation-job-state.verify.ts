@@ -57,8 +57,11 @@ try{
   await cold.initializeGenerationJobs();assert.equal(await readFile(storePath,'utf8'),JSON.stringify({version:1,jobs:[]}));
  });
  await test('successful hydration does not retry a failed recovery phase',async()=>{
-  const s=await import('./generation-job-store'),id=randomUUID(),tool='fixture-'+id,key=tool+':fixture',backup=storePath+'.resumer-backup';let lookups=0,resumerCalls=0;
-  const now=Date.now();await writeFile(storePath,JSON.stringify({version:1,jobs:[{id,status:'running',progress:50,params:{},toolName:tool,provider:'fixture',providerTaskId:'retained-task',createdAt:now,updatedAt:now,timestamps:{createdAt:now,submittedAt:now,updatedAt:now,acceptedAt:now}}]}));
+  const s=await import('./generation-job-store'),id=randomUUID(),finished=randomUUID(),tool='fixture-'+id,key=tool+':fixture',backup=storePath+'.resumer-backup';let lookups=0,resumerCalls=0;
+  const now=Date.now();await writeFile(storePath,JSON.stringify({version:1,jobs:[
+   {id,status:'running',progress:50,params:{},toolName:tool,provider:'fixture',providerTaskId:'retained-task',createdAt:now,updatedAt:now,timestamps:{createdAt:now,submittedAt:now,updatedAt:now,acceptedAt:now}},
+   {id:finished,status:'succeeded',progress:100,params:{kind:'export'},createdAt:now,updatedAt:now,result:result(finished)},
+  ]}));
   s.registerGenerationJobResumer(tool,'fixture',async()=>{resumerCalls++;return result(id);});
   const get=s.resumers.get;
   s.resumers.get=function(this:typeof s.resumers,k:string){if(k===key&&++lookups===1){renameSync(storePath,backup);mkdirSync(storePath);}return get.call(this,k);};
@@ -66,7 +69,9 @@ try{
    const path='./generation-job-lifecycle.ts?failed-recovery';const cold=await import(path) as typeof import('./generation-job-lifecycle');
    await assert.rejects(cold.initializeGenerationJobs());await rm(storePath,{recursive:true,force:true});await rename(backup,storePath);
    await assert.rejects(cold.initializeGenerationJobs(),'a failed recovery phase must not be re-entered by initialize');assert.equal(lookups,1);assert.equal(resumerCalls,0);
-  }finally{s.resumers.get=get;s.resumers.delete(key);const j=s.jobs.get(id);if(j)clearTimeout(j.expiryTimer);s.jobs.delete(id);if(await exists(backup)){await rm(storePath,{recursive:true,force:true});await rename(backup,storePath);}await writeFile(storePath,JSON.stringify({version:1,jobs:[]}));}
+   assert.equal((await cold.readGenerationJobSnapshot(finished))?.result?.assetId,finished,'unrelated output remains readable after the ledger recovers');
+   assert.equal(resumerCalls,0);
+  }finally{s.resumers.get=get;s.resumers.delete(key);for(const key of [id,finished]){clearTimeout(s.jobs.get(key)?.expiryTimer);s.jobs.delete(key);}if(await exists(backup)){await rm(storePath,{recursive:true,force:true});await rename(backup,storePath);}await writeFile(storePath,JSON.stringify({version:1,jobs:[]}));}
  });
  for(const invalid of ['future-version','null-root','future-status','duplicate-id'])await test(`unreadable ${invalid} ledger cannot be overwritten by submission`,async()=>{
   const s=await import('./generation-job-store'),id=randomUUID(),now=Date.now(),row={id,status:'succeeded',progress:100,params:{kind:'retained'},createdAt:now,updatedAt:now};
@@ -200,7 +205,14 @@ try{
  await test('retention await cannot evict a replacement record',async()=>{
   let cleaned=0;const j=await start(async id=>result(id),{cleanupPolicy:'server-export'});await j.done;
   store.registerGenerationCleanupPolicy('server-export',async()=>{cleaned++;});
-  store.registerGenerationRetentionGuard('server-export',async id=>{const previous=store.jobs.get(id)!;store.jobs.set(id,{...previous,params:{kind:'replacement'}});await store.persistJobs();return false;});
+  store.registerGenerationRetentionGuard('server-export',async id=>{
+   const ledger=JSON.parse(await readFile(storePath,'utf8'));
+   const replacement=ledger.jobs.find((row:{id:string})=>row.id===id);
+   replacement.params={kind:'replacement'};replacement.reservationId=randomUUID();
+   await writeFile(storePath,JSON.stringify(ledger));
+   await store.refreshGenerationJobs();
+   return false;
+  });
   try{assert.equal(await api.deleteGenerationJob(j.id),false);assert.equal(cleaned,0);assert.equal(api.getGenerationJobSnapshot(j.id)!.params.kind,'replacement');assert.equal((await disk(j.id)).params.kind,'replacement');}
   finally{store.registerGenerationRetentionGuard('server-export',async()=>false);}
  });

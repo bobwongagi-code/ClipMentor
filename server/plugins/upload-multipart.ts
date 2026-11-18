@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import { putUploadFile, r2Config } from '../r2.ts';
-import { uploadDir } from '../media-dir.ts';
+import { isReservedExportAssetId, uploadDir } from '../media-dir.ts';
 import { maxUploadBytes } from './upload.ts';
 import { assembleHashedParts } from './upload-multipart-assembly.ts';
 import { editorCredentialAuthorized } from '../editor-auth.ts';
@@ -258,6 +258,10 @@ export function uploadMultipartPlugin(): Plugin {
             partCount = Math.ceil(size / partSize);
           }
           const assetIdRaw = String(body.assetId ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+          if (isReservedExportAssetId(assetIdRaw)) {
+            sendError(res, 400, 'upload asset ID is reserved for generated exports');
+            return;
+          }
           const ext = (extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '') || '.bin');
           const uploadId = randomUUID().replace(/-/g, '');
           const timestamp = Date.now();
@@ -405,6 +409,10 @@ export function uploadMultipartPlugin(): Plugin {
           }
           if (missing.length) {
             sendError(res, 400, `missing parts: ${missing.slice(0, 20).join(',')}${missing.length > 20 ? '…' : ''}`);
+            return;
+          }
+          if (meta.assetId && isReservedExportAssetId(meta.assetId)) {
+            sendError(res, 400, 'upload asset ID is reserved for generated exports');
             return;
           }
           const dir = uploadDir();

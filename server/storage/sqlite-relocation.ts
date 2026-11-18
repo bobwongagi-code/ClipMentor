@@ -2,8 +2,9 @@ import { chmod, lstat, open } from 'node:fs/promises';
 import sqlite, { DatabaseSync } from 'node:sqlite';
 import { load as loadSqliteVec } from 'sqlite-vec';
 import { beginSqliteWrite } from '../plugins/project-store-process-lock.ts';
+import { assertNoActiveExportForRelocation } from '../plugins/generation-job-types.ts';
 import { assertProjectIndexCompleteness } from '../data-dir.ts';
-import { DELETED_PROJECTS_KV_KEY, readAuthoritativeImportReceipt, RECEIPT_PHASE } from './sqlite-migration.ts';
+import { DELETED_PROJECTS_KV_KEY, GENERATION_JOBS_KV_KEY, readAuthoritativeImportReceipt, RECEIPT_PHASE } from './sqlite-migration.ts';
 
 type SaveSnapshot = (stagedPath: string) => Promise<void>;
 
@@ -43,7 +44,7 @@ export async function verifyRelocatedSqliteSnapshot(path: string) {
 /** Keep a writer fence until the caller finishes the directory cutover. */
 export async function withSqliteRelocationSnapshot<T>(
   sourcePath: string,
-  relocate: (saveSnapshot: SaveSnapshot | null) => Promise<T>,
+  relocate: (saveSnapshot: SaveSnapshot | null, generationLedger?: unknown) => Promise<T>,
 ): Promise<T> {
   const writerFence = new DatabaseSync(sourcePath);
   try {
@@ -52,6 +53,9 @@ export async function withSqliteRelocationSnapshot<T>(
     try {
       const authority = readAuthority(reader);
       if (!authority) return await relocate(null);
+      const ledger = reader.prepare('SELECT v FROM kv WHERE k = ?').get(GENERATION_JOBS_KV_KEY);
+      const generationLedger: unknown = ledger ? JSON.parse(String(ledger.v)) : undefined;
+      assertNoActiveExportForRelocation(generationLedger);
       return await relocate(async (stagedPath) => {
         await sqlite.backup(reader, stagedPath, { rate: 64 });
         await chmod(stagedPath, 0o600);
@@ -69,7 +73,7 @@ export async function withSqliteRelocationSnapshot<T>(
         const file = await open(stagedPath, 'r+');
         try { await file.sync(); }
         finally { await file.close(); }
-      });
+      }, generationLedger);
     } finally {
       reader.close();
     }
