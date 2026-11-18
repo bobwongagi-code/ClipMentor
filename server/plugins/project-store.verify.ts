@@ -44,37 +44,24 @@ async function verifyAtomicWriteOrdering(): Promise<void> {
 }
 
 async function verifyCorruptEntryIsolation(root: string): Promise<void> {
-  // os.homedir() resolves from USERPROFILE on Windows and HOME elsewhere, and
-  // runtime-profile routes the store through it; redirect both so the test root
-  // is honored on every platform.
-  const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  process.env.HOME = root;
-  process.env.USERPROFILE = root;
-  try {
-    const storeDir = join(root, '.openchatcut', 'project-store-v1');
-    await mkdir(storeDir, { recursive: true });
-    await writeFile(join(storeDir, '.ready'), '1\n');
-    await writeFile(join(storeDir, `${encodeURIComponent('project:healthy')}.json`), JSON.stringify({ healthy: true }));
-    await writeFile(join(storeDir, `${encodeURIComponent('project:broken')}.json`), '{');
-    // Dynamic import is intentional: project-store captures the resolved store root at module evaluation.
-    const { readStore } = await import('./project-store.ts');
-    const store = await readStore();
-    assert.deepEqual(store.entries['project:healthy'], { healthy: true });
-    const brokenEntry = store.entries['project:broken'];
-    assert(brokenEntry && typeof brokenEntry === 'object' && 'kind' in brokenEntry);
-    assert.equal(
-      brokenEntry.kind,
-      'quarantined-project-store-entry',
-      'one corrupt entry becomes an explicit marker instead of aborting the directory read',
-    );
-    const quarantine = await readdir(join(storeDir, '.quarantine'));
-    assert.equal(quarantine.length, 1);
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+  const storeDir = join(root, '.openchatcut', 'project-store-v1');
+  await mkdir(storeDir, { recursive: true });
+  await writeFile(join(storeDir, '.ready'), '1\n');
+  await writeFile(join(storeDir, `${encodeURIComponent('project:healthy')}.json`), JSON.stringify({ healthy: true }));
+  await writeFile(join(storeDir, `${encodeURIComponent('project:broken')}.json`), '{');
+  // Dynamic import is intentional: project-store captures the resolved store root at module evaluation.
+  const { readStore } = await import('./project-store.ts');
+  const store = await readStore();
+  assert.deepEqual(store.entries['project:healthy'], { healthy: true });
+  const brokenEntry = store.entries['project:broken'];
+  assert(brokenEntry && typeof brokenEntry === 'object' && 'kind' in brokenEntry);
+  assert.equal(
+    brokenEntry.kind,
+    'quarantined-project-store-entry',
+    'one corrupt entry becomes an explicit marker instead of aborting the directory read',
+  );
+  const quarantine = await readdir(join(storeDir, '.quarantine'));
+  assert.equal(quarantine.length, 1);
 }
 
 async function verifyConcurrentProjectIndexUpdates(): Promise<void> {
@@ -94,11 +81,15 @@ async function verifyConcurrentProjectIndexUpdates(): Promise<void> {
 }
 
 const storeRoot = await mkdtemp(join(tmpdir(), 'openchatcut-project-store-'));
+const previousDataDir = process.env.OPENCHATCUT_DATA_DIR;
+process.env.OPENCHATCUT_DATA_DIR = join(storeRoot, '.openchatcut');
 try {
   await verifyAtomicWriteOrdering();
   await verifyCorruptEntryIsolation(storeRoot);
   await verifyConcurrentProjectIndexUpdates();
 } finally {
+  if (previousDataDir === undefined) delete process.env.OPENCHATCUT_DATA_DIR;
+  else process.env.OPENCHATCUT_DATA_DIR = previousDataDir;
   await rm(storeRoot, { recursive: true, force: true });
 }
 
