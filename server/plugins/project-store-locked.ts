@@ -6,6 +6,7 @@ import {
 import { sqliteDeleteEntry, sqliteReadEntry, sqliteStoreEnabled } from '../storage/sqlite-store.ts';
 import { mergeAgentSidecar } from './project-store-entries.ts';
 import { durableRemove } from './project-store-durable.ts';
+import type { CommitEditRows } from './project-store-edit-journal.ts';
 
 export interface StoredEntryValue {
   found: boolean;
@@ -18,6 +19,7 @@ export interface LockedProjectStore {
   writeAgentRuntimeExact: (key: string, value: unknown) => Promise<void>;
   writeEntryExact: (key: string, value: unknown) => Promise<void>;
   removeEntry: (key: string) => Promise<void>;
+  commitEditRows?: CommitEditRows;
 }
 
 interface ProjectStoreEntryAdapterOptions {

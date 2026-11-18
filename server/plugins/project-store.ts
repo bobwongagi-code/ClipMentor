@@ -53,12 +53,19 @@ import {
   type LockedProjectStore,
   type StoredEntryValue,
 } from './project-store-locked.ts';
+import {
+  commitLegacyProjectEdit,
+  recoverLegacyProjectEdit,
+  type CommitEditRows,
+} from './project-store-edit-journal.ts';
+import { withProjectStoreProcessLock } from './project-store-process-lock.ts';
 
 export type {
   LockedProjectStore,
   StoredEntryValue,
 } from './project-store-locked.ts';
 
+const profile = runtimeProfile();
 const {
   legacyStorePath: LEGACY_STORE_PATH,
   legacyBackupPath: LEGACY_BACKUP_PATH,
@@ -67,7 +74,7 @@ const {
   quarantineDir: QUARANTINE_DIR,
   readyPath: READY_PATH,
   tombstonePath: DELETED_PROJECTS_PATH,
-} = runtimeProfile().projectStore;
+} = profile.projectStore;
 const PROJECT_DOCUMENT_KEY = /^project:(.+)$/;
 const PROJECT_EDIT_OWNERSHIP_PREFIX = 'project-edit-ownership:';
 const VALID_PROJECT_ID = /^[a-zA-Z0-9_-]{1,160}$/;
@@ -231,7 +238,6 @@ async function migrateLegacyStore(): Promise<void> {
 
 let legacyStoreReady: Promise<void> | undefined;
 async function ensureStoreReady(): Promise<void> {
-  await initializeSqliteProjectStore();
   // SQLite backend: no JSON dir / .ready / legacy-file migration needed; the
   // database self-creates its directory and schema (phase 1 adds import).
   if (sqliteStoreEnabled()) return;
@@ -407,25 +413,46 @@ export async function isStoredProjectDeleted(projectId: string): Promise<boolean
 }
 
 
-/**
- * Process-local ordering for project-store operations.
- *
- * The owner-safe cross-process file lease was removed (it caused "guard
- * busy" stalls and is unnecessary for a single-instance app). Within a single
- * process, multi-step store operations (project-document CAS, offline commits,
- * agent-runtime CAS, export-recovery) must still run in order so their
- * read-modify-write steps do not interleave: e.g. a browser editor registered
- * while an offline commit is in flight must observe the post-commit revision
- * (reload) rather than claim a stale frame. This chained promise serializes
- * concurrent project-store mutations in this process. Cross-process
- * safety on SQLite continues to come from WAL + busy_timeout.
- */
 let projectStoreTail = Promise.resolve();
 function serializeProjectStore<T>(task: () => Promise<T>): Promise<T> {
-  const result = projectStoreTail.then(task, task);
+  const run = async () => {
+    // Migration uses the same process lock and must run before we acquire it.
+    await initializeSqliteProjectStore();
+    return withProjectStoreProcessLock(profile.rootDir, async () => {
+      if (!sqliteStoreEnabled()) await recoverLegacyProjectEdit(profile);
+      return task();
+    });
+  };
+  const result = projectStoreTail.then(run, run);
   projectStoreTail = result.then(() => undefined, () => undefined);
   return result;
 }
+
+const editCancelled = Symbol('project edit cancelled');
+const commitSqliteProjectEdit: CommitEditRows = async (changes, _originals, canCommit) => {
+  try {
+    sqliteImmediateTransaction((store) => {
+      for (const [key, entry] of Object.entries(changes)) {
+        if (!canCommit()) throw editCancelled;
+        if (entry.found) store.writeEntry(key, entry.value);
+        else store.deleteEntry(key);
+      }
+      if (!canCommit()) throw editCancelled;
+    });
+  } catch (error) {
+    if (error === editCancelled) return false;
+    throw error;
+  }
+  for (const [key, entry] of Object.entries(changes)) {
+    try {
+      if (entry.found) indexStoreKey(key, entry.value);
+      else removeStoreKey(key);
+    } catch {
+      process.emitWarning('Could not update the search index after a committed project edit.');
+    }
+  }
+  return true;
+};
 
 export async function withSerializedProjectStore<T>(
   work: (store: LockedProjectStore) => Promise<T>,
@@ -433,7 +460,18 @@ export async function withSerializedProjectStore<T>(
   return serializeProjectStore(async () => {
     await ensureStoreReady();
     const deletedIds = new Set(Object.keys(await readDeletedProjects()));
-    return work(createLockedProjectStore(deletedIds));
+    const store = createLockedProjectStore(deletedIds);
+    store.commitEditRows = (changes, originals, canCommit) => {
+      for (const key of Object.keys(changes)) {
+        if (!isProjectStoreKey(key)) throw new Error('invalid project edit key');
+        const projectId = projectIdFromProjectStoreKey(key);
+        if (projectId && deletedIds.has(projectId)) throw new Error('project was deleted');
+      }
+      return sqliteStoreEnabled()
+        ? commitSqliteProjectEdit(changes, originals, canCommit)
+        : commitLegacyProjectEdit(profile, store, changes, originals, canCommit);
+    };
+    return work(store);
   });
 }
 
@@ -447,7 +485,7 @@ const updateLegacyExportRecovery =
 export async function updateExportRecoveryLease(
   input: ExportRecoveryLeaseInput,
 ): Promise<ProjectStoreMutationResponse> {
-  await ensureStoreReady();
+  await initializeSqliteProjectStore();
   if (!sqliteStoreEnabled()) return updateLegacyExportRecovery(input);
   return sqliteImmediateTransaction((store) => (
     executeImmediateExportRecoveryMutation(store, input)
