@@ -88,7 +88,18 @@ export type PollResult =
   }
   | { error: string };
 
-const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+function waitForNextPoll(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, POLL_INTERVAL_MS);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
 
 /** Render jobs submitted THIS session — the lookup base for renderIds prefix
  * resolution and the latest/onlyActive/timelineId selectors. The local dev-server
@@ -156,17 +167,22 @@ function withMediaPoolState(result: PollResult): PollResult {
 /** GET /export/job/:id once, mapping the snapshot to the tool result; transmission/unknown renderId will return a clean error and never throw a naked exception.
  * Exported for register_converted_video (mg-video-tools): resolve a finished render's downloadUrl by renderId. */
 export async function fetchRenderJob(renderId: string): Promise<PollResult> {
-  return pollOnce(renderId);
+  try { return await pollOnce(renderId, AbortSignal.timeout(DEFAULT_WAIT_SECONDS * 1000)); }
+  catch { return { error: `render job ${renderId} status unavailable; query the same render ID` }; }
 }
 
-async function pollOnce(renderId: string): Promise<PollResult> {
-  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { method: 'GET' });
+async function pollOnce(renderId: string, signal?: AbortSignal): Promise<PollResult> {
+  signal?.throwIfAborted();
+  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { method: 'GET', signal });
+  signal?.throwIfAborted();
   if (response.status === 404) return { error: `render job ${renderId} not found` };
   const snapshot = (await response.json().catch(() => null)) as JobSnapshot | { error?: string } | null;
+  signal?.throwIfAborted();
   if (!response.ok || !snapshot || !('status' in snapshot)) {
     const message = snapshot && 'error' in snapshot ? snapshot.error : undefined;
     return { error: message ?? `track_export failed (${response.status})` };
   }
+  if (snapshot.id !== renderId) return { error: `render job ${renderId} status identity mismatch` };
   const completed = isComplete(snapshot.status);
   const result = snapshot.result;
   return {
@@ -278,9 +294,8 @@ function resolveRenderIds(raw: string): { ids: string[] } | { error: string } {
   return { ids: [...new Set(ids)] };
 }
 
-/** latest semantics when renderIds is omitted: latest matching job; onlyActive only leaves in progress;
- *  latest=false lists all recent jobs. Submit records based on this session + real-time polling status.*/
-async function selectLatestJobs(args: Args): Promise<{ ids: string[]; note?: string } | { error: string }> {
+/** When renderIds is omitted, select from this session's submitted jobs. */
+function selectLatestJobs(args: Args): { ids: string[]; note?: string; activeOnly?: boolean } | { error: string } {
   const timelineQ = typeof args.timelineId === 'string' ? args.timelineId.trim() : '';
   const candidates = sessionJobs
     .filter((j) => !timelineQ || (j.timelineId ?? '').startsWith(timelineQ))
@@ -291,13 +306,7 @@ async function selectLatestJobs(args: Args): Promise<{ ids: string[]; note?: str
       : 'no render jobs recorded this session — pass renderIds from submit_render_job' };
   }
   if (args.latest === false) return { ids: candidates.map((j) => j.renderId), note: 'latest=false: all recent render jobs this session, newest first' };
-  if (args.onlyActive === true) {
-    for (const j of candidates) {
-      const r = await pollOnce(j.renderId);
-      if ('ok' in r && !isTerminal(r.status)) return { ids: [j.renderId] };
-    }
-    return { ids: [], note: 'no currently rendering job (onlyActive=true); use onlyActive=false to include completed/failed renders' };
-  }
+  if (args.onlyActive === true) return { ids: candidates.map((j) => j.renderId), activeOnly: true };
   return { ids: [candidates[0]!.renderId] };
 }
 
@@ -316,8 +325,13 @@ function completedExportResult(result: PollResult): ExportJobResult | null {
   };
 }
 
-async function pollAll(ids: string[], ctx: AgentContext): Promise<PollResult[]> {
-  const polled = await Promise.all(ids.map((id) => pollOnce(id)));
+async function pollAll(ids: string[], ctx: AgentContext, signal: AbortSignal, observed: Map<string, PollResult>): Promise<PollResult[]> {
+  const polled = await Promise.all(ids.map(async (id) => {
+    const result = await pollOnce(id, signal);
+    if ('ok' in result) observed.set(id, result);
+    return result;
+  }));
+  signal.throwIfAborted();
   for (const result of polled) {
     const completed = completedExportResult(result);
     const job = 'ok' in result
@@ -327,7 +341,8 @@ async function pollAll(ids: string[], ctx: AgentContext): Promise<PollResult[]> 
       await saveTrackedAgentExport(job.renderId, completed, {
         commands: ctx.commands,
         getDoc: ctx.getDoc,
-      }).catch(() => undefined);
+      }, signal).catch(() => undefined);
+      signal.throwIfAborted();
     }
   }
   const results = polled.map(withMediaPoolState);
@@ -336,54 +351,78 @@ async function pollAll(ids: string[], ctx: AgentContext): Promise<PollResult[]> 
 }
 
 /** Single job keeps the old flat return; multi-job returns {ok, count, jobs} aggregation.*/
-function presentJobs(results: PollResult[], note?: string): Record<string, unknown> {
+function presentJobs(results: Array<PollResult | { renderId: string; status: 'unknown' }>, note?: string): Record<string, unknown> {
   if (results.length === 1 && !note) return { ...results[0] };
   return { ok: true, count: results.length, jobs: results, ...(note ? { note } : {}) };
 }
 
 async function trackExport(args: Args, ctx: AgentContext): Promise<unknown> {
-  try {
-    const action = args.action === 'wait' ? 'wait' : args.action === 'status' ? 'status' : null;
-    if (!action) return { error: 'action is required: "status" or "wait"' };
+  const action = args.action === 'wait' ? 'wait' : args.action === 'status' ? 'status' : null;
+  if (!action) return { error: 'action is required: "status" or "wait"' };
 
+  // 0 keeps the caller's explicit opt-out from a wait deadline.
+  const requested = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? args.timeoutSeconds : DEFAULT_WAIT_SECONDS;
+  const bounded = Math.min(Math.max(requested, 0), MAX_WAIT_SECONDS);
+  const deadline = new AbortController();
+  const runSignal = ctx.getAgentRunSignal?.();
+  const signal = runSignal ? AbortSignal.any([runSignal, deadline.signal]) : deadline.signal;
+  const seconds = action === 'wait' ? bounded : DEFAULT_WAIT_SECONDS;
+  const timer = seconds > 0 ? setTimeout(() => deadline.abort(), seconds * 1000) : undefined;
+  const observed = new Map<string, PollResult>();
+  let ids: string[] = [];
+  let note: string | undefined;
+  try {
     // renderIds (comma separated) take precedence; old singular renderIds are still compatible; both lack → latest semantics.
     const rawIds = typeof args.renderIds === 'string' && args.renderIds.trim()
       ? args.renderIds
       : typeof args.renderId === 'string' && args.renderId.trim() ? args.renderId : '';
-    let ids: string[];
-    let note: string | undefined;
     if (rawIds) {
       const resolved = resolveRenderIds(rawIds);
       if ('error' in resolved) return resolved;
       ids = resolved.ids;
     } else {
-      const selected = await selectLatestJobs(args);
+      const selected = selectLatestJobs(args);
       if ('error' in selected) return selected;
       ids = selected.ids;
       note = selected.note;
-      if (!ids.length) return { ok: true, count: 0, jobs: [], ...(note ? { note } : {}) };
+      if (selected.activeOnly) {
+        let active = false;
+        for (const id of selected.ids) {
+          ids = [id];
+          const result = await pollOnce(id, signal);
+          if ('ok' in result) observed.set(id, result);
+          if ('ok' in result && !isTerminal(result.status)) {
+            active = true;
+            break;
+          }
+        }
+        if (!active) return presentJobs([], 'no currently rendering job (onlyActive=true); use onlyActive=false to include completed/failed renders');
+      }
     }
 
-    if (action === 'status') return presentJobs(await pollAll(ids, ctx), note);
-
-    // action=wait: Poll until all selected jobs are finalized, or timeoutSeconds expires (default 20, 0=unbounded).
-    const requested = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? args.timeoutSeconds : DEFAULT_WAIT_SECONDS;
-    const bounded = Math.min(Math.max(requested, 0), MAX_WAIT_SECONDS);
-    const deadline = bounded === 0 ? Infinity : Date.now() + bounded * 1000;
     for (;;) {
-      const results = await pollAll(ids, ctx);
+      signal.throwIfAborted();
+      const results = await pollAll(ids, ctx, signal, observed);
       const allSettled = results.every((r) => !('ok' in r) || isTerminal(r.status));
-      if (allSettled) return presentJobs(results, note);
-      if (Date.now() >= deadline) return {
-        ...presentJobs(results, note),
-        waitExpired: true,
-        background: true,
-        next: 'The render continues in the background. Report renderId, status, and progress now and end this turn. Do not submit another render or direct the user to the Export button for the same timeline.',
-      };
-      await sleep(POLL_INTERVAL_MS);
+      if (action === 'status' || allSettled) return presentJobs(results, note);
+      await waitForNextPoll(signal);
     }
   } catch (error) {
+    if (signal.aborted) {
+      const latest = ids.map((id) => {
+        const result = observed.get(id);
+        return result && 'ok' in result ? withMediaPoolState(result) : { renderId: id, status: 'unknown' as const };
+      });
+      return {
+        ...presentJobs(latest, note),
+        ...(runSignal?.aborted ? { waitCancelled: true } : { waitExpired: true }),
+        background: latest.some((result) => 'status' in result && !isTerminal(result.status)),
+        next: 'Report the last known status and end this turn. Use track_export with the same renderId for a fresh status. Do not submit another render for the same timeline.',
+      };
+    }
     return { error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -45,8 +45,11 @@ try{
  d.assets.push({id:'original',kind:'video',src:'/media/uploads/original.mp4',sourceContentHash:sourceSha,props:{}});
  d.assets.at(-1)!.props!.clipmentorCreatorStoryboard={source_sha256:sourceSha,rows:[{source_range_seconds:[0,1],source_frames:[0],shot_ms:'Dia menunjukkan palet.',information_ms:'Ini warna.',visible_evidence_ids:['visible'],claim_evidence_ids:['speech']}]};
  const pdf=Buffer.from('%PDF-1.4 fixture derivative');
+ await writeFile(join(root,'original.mp4'),'synthetic source for status');
  const before=JSON.stringify(d);let reads=0,renders=0;const io={storyboard:async()=>{renders++;return {bytes:pdf,preview:attachment,pages:1};},resolve:(name:string)=>join(root,name),read:async(file:string)=>{reads++;return readFile(file);}};
- await productionAttachmentSlots(d,io);assert.equal(renders,0,'ordinary status metadata never renders PDF frames');reads=0;
+ await productionAttachmentSlots(d,io);assert.equal(renders,0,'ordinary status metadata never renders PDF frames');
+ await rm(join(root,'original.mp4'));await assert.rejects(productionAttachmentSlots(d,io),/required_delivery_source_unavailable/);
+ await writeFile(join(root,'original.mp4'),'synthetic source for status');reads=0;
  const files=await productionDeliverables(d,io);assert.equal(files.length,1);assert.equal('src'in files[0],false,'a PDF record cannot pretend its bytes live at the PNG URL');assert.equal(reads,1,'read only current required output, not every old storyboard in the pool');assert.deepEqual(files[0].bytes,pdf);assert.equal(files[0].sha256,hash(pdf));assert.match(files[0].fileName,/Storyboard_.*\.pdf$/);assert.equal(JSON.stringify(d),before);
  await writeFile(join(root,'attachment.png'),'wrong bytes');await assert.rejects(productionDeliverables(d,io),/output_changed/);
  await rm(join(root,'attachment.png'));await assert.rejects(productionDeliverables(d,io),'pool registration without bytes cannot certify delivery');

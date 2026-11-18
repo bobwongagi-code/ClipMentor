@@ -107,12 +107,15 @@ async function verifyDeliveryFailureDoesNotTriggerRenderFallback(): Promise<void
 }
 
 async function verifyPollFailureDoesNotTriggerRenderFallback(): Promise<void> {
+  resetServerExportRecoveryMemory();
   const requests: string[] = [];
+  let readable = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push(`${init?.method ?? 'GET'} ${url}`);
     if (url === '/export/job') return Response.json({ renderId: 'render-active' });
     if (init?.method === 'DELETE') return Response.json({ error: 'still running' }, { status: 409 });
+    if (readable) return Response.json({status:'succeeded',progress:100,result:{path:'/media/original.mp4'}});
     return Response.json({ error: 'temporary poll failure' }, { status: 503 });
   }) as typeof fetch;
   await assert.rejects(
@@ -121,7 +124,13 @@ async function verifyPollFailureDoesNotTriggerRenderFallback(): Promise<void> {
       && error.name !== 'ServerRenderError'
       && error.message === 'temporary poll failure',
   );
-  assert.equal(requests.at(-1), 'DELETE /export/job/render-active');
+  const [saved] = await listServerExportJobs('project-lifecycle');
+  assert.equal(saved?.renderId, 'render-active', 'unknown polling outcome must retain the original recovery record');
+  readable = true;
+  const completed = await pollExport({t:(key)=>key,setProgress:noop},saved.renderId);
+  assert.equal(completed.path,'/media/original.mp4');
+  assert.deepEqual(requests,['POST /export/job','GET /export/job/render-active','GET /export/job/render-active']);
+  resetServerExportRecoveryMemory();
 }
 
 async function verifyCancellationDeletesActiveJob(): Promise<void> {

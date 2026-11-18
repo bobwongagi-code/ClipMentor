@@ -6,6 +6,8 @@ import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFe
 import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
+import {migrateProjectDoc} from '../../src/persist/projectStore';
+import {revisionOf} from '../../src/agent/external-edit-session';
 import {createRun,flushRunPersistence} from '../agent-runs/store';
 import {executeRun} from '../agent-runs/executor';
 import {canonicalServerRunToolCatalog} from '../agent-runs/tool-policy';
@@ -25,7 +27,7 @@ import {recoverProductionGateway,type GatewayRecoveryDecision} from './productio
 import {checkProductionAuthorBlueprint} from './production-author-self-check';
 import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence} from './production-panel-delivery';
 import {assertCreatorDocumentEdit,currentCreatorDocument} from './creator-storyboard-document';
-import {createProductionPreparation,verifyProductionNarrationFiles,verifyProductionEditing,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
+import {createProductionPreparation,verifyProductionNarrationFiles,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
 import {openHeadlessEditor} from './headless-editor';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -66,7 +68,7 @@ export async function persistProductionGatewayDecision(record:ReturnType<typeof 
  const saved=await deps.load(record.projectId,record.artifactId)??await deps.archived?.(record);
  if(!matches(saved??null))throw Error('gateway_recovery_decision_not_saved');
 }
-import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,type StageWorker,type ProductionTask} from './production-task';
+import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,type StageWorker,type ProductionTask} from './production-task';
 
 const hostNames=new Set(['load_skill','edit_item','edit_asset','read_clipmentor_analysis','revise_clipmentor_analysis','observe_clipmentor_source',
  'observe_clipmentor_source_video','read_clipmentor_source_video','view_asset_frames','view_timeline_frames','save_clipmentor_source_frame','submit_voice']);
@@ -102,6 +104,7 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
  const before={stage:task.stage,repairs:task.repairs};let route:RecoveryRoute|'no_matching_route'='no_matching_route';
  try{
   await reconcileBlockedBlueprintState(task,value=>{route=value;});
+  invalidateReconciledProductionStages(task,before);
   await recordProductionDecision(task,{scope:'recovery',action:productionRecoveryProgress(task,before,PRODUCTION_STAGES)?'resume':'stop',
    reason:route,fromStage:before.stage,fromEpoch:before.repairs});
  }catch(error){await recordProductionDecision(task,{scope:'recovery',action:'stop',reason:'reconciliation_failed',fromStage:before.stage,fromEpoch:before.repairs});throw error;}
@@ -123,7 +126,6 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
    if(affected.length){
     task.repairContext={...task.repairContext,revision:saved.revision,audio_picture_repair:{groups:affected,
      instruction:'实测音频已齐全；组级动态秒数不含参照图阅读容量，不能按单句不足直接判失败。按整组意群和原片证据核画面分工，必要时登记有教学作用的参照图/关系卡，不用空长定格、循环、慢放填时长。只修画面计划，不改口播、字幕、短标文字或交付片头片尾，不重新配音。'}};
-    for(const stage of ['blueprint','copy_review','audio','edit','export','self_check'] as const)delete task.completed[stage];
     task.stage='blueprint';task.repairs++;return;
    }
   }
@@ -138,7 +140,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
    const route=productionReviewObservation(saved.doc,{...task,stage:'blueprint',repairContext});
    if(route){
     task.repairContext=repairContext;task.stage='blueprint';task.repairs++;
-    delete task.completed.blueprint;delete task.completed.copy_review;return;
+    return;
    }
   }
  }
@@ -149,7 +151,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   if(saved?.revision===task.projectRevision&&repair?.status==='bound'
    &&repair.subject?.digest===task.repairContext?.blueprint_digest&&needsVisualReviewCompletion(repair)){
    task.repairContext={...task.repairContext,review_contract_recheck:true};
-   task.repairs++;delete task.completed.copy_review;return;
+   task.repairs++;return;
   }
  }
  if(selected('continuation_brief')){
@@ -157,7 +159,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   if(saved&&saved.revision===task.projectRevision&&await upgradeContinuationBrief(updated)){
    const repair=await currentReviewRepair(saved.doc);
    if(repair.status==='bound'&&repair.subject?.digest===task.repairContext?.blueprint_digest){
-    recordTechnicalRecovery(updated);updated.stage='blueprint';delete updated.completed.blueprint;
+    recordTechnicalRecovery(updated);updated.stage='blueprint';
     Object.assign(task,updated);return;
    }
   }
@@ -177,7 +179,6 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
      task.repairContext={...task.repairContext,source_evidence_import:effect.operationId};
      task.repairs++;
      task.stage='blueprint';
-     delete task.completed.blueprint;
      return;
     }
    }
@@ -198,7 +199,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
     return;
    }
    if(contractUpgrade)task.authorCheckContractRevision=2;
-   task.stage='blueprint';task.repairs++;delete task.completed.blueprint;
+   task.stage='blueprint';task.repairs++;
    return;
   }
  }
@@ -207,7 +208,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   const checked=snapshot&&await currentReviewRepair(snapshot.doc);
   if(snapshot&&snapshot.revision===task.projectRevision&&snapshot.doc.clipMentorAnalysis?.source.asset_id===task.input.sourceAssetId
    &&checked?.status==='bound'&&checked.subject?.digest===task.repairContext?.blueprint_digest&&grantFocusedIndependentRepair(task,checked)){
-   task.stage='blueprint';task.repairs++;delete task.completed.blueprint;
+   task.stage='blueprint';task.repairs++;
    return;
   }
  }
@@ -320,7 +321,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
  const editor=await openHeadlessEditor({projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
   ...(task.input.panelDelivery?{assertCanvas:(next:ProjectDoc)=>{assertProductionCanvas(next);if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);}}:{}),
-  assertCurrent:stage.assertCurrent,effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
+  stageEditWrites:task.stage==='edit',assertCurrent:stage.assertCurrent,effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
  const openedRevision=editor.revision;
  editor.context.getAgentRunSignal=()=>stage.signal;
  const executeWithRecovery=(name:string,args:Record<string,unknown>,id:string)=>{
@@ -342,6 +343,19 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  };
  const operation=(scope:string)=>{const h=createHash('sha256').update(`${task.taskId}:${task.stage}:${task.repairs}:${task.feedbackUsed}:${scope}`).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`;};
  try{
+  const publication=task.stage==='edit'?task.editPublication:undefined;
+  if(publication){
+   const saved=await loadOfflineStoredProject(task.projectId);
+   const requirements=await productionReviewRequirements(task.projectId);
+   if(!saved||publication.repairEpoch!==task.repairs||publication.feedbackUsed!==task.feedbackUsed
+    ||task.projectRevision!==undefined&&task.projectRevision!==publication.baseRevision&&task.projectRevision!==saved.revision
+    ||publication.requirementsDigest!==digestValue(requirements?.brief.doneCriteria??[])
+    ||publication.artifact.revision!==saved.revision||saved.revision!==editor.revision
+    ||publication.outputDigest!==feedbackProjectDigest(saved.doc)||publication.outputDigest!==feedbackProjectDigest(editor.getDoc()))
+    throw Error('production_edit_publication_unconfirmed');
+   await stage.assertCurrent?.();
+   return {artifact:publication.artifact};
+  }
   if(task.projectRevision&&editor.revision!==task.projectRevision)throw new Error('production_project_changed; reconcile the saved project before resuming');
   if(isBoundCanvasReflow(task,editor.getDoc()))reflowBaseline=structuredClone(editor.getDoc());
   else if(task.input.panelDelivery)assertProductionCanvas(editor.getDoc());
@@ -638,24 +652,36 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }
   }
   if(task.stage==='audio')await verifyProductionNarrationFiles(next,task.input.voice);
+  let editArtifact:Record<string,unknown>|undefined;
   if(task.stage==='edit'){
+   const normalized=migrateProjectDoc(next);if(!normalized)throw Error('Invalid saved project');next=normalized;
    if(task.input.panelDelivery)assertProductionCanvas(next);
-   try{await verifyProductionEditing(next,task.input.voice);}catch(error){
+   let executionReport:Awaited<ReturnType<typeof productionExecutionReport>>;
+   try{executionReport=await productionExecutionReport(beforeExecution!,next,task.input.voice);}catch(error){
     const diagnostic=executionMappingDiagnostic(error);
     if(!diagnostic)throw error;
-    await editor.commit();
     return {artifact:{revision:editor.revision,runId:run.id,execution_validation_error:diagnostic,
-     instruction:'只修实际摆放校验列出的执行差异；先读现存工程，不重做主体，不改已审计划、稿件或音频。整张已审片尾卡须原样完整显示，不能放大裁掉、上移或拆解替代。保存并按实际组合帧自查。原回执仍有效；宿主复核通过才导出。'},repair:'edit'};
+     instruction:'上轮草稿未发布。先读现存工程，再针对实际摆放校验指出的差异完成本轮。保留已审计划、稿件或音频。整张已审片尾卡须原样完整显示，按实际组合帧自查。宿主验证并保存后才导出。'},repair:'edit'};
    }
    assertSharedProduction(task,next);assertLocalFeedbackPreservation(beforeExecution!,next,task.repairContext?.final_feedback as Record<string,unknown>|undefined);
+   editArtifact={revision:revisionOf(next),analysisRevision:analysis.revision,runId:run.id,
+    blueprintReadiness:await productionBlueprintReadiness(next,task.input.voice),executionReport,semantic_quality:'not_certified_by_structure'};
+   await stage.checkpointEditPublication?.({baseRevision:editor.revision,repairEpoch:task.repairs,feedbackUsed:task.feedbackUsed,
+    outputDigest:feedbackProjectDigest(next),requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),artifact:editArtifact});
   }
   await editor.commit();
   const saved=await loadOfflineStoredProject(task.projectId);
-  if(!saved||saved.revision!==editor.revision)throw new Error('production_saved_readback_mismatch');
+  if(!saved||saved.revision!==editor.revision
+   ||task.stage==='edit'&&feedbackProjectDigest(saved.doc)!==feedbackProjectDigest(editor.getDoc()))
+   throw new Error('production_saved_readback_mismatch');
+  if(editArtifact){
+   if(editArtifact.revision!==saved.revision||feedbackProjectDigest(next)!==feedbackProjectDigest(saved.doc))
+    throw Error('production_saved_readback_mismatch');
+   return {artifact:editArtifact};
+  }
   const blueprintReadiness=await productionBlueprintReadiness(saved.doc,task.input.voice);
-  const executionReport=beforeExecution?await productionExecutionReport(beforeExecution,saved.doc,task.input.voice):undefined;
   return {artifact:{revision:editor.revision,analysisRevision:analysis.revision,runId:run.id,blueprintReadiness,
-   ...(executionReport?{executionReport}:{}),semantic_quality:'not_certified_by_structure'}};
+   semantic_quality:'not_certified_by_structure'}};
  }catch(error){
   // Tool commits are durable even when the subsequent audio verifier fails.
   // Never reconcile an already-stale opening snapshot or someone else's write.

@@ -361,6 +361,125 @@ assert.ok(!('ok' in missing), 'a transport error should not claim ok:true');
   assert.ok(Date.now() - t0 < 5000, 'tiny timeout returns promptly');
 }
 
+for (const stop of ['deadline', 'cancel'] as const) {
+  __resetExportSessionJobs();
+  const id = 'render-stalled-status';
+  const pending = Promise.withResolvers<Response>();
+  const started = Promise.withResolvers<void>();
+  const owner = new AbortController();
+  const trackingContext = { ...ctx, getAgentRunSignal: () => owner.signal };
+  let state = 'running';
+  let submissions = 0;
+  let cancellations = 0;
+  let statusAborts = 0;
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      submissions++;
+      return Response.json({ renderId: id });
+    }
+    if (init?.method === 'DELETE') cancellations++;
+    assert.equal(String(url), `/export/job/${id}`);
+    if (state === 'running') {
+      init?.signal?.addEventListener('abort', () => {
+        statusAborts++;
+        pending.reject(init.signal!.reason);
+      }, { once: true });
+      started.resolve();
+      return pending.promise;
+    }
+    return Response.json({ id, status: 'succeeded', progress: 100, result: { path: '/media/uploads/stalled.mp4' } });
+  }) as typeof fetch;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  try {
+    assert.equal((await execExportTool('submit_render_job', {}, ctx) as { renderId: string }).renderId, id);
+    const timed = execExportTool('track_export', stop === 'deadline'
+      ? { action: 'wait', renderIds: id, timeoutSeconds: 0.03 }
+      : { action: 'wait', onlyActive: true, timeoutSeconds: 0 }, trackingContext);
+    const limit = new Promise<never>((_, reject) => {
+      watchdog = setTimeout(() => reject(Error('wait remained blocked on a single status request')), 600);
+    });
+    if (stop === 'cancel') {
+      await Promise.race([started.promise, limit]);
+      owner.abort();
+    }
+    const expired = await Promise.race([timed, limit]) as { renderId: string; status: string; waitExpired?: boolean; waitCancelled?: boolean; progress?: number };
+    assert.equal(expired.waitExpired, stop === 'deadline' ? true : undefined);
+    assert.equal(expired.waitCancelled, stop === 'cancel' ? true : undefined);
+    assert.equal(expired.renderId, id);
+    assert.equal(expired.status, 'unknown', 'a hung first poll has no observed status');
+    assert.equal(expired.progress, undefined, 'a hung first poll has no observed progress');
+    assert.equal(statusAborts, 1);
+    assert.equal(state, 'running', 'the render continues after the wait expires');
+    state = 'succeeded';
+    const readback = await execExportTool('track_export', { action: 'status', renderIds: id }, ctx) as { renderId: string; status: string; downloadUrl: string };
+    assert.deepEqual([readback.renderId, readback.status, readback.downloadUrl], [id, 'completed', '/media/uploads/stalled.mp4']);
+    assert.deepEqual([submissions, cancellations], [1, 0]);
+  } finally {
+    clearTimeout(watchdog);
+    pending.resolve(Response.json({ id, status: 'succeeded', progress: 100 }));
+  }
+}
+
+{
+  globalThis.fetch = async () => Response.json({ id: 'another-render', status: 'succeeded', progress: 100,
+    result: { path: '/media/uploads/another-render.mp4' } });
+  const result = await execExportTool('track_export', { action: 'status', renderIds: 'original-render' }, ctx) as {error?:string;downloadUrl?:string};
+  assert.match(result.error ?? '', /original-render status identity mismatch/);
+  assert.equal(result.downloadUrl, undefined);
+}
+
+// A successful status read is still available when another job stalls.
+{
+  __resetExportSessionJobs();
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url).endsWith('/fast')) return Response.json({ id: 'fast', status: 'running', progress: 42 });
+    assert.equal(String(url), '/export/job/slow');
+    return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+  }) as typeof fetch;
+  const expired = await execExportTool('track_export', { action: 'wait', renderIds: 'fast, slow', timeoutSeconds: 0.03 }, ctx) as {
+    waitExpired: boolean; jobs: Array<{ renderId: string; status: string; progress?: number }>;
+  };
+  assert.equal(expired.waitExpired, true);
+  assert.deepEqual(expired.jobs.map(({renderId, status, progress}) => [renderId, status, progress]), [
+    ['fast', 'running', 42],
+    ['slow', 'unknown', undefined],
+  ]);
+}
+
+// A render that finished within budget remains completed if media promotion stalls.
+{
+  __resetExportSessionJobs();
+  const id = 'render-pending-promotion';
+  const targetDraft = makeDraft(draft.getDoc());
+  const trackingContext: AgentContext = {
+    ...ctx, commands: targetDraft.commands, getDoc: targetDraft.getDoc, getState: targetDraft.getState, getProjectId: () => 'fixture-export-project',
+  };
+  let submissions = 0;
+  let promotions = 0;
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url) === '/export/job' && init?.method === 'POST') {
+      submissions++;
+      return Response.json({ renderId: id });
+    }
+    if (String(url).endsWith('/promote')) {
+      if (++promotions === 1) return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+      return Response.json({ assetId: 'asset-render', path: '/media/uploads/managed-render.mp4' });
+    }
+    assert.equal(String(url), `/export/job/${id}`);
+    return Response.json({ id, status: 'succeeded', progress: 100, result: { path: '/media/uploads/completed.mp4' } });
+  }) as typeof fetch;
+  await execExportTool('submit_render_job', { saveToMediaPool: true }, trackingContext);
+  const expired = await execExportTool('track_export', { action: 'wait', renderIds: id, timeoutSeconds: 0.03 }, trackingContext) as {
+    status: string; waitExpired: boolean; mediaPoolStatus: string; background: boolean;
+  };
+  assert.deepEqual([expired.status, expired.waitExpired, expired.mediaPoolStatus, expired.background], ['completed', true, 'pending', false]);
+  assert.equal(targetDraft.getDoc().assets.length, 0);
+  const readback = await execExportTool('track_export', { action: 'status', renderIds: id }, trackingContext) as { mediaPoolStatus: string };
+  assert.equal(readback.mediaPoolStatus, 'saved');
+  assert.equal(targetDraft.getDoc().assets[0]?.id, 'asset-render');
+  assert.deepEqual([submissions, promotions], [1, 2]);
+}
+
 // ── latest with an empty session registry → helpful error, no fetch guessing ──
 {
   __resetExportSessionJobs();

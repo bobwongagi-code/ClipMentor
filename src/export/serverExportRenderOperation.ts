@@ -156,8 +156,11 @@ async function readSnapshot(
   t: Translate,
   signal?: AbortSignal,
 ): Promise<ExportJobSnapshot> {
-  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { signal });
+  const readDeadline = AbortSignal.timeout(20_000);
+  const readSignal = signal ? AbortSignal.any([signal, readDeadline]) : readDeadline;
+  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { signal: readSignal });
   const snapshot: unknown = await response.json().catch(() => null);
+  readSignal.throwIfAborted();
   const validSnapshot = snapshot !== null && typeof snapshot === 'object'
     && 'status' in snapshot
     && (snapshot.status === 'queued' || snapshot.status === 'running'
@@ -221,6 +224,9 @@ export async function pollExport(
       const cause = snapshot.failure
         ? new ExportFailureError(snapshot.failure)
         : new Error(snapshot.error ?? context.t('导出失败'));
+      // A saved renderer receipt can outlive its file. Keep the existing
+      // operation available for readback without treating it as a render retry.
+      if (snapshot.failure?.stage === 'destination') throw cause;
       throw new ServerRenderError(cause);
     }
     if (snapshot.status === 'succeeded') return completeSnapshot(context, snapshot);
@@ -260,7 +266,7 @@ export async function renderCompleted(
     await markServerExportOutputReady(renderId);
     return { renderId, completed };
   } catch (error) {
-    if (submissionAccepted && !outputObserved) {
+    if (submissionAccepted && !outputObserved && (signal?.aborted || isServerRenderError(error))) {
       await retireAndDeleteExportJob(renderId).catch(() => false);
     }
     throw error;

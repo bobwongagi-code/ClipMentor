@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {savePendingBlueprintFeedback} from './production-task';
 import {bindBlueprintFeedbackSummary,blueprintFeedbackPoints,captureBlueprintFeedbackSummary} from './production-feedback';
-import {advanceProductionTask,productionFeedback,acceptProductionTask,PRODUCTION_STAGES,validateProductionInput,cancelActiveProductionTask,type ProductionInput,type ProductionTask,type TaskStore} from './production-task';
+import {advanceProductionTask,productionFeedback,acceptProductionTask,PRODUCTION_STAGES,validateProductionInput,cancelActiveProductionTask,runProductionWithRecovery,type ProductionInput,type ProductionTask,type TaskStore} from './production-task';
 const input:ProductionInput={projectId:'test',sourceAssetId:'source',product:{name:'Fixture',category:'test'},brief:'Fixture production without a provider',
  voice:{provider:'minimax',voiceId:'fixture'},
  author:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'responses'},reviewer:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'responses'},
@@ -113,6 +113,25 @@ for(const [from,target] of [['copy_review','blueprint'],['self_check','edit']] a
  assert.equal(coldVisited[0],target,'a cold resume must execute the repair before later review/export');
 }
 const cancellation=fresh();let cancelInvoked=false;
+{
+ const recovering=fresh();
+ recovering.stage='self_check';recovering.repairs=1;
+ for(const stage of PRODUCTION_STAGES.slice(0,-1))recovering.completed[stage]={at:1,artifact:{fixture:'old-'+stage}};
+ recovering.effects['audio:initial:0:voice']={kind:'tts',operationId:'existing-voice',status:'completed',result:{path:'saved-audio'}};
+ recovering.attempts.tts=1;
+ let reconciled=false;
+ const visited:string[]=[];
+ await runProductionWithRecovery(recovering,async t=>{
+  if(!reconciled)throw Error('fixture: original preview needs correction');
+  visited.push(t.stage);
+  assert.equal(t.attempts.tts,1);
+  assert.equal(t.effects['audio:initial:0:voice'].operationId,'existing-voice');
+  return {artifact:{fixture:'new-'+t.stage}};
+ },async t=>{reconciled=true;t.stage='edit';t.repairs++;},store);
+ assert.deepEqual(visited,['edit','export','self_check'],'cold repair must never skip a stage using a prior round artifact');
+ assert.equal(saved.completed.audio?.artifact.fixture,'old-audio','the unaffected stage and its result remain reachable');
+ assert.equal(saved.completed.export?.artifact.fixture,'new-export');
+}
 await advanceProductionTask(cancellation,async(t,c)=>{cancelInvoked=cancelActiveProductionTask(t.projectId,t.taskId);c.signal.throwIfAborted();return {artifact:{saved:true}};},store);assert(cancelInvoked);assert.equal(cancellation.status,'cancelled');
 // Diagnostic persistence introduces an await: reservation must remain before it so
 // concurrent duplicate effect names cannot both cross the provider boundary.
@@ -356,7 +375,6 @@ assert.equal(grantFocusedBlueprintRepair({...focused,attempts:{...focused.attemp
 console.log('Focused blueprint continuation: only new or strictly shrinking known defects under the model cap.');
 
 
-const {runProductionWithRecovery}=await import('./production-task');
 {
  const stale=fresh();
  const settled={...structuredClone(stale),sequence:1,status:'completed' as const};

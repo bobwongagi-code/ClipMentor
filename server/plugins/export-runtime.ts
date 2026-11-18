@@ -212,7 +212,8 @@ export async function cancelActiveExportJob(jobId: string): Promise<boolean> {
   while (Date.now() < deadline) {
     const snapshot = getGenerationJobSnapshot(jobId);
     if (!snapshot) return true;
-    if (snapshot.status === 'succeeded' || snapshot.status === 'failed') {
+    if (snapshot.status === 'succeeded') return false;
+    if (snapshot.status === 'failed') {
       return deleteGenerationJob(jobId);
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
