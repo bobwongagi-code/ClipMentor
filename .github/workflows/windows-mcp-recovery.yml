@@ -8,6 +8,10 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'server/external-agent/**'
+      - 'server/owned-render-process.ts'
+      - 'server/windows-render-job.ts'
+      - 'server/plugins/export-windows-recovery.verify.ts'
+      - 'remotion/export-worker.mjs'
       - 'server/plugins/project-store*.ts'
       - 'src/agent/external-run-ledger.ts'
       - 'src/agent/runtime-ledger.ts'
@@ -19,6 +23,10 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'server/external-agent/**'
+      - 'server/owned-render-process.ts'
+      - 'server/windows-render-job.ts'
+      - 'server/plugins/export-windows-recovery.verify.ts'
+      - 'remotion/export-worker.mjs'
       - 'server/plugins/project-store*.ts'
       - 'src/agent/external-run-ledger.ts'
       - 'src/agent/runtime-ledger.ts'
@@ -35,7 +43,7 @@ jobs:
   process-recovery:
     name: Offline checkpoint process recovery
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -49,6 +57,8 @@ jobs:
         run: npx tsx server/external-agent/offline-mcp-process-recovery.verify.ts
         env:
           ISSUE63_KEEP_TEMP: '1'
+      - name: Verify Windows native render tree and export recovery
+        run: npx tsx server/plugins/export-windows-recovery.verify.ts
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v6
