@@ -1,7 +1,7 @@
 import {outputProductionBudget} from './production-budget';
 import {productionOutputsMatch} from './production-decisions';
 import {digestValue} from '../agent-runs/store-values';
-import {withSerializedProjectStore,getStoredEntry} from '../plugins/project-store';
+import {withSerializedProjectStore,getStoredEntry,isStoredProjectDeleted} from '../plugins/project-store';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {copyReviewSubject,copyTeachingPacketFromDoc,checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {storeAgentArtifact,agentRuntimeKey} from '../../src/persist/agentRuntimeStore';
@@ -139,8 +139,23 @@ export async function queueBlueprintContinuations(parent:ProductionTask){
 
 export async function readProductionOutputs(parent:ProductionTask):Promise<ProductionTask[]>{
  if(parent.productionChildren?.length){
-  const children=await Promise.all(parent.productionChildren.map(entry=>productionTaskStore.load(entry.projectId,entry.taskId)));
-  if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
+  const entries=parent.productionChildren;
+  const results=await Promise.all(entries.map(async entry=>{
+   try{return await productionTaskStore.load(entry.projectId,entry.taskId);}
+   catch(error){
+    if(entry.audience==='new_contact'&&await isStoredProjectDeleted(entry.projectId))return null;
+    throw error;
+   }
+  }));
+  const children=results.filter(child=>child!==null);
+  if(children.length===results.length){
+   if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
+  }else{
+   const [producer]=children;
+   const deleted=entries[results.indexOf(null)];
+   if(entries.length!==2||children.length!==1||!retainedProducerMatches(parent,producer,deleted))
+    throw Error('production_outputs_binding_invalid');
+  }
   return children;
  }
  const entry=parent.productionChild;
@@ -150,6 +165,19 @@ export async function readProductionOutputs(parent:ProductionTask):Promise<Produ
   ||child.blueprintApproval?.sourceProjectId!==parent.projectId||child.blueprintApproval.sourceTaskId!==parent.taskId
   ||child.input.sourceAssetId!==parent.input.sourceAssetId)throw Error('production_outputs_binding_invalid');
  return [child];
+}
+
+/** The durable manifest still identifies both outputs after a follower is
+ * purged. Only the live producer is independent of that removed project. */
+function retainedProducerMatches(parent:ProductionTask,producer:ProductionTask,deleted:NonNullable<ProductionTask['productionChild']>){
+ const entry=parent.productionChildren?.find(item=>item.audience==='existing_partner');
+ const approval=producer.blueprintApproval,shared=producer.sharedProduction;
+ return entry?.taskId===producer.taskId&&entry.projectId===producer.projectId
+  &&deleted.taskId!==producer.taskId&&deleted.projectId!==producer.projectId
+  &&parent.projectId!==producer.projectId&&parent.projectId!==deleted.projectId
+  &&producer.input.panelDelivery?.audience==='existing_partner'&&producer.input.sourceAssetId===parent.input.sourceAssetId
+  &&approval?.sourceProjectId===parent.projectId&&approval.sourceTaskId===parent.taskId&&!!approval.sourceRevision
+  &&(!shared||shared.prepared===true&&shared.projectId===deleted.projectId&&shared.taskId===deleted.taskId);
 }
 
 export async function publishedProductionParent(task:ProductionTask){
@@ -186,7 +214,7 @@ export async function productionParentControlGuards(task:ProductionTask):Promise
 /** Recover the narrow gap between persisting a confirmed batch and queueing its children. */
 async function queueConfirmedOutputs(parent:ProductionTask){
  const children=await readProductionOutputs(parent);
- if(children.length!==2)throw Error('production_outputs_binding_invalid');
+ if(!parent.productionChildren?.length)throw Error('production_outputs_binding_invalid');
  const index=(await getStoredEntry('projects')).value;
  const deleted=new Set(Array.isArray(index)?index.filter(row=>row?.deletedAt).map(row=>row.id):[]);
  if(deleted.has(parent.projectId))throw Error('production_output_project_deleted');
@@ -202,7 +230,9 @@ async function queueConfirmedOutputs(parent:ProductionTask){
    children[index]=current;
   }
  }
- if(!productionOutputsMatch(parent,children))throw Error('production_outputs_binding_invalid');
+ if(children.length===2?!productionOutputsMatch(parent,children)
+  :!retainedProducerMatches(parent,children[0],parent.productionChildren.find(entry=>entry.audience==='new_contact')!))
+  throw Error('production_outputs_binding_invalid');
  return children;
 }
 

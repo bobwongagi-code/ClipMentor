@@ -399,6 +399,13 @@ export async function getStoredEntry(key: string): Promise<StoredEntryValue> {
   });
 }
 
+export async function isStoredProjectDeleted(projectId: string): Promise<boolean> {
+  return serializeProjectStore(async () => {
+    await ensureStoreReady();
+    return Object.hasOwn(await readDeletedProjects(), projectId);
+  });
+}
+
 
 /**
  * Process-local ordering for project-store operations.

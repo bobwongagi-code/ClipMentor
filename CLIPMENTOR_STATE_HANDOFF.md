@@ -2,18 +2,18 @@
 
 ## 从哪里接手
 
-后端仓库为 `bobwongagi-code/ClipMentor`。本文件所在的 `codex/clipmentor-state-handoff` 分支是接手基线。此次修改前的后端树为 `f24436c`，与已合并的 `4f58502` 内容一致。前端在独立的 `Chimera-Prototype-Mockup` 仓库，同名分支的配对提交为 `8690ffd6939a62cabd1d51be90d4967ec030175b`，包含已有的 ClipMentor 前端提交和本次网页修复。前端仓库需要已有访问权限。
+后端仓库为 `bobwongagi-code/ClipMentor`，前端在独立的 `Chimera-Prototype-Mockup` 仓库。2026-11-18 核对的合并基线是后端 `50e6860`、前端 `7c9c1dc`。两边的 `codex/clipmentor-state-handoff` 已合入各自的 `main`。前端仓库需要已有访问权限。
 
 从已克隆的对应仓库进入各自的接手工作树。若远端名有区别，使用 `git remote -v` 核对后替换。
 
 ```bash
 # ClipMentor 后端检出
-git fetch rootify codex/clipmentor-state-handoff
-git worktree add --detach ../clipmentor-state-next FETCH_HEAD
+git fetch rootify main
+git worktree add --detach ../clipmentor-state-next rootify/main
 
 # Chimera 前端检出
-git fetch origin codex/clipmentor-state-handoff
-git worktree add --detach ../clipmentor-web-next FETCH_HEAD
+git fetch origin main
+git worktree add --detach ../clipmentor-web-next origin/main
 ```
 
 先读 [HANDOFF.MD](HANDOFF.MD) 最新几节和 [原状态机盘点](docs/clipmentor-state-machines.md) 的批次验收、网页状态及双版本派发部分。范围是已盘点的 ClipMentor 生产状态机。用实际入口重现可确认的缺陷并修复，沿用现有状态和存储。测试使用隔离工程、合成媒体和本地服务替身。保留真实工程、媒体、历史审核判断及外部调用计数。
@@ -29,9 +29,9 @@ git worktree add --detach ../clipmentor-web-next FETCH_HEAD
 
 ## 下一步
 
-1. 从实际制作 HTTP 继续查跨工程竞态。在持久化子任务前挂起控制请求，同时替换当前父任务、删除工程或切换会话，再恢复原请求。核对对象身份、实际写入、原回执和派发次数。现有回归覆盖请求进入前父清单已失效，也覆盖排队与取消相撞。父清单在控制请求途中变化的组合需要补直接证据。
-2. 用配对前端补多标签页的组合验证。一个标签页保存新蓝图或终审，另一个保留旧审片板、预览或待返回操作。检查两版各自的确认、附件和下载对象。已有真实后端联调、页面重开、旧响应竞态和实际 Vite 代理的分项证据。
-3. 与盘点逐条对照。遇到可复现问题先加失败对照，再修复并跑合法旧版正对照。以持久化数据、实际派发、当前页面状态和导出字节判断。记录仍未覆盖的部署或真实服务边界，避免把模拟工作流当成真实成片或远端可用性验收。
+父清单在控制提交途中变化、父子会话轮换、阶段保存失败以及实际处理器下的双标签页旧动作，均已有合入的回归。详见[盘点与组合证据](docs/clipmentor-state-machines.md)。继续从最新已合并版本复核，遇到可复现问题先加失败对照，再跑合法旧版正对照。
+
+待补的验证包括通用远程 project-store 的跨工程条件、Node 24 环境和多实例部署。现有本地回归可查持久化数据、派发次数、页面状态和导出字节。真实服务与成片质量仍需各自的直接证据。
 
 ## 本地验证入口
 
@@ -60,4 +60,4 @@ CI=1 ./node_modules/.bin/playwright test -c playwright.integration.config.ts --o
 
 **可复制给接手 Agent**
 
-> 从 ClipMentor 和 Chimera 前端的 `codex/clipmentor-state-handoff` 分支继续。先读本交接和对应 HANDOFF，复跑制作 HTTP 与浏览器联调，再查跨工程恢复竞态和两标签页验收。只修复能从实际入口证明的问题。保持真实工程、历史回执、额度和媒体完整，所有回归零外部服务调用。每轮验收后回收本轮临时文件和新生成缓存。全局审计仍未收口。
+> 从 ClipMentor 和 Chimera 前端各自最新的 `main` 开始。先读 HANDOFF 和盘点中的最新验收，复跑制作 HTTP 与浏览器联调。保留真实工程、历史回执、额度和媒体。每轮用本地替身测试并回收本轮临时文件与生成缓存。

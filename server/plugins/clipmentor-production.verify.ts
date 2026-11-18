@@ -365,6 +365,17 @@ try{
  const beforeWrongBatch=await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId)));
  await assert.rejects(queueBlueprintContinuations(reversedLabels),/production_outputs_binding_invalid/,'audience labels must match the actual saved variant before dispatch');
  assert.deepEqual(await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId))),beforeWrongBatch,'an invalid batch cannot partly queue or rewrite either child');
+ {
+  const load=productionTaskStore.load;
+  productionTaskStore.load=async(projectId,taskId)=>{
+   if(projectId===batch[1].projectId&&taskId===batch[1].taskId)throw Error('Production task not found');
+   return load(projectId,taskId);
+  };
+  try{await assert.rejects(queueBlueprintContinuations(confirmationParent),/Production task not found/);}
+  finally{productionTaskStore.load=load;}
+  assert.deepEqual(await Promise.all(batch.map(t=>productionTaskStore.load(t.projectId,t.taskId))),beforeWrongBatch,
+   'an unreadable follower without a project deletion record cannot authorize a partial batch');
+ }
 
  // Two releases can interleave: hold the second queued checkpoint until
  // the first release has already returned and a worker checkpoint is saved.
@@ -933,8 +944,11 @@ try{
  const indexed=[...outputFixtures,panelTask,queued,resumed,unknown,cancelled,blockedTask,deleted];
  for(const item of indexed)await setStoredEntry(`project:${item.projectId}`,projectDoc());
  await setStoredEntry('projects',indexed.map(item=>({
-  id:item.projectId,name:'Cold recovery fixture',updatedAt:Date.now(),...([deleted,removedParent,deletedOutput].includes(item)?{deletedAt:Date.now()}:{}),
+  id:item.projectId,name:'Cold recovery fixture',updatedAt:Date.now(),...([deleted,removedParent].includes(item)?{deletedAt:Date.now()}:{}),
  })));
+ const {deleteStoredEntry}=await import('./project-store');
+ await deleteStoredEntry('project:'+deletedOutput.projectId);
+ await assert.rejects(productionTaskStore.load(deletedOutput.projectId,deletedOutput.taskId),/not found/i);
  await flushServerRunPersistence();resetServerRunStoreForTest();resetAgentRuntimeStoreMemory();
  const visited:string[]=[];
  let replayed:string|undefined,newSubmissions=0,leaseAttempts=0;
@@ -973,10 +987,17 @@ try{
   const coldPost=(task:typeof panelTask)=>fetch(`http://127.0.0.1:${coldAddress.port}/api/clipmentor/production-task`,{method:'POST',
    headers:{Origin:`http://127.0.0.1:${coldAddress.port}`,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
    body:JSON.stringify({action:'resume',projectId:task.projectId,taskId:task.taskId})});
-  for(const item of [removedOutput,supersededOutput,wrongExisting,wrongNew,deletedOutput]){
+  for(const item of [removedOutput,supersededOutput,wrongExisting,wrongNew]){
    assert.equal((await coldPost(item)).status,409);
    assert.deepEqual(await productionTaskStore.load(item.projectId,item.taskId),item,'a separately indexed child cannot write or dispatch without a live and matching parent');
   }
+  assert.equal((await coldPost(deletedOutput)).status,409);
+  await assert.rejects(productionTaskStore.load(deletedOutput.projectId,deletedOutput.taskId),/not found/i);
+  const parentUrl=`http://127.0.0.1:${coldAddress.port}/api/clipmentor/production-task?view=panel&projectId=${partialParent.projectId}`;
+  const replay=await fetch(parentUrl,{method:'POST',headers:{Origin:`http://127.0.0.1:${coldAddress.port}`,
+   'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
+   body:JSON.stringify({action:'produce_versions',revision:liveOutput.blueprintApproval!.sourceRevision})});
+  assert.equal(replay.status,200,'retrying the parent action also tolerates the confirmed deletion');
   assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId,legacyOutput.taskId,liveOutput.taskId]));
  }finally{await new Promise<void>((r,e)=>coldServer.close(err=>err?e(err):r()));}
  console.log('production cold start: resumes queued/running tasks, reuses a reserved effect, keeps unknown outcomes, skips prior versions, review gates and deleted projects');
