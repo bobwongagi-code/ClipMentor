@@ -6,12 +6,15 @@ import { createServer } from 'node:http';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import type { GenerationResult } from './generation-job-types.ts';
 
-type Command = { op: 'submit' | 'recover' | 'status' | 'progress' | 'remove' | 'promote' | 'move' | 'restore-ledger';
-  id?: string; marker?: string; hold?: boolean; accepted?: boolean; fault?: boolean; acceptanceFault?: boolean; target?: string; };
+type Command = { op: 'submit' | 'recover' | 'status' | 'progress' | 'remove' | 'promote' | 'move' | 'restore-ledger'
+  | 'block-ledger' | 'cancel' | 'release' | 'hide-sqlite' | 'restore-sqlite';
+  id?: string; marker?: string; hold?: boolean; accepted?: boolean; fault?: boolean; acceptanceFault?: boolean; target?: string;
+  cancellable?: boolean; noObserver?: boolean; attempt?: string; holdReply?: boolean; };
 const entry = fileURLToPath(import.meta.url);
 const send = (event: string, value?: unknown) => process.send?.({ event, value });
 
@@ -66,10 +69,14 @@ async function worker() {
   registerExportJobRoute(vite);
   (generationProgressPlugin().configureServer as (server: never) => void)(vite);
   (settingsPlugin().configureServer as (server: never) => void)(vite);
+  let holdCancellationReply = false;
   const server = createServer((req, res) => {
     const route = [...routes.keys()].find((prefix) => req.url?.startsWith(prefix));
     if (!route) { res.statusCode = 404; res.end(); return; }
     req.url = req.url!.slice(route.length) || '/';
+    if (holdCancellationReply && req.url.split('?')[0]?.endsWith('/cancel')) {
+      res.end = (() => { send('cancel-persisted', res.statusCode); return res; }) as typeof res.end;
+    }
     routes.get(route)?.(req, res, () => { res.statusCode = 404; res.end(); });
   });
   server.listen(0, '127.0.0.1');
@@ -79,6 +86,8 @@ async function worker() {
   const url = 'http://127.0.0.1:' + address.port;
   let failureDb: InstanceType<typeof DatabaseSync> | undefined;
   let blockedLedger: string | undefined;
+  let offlineSqlite: string | undefined;
+  const heldJobs = new Map<string, () => void>();
   async function blockSettlement() {
     if (process.env.OPENCHATCUT_SQLITE_STORE === '1') {
       failureDb = new DatabaseSync(sqliteProjectStorePath(profile.rootDir));
@@ -98,6 +107,12 @@ async function worker() {
       const id = command.id!;
       let value: unknown;
       if (command.op === 'submit') {
+        const controller = new AbortController();
+        const name = runtime.exportJobFilename(id, 'mp4');
+        const privateOutput = join(uploadDir(), '.' + name);
+        const publicOutput = join(uploadDir(), name);
+        const onCancel = () => send('abort-seen', id);
+        if (command.cancellable) controller.signal.addEventListener('abort', onCancel, { once: true });
         value = await lifecycle.createGenerationJob({ kind: 'export', exportAttemptId: id, marker: command.marker }, async (_id, _update, _download, register) => {
           if (command.accepted) await register('fixture', 'original-provider-id');
           if (command.acceptanceFault) {
@@ -109,18 +124,61 @@ async function worker() {
             send('checkpoint-rejected');
           }
           if (command.hold) {
-            const path = join(uploadDir(), runtime.exportJobFilename(id, 'mp4'));
+            const path = command.cancellable ? privateOutput : publicOutput;
             await mkdir(dirname(path), { recursive: true });
             await writeFile(path, 'partial');
           }
           send('launch', command.marker);
-          if (command.hold) await new Promise(() => undefined);
+          if (command.hold) {
+            await new Promise<void>((resolve) => heldJobs.set(id, resolve));
+            heldJobs.delete(id);
+          }
+          if (command.cancellable) {
+            const bytes = Buffer.from('candidate bytes before terminal commit');
+            await writeFile(privateOutput, bytes);
+            if (command.fault) await blockSettlement();
+            return { assetId: id, kind: 'video', name, path: '/media/uploads/' + name, sizeBytes: bytes.length, durationSeconds: 1 };
+          }
           const result = await renderFile(id, command.marker!);
           if (command.fault) await blockSettlement();
           return result;
-        }, { operationId: id, toolName: 'fixture-process', provider: 'fixture', onSettled: () => { send('settled', id); } });
+        }, {
+          operationId: id, toolName: 'fixture-process', provider: 'fixture',
+          ...(command.cancellable && {
+            publishResult: async () => { await rename(privateOutput, publicOutput); send('published', id); },
+            onCancelled: async () => {
+              await Promise.all([rm(privateOutput, { force: true }), rm(publicOutput, { force: true })]);
+              send('cancel-cleaned', id);
+            },
+          }),
+          onSettled: () => {
+            const status = lifecycle.getGenerationJobSnapshot(id)?.status;
+            if (status !== 'queued' && status !== 'running') runtime.forgetExportJobController(id, controller);
+            send('settled', id);
+          },
+        });
+        if (command.cancellable && !command.noObserver) runtime.trackExportJobController(id, controller, id);
       } else if (command.op === 'recover') {
         await lifecycle.refreshGenerationJobStatus(); await lifecycle.resumeRestoredJobs();
+      } else if (command.op === 'release') {
+        heldJobs.get(id)?.();
+      } else if (command.op === 'block-ledger') {
+        await blockSettlement();
+      } else if (command.op === 'hide-sqlite') {
+        const sql = await import('../storage/sqlite-store.ts');
+        const stored = await sql.sqliteReadEntry('generation-jobs:snapshot');
+        const rows = stored.value as { jobs: Array<{ id: string; executionPid?: number }> };
+        const stale = rows.jobs.find((row) => row.id === id)!;
+        delete stale.executionPid;
+        await writeFile(profile.generationJobStore, JSON.stringify({ version: 1, jobs: [stale] }));
+        const primary = sqliteProjectStorePath(profile.rootDir);
+        offlineSqlite = primary + '.unavailable';
+        await rename(primary, offlineSqlite);
+      } else if (command.op === 'restore-sqlite') {
+        assert(offlineSqlite);
+        await rename(offlineSqlite, sqliteProjectStorePath(profile.rootDir));
+        const legacy = JSON.parse(await readFile(profile.generationJobStore, 'utf8'));
+        value = legacy.jobs[0];
       } else if (command.op === 'restore-ledger') {
         if (failureDb) { failureDb.exec('DROP TRIGGER fixture_terminal_fault'); failureDb.close(); failureDb = undefined; }
         if (blockedLedger) { await rm(profile.generationJobStore, { recursive: true }); await rename(blockedLedger, profile.generationJobStore); }
@@ -130,6 +188,11 @@ async function worker() {
         let body: unknown;
         if (command.op === 'remove') method = 'DELETE';
         if (command.op === 'promote') { route += '/promote'; method = 'POST'; }
+        if (command.op === 'cancel') {
+          route += '/cancel' + (command.attempt ? '?attemptId=' + encodeURIComponent(command.attempt) : '');
+          method = 'POST';
+          holdCancellationReply = command.holdReply === true;
+        }
         if (command.op === 'move') { route = '/api/keys'; method = 'POST'; body = { OPENCHATCUT_DATA_DIR: command.target }; }
         if (command.op === 'progress') { route = '/generate/progress'; method = 'POST'; body = { action: 'status', target: 'generation', jobIds: [id] }; }
         const response = await fetch(url + route, { method, ...(body && { body: JSON.stringify(body) }) });
@@ -195,6 +258,122 @@ async function main() {
       await delay(20);
     }
     assert.fail('expected status ' + expected);
+  }
+  async function verifyCancellation(home: string, sqlite: boolean) {
+    await mkdir(home);
+    const a = await start(home, sqlite), b = await start(home, sqlite), c = await start(home, sqlite);
+    const submitHeld = async (options: Partial<Command> = {}) => {
+      const id = randomUUID();
+      await a.request({ op: 'submit', id, marker: id, cancellable: true, hold: true, ...options });
+      assert.equal(await a.next('launch'), id);
+      return id;
+    };
+    const cancel = (w: Worker, id: string, attempt = id) => w.request({ op: 'cancel', id, attempt });
+    const uploads = join(home, 'public', 'media', 'uploads');
+
+    const done = await submitHeld();
+    await a.request({ op: 'release', id: done });
+    assert.equal(await a.next('published'), done);
+    assert.equal(await a.next('settled'), done);
+    const complete = await status(c, done, 'succeeded');
+    const donePath = join(uploads, basename(complete.result.path));
+    const saved = await readFile(donePath);
+    for (const peer of [b, c]) assert.equal((await cancel(peer, done)).http, 409);
+    assert.deepEqual(await readFile(donePath), saved);
+    assert.equal((await status(c, done, 'succeeded')).result.assetId, done);
+
+    const cancelled = await submitHeld();
+    assert.equal((await b.request({ op: 'cancel', id: cancelled })).http, 409, 'a new attempt requires the matching stop token');
+    assert.equal((await cancel(b, cancelled, done)).http, 409, 'a stale attempt cannot cancel its replacement');
+    assert.equal((await c.request({ op: 'remove', id: cancelled })).http, 409, 'cleanup cannot stop active work');
+    const pending = await Promise.all([cancel(b, cancelled), cancel(c, cancelled)]);
+    assert(pending.every(({ http }) => http === 202));
+    assert.equal((await status(c, cancelled, 'running')).cancellationRequested, true);
+    assert.equal(await a.next('abort-seen'), cancelled);
+    assert.equal((await cancel(b, cancelled)).http, 202);
+    await a.request({ op: 'release', id: cancelled });
+    assert.equal(await a.next('cancel-cleaned'), cancelled);
+    assert.equal(await a.next('settled'), cancelled);
+    const cancelledJob = await status(c, cancelled, 'failed');
+    assert.equal(cancelledJob.code, 'export_cancelled');
+    assert.equal(cancelledJob.result, undefined);
+    assert.equal(cancelledJob.timestamps.acceptedAt, undefined);
+    for (const peer of [b, c]) assert.equal((await cancel(peer, cancelled)).http, 204);
+    assert.equal((await status(b, cancelled, 'failed')).code, 'export_cancelled', 'repeat must retain the receipt');
+    assert.equal((await c.request({ op: 'promote', id: cancelled })).http, 409);
+    assert.equal(a.events.some(({ event, value }) => event === 'published' && value === cancelled), false);
+    await assert.rejects(readFile(join(uploads, `openchatcut-export-job-${cancelled}.mp4`)), { code: 'ENOENT' });
+
+    const retry = await submitHeld();
+    if (sqlite && process.platform !== 'win32') {
+      const removed = await b.request({ op: 'hide-sqlite', id: retry });
+      assert.equal(removed, undefined);
+      assert.equal((await cancel(b, retry)).http, 503, 'legacy must not replace unavailable SQLite authority');
+      assert.equal((await c.request({ op: 'status', id: retry })).http, 503);
+      assert.equal((await b.request({ op: 'restore-sqlite' })).status, 'running', 'old legacy bytes were not changed');
+    }
+    await b.request({ op: 'block-ledger' });
+    assert.equal((await cancel(b, retry)).http, 503);
+    await b.request({ op: 'restore-ledger' });
+    await delay(300);
+    assert.equal(a.events.some(({ event, value }) => event === 'abort-seen' && value === retry), false);
+    await status(c, retry, 'running');
+    assert.equal((await cancel(b, retry)).http, 202);
+    assert.equal(await a.next('abort-seen'), retry);
+    await a.request({ op: 'release', id: retry });
+    assert.equal(await a.next('cancel-cleaned'), retry);
+    assert.equal(await a.next('settled'), retry);
+    assert.equal((await status(c, retry, 'failed')).code, 'export_cancelled');
+
+    const late = await submitHeld({ fault: true });
+    await a.request({ op: 'release', id: late });
+    assert.equal(await a.next('settled'), late);
+    await a.request({ op: 'restore-ledger' });
+    assert.equal((await cancel(b, late)).http, 202);
+    assert.equal(await a.next('cancel-cleaned'), late, 'peer request settles after terminal write failure without an owner GET');
+    assert.equal((await status(c, late, 'failed')).code, 'export_cancelled');
+    await assert.rejects(readFile(join(uploads, `openchatcut-export-job-${late}.mp4`)), { code: 'ENOENT' });
+
+    for (const recoverFromStatus of sqlite ? [false, true] : []) {
+      // SQLite can reject the row update after the finished file was renamed.
+      // The owner then dies before its ordinary cancellation cleanup can run.
+      const crashed = await start(home, sqlite);
+      const id = randomUUID();
+      await crashed.request({ op: 'submit', id, marker: id, cancellable: true, hold: true, fault: true, noObserver: true });
+      assert.equal(await crashed.next('launch'), id);
+      await crashed.request({ op: 'release', id });
+      assert.equal(await crashed.next('published'), id);
+      assert.equal(await crashed.next('settled'), id);
+      await crashed.request({ op: 'restore-ledger' });
+      if (recoverFromStatus) assert.equal((await cancel(b, id)).http, 202);
+      await stop(crashed);
+      const exposedPath = join(uploads, `openchatcut-export-job-${id}.mp4`);
+      assert.equal(await readFile(exposedPath, 'utf8'), 'candidate bytes before terminal commit');
+      if (!recoverFromStatus) assert.equal((await cancel(b, id)).http, 204);
+      assert.equal((await status(c, id, 'failed')).code, 'export_cancelled');
+      await assert.rejects(readFile(exposedPath), { code: 'ENOENT' }, 'recovering cancellation retracts the exposed attempt');
+      assert.deepEqual(await readFile(donePath), saved, 'retraction leaves the previous completed attempt intact');
+    }
+
+    const abandoned = await submitHeld({ noObserver: true, accepted: true });
+    const lost = b.request({ op: 'cancel', id: abandoned, attempt: abandoned, holdReply: true }).catch(() => undefined);
+    assert.equal(await b.next('cancel-persisted'), 202);
+    await stop(b);
+    await lost;
+    assert.equal((await cancel(c, abandoned)).http, 202);
+    await stop(a);
+    assert.equal(a.events.some(({ event, value }) => event === 'abort-seen' && value === abandoned), false);
+    assert.equal((await status(c, abandoned, 'failed')).code, 'export_cancelled', 'warm status settles after owner death');
+    const cold = await start(home, sqlite);
+    const answers = await Promise.all([cancel(c, abandoned), cancel(cold, abandoned)]);
+    assert(answers.every(({ http }) => http === 204));
+    assert.equal((await status(cold, abandoned, 'failed')).code, 'export_cancelled');
+    assert.equal(cold.events.some(({ event }) => event === 'resume-start' || event === 'launch'), false);
+    assert.equal((await cancel(cold, randomUUID())).http, 404);
+    assert.equal(await readFile(join(uploads, `.openchatcut-export-job-${abandoned}.mp4`), 'utf8'), 'partial');
+    await assert.rejects(readFile(join(uploads, `openchatcut-export-job-${abandoned}.mp4`)), { code: 'ENOENT' });
+    await Promise.all([stop(c), stop(cold)]);
+    console.log('cross-process export cancellation', sqlite ? 'SQLite' : 'JSON', 'passed');
   }
   try {
     for (const sqlite of [false, true]) {
@@ -285,6 +464,7 @@ async function main() {
       assert.match(await readFile(join(target, 'media', 'uploads', 'openchatcut-export-job-' + pending + '.mp4'), 'utf8'), /complete synthetic output/);
       for (const w of [b, cold, observer]) await stop(w);
       console.log('generation-process', sqlite ? 'SQLite' : 'JSON', 'passed');
+      await verifyCancellation(join(root, sqlite ? 'cancel-sqlite' : 'cancel-json'), sqlite);
     }
   } finally {
     await Promise.all(workers.map(stop));

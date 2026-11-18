@@ -20,6 +20,7 @@ import {
   GENERATION_JOBS_KV_KEY,
   RECEIPT_PHASE,
   ensureJsonImported,
+  importReceiptPath,
   readAuthoritativeImportReceipt,
   synchronizeImportReceiptSidecar,
   type ImportReceipt,
@@ -114,6 +115,17 @@ export function sqliteStoreEnabled(): boolean {
   if (env !== undefined && env !== '1') return false;
   const receipt = authoritativeReceipt();
   return receipt !== null && receipt.phase >= RECEIPT_PHASE;
+}
+
+/** Ledger fallbacks must not turn unavailable SQLite into legacy authority. */
+export function assertGenerationLedgerAuthority(beforeInitialization = false): void {
+  const mode = process.env[SQLITE_STORE_ENV];
+  if (mode !== undefined && mode !== '1') return;
+  if (beforeInitialization && existsSync(storePath())) return;
+  if (sqliteStoreEnabled()) return;
+  if (processPhase === 'complete' || existsSync(storePath()) || existsSync(importReceiptPath())) {
+    throw new Error('SQLite generation ledger authority is unavailable');
+  }
 }
 
 async function withMigrationLease<T>(task: () => T | Promise<T>): Promise<T> {

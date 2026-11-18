@@ -37,25 +37,28 @@ try{
  const post=async(body:unknown)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal(response.status,200,await response.clone().text());return response.json();};
  try{
   const unreadableId=randomUUID(),operationUrl=`${url}/${unreadableId}`;
-  const lookups=[['GET',operationUrl],['DELETE',operationUrl],['POST',operationUrl+'/promote']] as const;
+  const lookups=[['GET',operationUrl],['DELETE',operationUrl],['POST',operationUrl+'/promote'],['POST',operationUrl+'/cancel']] as const;
   await writeFile(generationJobStore,'{unfinished');
   const readCodes=async()=>Promise.all(lookups.map(async ([method,path])=>{
    const response=await fetch(path,{method});await response.text();return response.status;
   }));
-  assert.deepEqual(await readCodes(),[503,503,503],'an unreadable cold ledger is unknown on every render-ID path');
+  assert.deepEqual(await readCodes(),[503,503,503,503],'an unreadable cold ledger is unknown on every render-ID path');
   const unknownSubmission=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({operationId:unreadableId})});
   assert.equal(unknownSubmission.status,503,'cold repeat submission cannot infer absence or start work');
   await unknownSubmission.text();
-  const priorColdId=randomUUID(),now=Date.now();
+  const priorColdId=randomUUID(),cancelledStaleId=randomUUID(),cancelledStaleAttempt=randomUUID(),now=Date.now();
   await writeFile(generationJobStore,JSON.stringify({version:1,jobs:[{
    id:priorColdId,status:'failed',progress:100,params:{kind:'export',projectRevision:'original-revision',timelineId:'timeline-1'},
    createdAt:now,updatedAt:now,
+  },{
+   id:cancelledStaleId,status:'failed',progress:100,code:'export_cancelled',
+   params:{kind:'export',exportAttemptId:cancelledStaleAttempt},createdAt:now,updatedAt:now,
   }]}));
   const coldDuplicate=await post({operationId:priorColdId});
   assert.deepEqual(coldDuplicate,{renderId:priorColdId,projectRevision:'original-revision',timelineId:'timeline-1'},
    'a cold duplicate must read the existing job before validating new render input');
-  assert.deepEqual(await readCodes(),[404,404,404],'a healthy ledger can establish that an ID is absent');
+  assert.deepEqual(await readCodes(),[404,404,404,404],'a healthy ledger can establish that an ID is absent');
   jobIds.push(priorColdId);
   const id=randomUUID();jobIds.push(id);
   const first=await post({operationId:id,state:draft.getState(),project:doc,timelineId:doc.activeTimelineId});
@@ -70,26 +73,42 @@ try{
   const parallel=await Promise.all([post({operationId:concurrentId,state:draft.getState(),project:doc}),post({operationId:concurrentId,state:changed.timelines[0],project:changed})]);
   assert.equal(parallel[0].projectRevision,parallel[1].projectRevision,'concurrent duplicates identify the single winning snapshot');
   assert.equal(parallel[0].renderId,parallel[1].renderId);
+  const reusedId=randomUUID();
+  const originalAttempt=await post({operationId:reusedId,state:draft.getState()});
+  const stopOriginal=async()=>fetch(`${url}/${reusedId}/cancel?attemptId=${originalAttempt.attemptId}`,{method:'POST'});
+  const until=Date.now()+4000;
+  for(;;){
+   const response=await stopOriginal();await response.text();
+   if(response.status===204)break;
+   assert.equal(response.status,202);assert(Date.now()<until);await new Promise(r=>setTimeout(r,30));
+  }
+  assert.equal((await fetch(`${url}/${reusedId}`,{method:'DELETE'})).status,204);
+  const replacement=await post({operationId:reusedId,state:draft.getState()});
+  jobIds.push(reusedId);
+  assert.notEqual(replacement.attemptId,originalAttempt.attemptId);
+  assert.equal((await stopOriginal()).status,409,'delayed cancellation cannot stop a replacement under the same ID');
   const {createGenerationJob,deleteGenerationJob,getGenerationJobSnapshot}=await import('../plugins/generation-jobs');
   const foreignId=randomUUID();await createGenerationJob({kind:'fixture-other'},async()=>{throw Error('fixture terminal job');},{operationId:foreignId});
   const foreign=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operationId:foreignId,state:draft.getState(),project:doc})});
-  assert.equal(foreign.status,400);assert.match(await foreign.text(),/different job kind/);await deleteGenerationJob(foreignId);
+  assert.equal(foreign.status,400);assert.match(await foreign.text(),/different job kind/);
+  assert.equal((await fetch(`${url}/${foreignId}/cancel`,{method:'POST'})).status,404);
+  await deleteGenerationJob(foreignId);
   const legacyId=randomUUID();jobIds.push(legacyId);const legacy=await post({operationId:legacyId,state:draft.getState()});
   assert.equal(legacy.renderId,legacyId);assert.equal(legacy.projectRevision,undefined,'ordinary state-only exports remain valid');
   const finishedId=randomUUID(),assetId=randomUUID(),filename=exportJobFilename(assetId,'mp4'),file=join(uploadDir(),filename);
   const output=Buffer.from('synthetic fixture bytes');
-  const controller=new AbortController(),started=Promise.withResolvers<void>(),complete=Promise.withResolvers<void>();
+  const controller=new AbortController(),started=Promise.withResolvers<void>(),complete=Promise.withResolvers<void>(),finished=Promise.withResolvers<void>();
   await createGenerationJob({kind:'export'},async()=>{
    started.resolve();await complete.promise;
    return {assetId,path:'/media/uploads/'+filename,kind:'video',name:'Fixture',sizeBytes:output.length,durationSeconds:1};
-  },{operationId:finishedId,cleanupPolicy:'server-export',onSettled:forgetExportJobController});
+  },{operationId:finishedId,cleanupPolicy:'server-export',onSettled:id=>{forgetExportJobController(id);finished.resolve();}});
   await started.promise;
   trackExportJobController(finishedId,controller);
   await writeFile(file,output);
-  controller.signal.addEventListener('abort',()=>complete.resolve(),{once:true});
-  const lateCancellation=await fetch(`${url}/${finishedId}`,{method:'DELETE'});
+  complete.resolve();await finished.promise;
+  const lateCancellation=await fetch(`${url}/${finishedId}/cancel`,{method:'POST'});
   assert.equal(lateCancellation.status,409,'a cancellation racing a completed render must keep the successful result');
-  assert.match(await lateCancellation.text(),/completed before cancellation/);
+  assert.match(await lateCancellation.text(),/result was retained/);
   assert.equal(getGenerationJobSnapshot(finishedId)?.status,'succeeded');
   const status=async()=>{const answer=await fetch(`${url}/${finishedId}`);assert.equal(answer.status,200);return answer.json();};
   assert.equal((await status()).result.path,'/media/uploads/'+filename);
@@ -115,13 +134,16 @@ try{
   assert.deepEqual(await readFile(join(uploadDir(),`openchatcut-derived-${assetId}.mp4`)),output);
   const {setStoredEntry,deleteStoredEntry}=await import('../plugins/project-store');
   const recoveryKey='export-recovery:'+finishedId;
+  const cancelledRecoveryKey='export-recovery:'+cancelledStaleId;
   await setStoredEntry(recoveryKey,{version:1,renderId:finishedId,stage:'output-ready'});
+  await setStoredEntry(cancelledRecoveryKey,{version:1,renderId:cancelledStaleId,stage:'polling'});
   assert.notEqual(finishedId,assetId,'legacy export output ID differs from its persisted operation ID');
   const orphan=join(uploadDir(),exportJobFilename(randomUUID(),'mp4'));
   const activeAlias=join(uploadDir(),exportJobFilename(snapshot.params.exportAttemptId,'mp4'));
+  const cancelledAlias=join(uploadDir(),exportJobFilename(cancelledStaleAttempt,'mp4'));
   const obsolete=new Date(Date.now()-3*60*60_000);
-  await Promise.all([writeFile(orphan,output),writeFile(activeAlias,output)]);
-  await Promise.all([file,orphan,activeAlias].map(path=>utimes(path,obsolete,obsolete)));
+  await Promise.all([writeFile(orphan,output),writeFile(activeAlias,output),writeFile(cancelledAlias,output)]);
+  await Promise.all([file,orphan,activeAlias,cancelledAlias].map(path=>utimes(path,obsolete,obsolete)));
   const swept=Promise.withResolvers<void>();
   const cleanupServer=createServer();
   const plugin=exportPlugin();
@@ -130,6 +152,7 @@ try{
   try{
    await swept.promise;
    await assert.rejects(readFile(orphan),{code:'ENOENT'});
+   await assert.rejects(readFile(cancelledAlias),{code:'ENOENT'},'cancelled output can expire with a browser recovery record');
    assert.deepEqual(await readFile(file),output,'startup cleanup must resolve an older output to the operation that still needs it');
    assert.deepEqual(await readFile(activeAlias),output,'cleanup cannot evict an active attempt older than the sweep threshold');
    assert.equal((await status()).result.path,'/media/uploads/'+filename,'readback uses the original operation after unrelated cleanup');
@@ -137,6 +160,7 @@ try{
    cleanupServer.emit('close');
    await rm(activeAlias,{force:true});
    await deleteStoredEntry(recoveryKey);
+   await deleteStoredEntry(cancelledRecoveryKey);
   }
   const blockedLedger=generationJobStore+'.cleanup-backup';
   await rename(generationJobStore,blockedLedger);await mkdir(generationJobStore);
@@ -210,7 +234,18 @@ try{
    exportPlugin();await deleteGenerationJob(priorId);
   }
  }finally{
-  for(const id of jobIds){const cancelled=await fetch(`${url}/${id}`,{method:'DELETE'});assert.equal(cancelled.status,204,await cancelled.text());}
+  for(const id of jobIds){
+   const deadline=Date.now()+8000;
+   const existing=await (await fetch(`${url}/${id}`)).json();
+   const attemptId=existing.params?.exportAttemptId;
+   for(;;){
+    const attempt=attemptId?`?attemptId=${encodeURIComponent(attemptId)}`:'';
+    const requested=await fetch(`${url}/${id}/cancel${attempt}`,{method:'POST'});await requested.text();
+    if(requested.status!==202)break;
+    assert(Date.now()<deadline,'queued cancellation did not settle');await new Promise(r=>setTimeout(r,50));
+   }
+   const deleted=await fetch(`${url}/${id}`,{method:'DELETE'});assert.equal(deleted.status,204,await deleted.text());
+  }
   releases.forEach(release=>release());await new Promise<void>(r=>server.close(()=>r()));
  }
  assert(!(await readdir(uploadDir())).some(name=>name.endsWith('.mp4')),'no renderer created a video');

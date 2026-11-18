@@ -3,7 +3,7 @@ import type { MediaAsset, ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
 import { readStoredServerRun } from '../agent/serverRunSessionStorage';
 import type { BackgroundExportExecution, ExportJobStore } from './backgroundExportStore';
-import { deleteExportJob, pollExport } from './serverExportRenderOperation';
+import { cancelExportJob, pollExport } from './serverExportRenderOperation';
 import type { ExportJobResult, Translate } from './exportWorkflowTypes';
 
 export interface AgentExportSourceItem {
@@ -25,6 +25,7 @@ export interface AgentExportMediaPoolPlan {
 
 export interface AgentExportSubmission {
   renderId: string;
+  attemptId?: string;
   projectId: string;
   label: string;
   createdAt: number;
@@ -192,9 +193,11 @@ async function monitorAgentExport(
   target?: MediaPoolTarget,
 ): Promise<void> {
   const { signal, setters } = execution;
+  let outputObserved = false;
   setters.setRenderEngine('server');
   try {
     const completed = await pollExport({ setProgress: setters.setProgress, t }, submission.renderId, signal);
+    outputObserved = true;
     if (submission.saveToMediaPool) {
       try {
         if (!target) throw new Error('media pool target unavailable');
@@ -225,7 +228,7 @@ async function monitorAgentExport(
     } : current);
   } finally {
     setters.setBusy(null);
-    if (signal.aborted) await deleteExportJob(submission.renderId);
+    if (signal.aborted && !outputObserved) await cancelExportJob(submission.renderId, submission.attemptId);
   }
 }
 

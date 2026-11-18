@@ -340,6 +340,16 @@ async function verifyExplicitRerenderRetiresRecoveryFirst(): Promise<void> {
   const store = createExportJobStore();
   await resumePersistedServerExports({ exportJobs: store, projectId: retained.projectId, t: (key) => key });
   assert.equal(store.getSnapshot().jobs.length, 0, 'retired recovery cannot auto-deliver later');
+
+  const stillRendering = { ...retained, renderId: 'pending-stop', attemptId: 'pending-attempt', stage: 'polling' as const };
+  await persistServerExportJob(stillRendering);
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), '/export/job/pending-stop/cancel?attemptId=pending-attempt');
+    assert.equal(init?.method, 'POST');
+    return new Response(null, { status: 202 });
+  }) as typeof fetch;
+  await assert.rejects(retirePersistedServerExport(stillRendering.renderId), /已请求停止导出/);
+  assert.equal((await listServerExportJobs(retained.projectId))[0]?.renderId, stillRendering.renderId);
 }
 
 export async function runServerExportRecoveryVerifications(): Promise<void> {

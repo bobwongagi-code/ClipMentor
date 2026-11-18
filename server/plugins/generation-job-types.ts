@@ -166,6 +166,7 @@ export interface GenerationJobSnapshot {
   retryable?: boolean;
   cleanupPolicy?: string;
   pendingDownloadUrl?: string;
+  cancellationRequested?: boolean;
 }
 
 export interface GenerationJobProgress {
@@ -201,6 +202,8 @@ export interface GenerationJobOptions {
   cleanupResult?: (result: GenerationResult) => Promise<void> | void;
   cleanupPolicy?: GenerationCleanupPolicy;
   retentionMs?: number;
+  publishResult?: (result: GenerationResult) => Promise<void>;
+  onCancelled?: () => Promise<void>;
   onSettled?: (jobId: string) => void;
 }
 

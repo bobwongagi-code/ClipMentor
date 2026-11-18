@@ -32,6 +32,8 @@ import {
   persistGenerationJob,
   refreshGenerationJobs,
   hasLiveGenerationOwner,
+  hasPendingExportCancellation,
+  requestExportCancellation,
   resumerKey,
   resumers,
   scheduleExpiry,
@@ -109,25 +111,27 @@ function failGenerationJob(job: GenerationJob, error: unknown): void {
   else job.retryClass = 'provider-terminal';
 }
 
-const pendingSettlements = new WeakMap<GenerationJob, GenerationJob>();
+type Settlement = { next: GenerationJob; effects?: Pick<GenerationJobOptions, 'publishResult' | 'onCancelled'> };
+const pendingSettlements = new WeakMap<GenerationJob, Settlement>();
 const settlementWrites = new WeakMap<GenerationJob, Promise<void>>();
 
 function saveSettlement(job: GenerationJob): Promise<void> {
   const writing = settlementWrites.get(job);
   if (writing) return writing;
-  const next = pendingSettlements.get(job);
-  if (!next) return Promise.resolve();
-  const write = applySettlement(job, next).finally(() => settlementWrites.delete(job));
+  const pending = pendingSettlements.get(job);
+  if (!pending) return Promise.resolve();
+  const write = applySettlement(job, pending).finally(() => settlementWrites.delete(job));
   settlementWrites.set(job, write);
   return write;
 }
 
-async function applySettlement(job: GenerationJob, next: GenerationJob): Promise<void> {
-  if (!await persistGenerationJob(job, next)) {
+async function applySettlement(job: GenerationJob, { next, effects }: Settlement): Promise<void> {
+  if (!await persistGenerationJob(job, next, effects?.publishResult)) {
     pendingSettlements.delete(job);
     return;
   }
   pendingSettlements.delete(job);
+  if (job.code === 'export_cancelled') await effects?.onCancelled?.().catch(() => undefined);
   if (job.timestamps.acceptedAt) job.acceptance?.resolve(acceptanceOf(job));
   else job.acceptance?.reject(Object.assign(new Error(job.error ?? 'generation did not start'), {
     code: job.code, retryable: job.retryable,
@@ -135,12 +139,20 @@ async function applySettlement(job: GenerationJob, next: GenerationJob): Promise
   scheduleExpiry(job);
 }
 
-function settleGenerationJob(job: GenerationJob, settle: (next: GenerationJob) => void): Promise<void> {
+/** The owning export worker can finish a previously prepared terminal write. */
+export async function retryOwnedExportSettlement(id: string): Promise<boolean> {
+  const job = jobs.get(id);
+  if (!job) return true;
+  await saveSettlement(job);
+  return TERMINAL.has(job.status);
+}
+
+function settleGenerationJob(job: GenerationJob, settle: (next: GenerationJob) => void, effects?: Settlement['effects']): Promise<void> {
   const next = { ...job, timestamps: { ...job.timestamps }, resuming: false };
   settle(next);
   next.updatedAt = Date.now();
   next.timestamps.updatedAt = next.updatedAt;
-  pendingSettlements.set(job, next);
+  pendingSettlements.set(job, { next, effects });
   return saveSettlement(job);
 }
 
@@ -166,6 +178,7 @@ async function runGenerationJob(job: GenerationJob, task: GenerationJobTask, opt
     job.timestamps.startedAt ??= job.updatedAt;
     job.timestamps.updatedAt = job.updatedAt;
     await saveProgress(job);
+    if (hasPendingExportCancellation(job)) throw new Error('export cancelled before execution');
     const returned = await task(
       job.id,
       async (next) => {
@@ -208,7 +221,7 @@ async function runGenerationJob(job: GenerationJob, task: GenerationJobTask, opt
     active = false;
   }
   try {
-    await settleGenerationJob(job, finish);
+    await settleGenerationJob(job, finish, options);
   } catch (error) {
     console.warn(`[generation-job] failed to persist ${job.id}: ${error instanceof Error ? error.message : String(error)}`);
     job.acceptance?.reject(new Error('generation result was not confirmed; query the same operation ID', { cause: error }));
@@ -333,6 +346,10 @@ export async function resumeRestoredJobs(ids: readonly string[] = [...jobs.keys(
     !!job && !!job.restored && !job.resuming && !TERMINAL.has(job.status) && !hasLiveGenerationOwner(job)
   ));
   await Promise.all(candidates.map(async (job) => {
+    if (hasPendingExportCancellation(job)) {
+      await reconcileExportCancellation(job);
+      return;
+    }
     const resumer = registeredResumer(job);
     if (resumer) {
       await resumeWithRegisteredHandler(job, resumer);
@@ -366,8 +383,16 @@ export async function readGenerationJobSnapshot(jobId: string, refresh = true): 
   if (refresh) await refreshGenerationJobStatus();
   const job = jobs.get(jobId);
   if (job) await saveSettlement(job);
+  if (job && hasPendingExportCancellation(job) && !hasLiveGenerationOwner(job)) {
+    await reconcileExportCancellation(job);
+  }
   const current = jobs.get(jobId);
   return current && committedGenerationSnapshot(current);
+}
+
+function reconcileExportCancellation(job: GenerationJob) {
+  const attempt = job.params.exportAttemptId;
+  return requestExportCancellation(job.id, typeof attempt === 'string' ? attempt : undefined, true);
 }
 
 export async function resumeGenerationJobDownload(jobId: string): Promise<boolean> {

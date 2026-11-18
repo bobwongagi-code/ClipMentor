@@ -133,20 +133,61 @@ async function verifyPollFailureDoesNotTriggerRenderFallback(): Promise<void> {
   resetServerExportRecoveryMemory();
 }
 
-async function verifyCancellationDeletesActiveJob(): Promise<void> {
+async function verifyCancellationRetainsUnconfirmedRecovery(): Promise<void> {
+  for (const status of [204, 202, 409, 503]) {
+    resetServerExportRecoveryMemory();
+    const requests: string[] = [];
+    const polled = deferred();
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      requests.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url === '/export/job') return Response.json({ renderId: 'render-cancelled', attemptId: 'attempt-original' });
+      if (url.includes('/cancel?')) return new Response(null, { status });
+      polled.resolve();
+      return Response.json({ status: 'running', progress: 20, phase: 'rendering' });
+    }) as typeof fetch;
+    const controller = new AbortController();
+    const operation = exporter(undefined, () => 'render-cancelled')('video', controller.signal);
+    await polled.promise;
+    controller.abort();
+    await assert.rejects(operation, (error) => error instanceof Error
+      && (status === 204 ? error.name === 'AbortError' : error.name !== 'AbortError'));
+    assert.equal(requests.at(-1), 'POST /export/job/render-cancelled/cancel?attemptId=attempt-original');
+    assert.equal(requests.some((request) => request.startsWith('DELETE')), false);
+    const records = await listServerExportJobs('project-lifecycle');
+    assert.equal(records.length, status === 204 ? 0 : 1, 'only a confirmed cancellation may retire recovery');
+    if (status !== 204) assert.equal(records[0]?.attemptId, 'attempt-original');
+  }
+  resetServerExportRecoveryMemory();
+}
+
+async function verifyCancelDuringAdmissionUsesAcknowledgedAttempt(): Promise<void> {
+  const started = deferred();
+  const committed = deferred();
   const requests: string[] = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    requests.push(`${init?.method ?? 'GET'} ${url}`);
-    if (url === '/export/job') return Response.json({ renderId: 'render-cancelled' });
-    if (init?.method === 'DELETE') return new Response(null, { status: 204 });
-    return Response.json({ status: 'running', progress: 20, phase: 'rendering' });
+    requests.push(url);
+    if (url === '/export/job') {
+      started.resolve();
+      await committed.promise;
+      assert.equal(init?.signal?.aborted, false);
+      return Response.json({ renderId: 'during-admission', attemptId: 'admitted-attempt' });
+    }
+    assert.equal(url, '/export/job/during-admission/cancel?attemptId=admitted-attempt');
+    assert.equal(init?.method, 'POST');
+    assert(init.signal instanceof AbortSignal, 'wait for acknowledgement has a deadline signal');
+    return new Response(null, { status: 204 });
   }) as typeof fetch;
   const controller = new AbortController();
-  const operation = exporter()('video', controller.signal);
-  setTimeout(() => controller.abort(), 10);
-  await assert.rejects(operation, (error) => error instanceof DOMException && error.name === 'AbortError');
-  assert.equal(requests.at(-1), 'DELETE /export/job/render-cancelled');
+  const operation = exporter(undefined, () => 'during-admission')('video', controller.signal);
+  await started.promise;
+  controller.abort();
+  assert.deepEqual(requests, ['/export/job']);
+  committed.resolve();
+  await assert.rejects(operation, { name: 'AbortError' });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(await listServerExportJobs('project-lifecycle'), []);
 }
 
 async function verifyQueuedProgressExplainsTheWait(): Promise<void> {
@@ -474,7 +515,8 @@ export async function runServerExportLifecycleVerifications(): Promise<void> {
   await verifyRenderFailureIsTypedAndDeleted();
   await verifyDeliveryFailureDoesNotTriggerRenderFallback();
   await verifyPollFailureDoesNotTriggerRenderFallback();
-  await verifyCancellationDeletesActiveJob();
+  await verifyCancellationRetainsUnconfirmedRecovery();
+  await verifyCancelDuringAdmissionUsesAcknowledgedAttempt();
   await verifyQueuedProgressExplainsTheWait();
   await verifyCancellationAfterRenderDoesNotSave();
   await verifyCancellationDuringServerQaDoesNotSave();

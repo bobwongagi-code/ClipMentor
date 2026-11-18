@@ -10,6 +10,7 @@ import {
 import type { LockedProjectStore } from '../../server/plugins/project-store';
 import type { ExportDestination } from './exportDestination';
 import {
+  bindServerExportAttempt,
   claimServerExportDelivery,
   listServerExportJobs,
   markServerExportOutputReady,
@@ -582,6 +583,20 @@ async function main(): Promise<void> {
   const updated = serverStore['export-recovery:render-1'] as PersistedServerExportJob;
   assert.equal(updated.stage, 'target-committed');
   await releaseServerExportDelivery('render-1', deliveryClaim);
+
+  const remoteOnly = record('render-bound-attempt', 'project-bound-attempt');
+  const firstAttempt = '11111111-1111-4111-8111-111111111111';
+  const wrongAttempt = '22222222-2222-4222-8222-222222222222';
+  await persistServerExportJob(remoteOnly);
+  assert.equal(await readLocalRecord(remoteOnly.renderId), null, 'Downloads use the remote-only registration path');
+  await assert.rejects(bindServerExportAttempt({ ...remoteOnly, createdAt: remoteOnly.createdAt + 1 }, wrongAttempt));
+  await bindServerExportAttempt(remoteOnly, firstAttempt);
+  await markServerExportOutputReady(remoteOnly.renderId);
+  await assert.rejects(bindServerExportAttempt(remoteOnly, wrongAttempt));
+  const [reattached] = await listServerExportJobs(remoteOnly.projectId);
+  assert.equal(reattached?.attemptId, firstAttempt);
+  assert.equal(reattached?.stage, 'output-ready');
+  assert.equal(await readLocalRecord(remoteOnly.renderId), null);
 
   // ── a newer stale local timestamp cannot rewind server output-ready authority ──
   await persistServerExportJob(record('render-stale', 'project-stale', {

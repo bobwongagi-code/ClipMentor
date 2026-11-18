@@ -32,6 +32,7 @@ export interface ServerExportDeliveryClaim {
 export interface PersistedServerExportJob {
   version: 1;
   renderId: string;
+  attemptId?: string;
   projectId: string;
   label: string;
   targetPath: string | null;
@@ -93,6 +94,7 @@ export function validRecord(value: unknown): value is PersistedServerExportJob {
   const record = value as Partial<PersistedServerExportJob>;
   return record.version === 1
     && typeof record.renderId === 'string' && record.renderId.length > 0
+    && (record.attemptId === undefined || typeof record.attemptId === 'string')
     && typeof record.projectId === 'string' && record.projectId.length > 0
     && typeof record.label === 'string'
     && (record.targetPath === null || typeof record.targetPath === 'string')

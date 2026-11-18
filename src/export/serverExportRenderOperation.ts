@@ -7,6 +7,7 @@ import {
   type ExportFailure,
 } from './exportFailure';
 import {
+  bindServerExportAttempt,
   markServerExportOutputReady,
   persistServerExportJob,
   retireServerExportJob,
@@ -148,7 +149,8 @@ async function submitExport(
       : context.t('导出失败 ({status})', { status: submission.status });
     throw new Error(error);
   }
-  return renderId;
+  return submitted && typeof submitted === 'object' && 'attemptId' in submitted
+    && typeof submitted.attemptId === 'string' ? submitted.attemptId : undefined;
 }
 
 async function readSnapshot(
@@ -226,7 +228,7 @@ export async function pollExport(
         : new Error(snapshot.error ?? context.t('导出失败'));
       // A saved renderer receipt can outlive its file. Keep the existing
       // operation available for readback without treating it as a render retry.
-      if (snapshot.failure?.stage === 'destination') throw cause;
+      if (snapshot.failure?.stage === 'destination' || snapshot.failure?.stage === 'cancel') throw cause;
       throw new ServerRenderError(cause);
     }
     if (snapshot.status === 'succeeded') return completeSnapshot(context, snapshot);
@@ -242,6 +244,30 @@ export async function deleteExportJob(renderId: string): Promise<void> {
   }
 }
 
+export type ExportCancellationOutcome = 'cancelled' | 'pending' | 'retained' | 'unknown';
+
+export async function cancelExportJob(renderId: string, attemptId?: string): Promise<ExportCancellationOutcome> {
+  const attempt = attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : '';
+  try {
+    const response = await fetch(`/export/job/${encodeURIComponent(renderId)}/cancel${attempt}`, {
+      method: 'POST', signal: AbortSignal.timeout(5_000),
+    });
+    void response.body?.cancel().catch(() => undefined);
+    if (response.status === 204) return 'cancelled';
+    if (response.status === 202) return 'pending';
+    if (response.status === 409) return 'retained';
+  } catch {
+    // Keep the original recovery record when the response cannot be confirmed.
+  }
+  return 'unknown';
+}
+
+export function exportCancellationMessage(outcome: ExportCancellationOutcome, t: Translate): string {
+  if (outcome === 'pending') return t('已请求停止导出，请稍后查看结果');
+  if (outcome === 'retained') return t('原导出已保留，请重新查看结果');
+  return t('尚未确认导出是否停止，请重新查看结果');
+}
+
 export async function retireAndDeleteExportJob(renderId: string): Promise<boolean> {
   if (!await retireServerExportJob(renderId)) return false;
   await deleteExportJob(renderId);
@@ -255,19 +281,42 @@ export async function renderCompleted(
   signal?: AbortSignal,
 ): Promise<{ renderId: string; completed: ExportJobResult }> {
   const renderId = context.createOperationId?.() ?? globalThis.crypto.randomUUID();
-  let submissionAccepted = false;
+  let submissionStarted = false;
   let outputObserved = false;
+  let attemptId: string | undefined;
   try {
-    await persistServerExportJob(recoveryRecord(context, renderId, format, codec));
-    await submitExport(context, format, codec, renderId, signal);
-    submissionAccepted = true;
+    const original = recoveryRecord(context, renderId, format, codec);
+    await persistServerExportJob(original);
+    signal?.throwIfAborted();
+    submissionStarted = true;
+    // A stop during POST waits for the one submission to identify its attempt.
+    const submission = new AbortController();
+    let stopDeadline: ReturnType<typeof setTimeout> | undefined;
+    const allowAcknowledgement = () => { stopDeadline = setTimeout(() => submission.abort(), 20_000); };
+    signal?.addEventListener('abort', allowAcknowledgement, { once: true });
+    try {
+      attemptId = await submitExport(context, format, codec, renderId, submission.signal);
+    } finally {
+      signal?.removeEventListener('abort', allowAcknowledgement);
+      clearTimeout(stopDeadline);
+    }
+    if (attemptId) await bindServerExportAttempt(original, attemptId);
+    signal?.throwIfAborted();
     const completed = await pollExport(context, renderId, signal);
     outputObserved = true;
     await markServerExportOutputReady(renderId);
     return { renderId, completed };
   } catch (error) {
-    if (submissionAccepted && !outputObserved && (signal?.aborted || isServerRenderError(error))) {
-      await retireAndDeleteExportJob(renderId).catch(() => false);
+    if (submissionStarted && !outputObserved) {
+      if (signal?.aborted) {
+        const outcome = await cancelExportJob(renderId, attemptId);
+        if (outcome !== 'cancelled') throw new Error(exportCancellationMessage(outcome, context.t));
+        await retireServerExportJob(renderId).catch(() => false);
+      } else if (exportFailureFrom(error)?.stage === 'cancel') {
+        await retireServerExportJob(renderId).catch(() => false);
+      } else if (isServerRenderError(error)) {
+        await retireAndDeleteExportJob(renderId).catch(() => false);
+      }
     }
     throw error;
   }

@@ -401,10 +401,10 @@ async function verifyAgentExportTracking(): Promise<void> {
     assert.equal(tracked.getSnapshot().jobs[0]?.progress.outputSize, 12);
     unsubscribe();
 
-    let deleted = false;
+    let requestedStop = false;
     globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'DELETE') {
-        deleted = String(url).endsWith('/render-cancel');
+      if (init?.method === 'POST') {
+        requestedStop = String(url).endsWith('/render-cancel/cancel?attemptId=agent-attempt');
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       return new Promise<Response>((_resolve, reject) => {
@@ -413,14 +413,14 @@ async function verifyAgentExportTracking(): Promise<void> {
     }) as typeof fetch;
     const unsubscribeCancel = subscribeAgentExportJobs('project-agent', tracked, (key) => key);
     notifyAgentExportSubmitted({
-      renderId: 'render-cancel', projectId: 'project-agent', label: 'cancel.mp4', createdAt: 2_000,
+      renderId: 'render-cancel', attemptId: 'agent-attempt', projectId: 'project-agent', label: 'cancel.mp4', createdAt: 2_000,
     });
     await Promise.resolve();
     const jobId = tracked.getSnapshot().jobs.find((job) => job.label === 'cancel.mp4')?.id;
     assert.ok(jobId);
     assert.equal(tracked.cancel(jobId), true);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(deleted, true);
+    assert.equal(requestedStop, true);
     assert.equal(tracked.getSnapshot().jobs.find((job) => job.id === jobId)?.progress.phase, 'cancelled');
     unsubscribeCancel();
   } finally {
