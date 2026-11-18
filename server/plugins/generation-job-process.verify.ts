@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { fork, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { unlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -12,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import type { GenerationResult } from './generation-job-types.ts';
 
 type Command = { op: 'submit' | 'recover' | 'status' | 'progress' | 'remove' | 'promote' | 'move' | 'restore-ledger'
-  | 'block-ledger' | 'cancel' | 'release' | 'hide-sqlite' | 'restore-sqlite';
+  | 'block-ledger' | 'cancel' | 'release' | 'hide-sqlite' | 'restore-sqlite' | 'read-output' | 'move-media' | 'race-output';
   id?: string; marker?: string; hold?: boolean; accepted?: boolean; fault?: boolean; acceptanceFault?: boolean; target?: string;
   cancellable?: boolean; noObserver?: boolean; attempt?: string; holdReply?: boolean; };
 const entry = fileURLToPath(import.meta.url);
@@ -51,6 +52,10 @@ async function worker() {
   const { DatabaseSync } = await import('node:sqlite');
   const { sqliteProjectStorePath } = await import('../project-store-paths.ts');
   const { settingsPlugin } = await import('./settings.ts');
+  const { registerUploadRoutes } = await import('./upload-routes.ts');
+  const { exportDestinationPlugin } = await import('./export-destination.ts');
+  const { createExportDirectoryGrant } = await import('../export-destinations.ts');
+  const { uploadsMiddleware } = await import('../../desktop/static-files.ts');
   const profile = runtimeProfile();
   const renderFile = async (id: string, marker: string): Promise<GenerationResult> => {
     const name = runtime.exportJobFilename(id, 'mp4');
@@ -67,6 +72,9 @@ async function worker() {
   const vite = { middlewares: { use: (route: string, fn: Parameters<import('vite').Connect.Server['use']>[1]) =>
     routes.set(route, fn) }, config: { logger: { error() {}, warn() {}, info() {} } } } as never;
   registerExportJobRoute(vite);
+  registerUploadRoutes(vite);
+  (exportDestinationPlugin().configureServer as (server: never) => void)(vite);
+  routes.set('/desktop-media', uploadsMiddleware());
   (generationProgressPlugin().configureServer as (server: never) => void)(vite);
   (settingsPlugin().configureServer as (server: never) => void)(vite);
   let holdCancellationReply = false;
@@ -74,6 +82,14 @@ async function worker() {
     const route = [...routes.keys()].find((prefix) => req.url?.startsWith(prefix));
     if (!route) { res.statusCode = 404; res.end(); return; }
     req.url = req.url!.slice(route.length) || '/';
+    if (route === '/media/uploads' && req.headers['x-fixture-unlink'] === '1') {
+      const name = basename(req.url);
+      const writeHead = res.writeHead.bind(res);
+      res.writeHead = ((...args: Parameters<typeof writeHead>) => {
+        if (args[0] === 206) unlinkSync(join(uploadDir(), name));
+        return writeHead(...args);
+      }) as typeof res.writeHead;
+    }
     if (holdCancellationReply && req.url.split('?')[0]?.endsWith('/cancel')) {
       res.end = (() => { send('cancel-persisted', res.statusCode); return res; }) as typeof res.end;
     }
@@ -194,10 +210,45 @@ async function worker() {
           holdCancellationReply = command.holdReply === true;
         }
         if (command.op === 'move') { route = '/api/keys'; method = 'POST'; body = { OPENCHATCUT_DATA_DIR: command.target }; }
+        if (command.op === 'move-media') { route = '/api/keys'; method = 'POST'; body = { MEDIA_DIR: command.target }; }
         if (command.op === 'progress') { route = '/generate/progress'; method = 'POST'; body = { action: 'status', target: 'generation', jobIds: [id] }; }
-        const response = await fetch(url + route, { method, ...(body && { body: JSON.stringify(body) }) });
-        const raw = await response.text();
-        value = { http: response.status, body: raw ? JSON.parse(raw) : null };
+        if (command.op === 'race-output') {
+          try {
+            const name = runtime.exportJobFilename(id, 'mp4');
+            const response = await fetch(url + '/media/uploads/' + name, {
+              headers: { range: 'bytes=0-2', 'x-fixture-unlink': '1' },
+            });
+            value = { http: response.status, bytes: await response.text() };
+          } catch { value = { connectionClosed: true }; }
+        } else if (command.op === 'read-output') {
+          const name = command.marker ?? runtime.exportJobFilename(id, 'mp4');
+          const publicPath = '/media/uploads/' + name;
+          const target = join(profile.rootDir, 'fixture-downloads');
+          await mkdir(target, { recursive: true });
+          const { grantId } = createExportDirectoryGrant(target);
+          const [get, head, desktop, list, hydrate, presign, copy] = await Promise.all([
+            fetch(url + publicPath),
+            fetch(url + publicPath, { method: 'HEAD' }),
+            fetch(url + '/desktop-media/' + name),
+            fetch(url + '/upload/list'),
+            fetch(url + '/upload/hydrate', { method: 'POST', headers: { origin: url }, body: JSON.stringify({ name }) }),
+            fetch(url + '/upload/presign?name=' + encodeURIComponent(name)),
+            fetch(url + '/api/export-destinations/' + grantId + '/' + id + '.mp4', {
+              method: 'PUT', headers: { 'x-openchatcut-export-source': publicPath },
+            }),
+          ]);
+          const uploaded = await list.json() as { files: Array<{ name: string }> };
+          value = {
+            get: get.status, head: head.status, desktop: desktop.status, hydrate: hydrate.status,
+            presign: presign.status, copy: copy.status, listed: uploaded.files.some((entry) => entry.name === name),
+            bytes: await get.text(), copied: await readFile(join(target, id + '.mp4'), 'utf8').catch(() => undefined),
+          };
+          await Promise.all([desktop, hydrate, presign, copy].map((response) => response.arrayBuffer()));
+        } else {
+          const response = await fetch(url + route, { method, ...(body && { body: JSON.stringify(body) }) });
+          const raw = await response.text();
+          value = { http: response.status, body: raw ? JSON.parse(raw) : null };
+        }
       }
       send('reply:' + seq, value);
     } catch (error) { send('reply:' + seq, { error: String(error) }); }
@@ -349,6 +400,25 @@ async function main() {
       await stop(crashed);
       const exposedPath = join(uploads, `openchatcut-export-job-${id}.mp4`);
       assert.equal(await readFile(exposedPath, 'utf8'), 'candidate bytes before terminal commit');
+      const inaccessible = await c.request({ op: 'read-output', id });
+      assert.deepEqual([inaccessible.get, inaccessible.head, inaccessible.desktop, inaccessible.hydrate,
+        inaccessible.presign, inaccessible.copy, inaccessible.listed, inaccessible.copied],
+      [404, 404, 404, 404, 404, 404, false, undefined], 'an interrupted terminal commit must not deliver candidate bytes');
+      const deliverable = await c.request({ op: 'read-output', id: complete.id });
+      assert.deepEqual([deliverable.get, deliverable.head, deliverable.desktop, deliverable.hydrate,
+        deliverable.presign, deliverable.copy, deliverable.listed, deliverable.bytes, deliverable.copied],
+      [200, 200, 200, 200, 200, 204, true, saved.toString(), saved.toString()], 'prior committed output remains deliverable');
+      if (!recoverFromStatus) {
+        assert.deepEqual(await c.request({ op: 'race-output', id: complete.id }), { connectionClosed: true },
+          'a concurrent delete terminates this read only');
+        await assert.rejects(readFile(donePath), { code: 'ENOENT' }, 'fixture deleted the file after headers');
+        await writeFile(donePath, saved.subarray(0, 2));
+        const short = await c.request({ op: 'read-output', id: complete.id });
+        assert.deepEqual([short.get, short.head, short.desktop, short.hydrate,
+          short.presign, short.copy, short.listed, short.copied],
+        [404, 404, 404, 404, 404, 404, false, saved.toString()], 'truncation must not overwrite a prior download');
+        await writeFile(donePath, saved);
+      }
       if (!recoverFromStatus) assert.equal((await cancel(b, id)).http, 204);
       assert.equal((await status(c, id, 'failed')).code, 'export_cancelled');
       await assert.rejects(readFile(exposedPath), { code: 'ENOENT' }, 'recovering cancellation retracts the exposed attempt');
@@ -416,6 +486,11 @@ async function main() {
       const move = await b.request({ op: 'move', target });
       assert.equal(move.http, 400);
       assert.match(JSON.stringify(move.body), /export is still active/);
+      const mediaTarget = join(root, 'move-media-' + sqlite);
+      await mkdir(mediaTarget);
+      const mediaMove = await b.request({ op: 'move-media', target: mediaTarget });
+      assert.equal(mediaMove.http, 400);
+      assert.match(JSON.stringify(mediaMove.body), /export is still active/);
       assert.equal(observer.events.some((e) => e.event === 'resume-start'), false);
       await stop(a);
       await Promise.all([b.request({ op: 'recover' }), observer.request({ op: 'recover' })]);
@@ -457,10 +532,13 @@ async function main() {
       assert.match(await readFile(derived, 'utf8'), /complete synthetic output/);
       await assert.rejects(readFile(join(dirname(derived), '.' + basename(derived) + '.pending')), { code: 'ENOENT' });
       const partialName = 'openchatcut-export-job-' + unknown + '.mp4';
+      const unregisteredName = `openchatcut-export-job-${randomUUID()}.mp4`;
       assert.equal(await readFile(join(dirname(derived), partialName), 'utf8'), 'partial');
+      await writeFile(join(dirname(derived), unregisteredName), 'orphan output without a receipt');
       const moved = await b.request({ op: 'move', target });
       assert.equal(moved.http, 200, JSON.stringify(moved));
       await assert.rejects(readFile(join(target, 'media', 'uploads', partialName)), { code: 'ENOENT' });
+      await assert.rejects(readFile(join(target, 'media', 'uploads', unregisteredName)), { code: 'ENOENT' });
       assert.match(await readFile(join(target, 'media', 'uploads', 'openchatcut-export-job-' + pending + '.mp4'), 'utf8'), /complete synthetic output/);
       for (const w of [b, cold, observer]) await stop(w);
       console.log('generation-process', sqlite ? 'SQLite' : 'JSON', 'passed');

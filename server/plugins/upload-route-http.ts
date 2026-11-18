@@ -3,7 +3,6 @@ import { extname } from 'node:path';
 import {
   effectiveUploadMaxBytes, r2PresignEnabled, UploadTooLargeError,
 } from '../r2.ts';
-import { isSafeUploadName } from '../media-dir.ts';
 
 const MAX_JSON_BYTES = 64 * 1024;
 
@@ -75,8 +74,7 @@ function extFromUrlOrType(url: string, contentType: string | null, hint?: string
 
 function mediaName(req: IncomingMessage): string | null {
   try {
-    const name = decodeURIComponent((req.url ?? '/').split('?')[0].replace(/^\/+/, ''));
-    return isSafeUploadName(name) ? name : null;
+    return decodeURIComponent((req.url ?? '/').split('?')[0].replace(/^\/+/, ''));
   } catch {
     return null;
   }

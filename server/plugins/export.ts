@@ -13,7 +13,8 @@ import {
 import { jobs } from './generation-job-store.ts';
 import { getStoredEntry } from './project-store.ts';
 import { isUnresolvedExportRecovery } from './project-store-export-recovery.ts';
-import { resolveUploadFile, uploadDir } from '../media-dir.ts';
+import { join } from 'node:path';
+import { uploadDir } from '../media-dir.ts';
 import { runtimeProfile } from '../runtime-profile.ts';
 import { setUploadsDirProvider } from './export-rendering.ts';
 import {
@@ -37,8 +38,7 @@ export function exportPlugin(): Plugin {
   registerGenerationCleanupPolicy('server-export', async (result) => {
     const name = exportJobResultName(result.path, result.assetId);
     if (!name) throw new Error(`refusing to clean invalid server export result ${result.path}`);
-    const file = resolveUploadFile(name);
-    if (file) await unlinkWithRetry(file);
+    await unlinkWithRetry(join(uploadDir(), name));
   });
   registerGenerationRetentionGuard('server-export', retainUnresolvedExportRecovery);
   return {
@@ -50,15 +50,14 @@ export function exportPlugin(): Plugin {
           await refreshGenerationJobStatus();
           // A render operation and the attempt UUID in its filename can differ.
           // Resolve legacy names through the hydrated job ledger before checking retention.
-          const owners = new Map<string, { id: string; active: boolean; cancelled: boolean }>();
+          const owners = new Map<string, { id: string; status: 'queued' | 'running' | 'succeeded' | 'failed' }>();
           for (const job of jobs.values()) {
             if (job.params.kind !== 'export') continue;
             const attemptId = job.result?.assetId ?? job.params.exportAttemptId;
             if (typeof attemptId === 'string') {
               owners.set(attemptId, {
                 id: job.id,
-                active: job.status === 'queued' || job.status === 'running',
-                cancelled: job.status === 'failed' && job.code === 'export_cancelled',
+                status: job.status,
               });
             }
           }
@@ -66,9 +65,8 @@ export function exportPlugin(): Plugin {
             profile: runtimeProfile(),
             shouldRetain: (fileId, privateStage) => {
               const owner = owners.get(fileId);
-              if (owner?.cancelled) return false;
-              if (privateStage) return owner?.active === true;
-              return owner?.active || retainUnresolvedExportRecovery(owner?.id ?? fileId);
+              if (owner?.status === 'queued' || owner?.status === 'running') return true;
+              return !privateStage && owner?.status === 'succeeded' && retainUnresolvedExportRecovery(owner.id);
             },
             onError: (path, error) => server.config.logger.warn(
               `[export] failed to clean stale artifact ${path}: ${error instanceof Error ? error.message : String(error)}`,

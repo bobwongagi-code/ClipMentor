@@ -7,9 +7,7 @@ import type { Plugin, ViteDevServer } from "vite";
 
 import { validatePack } from "../../src/plugins/validate.ts";
 import { withExportPermit } from "./export-runtime.ts";
-
-// @ts-expect-error — plain .mjs render pipeline has no .d.ts
-import { renderTimeline, renderTimelineStills } from "../../remotion/render.mjs";
+import { renderTimeline, renderTimelineStills } from "./export-rendering.ts";
 import { scrubInternalPaths } from '../error-scrub.ts';
 
 const MAX_BODY_BYTES = 24 * 1024 * 1024;

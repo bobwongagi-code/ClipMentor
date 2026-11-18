@@ -1,14 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ViteDevServer } from 'vite';
-import { readdir, stat } from 'node:fs/promises';
+import { lstat, readdir, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   presignGetUpload, presignPutUpload, r2Config, r2PresignEnabled, UploadTooLargeError,
 } from '../r2.ts';
 import {
-  isReservedExportAssetId, isSafeUploadName, resolveOrHydrateUploadFile, serveDiskFile, syncLegacyUploads,
-  uploadReadDirs,
+  exportAttemptIdFromFilename, isReservedExportAssetId, isSafeUploadName, resolveOrHydrateUploadFile,
+  serveDiskFile, syncLegacyUploads, uploadDir, uploadReadDirs,
 } from '../media-dir.ts';
 import { isIsolatedDevProfile } from '../runtime-profile.ts';
 import { listMediaReferences } from '../media-references.ts';
@@ -19,6 +19,10 @@ import {
 } from './upload-route-http.ts';
 import { diskUpload } from './upload-route-storage.ts';
 import { handleImportUrl, handleUpload } from './upload-route-write.ts';
+import { isPrivateExportFilename } from '../export-media-names.ts';
+import { matchesCommittedExportFile, resolveCommittedExport } from './export-delivery.ts';
+import { readCommittedExportSizes } from './generation-job-store.ts';
+import { exportSizeMatches } from './generation-job-types.ts';
 
 export { directR2UploadAllowed, maxUploadBytes } from './upload-route-http.ts';
 
@@ -45,13 +49,15 @@ async function serveR2Media(
   dependencies: UploadRouteDependencies,
 ): Promise<void> {
   try {
-    const resolved = await dependencies.resolveUpload(name);
+    const resolved = await (exportAttemptIdFromFilename(name)
+      ? resolveCommittedExport(name) : dependencies.resolveUpload(name));
     if (!resolved) {
       sendError(res, 404, `media not found: ${name}`);
       return;
     }
     if (!resolved.cached) logger.info(`[R2 回源] ${name} (${resolved.bytes} bytes)`);
     res.setHeader(MEDIA_AUTHORITY_HEADER, 'server');
+    if (exportAttemptIdFromFilename(name)) res.setHeader('Cache-Control', 'no-store');
     await serveDiskFile(req, res, resolved.file);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -72,11 +78,14 @@ function handleMediaRead(
 ): void {
   if (req.method !== 'GET' && req.method !== 'HEAD') { next(); return; }
   const name = mediaName(req);
-  if (!name) {
-    if (isIsolatedDevProfile()) sendError(res, 404, 'media not found');
+  if (!name || !isSafeUploadName(name)) {
+    if (isIsolatedDevProfile() || (name && isPrivateExportFilename(name))) {
+      sendError(res, 404, 'media not found');
+    }
     else next();
     return;
   }
+  if (exportAttemptIdFromFilename(name)) { void serveR2Media(name, req, res, logger, dependencies); return; }
   const local = diskUpload(name);
   if (!local) { void serveR2Media(name, req, res, logger, dependencies); return; }
   res.setHeader(MEDIA_AUTHORITY_HEADER, 'server');
@@ -91,15 +100,23 @@ async function handleUploadList(req: IncomingMessage, res: ServerResponse): Prom
   if (req.method !== 'GET') { sendError(res, 405, 'method not allowed — use GET'); return; }
   try {
     const directories = uploadReadDirs();
+    let exportSizes: ReturnType<typeof readCommittedExportSizes> | undefined;
+    const currentUploads = uploadDir();
     const seen = new Map<string, { name: string; bytes: number; mtimeMs: number }>();
     for (const directory of directories) {
       for (const name of await readdir(directory).catch(() => [] as string[])) {
         if (!isSafeUploadName(name) || seen.has(name)) continue;
-        const info = await stat(join(directory, name)).catch(() => null);
+        const isAttempt = !!exportAttemptIdFromFilename(name);
+        if (isAttempt && directory !== currentUploads) continue;
+        const info = await (isAttempt ? lstat : stat)(join(directory, name)).catch(() => null);
+        if (isAttempt) {
+          const sizes = await (exportSizes ??= readCommittedExportSizes().catch(() => new Map()));
+          if (!sizes.has(name) || !info || !exportSizeMatches(info.size, sizes.get(name))) continue;
+        }
         if (info?.isFile()) seen.set(name, { name, bytes: info.size, mtimeMs: info.mtimeMs });
       }
       for (const reference of await listMediaReferences(directory)) {
-        if (isSafeUploadName(reference.name) && !seen.has(reference.name)) {
+        if (isSafeUploadName(reference.name) && !exportAttemptIdFromFilename(reference.name) && !seen.has(reference.name)) {
           seen.set(reference.name, reference);
         }
       }
@@ -130,7 +147,8 @@ async function handleHydrate(
     const body = JSON.parse((await readBody(req)).toString('utf8') || '{}') as { name?: string; path?: string };
     const name = hydrateName(body);
     if (!isSafeUploadName(name)) { sendError(res, 400, 'unsafe or missing name'); return; }
-    const resolved = await dependencies.resolveUpload(name);
+    const resolved = await (exportAttemptIdFromFilename(name)
+      ? resolveCommittedExport(name) : dependencies.resolveUpload(name));
     if (!resolved) {
       sendError(res, 404, r2Config()
         ? `R2 object not found: ${name}`
@@ -156,7 +174,9 @@ async function handlePresignGet(req: IncomingMessage, res: ServerResponse): Prom
   const url = new URL(req.url ?? '/', 'http://localhost');
   const name = (url.searchParams.get('name') ?? '').replace(/^.*\//, '');
   if (!isSafeUploadName(name)) { sendError(res, 400, 'unsafe or missing name'); return; }
-  if (!r2PresignEnabled()) {
+  const isAttempt = !!exportAttemptIdFromFilename(name);
+  if (isAttempt && !await resolveCommittedExport(name)) { sendError(res, 404, 'media not found'); return; }
+  if (isAttempt || !r2PresignEnabled()) {
     sendJson(res, 200, {
       mode: 'proxy', downloadUrl: `/media/uploads/${name}`,
       path: `/media/uploads/${name}`, enabled: false,
@@ -245,7 +265,11 @@ export function registerUploadRoutes(
   dependencies: UploadRouteDependencies = defaultUploadRouteDependencies,
 ): void {
   const logger = server.config.logger;
-  void dependencies.syncLegacy((message) => logger.info(message));
+  let startupExportSizes: ReturnType<typeof readCommittedExportSizes> | undefined;
+  void dependencies.syncLegacy((message) => logger.info(message), undefined, async (name, file) => {
+    const sizes = await (startupExportSizes ??= readCommittedExportSizes().catch(() => new Map()));
+    return matchesCommittedExportFile(name, file, sizes);
+  });
   server.middlewares.use('/media/uploads', (req, res, next) => {
     if (!requireEditorRead(req, res)) return;
     handleMediaRead(req, res, next, logger, dependencies);

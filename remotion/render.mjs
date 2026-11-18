@@ -88,6 +88,9 @@ export async function withAbortableCompositionSelection({
   signal?.throwIfAborted();
   const browser = await openBrowserImpl('chrome', {
     browserExecutable: browserExecutable(),
+    // The owned Chromium launcher uses Remotion's stdin pipe. Verbose
+    // BrowserRunner uses ignored stdin, which would close the lifetime pipe.
+    logLevel: 'info',
     chromiumOptions: { gl: resolveRenderGlBackend() },
   });
   let closePromise;
@@ -266,6 +269,8 @@ async function getServeUrl() {
   return serveUrl;
 }
 
+export { getServeUrl as prepareRenderServeUrl };
+
 /**
  * Render a timeline state to video or audio at outputLocation.
  * @param {object} args
@@ -277,6 +282,7 @@ async function getServeUrl() {
  * @param {[number, number]} [args.frameRange] inclusive Remotion frame range
  * @param {number} [args.videoBitrate] video bitrate in bits per second
  * @param {{id:string,label:string,hardware:boolean,transport:'server'}} [args.h264Profile]
+ * @param {string} [args.preparedServeUrl] cached bundle prepared by the export server
  * @param {string} [args.vaapiDevice]
  * @param {(progress: number) => void} [args.onProgress]  0..1
  * @param {AbortSignal} [args.signal]
@@ -293,6 +299,7 @@ export async function renderTimeline({
   videoBitrate,
   h264Profile,
   vaapiDevice,
+  preparedServeUrl,
   signal,
 }) {
   if (!state || typeof state !== 'object' || !Array.isArray(state.items)) {
@@ -304,7 +311,7 @@ export async function renderTimeline({
   if (project) assertMaterializedRenderSnapshot(project, 'renderTimeline', timelineId);
   const cancelSignal = remotionCancelSignal(signal);
 
-  const serveUrl = await getServeUrl();
+  const serveUrl = preparedServeUrl ?? await getServeUrl();
   signal?.throwIfAborted();
   const inputProps = { state, project, timelineId };
   // Full-timeline mezzanine: ProRes 422 HQ (not 4444 alpha — that is clip/MG only).
@@ -372,6 +379,7 @@ export async function renderClip({
   transparent = true,
   h264Profile,
   vaapiDevice,
+  preparedServeUrl,
   signal,
 }) {
   if (!state || !Array.isArray(state.items) || !state.items.length) {
@@ -381,7 +389,7 @@ export async function renderClip({
   signal?.throwIfAborted();
   assertMaterializedRenderSnapshot(state, 'renderClip');
   const cancelSignal = remotionCancelSignal(signal);
-  const serveUrl = await getServeUrl();
+  const serveUrl = preparedServeUrl ?? await getServeUrl();
   signal?.throwIfAborted();
   const inputProps = { state, transparent };
   await withAbortableCompositionSelection({

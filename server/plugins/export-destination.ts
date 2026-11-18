@@ -7,8 +7,9 @@ import { pipeline } from 'node:stream/promises';
 import type { Plugin } from 'vite';
 import { resolveExportDirectoryGrant } from '../export-destinations.ts';
 import { sanitizeFileName } from '../file-name.ts';
-import { resolveUploadFile } from '../media-dir.ts';
+import { exportAttemptIdFromFilename, resolveUploadFile } from '../media-dir.ts';
 import { createExportFailure, type ExportCleanupStatus } from '../../src/export/exportFailure.ts';
+import { resolveCommittedExport } from './export-delivery.ts';
 
 const MAX_EXPORT_BYTES = 100 * 1024 * 1024 * 1024;
 const GRANT_ID = /^[A-Za-z0-9_-]{32,128}$/;
@@ -117,18 +118,19 @@ async function streamRequest(req: IncomingMessage, path: string): Promise<void> 
   await pipeline(req as Readable, limiter, file.createWriteStream());
 }
 
-function exportSource(
+async function exportSource(
   req: IncomingMessage,
   target: string,
   resolveSource: (name: string) => string | null,
-): string | null {
+): Promise<string | null> {
   const raw = req.headers[SOURCE_HEADER];
   if (raw === undefined) return null;
   const prefix = '/media/uploads/';
   if (Array.isArray(raw) || !raw.startsWith(prefix)) {
     throw new ExportDestinationError(400, 'invalid export source', { targetPath: target });
   }
-  const source = resolveSource(decodeSegment(raw.slice(prefix.length)));
+  const name = decodeSegment(raw.slice(prefix.length));
+  const source = exportAttemptIdFromFilename(name) ? (await resolveCommittedExport(name))?.file : resolveSource(name);
   if (source) return source;
   throw new ExportDestinationError(404, 'export source is unavailable', {
     code: 'export_source_read_failed', retryable: true, targetPath: target,
@@ -147,7 +149,7 @@ export async function handleExportDestinationPut(
   const directory = resolve(grant.directory);
   const target = resolve(directory, filename);
   if (dirname(target) !== directory) throw new ExportDestinationError(400, 'invalid export filename');
-  const source = exportSource(req, target, resolveSource);
+  const source = await exportSource(req, target, resolveSource);
   const releaseLease = acquireTargetLease(target);
   try {
     const info = await stat(directory).catch(() => null);

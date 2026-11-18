@@ -1,4 +1,5 @@
 import type { H264EncoderProfile } from '../media-acceleration.ts';
+import { exportAttemptIdFromFilename } from '../export-media-names.ts';
 
 export type GenerationJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 export type GenerationRetryClass = 'none' | 'provider-retryable' | 'provider-terminal' | 'download-retryable' | 'restart-recoverable';
@@ -249,15 +250,27 @@ export function assertNoActiveExportForRelocation(ledger: unknown): void {
   }
 }
 
-export function unfinishedExportAttempts(ledger: unknown): ReadonlySet<string> {
-  const attempts = new Set<string>();
-  if (!ledger || typeof ledger !== 'object' || !('jobs' in ledger) || !Array.isArray(ledger.jobs)) return attempts;
-  for (const row of ledger.jobs) {
-    if (row?.params?.kind !== 'export' || row.status === 'succeeded') continue;
-    const id = row.params.exportAttemptId ?? row.id;
-    if (typeof id === 'string') attempts.add(id.toLowerCase());
+
+export function committedExportSizes(rows: Iterable<Partial<GenerationJobSnapshot>>) {
+  const files = new Map<string, number | undefined>();
+  const prefix = '/media/uploads/';
+  for (const row of rows) {
+    if (row?.status !== 'succeeded' || row.params?.kind !== 'export') continue;
+    const result = row.result;
+    if (typeof result?.path !== 'string' || typeof result.assetId !== 'string' || !result.path.startsWith(prefix)) continue;
+    const name = result.path.slice(prefix.length);
+    const attempt = exportAttemptIdFromFilename(name);
+    if (!attempt || attempt !== result.assetId.toLowerCase()
+      || (row.params.exportAttemptId !== undefined
+        && (row.params.exportAttemptId !== attempt || result.sizeBytes === undefined))
+      || (result.sizeBytes !== undefined && (!Number.isSafeInteger(result.sizeBytes) || result.sizeBytes <= 0))) continue;
+    files.set(name, result.sizeBytes);
   }
-  return attempts;
+  return files;
+}
+
+export function exportSizeMatches(actual: number, expected: number | undefined): boolean {
+  return actual > 0 && (expected === undefined || actual === expected);
 }
 
 export function snapshotOf(job: GenerationJob): GenerationJobSnapshot {

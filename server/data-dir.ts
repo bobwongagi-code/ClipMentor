@@ -14,7 +14,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { atomicWriteJson, durableRemove, durableRename } from './plugins/project-store-durable.ts';
 import { projectEditRollbackPath, recoverLegacyProjectEdit } from './plugins/project-store-edit-journal.ts';
 import { withProjectStoreProcessLock } from './plugins/project-store-process-lock.ts';
-import { assertNoActiveExportForRelocation, unfinishedExportAttempts } from './plugins/generation-job-types.ts';
+import { assertNoActiveExportForRelocation, committedExportSizes } from './plugins/generation-job-types.ts';
+import type { GenerationJobSnapshot } from './plugins/generation-job-types.ts';
 import {
   legacyProjectBulkPendingPath, legacyProjectStoreEntryPath, PROJECT_STORE_DIRECTORY, sqliteProjectStorePath,
   SQLITE_PROJECT_STORE_FILENAME, SQLITE_STORE_ENV,
@@ -121,7 +122,7 @@ interface RelocationRecord {
 interface RelocationPublication {
   generationJobStore?: string;
   shouldPublish(): boolean;
-  prepareTarget(unfinishedAttempts?: ReadonlySet<string>): Promise<void>;
+  prepareTarget(completed?: ReadonlyMap<string, number | undefined>): Promise<void>;
   publishTarget(): Promise<void>;
 }
 
@@ -364,7 +365,8 @@ export async function relocateDataDir(
         await durableRename(stagedEntry, join(to, entry));
       }
       await durableRemove(staging, true);
-      await publication?.prepareTarget(unfinishedExportAttempts(ledger));
+      const rows = ledger as { jobs?: Partial<GenerationJobSnapshot>[] } | null;
+      await publication?.prepareTarget(committedExportSizes(Array.isArray(rows?.jobs) ? rows.jobs : []));
       if (publication) {
         await atomicWriteJson(relocationRecordPath(to), { ...record, phase: 'ready' });
         await publication.publishTarget();
