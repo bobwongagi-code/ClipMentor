@@ -99,10 +99,11 @@ export class MemoryPersistence implements OfflineEditPersistence {
     id: string,
     sessionId: string,
     ownership: ProjectEditOwnershipClaim,
-  ): Promise<void> {
-    if (this.matches(ownership) && id === projectId && this.checkpoint?.sessionId === sessionId) {
-      this.checkpoint = null;
-    }
+  ): Promise<boolean> {
+    if (!this.matches(ownership) || id !== projectId) return false;
+    if (this.checkpoint && this.checkpoint.sessionId !== sessionId) return false;
+    this.checkpoint = null;
+    return true;
   }
 
   async commitProject(input: OfflineProjectCommitInput) {
@@ -112,6 +113,7 @@ export class MemoryPersistence implements OfflineEditPersistence {
     if (revisionOf(this.current) !== input.expectedRevision) return { status: 'stale' as const };
     this.versions.push(structuredClone(this.current));
     this.current = structuredClone(input.doc);
+    if (this.checkpoint?.sessionId === input.checkpointSessionId) this.checkpoint = null;
     this.commitCount += 1;
     const revision = revisionOf(this.current);
     this.ownership = { ...input.ownership, baseRevision: revision };

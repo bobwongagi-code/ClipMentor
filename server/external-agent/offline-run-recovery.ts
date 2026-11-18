@@ -21,12 +21,17 @@ export async function openOfflineSessionRun(
   projectId: string,
   session: ExternalEditSession,
   resumedCheckpoint: boolean,
-): Promise<ExternalSessionRunLedger> {
+): Promise<ExternalSessionRunLedger | null> {
   activateOfflineAgentRuntimeBackend();
   const generation = await currentAgentSessionGeneration(projectId);
   adoptAgentSessionWriteGeneration(projectId, generation);
   if (resumedCheckpoint) {
     const sidecar = await loadAgentRuntimeSidecar(projectId);
+    // Older servers could leave a checkpoint behind after a successful commit.
+    // Only a completed run for this exact offline session proves consumption.
+    const applied = sidecar.runs.some((run) => run.externalSessionId === session.id
+      && run.backend === 'external-offline' && run.status === 'completed');
+    if (applied) return null;
     const persisted = sidecar.runs.find((run) => (
       run.externalSessionId === session.id
       && run.backend === 'external-offline'

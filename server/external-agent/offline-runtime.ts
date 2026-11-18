@@ -121,11 +121,16 @@ export class OfflineExternalEditRuntime {
     if (terminal && !ACTIVE_SESSION_STATUSES[terminal.session.status]) return this.info(terminal.session);
     const releaseAfter = name === 'review_edit_session' || name === 'discard_edit_session';
     return this.runExclusive(async () => {
+      let activeTarget: string | undefined;
       try {
-        await this.validateAvailabilityLocked();
         const args = { ...rawArgs };
-        if (name === 'begin_edit_session') return await this.begin(args.clientName, args.approvalMode);
+        if (name === 'begin_edit_session') {
+          await this.validateAvailabilityLocked();
+          return await this.begin(args.clientName, args.approvalMode);
+        }
         const state = this.requireSession(requiredSessionId(args));
+        if (releaseAfter && ACTIVE_SESSION_STATUSES[state.session.status]) activeTarget = state.session.id;
+        await this.validateAvailabilityLocked();
         if (name === 'get_edit_session') return this.info(state.session);
         if (name === 'discard_edit_session') return await this.discard(state);
         if (name === 'review_edit_session') return await this.review(state, args.summary);
@@ -136,7 +141,7 @@ export class OfflineExternalEditRuntime {
         const message = error instanceof Error ? error.message : String(error);
         throw new ExternalEditorCallError('failed', message);
       } finally {
-        if (releaseAfter) {
+        if (activeTarget && !ACTIVE_SESSION_STATUSES[this.requireSession(activeTarget).session.status]) {
           await this.persistence.releaseOwnership(this.ownership).catch((error: unknown) =>
             process.emitWarning(`Failed to release terminal offline project ownership: ${
               error instanceof Error ? error.message : String(error)}`));
@@ -195,26 +200,41 @@ export class OfflineExternalEditRuntime {
         `Offline editing requires approvalMode="auto". Open ${this.editorUrl} for manual approval.`,
       );
     }
-    const checkpoint = await this.persistence.loadCheckpoint?.(
+    let checkpoint = await this.persistence.loadCheckpoint?.(
       this.projectId,
       this.expectedRevision,
     );
-    const session = checkpoint
+    let session = checkpoint
       ? restoreDraftingExternalEditSession(checkpoint, this.baseDoc)
       : createExternalEditSession(this.baseDoc, clientName, approvalMode);
-    const run = await openOfflineSessionRun(
-      this.projectId,
-      session,
-      checkpoint !== null && checkpoint !== undefined,
-    );
+    let run = await openOfflineSessionRun(this.projectId, session, Boolean(checkpoint));
+    if (!run) {
+      await this.removeOwnedCheckpoint(session.id);
+      checkpoint = null;
+      session = createExternalEditSession(this.baseDoc, clientName, approvalMode);
+      run = await openOfflineSessionRun(this.projectId, session, false);
+      if (!run) throw new Error('could not start a new offline edit run');
+    }
     this.runs.set(session.id, run);
     this.sessions.set(session.id, { session, generation: 0 });
-    return { ...this.info(session), resumed: checkpoint !== null && checkpoint !== undefined };
+    return { ...this.info(session), resumed: Boolean(checkpoint) };
+  }
+
+  private async removeOwnedCheckpoint(sessionId: string): Promise<void> {
+    const removed = await this.persistence.deleteCheckpoint?.(this.projectId, sessionId, this.ownership);
+    if (removed === false) {
+      throw new ExternalEditorCallError('stale', 'The saved draft or its editing ownership changed.');
+    }
   }
 
   private async discard(state: VersionedOfflineSession): Promise<Record<string, unknown>> {
     if (ACTIVE_SESSION_STATUSES[state.session.status] === true) {
-      await this.persistence.deleteCheckpoint?.(this.projectId, state.session.id, this.ownership);
+      try {
+        await this.removeOwnedCheckpoint(state.session.id);
+      } catch (error) {
+        if (error instanceof ExternalEditorCallError && error.outcome === 'stale') this.finishIfCurrent(state, 'stale');
+        throw error;
+      }
       this.publishSession(state, finishExternalEditSession(state.session, 'cancelled'));
       await this.runs.get(state.session.id)?.finalize(
         'aborted',
@@ -321,19 +341,13 @@ export class OfflineExternalEditRuntime {
     this.expectedRevision = result.revision;
     this.ownership = result.ownership;
     this.baseDoc = draftDoc;
-    let warning: string | undefined;
-    try {
-      await this.persistence.deleteCheckpoint?.(this.projectId, state.session.id, this.ownership);
-    } catch {
-      warning = 'The applied draft checkpoint could not be removed; its stale revision prevents reuse.';
-    }
     const applied = finishExternalEditSession(
       state.session,
       'applied',
       state.session.operationCount,
     );
     const info = this.info(this.publishAppliedSession(state, applied).session);
-    warning = await publishAppliedOfflineReview(run, proposalId, warning);
+    const warning = await publishAppliedOfflineReview(run, proposalId);
     return warning ? { ...info, warning } : info;
   }
 
@@ -345,6 +359,7 @@ export class OfflineExternalEditRuntime {
     return this.persistence.commitProject({
       projectId: this.projectId,
       expectedRevision: this.expectedRevision,
+      checkpointSessionId: state.session.id,
       doc,
       ownership: this.ownership,
       canCommit: () => (

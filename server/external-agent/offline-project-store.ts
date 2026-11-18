@@ -94,6 +94,7 @@ export interface OfflineProjectCommitResult {
 export interface OfflineProjectCommitInput {
   projectId: string;
   expectedRevision: string;
+  checkpointSessionId?: string;
   doc: ProjectDoc;
   ownership: ProjectEditOwnershipClaim;
   canCommit: () => boolean;
@@ -198,17 +199,18 @@ async function restoreEntries(
 
 export async function writeCommitEntries(
   store: Pick<LockedProjectStore, 'writeEntry'|'removeEntry'>,
-  changes: Readonly<Record<string, unknown>>,
+  changes: Readonly<Record<string, StoredEntryValue>>,
   originals: Readonly<Record<string, StoredEntryValue>>,
   canCommit: () => boolean,
 ): Promise<void> {
   const written: string[] = [];
   try {
-    for (const [key, value] of Object.entries(changes)) {
+    for (const [key, entry] of Object.entries(changes)) {
       if (!canCommit()) throw new BrowserTakeoverError();
-      // A durable write can replace its file and then fail while syncing the directory.
+      // A write or removal can reach disk before its acknowledgement fails.
       written.push(key);
-      await store.writeEntry(key, value);
+      if (entry.found) await store.writeEntry(key, entry.value);
+      else await store.removeEntry(key);
     }
     if (!canCommit()) throw new BrowserTakeoverError();
   } catch (error) {
@@ -233,6 +235,7 @@ function metadataMatches(current: CommitMetadata, expected: CommitMetadata): boo
 async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectCommitResult> {
   const projectKey = `project:${input.projectId}`;
   const versionsKey = `versions:${input.projectId}`;
+  const checkpointKey = `${CHECKPOINT_PREFIX}${input.projectId}`;
   try {
     return await withSerializedProjectStore<OfflineProjectCommitResult>(async (store) => {
       const project = await store.readEntry(projectKey);
@@ -255,11 +258,11 @@ async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectC
       const now = Date.now();
       const nextRevision = revisionOf(input.normalizedDoc);
       const versions = automaticVersionEntries(currentMetadata.versions.value, before, now);
-      const changes = {
-        [versionsKey]: versions.entries,
-        projects: updatedProjectIndex(currentMetadata.projects.value, input.projectId, now),
-        [projectKey]: input.normalizedDoc,
-        [ownershipKey]: renewedProjectEditOwnership(input.ownership, nextRevision, now),
+      const changes: Record<string, StoredEntryValue> = {
+        [versionsKey]: { found: true, value: versions.entries },
+        projects: { found: true, value: updatedProjectIndex(currentMetadata.projects.value, input.projectId, now) },
+        [projectKey]: { found: true, value: input.normalizedDoc },
+        [ownershipKey]: { found: true, value: renewedProjectEditOwnership(input.ownership, nextRevision, now) },
       };
       const originals = {
         [versionsKey]: currentMetadata.versions,
@@ -267,6 +270,17 @@ async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectC
         [projectKey]: project,
         [ownershipKey]: ownership,
       };
+      if (input.checkpointSessionId) {
+        const checkpoint = await store.readEntry(checkpointKey);
+        if (checkpoint.found && isRecord(checkpoint.value)
+          && checkpoint.value.sessionId === input.checkpointSessionId) {
+          if (!normalizedCheckpoint(checkpoint.value, input.expectedRevision)) {
+            throw new Error('offline edit checkpoint does not match the reviewed draft base');
+          }
+          changes[checkpointKey] = { found: false };
+          originals[checkpointKey] = checkpoint;
+        }
+      }
       await writeCommitEntries(store, changes, originals, input.canCommit);
       const appliedOwnership = { ...input.ownership, baseRevision: nextRevision };
       return {
@@ -362,14 +376,15 @@ export async function deleteOfflineEditCheckpoint(
   projectId: string,
   sessionId: string,
   ownership: ProjectEditOwnershipClaim,
-): Promise<void> {
+): Promise<boolean> {
   if (!VALID_PROJECT_ID.test(projectId)) throw new Error('invalid project id');
-  await withSerializedProjectStore(async (store) => {
+  return withSerializedProjectStore(async (store) => {
     const owned = await store.readEntry(projectEditOwnershipKey(projectId));
-    if (!projectEditOwnershipMatches(owned.value, ownership)) return;
+    if (ownership.projectId !== projectId || !projectEditOwnershipMatches(owned.value, ownership)
+      || !isRecord(owned.value) || owned.value.baseRevision !== ownership.baseRevision) return false;
     const key = `${CHECKPOINT_PREFIX}${projectId}`;
     const current = await store.readEntry(key);
-    if (!current.found) return;
+    if (!current.found) return true;
     if (!isRecord(current.value)
       || typeof current.value.version !== 'number'
       || current.value.version !== 1
@@ -377,7 +392,12 @@ export async function deleteOfflineEditCheckpoint(
       || !normalizedCheckpoint(current.value, current.value.baseRevision)) {
       throw new Error('offline edit checkpoint is corrupt or unsupported');
     }
-    if (current.value.sessionId === sessionId) await store.removeEntry(key);
+    // An empty draft on another revision has no checkpoint of its own to clear.
+    // Keep the older draft available if its base is restored later.
+    if (current.value.baseRevision !== ownership.baseRevision) return current.value.sessionId !== sessionId;
+    if (current.value.sessionId !== sessionId) return false;
+    await store.removeEntry(key);
+    return true;
   });
 }
 
