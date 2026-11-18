@@ -202,6 +202,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
         jobParams,
         async (_jobId, update) => {
           try {
+            if (outDir !== uploadDir()) throw new Error('media directory changed before rendering');
             const encoding = await renderExportPlan(plan, stagedFilepath, update, controller.signal);
             const { size } = await stat(stagedFilepath);
             assertNonEmptyExportBytes(size);

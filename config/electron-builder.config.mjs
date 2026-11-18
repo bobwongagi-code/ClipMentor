@@ -81,6 +81,8 @@ export default {
   files: [
     'desktop-dist/main.mjs',
     'desktop-dist/preload.cjs',
+    'desktop-dist/export-worker.mjs',
+    'desktop-dist/owned-chromium.sh',
     ...nativeInferenceWorkers,
     'package.json',
     // Keep only the target compositor; renderer selects its package from process.platform at runtime.

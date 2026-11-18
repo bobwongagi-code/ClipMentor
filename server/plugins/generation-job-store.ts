@@ -19,6 +19,8 @@ import { atomicWriteJson } from './project-store-durable.ts';
 import {
   TERMINAL,
   acceptanceOf,
+  assertNoActiveExportForRelocation,
+  committedExportSizes,
   isGenerationExecutionAlive,
   makeAcceptanceWaiter,
   mergeGenerationResultUrls,
@@ -127,6 +129,15 @@ async function readLedger(): Promise<Map<string, LedgerRow>> {
     rows.set(value.id, value as LedgerRow);
   }
   return rows;
+}
+
+/** Read only. A media request must never trigger job recovery or use a warm job as authority. */
+export async function readCommittedExportSizes(forRelocation = false) {
+  assertCurrentStorageProfile(profile);
+  const rows = await readLedger();
+  assertCurrentStorageProfile(profile);
+  if (forRelocation) assertNoActiveExportForRelocation({ jobs: [...rows.values()] });
+  return committedExportSizes(rows.values());
 }
 
 async function saveLedger(rows: Map<string, LedgerRow>): Promise<void> {

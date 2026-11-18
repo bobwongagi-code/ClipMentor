@@ -1,5 +1,7 @@
 import { dirname } from 'node:path';
 import { mkdir, rename, unlink } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { runOwnedProcess } from '../owned-render-process.ts';
 import {
   resolveH264RenderOptions,
   resolveH264TargetBitrate,
@@ -28,11 +30,27 @@ import * as remotionRender from '../../remotion/render.mjs';
 export const {
   currentRenderConcurrency,
   remotionFfmpegPath,
-  renderTimeline,
   renderTimelineStills,
-  renderClip,
   setUploadsDirProvider,
 } = remotionRender;
+
+type TimelineRenderOptions = Parameters<typeof remotionRender.renderTimeline>[0];
+
+/** Keep the webpack bundle cache in the server, and execute the render in an owned process group. */
+async function renderInWorker({ signal, onProgress, ...options }: TimelineRenderOptions) {
+  signal?.throwIfAborted();
+  const preparedServeUrl = await remotionRender.prepareRenderServeUrl();
+  signal?.throwIfAborted();
+  const worker = fileURLToPath(new URL(process.versions.electron
+    ? './export-worker.mjs' : '../../remotion/export-worker.mjs', import.meta.url));
+  return runOwnedProcess<Awaited<ReturnType<typeof remotionRender.renderTimeline>>>({
+    command: process.execPath, args: [worker], input: { ...options, preparedServeUrl }, signal, onProgress,
+  });
+}
+
+export const renderTimeline: typeof remotionRender.renderTimeline = renderInWorker;
+export const renderClip: typeof remotionRender.renderClip = (options: Parameters<typeof remotionRender.renderClip>[0]) =>
+  renderInWorker({ ...options, clip: true });
 
 export async function cleanupExportOutputs(paths: Array<string | null>): Promise<ExportCleanupStatus> {
   let cleanupStatus: ExportCleanupStatus = 'succeeded';

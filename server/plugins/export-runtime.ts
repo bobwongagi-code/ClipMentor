@@ -2,7 +2,8 @@ import { constants as fsConstants } from 'node:fs';
 import { copyFile, link, lstat, open, readdir, stat, unlink } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { ffmpegBin } from '../media-binaries.ts';
-import { ffmpegThreadArgs, spawnMediaProcess } from '../media-process.ts';
+import { ffmpegThreadArgs } from '../media-process.ts';
+import { runOwnedProcess } from '../owned-render-process.ts';
 import { exportAttemptIdFromFilename, uploadDir } from '../media-dir.ts';
 import {
   h264EncoderAttempts,
@@ -79,7 +80,7 @@ export async function readExportJobResultFile(result: PromotableExportResult, di
   const name = exportJobResultName(result.path, result.assetId);
   if (!name) throw new Error('export result is not promotable');
   const path = join(directory, name);
-  const info = await stat(path);
+  const info = await lstat(path);
   if (!info.isFile() || info.size <= 0 || (result.sizeBytes !== undefined && info.size !== result.sizeBytes)) {
     throw new Error('original render output is missing or incomplete');
   }
@@ -198,7 +199,9 @@ export async function cleanupStaleExportFiles(
     const attemptId = exportAttemptIdFromFilename(entry.name);
     const staging = EXPORT_PROMOTION_STAGE.test(entry.name);
     const privateAttempt = entry.name.startsWith('.')
-      ? exportAttemptIdFromFilename(entry.name.slice(1).replace(/(\.[a-z0-9]+)\.retimed\1$/i, '$1'))
+      ? exportAttemptIdFromFilename(entry.name.slice(1)
+        .replace(/(\.[a-z0-9]+)\.retimed\1$/i, '$1')
+        .replace(/\.(?:direct-hardware\.mp4|pcm\.mov)$/i, ''))
       : undefined;
     if (!attemptId && !privateAttempt && !staging) continue;
     const path = join(directory, entry.name);
@@ -314,31 +317,15 @@ export async function withExportPermit<T>(
   }
 }
 
-function runFfmpeg(args: string[], signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawnMediaProcess(ffmpegBin(), [...ffmpegThreadArgs(), ...args], { stdio: ['ignore', 'ignore', 'pipe'], signal });
-    let stderr = '';
-    let settled = false;
-    let timeoutError: Error | undefined;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error); else resolve();
-    };
-    const timer = setTimeout(() => {
-      timeoutError = new Error('ffmpeg fps retime timed out');
-      child.kill('SIGKILL');
-    }, FFMPEG_TIMEOUT_MS);
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += String(chunk);
-      if (stderr.length > 16_000) stderr = stderr.slice(-8_000);
+async function runFfmpeg(args: string[], signal?: AbortSignal): Promise<void> {
+  try {
+    await runOwnedProcess({
+      command: ffmpegBin(), args: [...ffmpegThreadArgs(), ...args], signal, timeoutMs: FFMPEG_TIMEOUT_MS,
     });
-    child.once('error', (error) => finish(error));
-    child.once('close', (code) => finish(timeoutError ?? (code === 0
-      ? undefined
-      : new Error(`ffmpeg fps retime failed (${code}): ${stderr.slice(-600)}`))));
-  });
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw new Error(`ffmpeg fps retime failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
 }
 
 export function retimeVideoEncodingArgs(

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, mkdir, unlink } from 'node:fs/promises';
+import { readFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ViteDevServer } from 'vite';
@@ -7,9 +7,12 @@ import { exportFailureFrom } from '../../src/export/exportFailure.ts';
 import { sanitizeFileName } from '../file-name.ts';
 import { formatFrameLabel, tileContactSheet } from '../frame-grid.ts';
 import { uploadDir } from '../media-dir.ts';
+import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
 import type { ExportPlan } from './export-plan.ts';
 import { acceptExportSubmission } from './export-submission.ts';
-import { withExportPermit } from './export-runtime.ts';
+import { assertNonEmptyExportBytes, exportJobFilename, withExportPermit } from './export-runtime.ts';
+import { durableRename } from './project-store-durable.ts';
+import { withProjectStoreProcessLock } from './project-store-process-lock.ts';
 import {
   bindRequestAbort,
   contentDisposition,
@@ -145,19 +148,30 @@ export function registerRenderClipRoute(server: ViteDevServer): void {
       const mode = body?.mode === 'bake' ? 'bake' : 'download';
       const transparent = body?.transparent ?? codec === 'prores';
       if (mode === 'bake') {
+        const profile = runtimeProfile();
         const dir = uploadDir();
         await mkdir(dir, { recursive: true });
-        const fname = `${randomUUID()}.${ext}`;
-        bakeOut = join(dir, fname);
+        const id = randomUUID();
+        const fname = `${id}.${ext}`;
+        const staged = join(dir, '.' + exportJobFilename(id, ext));
+        bakeOut = staged;
         await withExportPermit(async () => renderClip({
           state: renderState,
-          outputLocation: bakeOut,
+          outputLocation: staged,
           codec,
           transparent,
           ...await h264RenderOptions(codec),
           signal: requestAbort.controller.signal,
         }), requestAbort.controller.signal);
         requestAbort.controller.signal.throwIfAborted();
+        assertNonEmptyExportBytes((await stat(staged)).size);
+        await withProjectStoreProcessLock(profile.rootDir, async () => {
+          requestAbort.controller.signal.throwIfAborted();
+          assertCurrentStorageProfile(profile);
+          if (dir !== uploadDir(profile)) throw new Error('media directory changed while rendering');
+          await durableRename(staged, join(dir, fname));
+        });
+        bakeOut = null;
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ path: `/media/uploads/${fname}` }));

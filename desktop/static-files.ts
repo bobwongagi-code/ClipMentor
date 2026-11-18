@@ -6,7 +6,9 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join, normalize, sep } from 'node:path';
-import { mimeFor, resolveUploadFile, serveDiskFile } from '../server/media-dir.ts';
+import { exportAttemptIdFromFilename, mimeFor, resolveUploadFile, serveDiskFile } from '../server/media-dir.ts';
+import { resolveCommittedExport } from '../server/plugins/export-delivery.ts';
+import { isPrivateExportFilename } from '../server/export-media-names.ts';
 import { editorCredentialAuthorized } from '../server/editor-auth.ts';
 import type { Middleware } from './mini-connect.ts';
 
@@ -54,6 +56,14 @@ export function uploadsMiddleware(): Middleware {
       return;
     }
     const name = decodeURIComponent((req.url ?? '/').split('?')[0].replace(/^\/+/, ''));
+    if (isPrivateExportFilename(name)) { res.statusCode = 404; res.end(); return; }
+    if (exportAttemptIdFromFilename(name)) {
+      const result = await resolveCommittedExport(name);
+      if (!result) { res.statusCode = 404; res.end(); return; }
+      res.setHeader('Cache-Control', 'no-store');
+      await serveDiskFile(req, res, result.file);
+      return;
+    }
     const file = resolveUploadFile(name);
     if (!file) { next(); return; }
     await serveDiskFile(req, res, file);

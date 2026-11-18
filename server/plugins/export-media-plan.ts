@@ -14,6 +14,7 @@ import {
   type ExportMediaIssue,
 } from '../../src/export/exportFailure.ts';
 import {
+  exportAttemptIdFromFilename,
   isSafeUploadName,
   resolveOrHydrateUploadFile,
   resolveUploadFile,
@@ -24,6 +25,7 @@ import {
 import { resolveProductAsset } from '../product-assets.ts';
 import { safePublicFetch } from '../safe-public-fetch.ts';
 import { materializeExportReferences } from './export-reference-materialization.ts';
+import { resolveCommittedExport } from './export-delivery.ts';
 
 const MAX_MATERIALIZED_MEDIA_BYTES = 10 * 1024 * 1024 * 1024;
 const MIME_EXTENSIONS: Readonly<Record<string, string>> = {
@@ -274,7 +276,8 @@ async function checkLocalReference(
     }
     let hydrated: ResolvedUploadFile | null;
     try {
-      hydrated = await options.hydrateUpload(name, options.signal);
+      hydrated = await (exportAttemptIdFromFilename(name)
+        ? resolveCommittedExport(name) : options.hydrateUpload(name, options.signal));
       options.signal?.throwIfAborted();
     } catch (error) {
       options.signal?.throwIfAborted();

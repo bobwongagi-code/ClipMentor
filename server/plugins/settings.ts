@@ -27,6 +27,13 @@ import {
   relocatedMediaDestination,
   writeDataDirPointer,
 } from '../data-dir.ts';
+import { readCommittedExportSizes } from './generation-job-store.ts';
+import { matchesCommittedExportFile } from './export-delivery.ts';
+import { withProjectStoreProcessLock } from './project-store-process-lock.ts';
+
+function includeCommittedMedia(sizes: ReadonlyMap<string, number | undefined>) {
+  return (name: string, file: string) => !exportAttemptIdFromFilename(name) || matchesCommittedExportFile(name, file, sizes);
+}
 
 const ISOLATED_R2_SETTINGS = [
   'R2_ACCOUNT_ID',
@@ -113,7 +120,7 @@ async function applyDataDirChange(
   raw: string,
   profile: RuntimeProfile,
   log: (msg: string) => void,
-  saveOtherSettings: () => Promise<void>,
+  saveOtherSettings: (sizes?: ReadonlyMap<string, number | undefined>) => Promise<void>,
   hasOtherSettings: boolean,
 ): Promise<void> {
   if (process.env[DATA_DIR_ENV]?.trim()) {
@@ -140,13 +147,11 @@ async function applyDataDirChange(
       assertCurrentStorageProfile(profile);
       return true;
     },
-    prepareTarget: async (unfinishedAttempts) => {
+    prepareTarget: async (completed) => {
       const mediaDestination = relocatedMediaDestination(target, destination, DEFAULT_UPLOAD_DIR);
-      await syncUploadDirectories(uploadDir(profile), mediaDestination, log, true, (name) => {
-        const attemptId = exportAttemptIdFromFilename(name);
-        return !attemptId || !unfinishedAttempts?.has(attemptId);
-      });
-      await saveOtherSettings();
+      const sizes = completed ?? await readCommittedExportSizes(true);
+      await syncUploadDirectories(uploadDir(profile), mediaDestination, log, true, includeCommittedMedia(sizes));
+      await saveOtherSettings(sizes);
     },
     publishTarget: () => writeDataDirPointer(target),
   });
@@ -194,13 +199,20 @@ export function settingsPlugin(): Plugin {
               nextMediaDir = expandMediaDir(rawMediaDir) ?? profile.mediaDir;
             }
             const log = (msg: string) => server.config.logger.info(msg);
-            const saveOtherSettings = async () => {
-              if (nextMediaDir) await syncUploadDirectories(previousMediaDir, nextMediaDir, log);
+            const saveOtherSettings = async (sizes?: ReadonlyMap<string, number | undefined>) => {
+              if (nextMediaDir) {
+                const committed = sizes ?? await readCommittedExportSizes(true);
+                await syncUploadDirectories(previousMediaDir, nextMediaDir, log, false, includeCommittedMedia(committed));
+              }
               await setKeys(patch);
             };
             if (dataDirChanged) await applyDataDirChange(
               dataDir, profile, log, saveOtherSettings, Object.keys(patch).length > 0,
             );
+            else if (nextMediaDir) await withProjectStoreProcessLock(profile.rootDir, async () => {
+              assertCurrentStorageProfile(profile);
+              await saveOtherSettings();
+            });
             else await saveOtherSettings();
             sendJson(res, 200, settingsBody(dataDirChanged));
             return;

@@ -18,6 +18,8 @@ import {
 } from './runtime-profile.ts';
 import { resolveMediaReference } from './media-references.ts';
 import { sha256File } from '../shared/node-content-hash.ts';
+import { exportAttemptIdFromFilename } from './export-media-names.ts';
+export { exportAttemptIdFromFilename } from './export-media-names.ts';
 
 export const DEFAULT_UPLOAD_DIR = join(process.cwd(), 'public', 'media', 'uploads');
 
@@ -35,12 +37,7 @@ export function isSafeUploadName(name: string): boolean {
 }
 
 const EXPORT_MEDIA_ID = '[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}';
-const EXPORT_ATTEMPT_FILENAME = new RegExp(`^openchatcut-export-job-(${EXPORT_MEDIA_ID})\\.(?:mp4|webm|mov|mp3|wav)$`, 'i');
 const RESERVED_EXPORT_ASSET_ID = new RegExp(`^openchatcut-(?:derived|export-job)-${EXPORT_MEDIA_ID}$`, 'i');
-
-export function exportAttemptIdFromFilename(name: string): string | undefined {
-  return isSafeUploadName(name) ? EXPORT_ATTEMPT_FILENAME.exec(name)?.[1]?.toLowerCase() : undefined;
-}
 
 export function isReservedExportAssetId(id: string): boolean {
   return RESERVED_EXPORT_ASSET_ID.test(id);
@@ -84,7 +81,7 @@ export function resolveUploadFile(
   profile: RuntimeProfile = runtimeProfile(),
   configuredMediaDir?: string,
 ): string | null {
-  if (!isSafeUploadName(name)) return null;
+  if (!isSafeUploadName(name) || exportAttemptIdFromFilename(name)) return null;
   for (const d of uploadReadDirs(profile, configuredMediaDir)) {
     const file = join(d, name);
     if (existsSync(file)) return file;
@@ -100,7 +97,7 @@ export function resolveUploadReference(
   profile: RuntimeProfile = runtimeProfile(),
   configuredMediaDir?: string,
 ): string | null {
-  if (!isSafeUploadName(name)) return null;
+  if (!isSafeUploadName(name) || exportAttemptIdFromFilename(name)) return null;
   for (const directory of uploadReadDirs(profile, configuredMediaDir)) {
     if (existsSync(join(directory, name))) return null;
     const referenced = resolveMediaReference(directory, name);
@@ -200,7 +197,7 @@ export function resolveOrHydrateUploadFile(
   dependencies: UploadHydrationDependencies = defaultUploadHydrationDependencies,
   signal?: AbortSignal,
 ): Promise<ResolvedUploadFile | null> {
-  if (!isSafeUploadName(name)) return Promise.resolve(null);
+  if (!isSafeUploadName(name) || exportAttemptIdFromFilename(name)) return Promise.resolve(null);
   signal?.throwIfAborted();
   if (signal) {
     let hydrationPaths: { partPath: string; finalPath: string } | null = null;
@@ -318,7 +315,7 @@ export async function serveDiskFile(req: IncomingMessage, res: ServerResponse, f
     await pipeline(opened.createReadStream({ start, end, autoClose: false }), res).catch(() => res.destroy());
     return;
   }
-  createReadStream(file, { start, end }).pipe(res);
+  await pipeline(createReadStream(file, { start, end }), res).catch(() => res.destroy());
 }
 
 // ── Start synchronization ────────────────────────────────────────────────────────
@@ -342,7 +339,7 @@ export async function syncUploadDirectories(
   target: string,
   log: (msg: string) => void,
   verifyExisting = false,
-  include: (name: string) => boolean = () => true,
+  include: (name: string, sourceFile: string) => boolean | Promise<boolean> = () => true,
 ): Promise<number> {
   if (resolve(source) === resolve(target)) return 0;
   await mkdir(target, { recursive: true });
@@ -352,8 +349,9 @@ export async function syncUploadDirectories(
   });
   let copied = 0;
   for (const entry of entries) {
-    if (!entry.isFile() || !isSafeUploadName(entry.name) || !include(entry.name)) continue;
+    if (!entry.isFile() || !isSafeUploadName(entry.name)) continue;
     const sourceFile = join(source, entry.name);
+    if (!await include(entry.name, sourceFile)) continue;
     const targetFile = join(target, entry.name);
     if (verifyExisting ? await matchingUpload(sourceFile, targetFile) : existsSync(targetFile)) continue;
     const part = join(target, `.${entry.name}${verifyExisting ? `.${randomUUID()}` : ''}.sync`);
@@ -381,10 +379,12 @@ export async function syncUploadDirectories(
 export async function syncLegacyUploads(
   log: (msg: string) => void,
   profile: RuntimeProfile = runtimeProfile(),
+  includeExport?: (name: string, file: string) => boolean | Promise<boolean>,
 ): Promise<void> {
   if (isIsolatedDevProfile(profile) || !isCustomUploadDir(profile)) return;
   try {
-    await syncUploadDirectories(profile.mediaDir, uploadDir(profile), log);
+    await syncUploadDirectories(profile.mediaDir, uploadDir(profile), log, false,
+      (name, file) => !exportAttemptIdFromFilename(name) || (includeExport?.(name, file) ?? false));
   } catch (err) {
     log(`[media-dir] 老素材同步失败:${err instanceof Error ? err.message : String(err)}`);
   }

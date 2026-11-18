@@ -5,7 +5,8 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isSafeUploadName, resolveUploadFile } from '../media-dir.ts';
+import { exportAttemptIdFromFilename, isSafeUploadName, resolveUploadFile } from '../media-dir.ts';
+import { resolveCommittedExport } from './export-delivery.ts';
 import { ffmpegBin, ffprobeBin } from '../media-binaries.ts';
 import { formatTimeLabel, tileContactSheet } from '../frame-grid.ts';
 import {
@@ -238,7 +239,7 @@ export function exportQaPlugin(): Plugin {
             sendJson(res, 400, { error: 'src must be /media/uploads/<safe-name>' });
             return;
           }
-          const file = resolveUploadFile(name);
+          const file = exportAttemptIdFromFilename(name) ? (await resolveCommittedExport(name))?.file : resolveUploadFile(name);
           if (!file || !existsSync(file)) {
             sendJson(res, 404, { error: `export not found: ${name}` });
             return;
