@@ -101,7 +101,7 @@ async function updateProjectDocument(
   }
   const nextRevision = revisionOf(project);
   if (!activeAgentWrite(request, projectId, readRun)) return endedRun(current);
-  const accepted = await commitProjectEditRows(store, {
+  const accepted = await commitProjectEditRows({ ...store, writeEntry: store.writeEntryExact }, {
     [request.key]: { found: true, value: project },
     [ownershipKey]: { found: true, value: renewedProjectEditOwnership(claim, nextRevision) },
   }, { [request.key]: current, [ownershipKey]: ownership }, () => activeAgentWrite(request, projectId, readRun));
