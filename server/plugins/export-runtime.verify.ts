@@ -91,6 +91,8 @@ try {
   const retainedName = exportJobFilename('00000000-0000-4000-8000-000000000004', 'mp4');
   const promotedId = '00000000-0000-4000-8000-000000000005';
   const promotionSourceName = exportJobFilename(promotedId, 'mp4');
+  const staleStage = '.openchatcut-derived-00000000-0000-4000-8000-000000000006.mp4.pending';
+  const freshStage = '.openchatcut-derived-00000000-0000-4000-8000-000000000007.mp4.pending';
   const unrelatedName = 'user-owned-video.mp4';
   const prefixedUserName = 'openchatcut-export-job-project.mp4';
   await Promise.all([
@@ -99,6 +101,8 @@ try {
     writeFile(join(exportDir, proresName), 'fresh prores export'),
     writeFile(join(exportDir, retainedName), 'recoverable stale export'),
     writeFile(join(exportDir, promotionSourceName), 'saved sequence export'),
+    writeFile(join(exportDir, staleStage), 'interrupted promotion'),
+    writeFile(join(exportDir, freshStage), 'fresh promotion'),
     writeFile(join(exportDir, unrelatedName), 'user media'),
     writeFile(join(exportDir, prefixedUserName), 'user media with reserved-looking prefix'),
   ]);
@@ -107,6 +111,7 @@ try {
   await utimes(join(exportDir, retainedName), staleDate, staleDate);
   await utimes(join(exportDir, prefixedUserName), staleDate, staleDate);
   await utimes(join(exportDir, promotionSourceName), staleDate, staleDate);
+  await utimes(join(exportDir, staleStage), staleDate, staleDate);
 
   const promoted = await promoteExportResult({
     assetId: promotedId,
@@ -134,7 +139,9 @@ try {
     retentionMs: 60 * 60_000,
     shouldRetain: (renderId) => renderId === '00000000-0000-4000-8000-000000000004',
   });
-  assert.equal(removed, 2);
+  assert.equal(removed, 3);
+  assert.equal(existsSync(join(exportDir, staleStage)), false, 'interrupted promotion staging is reclaimed');
+  assert.equal(existsSync(join(exportDir, freshStage)), true, 'fresh promotion staging is retained');
   assert.equal(existsSync(join(exportDir, staleName)), false, 'stale temporary export should be removed');
   assert.equal(existsSync(join(exportDir, freshName)), true, 'fresh temporary export should be retained');
   assert.equal(existsSync(join(exportDir, proresName)), true, 'fresh prores temporary export should be retained');

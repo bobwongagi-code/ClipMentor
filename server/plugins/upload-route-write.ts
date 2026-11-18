@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import {
   deleteUploadObject, UploadTooLargeError,
 } from '../r2.ts';
-import { enqueueUploadMutation, uploadDir } from '../media-dir.ts';
+import { enqueueUploadMutation, isReservedExportAssetId, uploadDir } from '../media-dir.ts';
 import { safePublicFetch, UnsafePublicUrlError } from '../safe-public-fetch.ts';
 import { streamUploadToFile } from './upload-stream.ts';
 import { sha256File } from '../../shared/node-content-hash.ts';
@@ -51,6 +51,11 @@ async function handleUploadWrite(
     const url = new URL(req.url ?? '/', 'http://localhost');
     const original = url.searchParams.get('name') ?? 'file';
     const assetId = (url.searchParams.get('assetId') ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+    if (!handoff && isReservedExportAssetId(assetId)) {
+      req.resume();
+      sendError(res, 400, 'upload asset ID is reserved for generated exports');
+      return;
+    }
     const ifAbsent = url.searchParams.get('ifAbsent') === '1';
     const requestedRollbackToken = url.searchParams.get('rollbackToken') ?? '';
     if (ifAbsent && requestedRollbackToken && !/^[A-Za-z0-9-]{1,128}$/.test(requestedRollbackToken)) {

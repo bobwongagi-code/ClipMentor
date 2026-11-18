@@ -6,7 +6,7 @@ import {
   unlinkWithRetry,
 } from './export-runtime.ts';
 import {
-  initializeGenerationJobs,
+  refreshGenerationJobStatus,
   registerGenerationCleanupPolicy,
   registerGenerationRetentionGuard,
 } from './generation-jobs.ts';
@@ -14,6 +14,7 @@ import { jobs } from './generation-job-store.ts';
 import { getStoredEntry } from './project-store.ts';
 import { isUnresolvedExportRecovery } from './project-store-export-recovery.ts';
 import { resolveUploadFile, uploadDir } from '../media-dir.ts';
+import { runtimeProfile } from '../runtime-profile.ts';
 import { setUploadsDirProvider } from './export-rendering.ts';
 import {
   registerRenderClipRoute,
@@ -46,7 +47,7 @@ export function exportPlugin(): Plugin {
       setUploadsDirProvider(uploadDir);
       const cleanStaleExports = async () => {
         try {
-          await initializeGenerationJobs();
+          await refreshGenerationJobStatus();
           // A render operation and the attempt UUID in its filename can differ.
           // Resolve legacy names through the hydrated job ledger before checking retention.
           const owners = new Map<string, { id: string; active: boolean }>();
@@ -58,6 +59,7 @@ export function exportPlugin(): Plugin {
             }
           }
           const removed = await cleanupStaleExportFiles(uploadDir(), {
+            profile: runtimeProfile(),
             shouldRetain: (fileId) => {
               const owner = owners.get(fileId);
               return owner?.active || retainUnresolvedExportRecovery(owner?.id ?? fileId);

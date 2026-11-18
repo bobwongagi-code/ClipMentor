@@ -1,12 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { TERMINAL } from './generation-job-types.ts';
-import type { GenerationJob } from './generation-job-types.ts';
-import { jobs } from './generation-job-store.ts';
+import type { GenerationJobSnapshot } from './generation-job-types.ts';
 import {
-  initializeGenerationJobs,
-  resumeGenerationJobDownload,
-  resumeRestoredJobs,
+  initializeGenerationJobs, refreshGenerationJobStatus, readGenerationJobSnapshot,
+  resumeGenerationJobDownload, resumeRestoredJobs,
 } from './generation-job-lifecycle.ts';
 
 export {
@@ -46,6 +44,8 @@ export {
   deleteGenerationJob,
   getGenerationJobSnapshot,
   initializeGenerationJobs,
+  refreshGenerationJobStatus,
+  readGenerationJobSnapshot,
   resumeGenerationJobDownload,
   waitForGenerationAcceptance,
 } from './generation-job-lifecycle.ts';
@@ -80,7 +80,7 @@ function parseJobIds(value: ProgressRequest['jobIds']): string[] {
   return [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
 }
 
-function report(job: GenerationJob, action: ProgressRequest['action']) {
+function report(job: GenerationJobSnapshot, action: ProgressRequest['action']) {
   return {
     jobId: job.id,
     operationId: job.id,
@@ -123,36 +123,45 @@ export function generationProgressPlugin(): Plugin {
       });
       server.middlewares.use('/generate/progress', async (req, res) => {
         if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed — use POST' }); return; }
+        let input: ProgressRequest;
+        let jobIds: string[];
+        let timeoutSeconds: number;
         try {
-          await initializeGenerationJobs();
-          await resumeRestoredJobs();
-          const input = await readJson(req);
+          input = await readJson(req);
           if (input.target !== 'generation') throw new Error('target must be generation');
           if (!input.action || !['params', 'status', 'wait', 'resume'].includes(input.action)) throw new Error('action must be params, status, wait, or resume');
-          const jobIds = parseJobIds(input.jobIds);
+          jobIds = parseJobIds(input.jobIds);
           if (!jobIds.length) throw new Error('jobIds is required');
-          const timeoutSeconds = input.timeoutSeconds ?? 90;
+          timeoutSeconds = input.timeoutSeconds ?? 90;
           if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 3600) throw new Error('timeoutSeconds must be between 0 and 3600');
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
 
-          if (input.action === 'wait') {
-            const deadline = Date.now() + timeoutSeconds * 1000;
-            while (Date.now() < deadline) {
-              const known = jobIds.map((id) => jobs.get(id));
-              if (known.every((job) => !job || TERMINAL.has(job.status))) break;
-              await wait(250);
-            }
-          }
+        try {
+          await refreshGenerationJobStatus();
+          await resumeRestoredJobs(jobIds);
           if (input.action === 'resume') await Promise.all(jobIds.map((id) => resumeGenerationJobDownload(id)));
+          const readSnapshots = () => Promise.all(jobIds.map((id) => readGenerationJobSnapshot(id, false)));
+          let snapshots = await readSnapshots();
+          const deadline = Date.now() + timeoutSeconds * 1000;
+          while (input.action === 'wait' && snapshots.some((job) => job && !TERMINAL.has(job.status)) && Date.now() < deadline) {
+            await wait(Math.min(250, Math.max(0, deadline - Date.now())));
+            await refreshGenerationJobStatus();
+            await resumeRestoredJobs(jobIds);
+            snapshots = await readSnapshots();
+          }
 
-          const reports = jobIds.map((id) => {
-            const job = jobs.get(id);
+          const reports = jobIds.map((id, index) => {
+            const job = snapshots[index];
             return job ? report(job, input.action) : { jobId: id, operationId: id, status: 'not_found', error: 'generation job not found' };
           });
           sendJson(res, 200, { target: 'generation', action: input.action, reports });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           server.config.logger.error(`[generate:progress] ${message}`);
-          sendJson(res, 400, { error: message });
+          sendJson(res, 503, { error: 'generation status unavailable; query the same operation ID' });
         }
       });
     },

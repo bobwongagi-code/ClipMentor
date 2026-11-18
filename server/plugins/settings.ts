@@ -5,6 +5,7 @@ import { runProbe } from '../key-probes.ts';
 import {
   checkMediaDir,
   DEFAULT_UPLOAD_DIR,
+  exportAttemptIdFromFilename,
   expandMediaDir,
   syncUploadDirectories,
   uploadDir,
@@ -129,6 +130,7 @@ async function applyDataDirChange(
   // elsewhere. It needs the same consistency checks and copy as any other move.
   const destination = target ?? defaultRootDir(profile);
   const outcome = await relocateDataDir(profile.rootDir, destination, log, {
+    generationJobStore: profile.generationJobStore,
     shouldPublish: () => {
       const configured = readDataDirPointerAuthority() ?? defaultRootDir(profile);
       if (destination !== profile.rootDir && configured === destination) {
@@ -138,9 +140,12 @@ async function applyDataDirChange(
       assertCurrentStorageProfile(profile);
       return true;
     },
-    prepareTarget: async () => {
+    prepareTarget: async (unfinishedAttempts) => {
       const mediaDestination = relocatedMediaDestination(target, destination, DEFAULT_UPLOAD_DIR);
-      await syncUploadDirectories(uploadDir(profile), mediaDestination, log, true);
+      await syncUploadDirectories(uploadDir(profile), mediaDestination, log, true, (name) => {
+        const attemptId = exportAttemptIdFromFilename(name);
+        return !attemptId || !unfinishedAttempts?.has(attemptId);
+      });
       await saveOtherSettings();
     },
     publishTarget: () => writeDataDirPointer(target),

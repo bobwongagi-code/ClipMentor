@@ -34,6 +34,18 @@ export function isSafeUploadName(name: string): boolean {
   return true;
 }
 
+const EXPORT_MEDIA_ID = '[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}';
+const EXPORT_ATTEMPT_FILENAME = new RegExp(`^openchatcut-export-job-(${EXPORT_MEDIA_ID})\\.(?:mp4|webm|mov|mp3|wav)$`, 'i');
+const RESERVED_EXPORT_ASSET_ID = new RegExp(`^openchatcut-(?:derived|export-job)-${EXPORT_MEDIA_ID}$`, 'i');
+
+export function exportAttemptIdFromFilename(name: string): string | undefined {
+  return isSafeUploadName(name) ? EXPORT_ATTEMPT_FILENAME.exec(name)?.[1]?.toLowerCase() : undefined;
+}
+
+export function isReservedExportAssetId(id: string): boolean {
+  return RESERVED_EXPORT_ASSET_ID.test(id);
+}
+
 /** Expand ~/ and require an absolute path; illegal (relative path) returns null. */
 export function expandMediaDir(raw: string): string | null {
   const t = raw.trim();
@@ -330,6 +342,7 @@ export async function syncUploadDirectories(
   target: string,
   log: (msg: string) => void,
   verifyExisting = false,
+  include: (name: string) => boolean = () => true,
 ): Promise<number> {
   if (resolve(source) === resolve(target)) return 0;
   await mkdir(target, { recursive: true });
@@ -339,7 +352,7 @@ export async function syncUploadDirectories(
   });
   let copied = 0;
   for (const entry of entries) {
-    if (!entry.isFile() || !isSafeUploadName(entry.name)) continue;
+    if (!entry.isFile() || !isSafeUploadName(entry.name) || !include(entry.name)) continue;
     const sourceFile = join(source, entry.name);
     const targetFile = join(target, entry.name);
     if (verifyExisting ? await matchingUpload(sourceFile, targetFile) : existsSync(targetFile)) continue;

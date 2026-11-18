@@ -199,6 +199,19 @@ try {
   });
   assert.equal(ordinaryUi.status, 200, await ordinaryUi.text());
   assert.equal(await readFile(join(directory, 'ordinary-ui.bin'), 'utf8'), 'ui');
+  const reserved = 'openchatcut-derived-00000000-0000-4000-8000-000000000012';
+  const reservedWrites = [
+    editorFetch(`${origin}/upload?name=movie.mp4&assetId=${reserved}`, { method: 'PUT', body: 'file' }),
+    editorFetch(`${origin}/upload/presign`, { method: 'POST', body: JSON.stringify({ name: 'movie.mp4', assetId: reserved }) }),
+    editorFetch(`${origin}/upload/multipart/init`, {
+      method: 'POST', body: JSON.stringify({ name: 'movie.mp4', assetId: reserved, size: 4 }),
+    }),
+  ];
+  for (const response of await Promise.all(reservedWrites)) {
+    assert.equal(response.status, 400);
+    await response.text();
+  }
+  await assertMissing(join(directory, reserved + '.mp4'), 'upload routes cannot claim a generated export destination');
 
   const handoffScope: ImportTokenScope = {
     sessionId: 'sess-upload-route',

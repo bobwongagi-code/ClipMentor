@@ -231,6 +231,32 @@ export type GenerationRetentionGuard = (jobId: string) => Promise<boolean> | boo
 
 export const TERMINAL = new Set<GenerationJobStatus>(['succeeded', 'failed']);
 
+export function isGenerationExecutionAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+}
+
+/** Directory moves copy media as well as the ledger. A running export can
+ * still be writing its output outside the directory lock. */
+export function assertNoActiveExportForRelocation(ledger: unknown): void {
+  if (!ledger || typeof ledger !== 'object' || !('jobs' in ledger) || !Array.isArray(ledger.jobs)) return;
+  for (const row of ledger.jobs) {
+    if (row?.params?.kind !== 'export' || (row.status !== 'queued' && row.status !== 'running')) continue;
+    throw new Error('an export is still active or awaiting recovery; finish it before moving the data directory');
+  }
+}
+
+export function unfinishedExportAttempts(ledger: unknown): ReadonlySet<string> {
+  const attempts = new Set<string>();
+  if (!ledger || typeof ledger !== 'object' || !('jobs' in ledger) || !Array.isArray(ledger.jobs)) return attempts;
+  for (const row of ledger.jobs) {
+    if (row?.params?.kind !== 'export' || row.status === 'succeeded') continue;
+    const id = row.params.exportAttemptId ?? row.id;
+    if (typeof id === 'string') attempts.add(id.toLowerCase());
+  }
+  return attempts;
+}
+
 export function snapshotOf(job: GenerationJob): GenerationJobSnapshot {
   return {
     id: job.id,

@@ -14,6 +14,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { atomicWriteJson, durableRemove, durableRename } from './plugins/project-store-durable.ts';
 import { projectEditRollbackPath, recoverLegacyProjectEdit } from './plugins/project-store-edit-journal.ts';
 import { withProjectStoreProcessLock } from './plugins/project-store-process-lock.ts';
+import { assertNoActiveExportForRelocation, unfinishedExportAttempts } from './plugins/generation-job-types.ts';
 import {
   legacyProjectBulkPendingPath, legacyProjectStoreEntryPath, PROJECT_STORE_DIRECTORY, sqliteProjectStorePath,
   SQLITE_PROJECT_STORE_FILENAME, SQLITE_STORE_ENV,
@@ -118,8 +119,9 @@ interface RelocationRecord {
 }
 
 interface RelocationPublication {
+  generationJobStore?: string;
   shouldPublish(): boolean;
-  prepareTarget(): Promise<void>;
+  prepareTarget(unfinishedAttempts?: ReadonlySet<string>): Promise<void>;
   publishTarget(): Promise<void>;
 }
 
@@ -307,20 +309,24 @@ export async function relocateDataDir(
         return unavailableSqlite();
       }
       const { withSqliteRelocationSnapshot } = await import('./storage/sqlite-relocation.ts');
-      return withSqliteRelocationSnapshot(sqliteSource, (save) => save ? publishSnapshot(save) : unavailableSqlite());
+      return withSqliteRelocationSnapshot(sqliteSource, (save, ledger) =>
+        save ? publishSnapshot(save, ledger) : unavailableSqlite());
     }
     if ((await Promise.all(SQLITE_SIDECAR_SUFFIXES.map((suffix) => present(sqliteSource + suffix)))).some(Boolean)) {
       return unavailableSqlite();
     }
     await recoverLegacyProjectEdit(from);
-    return publishSnapshot();
+    const ledgerPath = publication?.generationJobStore ?? join(from, 'generation-operations-v1.json');
+    const ledger = await readSnapshotJson(ledgerPath);
+    assertNoActiveExportForRelocation(ledger);
+    return publishSnapshot(undefined, ledger);
 
     async function unavailableSqlite(): Promise<RelocationOutcome> {
       log('[data-dir] relocation refused: SQLite authority could not be verified');
       return { refused: 'sqlite-store-active', copiedEntries: 0 };
     }
 
-    async function publishSnapshot(saveSqlite?: (path: string) => Promise<void>): Promise<RelocationOutcome> {
+    async function publishSnapshot(saveSqlite?: (path: string) => Promise<void>, ledger?: unknown): Promise<RelocationOutcome> {
       if (resumable) {
         for (const entry of prior.entries) await durableRemove(join(to, entry), true);
         await durableRemove(staging, true);
@@ -358,7 +364,7 @@ export async function relocateDataDir(
         await durableRename(stagedEntry, join(to, entry));
       }
       await durableRemove(staging, true);
-      await publication?.prepareTarget();
+      await publication?.prepareTarget(unfinishedExportAttempts(ledger));
       if (publication) {
         await atomicWriteJson(relocationRecordPath(to), { ...record, phase: 'ready' });
         await publication.publishTarget();

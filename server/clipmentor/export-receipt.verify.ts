@@ -102,9 +102,17 @@ try{
    assert.equal(unavailable.result,undefined);
    assert.equal(unavailable.retryable,false);
    assert.equal(getGenerationJobSnapshot(finishedId)?.status,'succeeded','the original receipt remains a historical fact');
+   const promotion=await fetch(`${url}/${finishedId}/promote`,{method:'POST'});
+   assert.equal(promotion.status,500,'promotion must use the same receipt/file checks');
+   await promotion.text();
+   await assert.rejects(readFile(join(uploadDir(),`openchatcut-derived-${assetId}.mp4`)),{code:'ENOENT'});
   }
   await writeFile(file,output);
   assert.equal((await status()).status,'succeeded','same-ID readback works again once the original file is available');
+  const promotion=await fetch(`${url}/${finishedId}/promote`,{method:'POST'});
+  assert.equal(promotion.status,200);
+  await promotion.text();
+  assert.deepEqual(await readFile(join(uploadDir(),`openchatcut-derived-${assetId}.mp4`)),output);
   const {setStoredEntry,deleteStoredEntry}=await import('../plugins/project-store');
   const recoveryKey='export-recovery:'+finishedId;
   await setStoredEntry(recoveryKey,{version:1,renderId:finishedId,stage:'output-ready'});
@@ -140,13 +148,16 @@ try{
    }
    assert.deepEqual(await readFile(file),output);
    assert.equal(getGenerationJobSnapshot(finishedId)?.status,'succeeded');
-   assert.equal(getGenerationJobSnapshot(id)?.status,'failed','explicit cancellation stopped the queued job but its receipt remains');
+   assert.equal(getGenerationJobSnapshot(id)?.status,'queued','an unreadable ledger cannot authorize cancellation');
   }finally{
    await rm(generationJobStore,{recursive:true,force:true});await rename(blockedLedger,generationJobStore);
   }
   const released=await fetch(`${url}/${finishedId}`,{method:'DELETE'});
   assert.equal(released.status,204,'the original task can be cleared after the ledger is writable');
   await assert.rejects(readFile(file),{code:'ENOENT'});
+  const promoted=join(uploadDir(),`openchatcut-derived-${assetId}.mp4`);
+  assert.deepEqual(await readFile(promoted),output,'published media survives cleanup of its temporary export');
+  await rm(promoted);
   const incompleteId=randomUUID();
   const incompleteOpened=Promise.withResolvers<void>(),incompleteClosed=Promise.withResolvers<void>(),incompleteHandled=Promise.withResolvers<void>();
   watchedPost={opened:incompleteOpened.resolve,closed:incompleteClosed.resolve,handled:incompleteHandled.resolve};
