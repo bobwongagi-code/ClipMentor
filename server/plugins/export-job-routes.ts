@@ -18,6 +18,7 @@ import {
   assertNonEmptyExportBytes,
   cancelActiveExportJob,
   exportJobFilename,
+  exportJobResultName,
   exportOutputSize,
   forgetExportJobController,
   promoteExportResult,
@@ -29,6 +30,7 @@ import {
   createGenerationJob,
   deleteGenerationJob,
   getGenerationJobSnapshot,
+  initializeGenerationJobs,
 } from './generation-jobs.ts';
 import {
   bindRequestAbort,
@@ -59,9 +61,17 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     const segments = path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
     const id = segments[0] ?? '';
     const action = segments[1] ?? '';
+    const readExportJob = async () => {
+      let snapshot = getGenerationJobSnapshot(id);
+      if (!snapshot) {
+        await initializeGenerationJobs();
+        snapshot = getGenerationJobSnapshot(id);
+      }
+      return snapshot?.params.kind === 'export' ? snapshot : undefined;
+    };
 
     if (req.method === 'POST' && action === 'promote' && segments.length === 2) {
-      const snapshot = getGenerationJobSnapshot(id);
+      const snapshot = await readExportJob().catch(() => undefined);
       if (!snapshot) { sendError(res, 404, `render job ${id} not found`); return; }
       if (snapshot.status !== 'succeeded' || !snapshot.result) {
         sendError(res, 409, `render job ${id} is not complete`); return;
@@ -76,14 +86,16 @@ export function registerExportJobRoute(server: ViteDevServer): void {
 
     if (req.method === 'DELETE') {
       if (!id || segments.length !== 1) { sendError(res, 400, 'render id is required'); return; }
-      const snapshot = getGenerationJobSnapshot(id);
+      const snapshot = await readExportJob().catch(() => undefined);
       if (!snapshot) { sendError(res, 404, `render job ${id} not found`); return; }
       if (snapshot.status === 'queued' || snapshot.status === 'running') {
         if (!await cancelActiveExportJob(id)) {
-          sendError(res, 409, 'render job cancellation timed out'); return;
+          sendError(res, 409, getGenerationJobSnapshot(id)?.status === 'succeeded'
+            ? 'render completed before cancellation; result retained'
+            : 'render job cancellation timed out'); return;
         }
-      } else {
-        await deleteGenerationJob(id);
+      } else if (!await deleteGenerationJob(id)) {
+        sendError(res, 409, 'render result is still retained'); return;
       }
       res.statusCode = 204;
       res.end();
@@ -91,8 +103,23 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     }
     if (req.method === 'GET') {
       if (!id || segments.length !== 1) { sendError(res, 400, 'render id is required'); return; }
-      const snapshot = getGenerationJobSnapshot(id);
+      let snapshot;
+      try { snapshot = await readExportJob(); }
+      catch { sendError(res, 503, 'render status unavailable; query the same render ID'); return; }
       if (!snapshot) { sendError(res, 404, `render job ${id} not found`); return; }
+      if (snapshot.status === 'succeeded') {
+        const result = snapshot.result;
+        const name = result && exportJobResultName(result.path, result.assetId);
+        const info = name ? await stat(join(uploadDir(), name)).catch(() => null) : null;
+        if (!info?.isFile() || !info.size || (result?.sizeBytes !== undefined && info.size !== result.sizeBytes)) {
+          const failure = createExportFailure({stage:'destination',code:'export_output_unreadable',retryable:false,
+            cleanupStatus:'not-required',targetPath:null,message:'Original render output is missing or incomplete'});
+          // Keep the original receipt so the exact file can be recovered later.
+          sendJson(res, 200, {...snapshot, status:'failed', phase:'failed', result:undefined, results:undefined,
+            error:failure.message, retryable:false, failure});
+          return;
+        }
+      }
       const failure = isExportFailure(snapshot.params.exportFailure)
         ? snapshot.params.exportFailure
         : undefined;

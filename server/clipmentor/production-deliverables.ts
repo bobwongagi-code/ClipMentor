@@ -1,4 +1,4 @@
-import {readFile} from 'node:fs/promises';
+import {readFile,stat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import sharp from 'sharp';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -24,7 +24,13 @@ export async function productionAttachmentSlots(doc:ProjectDoc,io={resolve:resol
    throw Error('required_delivery_output_changed:'+section.section_id);
   const metadata=await sharp(bytes).metadata();
   if(!metadata.width||!metadata.height)throw Error('required_delivery_output_unreadable:'+section.section_id);
-  creatorStoryboardSource(doc);
+  const {source}=creatorStoryboardSource(doc);
+  const original=doc.assets.find(a=>a.id===source.asset_id);
+  const sourceName=original?.src.startsWith('/media/uploads/')?original.src.slice('/media/uploads/'.length):'';
+  const sourceFile=original?.kind==='video'&&original.sourceContentHash===source.sourceContentHash&&isSafeUploadName(sourceName)
+   ?io.resolve(sourceName):null;
+  const sourceInfo=sourceFile?await stat(sourceFile).catch(()=>null):null;
+  if(!sourceInfo?.isFile()||!sourceInfo.size)throw Error('required_delivery_source_unavailable:'+section.section_id);
   await loadCreatorStoryboardDocument(doc);
   outputs.push({sectionId:section.section_id,assetId:asset.id,
    fileName:deliveryFileName(doc.clipMentorAnalysis!.product.name,undefined,'storyboard',at)});

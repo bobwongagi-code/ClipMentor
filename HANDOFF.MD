@@ -361,3 +361,19 @@ The saved parent manifest is the authority for published continuation controls a
 The merged backend base is `50e6860` and the paired frontend main is `7c9c1dc`. These include the previous handoff, the subsequent lifecycle/session guards, and the cross-tab browser regressions. Start new audits from those merged versions or their successors.
 
 The cold-start fixture used to mark the follower deleted in the index while leaving its task readable. A production project purge also removes its runtime. Reproducing that path left the valid producer queued. The parent manifest still identifies both outputs. When the server's deletion registry confirms that the new-contact follower was purged, validate and recover the remaining existing-partner producer against that manifest, including any reciprocal shared-body marker. An unreadable follower with no deletion record stops recovery. Losing the producer does not establish the follower's shared-body authority.
+
+### 2026-11-18 · Bound export observation
+
+`track_export` owns the wait deadline and the original Agent cancellation signal. Pass them through job selection, status fetch and response body, polling delays, and optional media-pool promotion. Ending the wait reports the same render ID and its last observed status. A job with no snapshot has unknown status and no invented progress. Interrupted promotion leaves the completed render available for another read and keeps media-pool registration pending.
+
+The zero-external-call verifier held a status request past a 30 ms budget. The old implementation reached the 600 ms watchdog. The fixed tool aborts the held request, then finds the completed artifact with the original render ID and observes one render submission and zero render cancellation requests. Regression cases cover Agent cancellation during active-job lookup, a stalled job alongside a responsive job, and interrupted media promotion.
+
+### 2026-11-18 · Review export, repair rounds, and delivery together
+
+The editor export path also used to retire the saved recovery record and issue DELETE when a status read returned 503. Retain the record on an unknown read and query the same ID. Explicit cancellation still reaches the original job. If a render finishes while the cancellation is settling, keep its result. A completed export receipt with missing or truncated bytes does not supply a download URL.
+
+New repair checkpoints clear stage results from the rewind target onward and keep the already consumed effect ledger. Native editing stages keep tool writes private until the host validates the full draft, then publish once through the existing project/version store. The pre-commit checkpoint binds the intended result to the repair epoch and requirements. After a crash, recover only the exact saved result. Before publication, reopening shows the prior project. Blueprint candidates and provider evidence still checkpoint at their existing boundaries.
+
+The panel checks current project identity and reviewed video bytes before advertising a finished delivery. It also checks the promised Storyboard inputs. The PDF route verifies its sources and returns the actual PDF bytes. Losing a required file suppresses delivery without rewriting the original acceptance or dispatching a new render. Fixtures exercised a real local project store, HTTP endpoints, same-ID recovery, missing/truncated bytes, and restoration of the original files.
+
+`verify:clipmentor-production`, the editor export and Agent export regressions, both TypeScript checks, lint, skill loading and the server tool catalog passed. Rendering used only synthetic fixtures. Reclaimed this task's temporary outputs and its generated Remotion cache.

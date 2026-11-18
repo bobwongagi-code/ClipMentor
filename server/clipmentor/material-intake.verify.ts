@@ -258,8 +258,13 @@ try {
       const beforeRead=JSON.stringify(await productionTaskStore.load(id,legacy.taskId));
       for(const view of ['panel','panel_video',...(status==='completed'?['panel_download']:[])]){
         const response=await fetch(`${panelOrigin}/?view=${view}&renderId=legacy-render`);
-        if(response.status!==409)leaks.push(`${status}:${view}`);
-        await response.arrayBuffer();
+        if(view==='panel'&&response.status===200){
+          const state=(await response.json()).task;
+          if(state?.status!=='blocked'||state.renderId!==undefined)leaks.push(`${status}:${view}`);
+        }else{
+          if(response.status!==409)leaks.push(`${status}:${view}`);
+          await response.arrayBuffer();
+        }
       }
       assert.equal(JSON.stringify(await productionTaskStore.load(id,legacy.taskId)),beforeRead,'refusing legacy delivery does not rewrite historical results or budgets');
     }

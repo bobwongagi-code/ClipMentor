@@ -131,11 +131,14 @@ function mediaAssetFor(
 
 async function promoteCompletedExport(
   submission: AgentExportSubmission,
+  signal?: AbortSignal,
 ): Promise<PromotedResult> {
+  signal?.throwIfAborted();
   const existing = promotedResults.get(submission.renderId);
   if (existing) return existing;
-  const response = await fetch(`/export/job/${encodeURIComponent(submission.renderId)}/promote`, { method: 'POST' });
+  const response = await fetch(`/export/job/${encodeURIComponent(submission.renderId)}/promote`, { method: 'POST', signal });
   const promoted = (await response.json().catch(() => null)) as PromotedResult | { error?: string } | null;
+  signal?.throwIfAborted();
   if (!response.ok || !promoted || !('path' in promoted) || !('assetId' in promoted)) {
     const message = promoted && 'error' in promoted ? promoted.error : undefined;
     throw new Error(message ?? `export media promotion failed (${response.status})`);
@@ -164,13 +167,16 @@ export async function saveTrackedAgentExport(
   renderId: string,
   completed: ExportJobResult,
   target: MediaPoolTarget,
+  signal?: AbortSignal,
 ): Promise<void> {
   const submission = submissions.get(renderId);
   if (!submission?.saveToMediaPool) return;
   try {
-    const promoted = await promoteCompletedExport(submission);
+    const promoted = await promoteCompletedExport(submission, signal);
+    signal?.throwIfAborted();
     registerPromotedExport(submission, completed, promoted, target);
   } catch (error) {
+    signal?.throwIfAborted();
     mediaPoolStates.set(renderId, {
       status: 'failed',
       error: error instanceof Error ? error.message : String(error),

@@ -30,7 +30,7 @@ export const EXPORT_TOOL_SCHEMAS: AgentToolSchema[] = [
   {
     name: 'track_export',
     description:
-      'Inspect render/export jobs started by submit_render_job. action=status: return current status. action=wait: poll until terminal or timeoutSeconds elapses. Use one bounded wait; if waitExpired=true, report the background status and end the turn instead of calling wait again or starting another export. Pass renderIds when available. If omitted, latest defaults to true. Returns status, progress, and — when completed — a downloadUrl plus mediaPoolStatus when saveToMediaPool was requested.',
+      'Inspect render/export jobs started by submit_render_job. action=status reads the current status. action=wait polls until terminal or timeoutSeconds elapses. If waitExpired or waitCancelled is true, report the last observed status (unknown if none) and end the turn. Use the same renderId for later status checks. Pass renderIds when available. If omitted, latest defaults to true. A completed job can return downloadUrl and mediaPoolStatus.',
     input_schema: {
       type: 'object',
       properties: {
@@ -39,7 +39,7 @@ export const EXPORT_TOOL_SCHEMAS: AgentToolSchema[] = [
         latest: { type: 'boolean', description: 'When true, read the newest matching render job. Defaults to true when renderIds is omitted.' },
         onlyActive: { type: 'boolean', description: 'When latest=true, return only currently rendering jobs. Use false/omit to include recently completed or failed renders.' },
         timelineId: { type: 'string', description: 'Optional timeline ID or prefix to narrow latest lookup.' },
-        timeoutSeconds: { type: 'number', minimum: 0, maximum: MAX_WAIT_SECONDS, description: 'For action=wait, maximum seconds before returning the current non-terminal status. Defaults to 20. Use 0 only when the caller owns a sufficiently long tool deadline.' },
+        timeoutSeconds: { type: 'number', minimum: 0, maximum: MAX_WAIT_SECONDS, description: 'Maximum seconds for action=wait, including status requests. Defaults to 20. Use 0 only when the caller owns a sufficiently long tool deadline.' },
       },
       required: ['action'],
     },

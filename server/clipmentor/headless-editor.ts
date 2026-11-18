@@ -36,6 +36,7 @@ export interface HeadlessOptions {
  retryGateway?:boolean;
  voice?:{provider:string;voiceId:string};signal?:AbortSignal;
  finalFeedback?:Record<string,unknown>;
+ stageEditWrites?:boolean;
  assertCanvas?:(doc:ProjectDoc)=>void;
  assertCurrent?:()=>Promise<void>;
  effect<T>(kind:'review'|'observation'|'tts'|'render'|'preview_review',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
@@ -50,6 +51,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  const claimed=await persistence.claimProject(options.projectId,randomUUID());
  if(claimed.status!=='claimed')throw new Error(`project_${claimed.status}`);
  let ownership=claimed.claim,committed=claimed.doc,revision=claimed.revision,closed=false;
+ const privateFrames=new Set<string>();
  let engine:ReturnType<typeof makeDraft>;
  try{engine=makeDraft(committed);}catch(error){await persistence.releaseOwnership(ownership);throw error;}
  const origin=checkedOrigin;
@@ -138,7 +140,10 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  const validate=()=>withLease(renew);
  async function commitDraft(onWrite?:()=>void){return withLease(async()=>{
   await renew();await options.assertCurrent?.();active();const doc=migrateProjectDoc(engine.getDoc());if(!doc)throw new Error('Invalid saved project');
-  if(revisionOf(doc)!==revision){options.assertCanvas?.(doc);assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);onWrite?.();const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
+  if(revisionOf(doc)!==revision){options.assertCanvas?.(doc);assertFrozenParameterChanges(committed,doc);assertLocalFeedbackPreservation(committed,doc,options.finalFeedback);assertDeliveryPicturePreservation(committed,doc);onWrite?.();
+   // The save may apply even when acknowledgement fails. Referenced files then belong to the saved project.
+   for(const asset of doc.assets)if(asset.src.startsWith('/media/uploads/clipmentor-frame-'))privateFrames.delete(join(uploadDir(),asset.src.slice('/media/uploads/'.length)));
+   const result=await persistence.commitProject({projectId:options.projectId,expectedRevision:revision,doc,ownership,canCommit});
    if(result.status!=='applied'||!result.revision)throw new Error(`Project commit ${result.status}`);revision=result.revision;ownership=result.ownership??{...ownership,baseRevision:revision};
   }
   committed=doc;engine=makeDraft(doc);sync();return {saved:true,revision,projectId:options.projectId};
@@ -180,6 +185,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
       sourceContentHash:await sha256File(target),props:{sourceAssetId:asset.id,sourceSeconds:seconds,sourceHash:asset.sourceContentHash}};
      active();
      ctx.commands.applyDoc({...before,assets:[...before.assets,image]});
+     if(options.stageEditWrites){privateFrames.add(target);return {asset:image,saved:false};}
      await commitDraft(()=>{commitStarted=true;});
      return savedResult({asset:image});
     }catch(error){
@@ -255,9 +261,10 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
    else if(isExternalServerDirectCall(name,args))result=await executeOfflineTool(name,args,ctx);
    else throw new Error(`Tool/action requires an unsupported browser host: ${name}`);
    if(result&&typeof result==='object'&&'error' in result){engine=makeDraft(before);sync();return result;}
+   if(options.stageEditWrites)return result;
    // Preparation and committed editing never rely on browser settlement.
    await commitDraft();return revision!==beforeRevision?savedResult(result):result;
-  }catch(error){engine=makeDraft(committed);sync();throw error;}
+  }catch(error){engine=makeDraft(options.stageEditWrites?before:committed);sync();throw error;}
  }
  async function loadSkill(name:string,file='SKILL.md'){
   if(!/^[a-z0-9_-]+$/.test(name)||!/^([a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_.-]+\.md$/.test(file)||file.includes('..'))throw new Error('Unsupported skill file');
@@ -278,5 +285,10 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   if(end===Number(offset)&&end<body.length)throw new Error('Page limit is too small for a Unicode character');
   return {skill:name,file,contents:{[file]:body.slice(Number(offset),end)},offset,nextOffset:end<body.length?end:null,totalChars:body.length};
  }
- return {context:ctx,execute,commit,readExport,getDoc:()=>engine.getDoc(),get revision(){return revision;},async close(){closed=true;clearInterval(heartbeat);await operationTail;await leaseTail;await persistence.releaseOwnership(ownership);},loadSkill,loadSkillTool};
+ async function close(){
+  closed=true;clearInterval(heartbeat);await operationTail;await leaseTail;
+  try{await persistence.releaseOwnership(ownership);}
+  finally{await Promise.allSettled([...privateFrames].map(path=>rm(path,{force:true})));}
+ }
+ return {context:ctx,execute,commit,readExport,getDoc:()=>engine.getDoc(),get revision(){return revision;},close,loadSkill,loadSkillTool};
 }

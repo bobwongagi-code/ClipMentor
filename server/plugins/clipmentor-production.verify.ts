@@ -133,6 +133,59 @@ try{
  assert.equal(projected.status,'awaiting_blueprint');assert.equal(projected.revision,'fixture-r1');assert(!('stopReason' in projected));
  const {setStoredEntry}=await import('./project-store');
  const {projectDoc}=await import('../external-agent/offline-runtime.verify-fixtures');
+ {
+  const {openHeadlessEditor}=await import('../clipmentor/headless-editor');
+  const {productionStageWorker}=await import('../clipmentor/production-worker');
+  const {feedbackProjectDigest}=await import('../clipmentor/production-feedback');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {getStoredEntry}=await import('./project-store');
+  const {digestValue}=await import('../agent-runs/store-values');
+  const {makeDraft}=await import('../../src/editor/store');
+  const {revisionOf}=await import('../../src/agent/external-edit-session');
+  for(const finish of ['cancel','commit'] as const){
+   const projectId='native-edit-round-'+finish;
+   const draft=makeDraft(projectDoc());
+   draft.commands.addTextClip({text:'BEFORE',startFrame:0,durationInFrames:30,track:'track-v1'});
+   await setStoredEntry('project:'+projectId,draft.getDoc());
+   const base=(await loadOfflineStoredProject(projectId))!,itemId=base.doc.timelines[0].items[0].id;
+   const task=await createProductionTask({...input,projectId,author:{...input.author,origin},reviewer:{...input.reviewer,origin}});
+   task.stage='edit';task.status='running';task.projectRevision=base.revision;task.repairs=1;
+   const signal=new AbortController(),effect=async()=>{throw Error('Unexpected external effect');};
+   const editor=await openHeadlessEditor({projectId,runId:task.taskId,origin,review:{...task.input.reviewer,origin},
+    browserConnected:()=>false,signal:signal.signal,stageEditWrites:true,effect});
+   try{
+    await editor.execute('update_item_props',{itemId,props:{text:'REVISED'}},'edit-first');
+    await editor.execute('update_item_props',{itemId,props:{fontSize:72}},'edit-second');
+    assert.equal(editor.getDoc().timelines[0].items[0].props?.fontSize,72);
+    assert.deepEqual(await loadOfflineStoredProject(projectId),base,'the real project must not publish part of an edit round');
+    assert.equal((await getStoredEntry('versions:'+projectId)).found,false);
+    const next=editor.getDoc();
+    task.editPublication={baseRevision:base.revision,outputDigest:feedbackProjectDigest(next),
+     requirementsDigest:digestValue([]),repairEpoch:task.repairs,feedbackUsed:task.feedbackUsed,
+     artifact:{revision:revisionOf(next),executionReport:{fixture:true}}};
+    await productionTaskStore.save(task);
+    if(finish==='cancel'){signal.abort();await assert.rejects(editor.commit());}
+    else await editor.commit();
+   }finally{await editor.close();}
+   const sealed=await productionTaskStore.load(projectId,task.taskId);
+   const saved=(await loadOfflineStoredProject(projectId))!;
+   const stage={signal:new AbortController().signal,effect};
+   if(finish==='commit'){
+    const versions=(await getStoredEntry('versions:'+projectId)).value as Array<{doc:unknown}>;
+    assert.deepEqual(versions.map(v=>v.doc),[base.doc],'one stored version holds the complete original project');
+    assert.equal(saved.doc.timelines[0].items[0].props?.text,'REVISED');
+    assert.equal(saved.doc.timelines[0].items[0].props?.fontSize,72);
+    assert.deepEqual((await productionStageWorker(sealed,stage)).artifact,sealed.editPublication!.artifact,
+     'cold readback uses the committed round without another author or provider');
+    sealed.repairs++;
+    await assert.rejects(productionStageWorker(sealed,stage),/production_edit_publication_unconfirmed/);
+   }else{
+    assert.deepEqual(saved,base);
+    await assert.rejects(productionStageWorker(sealed,stage),/production_edit_publication_unconfirmed/);
+   }
+   sealed.status='cancelled';await productionTaskStore.save(sealed);
+  }
+ }
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
  await setStoredEntry(`project:${panelTask.projectId}`,projectDoc());
  const {default:boardFixture}=await import('../clipmentor/fixtures/blueprint-review-board-20261031.json');
@@ -228,6 +281,19 @@ try{
  assert.equal((await videoGet('panel_video','bytes=0-15')).status,409,'Range cannot bypass preview identity');
  await writeFile(videoFile,originalVideo);
  const restored=await videoGet('panel_download');assert.equal(restored.status,200);await restored.arrayBuffer();
+ await rm(videoFile);
+ const unavailable=await panelGet();
+ assert.equal(unavailable.task.status,'blocked','a completed checkpoint cannot advertise a missing preview as a finished delivery');
+ assert.equal(unavailable.task.renderId,undefined);
+ assert.equal((await videoGet('panel_download')).status,409);
+ assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).status,'completed','keep the historical acceptance');
+ await writeFile(videoFile,originalVideo);
+ assert.equal((await panelGet()).task.renderId,'delivery-fixture','restoring the exact bytes restores the existing delivery');
+ await rm(join(media,'fixture-attachment.png'));
+ assert.equal((await panelGet()).task.status,'blocked','a missing required Storyboard makes the final delivery unavailable');
+ assert.equal((await videoGet('panel_download')).status,409,'the download route must agree with the delivery surface');
+ await writeFile(join(media,'fixture-attachment.png'),png);
+ assert.equal((await panelGet()).task.status,'completed');
  delete panelTask.input.panelDelivery; // Complete requirement identity and atomic publication use the real canonical store.
  const requirementProject='required-final-fixture';await setStoredEntry('project:'+requirementProject,deliveryDoc);
  const required=await createProductionTask({...panelTask.input,projectId:requirementProject,panelDelivery:{productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:'f'.repeat(64)}});

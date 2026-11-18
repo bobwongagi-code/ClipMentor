@@ -13,7 +13,7 @@ import { loadOfflineStoredProject } from '../external-agent/offline-project-stor
 import { isSafeUploadName, resolveUploadFile, serveDiskFile } from '../media-dir';
 import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-board';
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
-import { productionFeedbackAnchor,blueprintFeedbackPoints } from './production-feedback';
+import { productionFeedbackAnchor,blueprintFeedbackPoints,feedbackProjectDigest } from './production-feedback';
 import { panelDeliveryIssues,panelSalesEvidence } from './production-panel-delivery';
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
@@ -197,12 +197,6 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       res.end(JSON.stringify(data));
     };
     const view = query.get('view');
-    // Legacy completed tasks do not re-enter worker export/self_check. Never
-    // advertise, accept or serve their old preview solely on a saved status.
-    const preview=task&&previewFile(task);
-    if(req.method==='GET'&&preview&&task.input.panelDelivery&&view!=='panel_video'&&view!=='panel_download'){
-      await (await openVerifiedPreview(task,preview)).close();
-    }
     const readRequirements=async()=>manifestTask
       ? await readHandoffPolicy(projectId)??manifestTask.blueprintApproval?.requirements??null
       : productionReviewRequirements(projectId);
@@ -222,10 +216,27 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       return {identity,siblingEntry,sibling,siblingRevision:sibling?.revision};
     };
     if (req.method === 'GET') {
+      const preview=task&&previewFile(task);
+      const boundPreviewProject=async()=>{
+        const saved=await snapshot(),exported=task?.completed.export?.artifact;
+        if(task?.status==='awaiting_review'&&task.completed.self_check?.artifact.receipt===undefined&&exported?.revision===undefined)
+          return saved; // A legacy portrait preview may still be watched, but cannot be accepted without the receipt.
+        if(!exported||saved.revision!==exported.revision&&feedbackProjectDigest(saved.doc)!==exported.feedback_project_digest)
+          throw Error('预览已变化，请刷新');
+        return saved;
+      };
+      const verifyPreview=async()=>{
+        if(!task||!preview)throw Error('这个预览已过期或文件缺失');
+        if(!task.input.panelDelivery)return;
+        const saved=await boundPreviewProject();
+        await (await openVerifiedPreview(task,preview)).close();
+        return saved;
+      };
       const deliveryOutputs=async()=>{
-        if(!task||!previewFile(task)||query.get('renderId')!==task.completed.export?.artifact.renderId)throw Error('这个预览已过期或文件缺失');
-        const saved=await snapshot();
-        if(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision)throw Error('预览已变化，请刷新');
+        if(!task||!preview||query.get('renderId')!==task.completed.export?.artifact.renderId)throw Error('这个预览已过期或文件缺失');
+        const saved=(await verifyPreview())??await snapshot();
+        if(!task.input.panelDelivery&&(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision))
+          throw Error('预览已变化，请刷新');
         return productionDeliverables(saved.doc,undefined,task.completed.export!.at);
       };
       if(view==='panel_attachment'){
@@ -285,8 +296,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         res.end(bytes);return;
       }
       if(view==='panel_reference'){
-        if(!task||!previewFile(task)||query.get('renderId')!==task.completed.export?.artifact.renderId
+        if(!task||!preview||query.get('renderId')!==task.completed.export?.artifact.renderId
           ||!criteria||criteria.digest!==task.completed.self_check?.artifact.visualCriteriaDigest)throw Error('此预览的参照已变化');
+        await verifyPreview();
         const entry=criteria.entries.find(e=>e.criterion.id===query.get('criterion'));
         if(!entry)throw Error('参照不存在');
         const [frame]=await visualReferenceFrames({...criteria,entries:[entry]},copyReviewDependencies());
@@ -294,9 +306,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         res.end(Buffer.from(frame.base64,'base64'));return;
       }
       if (view === 'panel_video' || view === 'panel_download') {
-        const file = task && previewFile(task);
+        const file = preview;
         if (!file || query.get('renderId') !== task?.completed.export?.artifact.renderId) throw new Error('这个预览已过期或文件缺失');
         if (view === 'panel_download' && task.status !== 'completed') throw new Error('请先完成终审');
+        if(task.input.panelDelivery){
+          const saved=await boundPreviewProject();
+          if(view==='panel_download')await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at);
+        }
         const handle=task.input.panelDelivery?await openVerifiedPreview(task,file):undefined;
         try{
           if (view === 'panel_download') res.setHeader('Content-Disposition',attachmentDisposition(deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at)));
@@ -329,18 +345,25 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           : 'service'
         : undefined;
       let attachments:Array<{assetId:string;fileName:string}>=[],deliveryUnavailable=false;
-      if(task&&previewFile(task)){
+      let playablePreview=preview;
+      let verifiedProject:Awaited<ReturnType<typeof verifyPreview>>;
+      const needPreview=!!task?.input.panelDelivery&&['awaiting_review','completed'].includes(task.status);
+      if(needPreview)try{verifiedProject=await verifyPreview();}catch{playablePreview=null;}
+      if(task&&playablePreview){
         try{
-          const saved=await snapshot();
-          if(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision)throw Error('Preview changed');
+          const saved=verifiedProject??await snapshot();
+          if((!verifiedProject||!task.completed.self_check?.artifact.receipt)
+            &&(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision))
+            throw Error('Preview changed');
           attachments=(await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at)).map(({assetId,fileName})=>({assetId,fileName}));
         }catch{deliveryUnavailable=true;}
       }
+      const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
       send({ task:task ? {
         taskId:task.taskId,...(task.blueprintApproval?{sourceTaskId:task.blueprintApproval.sourceTaskId}:{}),
-        status: waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
+        status: outputUnavailable?'blocked':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
         stage: task.stage, revision: task.projectRevision, sequence: task.sequence,
-        active: running, stopReason, feedbackUsed: task.feedbackUsed,
+        active: running, stopReason:outputUnavailable?'service':stopReason, feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
         ...(blueprintRevision?{blueprintRevision,boardIdentity:(await boardSubject(blueprintRevision)).identity,canApproveBlueprint:!approvalUnavailable,
@@ -348,8 +371,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ...(task.input.panelDelivery?{dualBlueprint:!task.input.panelDelivery.audience,
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),
         ...(task.status==='awaiting_review'&&criteria?{visualCriteria:{digest:criteria.digest}}:{}),
-        ...(previewFile(task)?{downloadName:deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at)}:{}),
-        renderId: previewFile(task) ? task.completed.export?.artifact.renderId : undefined,
+        ...(playablePreview&&!outputUnavailable?{downloadName:deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at),
+          renderId:task.completed.export?.artifact.renderId}:{}),
         ...(attachments.length?{attachments}:{}),...(deliveryUnavailable?{deliveryUnavailable:true}:{}),
       } : null,
         unavailable: (config && 'unavailable' in config) || (!task && isProjectConnected(projectId)) ? panelServiceUnavailable : undefined,

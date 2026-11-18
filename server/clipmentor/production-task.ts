@@ -33,6 +33,10 @@ export function productionRepairContext(previous:Record<string,unknown>|undefine
 export const PRODUCTION_STAGES=['analysis','blueprint','copy_review','audio','edit','export','self_check'] as const;
 export type ProductionStage=typeof PRODUCTION_STAGES[number];
 export type EffectKind='model'|'review'|'observation'|'tts'|'render'|'preview_review';
+export interface EditPublication {
+ baseRevision:string;outputDigest:string;requirementsDigest:string;repairEpoch:number;feedbackUsed:boolean;
+ artifact:Record<string,unknown>;
+}
 type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
@@ -61,8 +65,19 @@ export interface ProductionTask {
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
+ editPublication?:EditPublication;
 }
 export interface TaskStore {save(task:ProductionTask,entryPreconditions?:EntryPreconditions):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
+
+function clearProductionStagesFrom(task:ProductionTask,stage:ProductionStage){
+ for(const invalidated of PRODUCTION_STAGES.slice(PRODUCTION_STAGES.indexOf(stage)))delete task.completed[invalidated];
+ if(PRODUCTION_STAGES.indexOf(stage)<=PRODUCTION_STAGES.indexOf('edit'))delete task.editPublication;
+}
+
+export function invalidateReconciledProductionStages(task:ProductionTask,before:Pick<ProductionTask,'stage'|'repairs'>){
+ const previous=PRODUCTION_STAGES.indexOf(before.stage),current=PRODUCTION_STAGES.indexOf(task.stage);
+ if(current<previous||current===previous&&task.repairs>before.repairs)clearProductionStagesFrom(task,task.stage);
+}
 
 export async function saveProductionCheckpoint(store:TaskStore,task:ProductionTask,guards?:EntryPreconditions){
  const previousSequence=task.sequence;
@@ -313,6 +328,7 @@ export interface StageContext {
  assertCurrent?():Promise<void>;
  remaining?(kind:EffectKind):number;
  hasEffect?(kind:EffectKind,key:string):boolean;
+ checkpointEditPublication?(publication:EditPublication):Promise<void>;
 }
 export interface StageResult {artifact:Record<string,unknown>;repair?:'blueprint'|'edit'|'copy_review'}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
@@ -378,6 +394,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
  const effectKey=(name:string)=>`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:${name}`;
  const activeEffects=new Set<string>();
  const ctx:StageContext={signal:abort.signal,remaining,assertCurrent:async()=>{check();await published();check();},
+ async checkpointEditPublication(publication){
+  if(task.stage!=='edit'||publication.repairEpoch!==task.repairs||publication.feedbackUsed!==task.feedbackUsed
+    ||task.projectRevision!==undefined&&publication.baseRevision!==task.projectRevision)
+   throw Error('production_edit_publication_binding_mismatch');
+  task.editPublication=structuredClone(publication);await publishStage();
+ },
  hasEffect:(kind,name)=>task.effects[effectKey(name)]?.kind===budgetKind(kind),async effect<T>(kind:EffectKind,name:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>){
   check();await published();check();const id=effectKey(name);
   const old=task.effects[id];
@@ -437,11 +459,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      throw new Error(`已用完自动返修额度${typeof detail==='string'?`。未解决：${detail.slice(0,360)}`:''}`);
     }
     task.repairs++;task.stage=result.repair;index=PRODUCTION_STAGES.indexOf(result.repair);
-    for(const stage of PRODUCTION_STAGES.slice(index))delete task.completed[stage];
+    clearProductionStagesFrom(task,result.repair);
     await publishStage();continue;
    }
    if(!result.artifact||Object.keys(result.artifact).length===0)throw new Error('Stage has no verified artifact');
    task.completed[task.stage]={at:now(),artifact:result.artifact};
+   if(task.stage==='edit')delete task.editPublication;
    if(task.stage==='copy_review'&&(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed===true&&task.repairContext){
     delete task.repairContext.pending_review_repair;delete task.repairContext.repair;
    }
@@ -499,12 +522,12 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
    const stop=(reason:'cancelled_or_expired'|'checkpoint_unpersisted'|'no_verified_progress')=>recordProductionDecision(task,{scope:'recovery',action:'stop',reason,fromStage:from.stage,fromEpoch:from.repairs});
    if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs){await stop('cancelled_or_expired');return advance();}
    if(task.error?.includes('checkpoint_write_failed:')){await stop('checkpoint_unpersisted');return task;}
-   const previousStage=task.stage,previousEpoch=task.repairs;
+   const repaired=structuredClone(task);
    try{
      if(task.blueprintApproval&&task.input.panelDelivery?.audience){
       const {publishedProductionParent}=await import('./production-continuation');await publishedProductionParent(task);
      }
-     await reconcile(task);
+     await reconcile(repaired);
     }catch(error){
     if(controller.signal.aborted)return advance();
     task.error=`${task.error??'Production blocked'}; recovery: ${String(error).slice(0,500)}`.slice(0,1600);
@@ -512,7 +535,9 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
     return controller.signal.aborted?advance():task;
    }
    if(controller.signal.aborted)return advance();
-   if(!productionRecoveryProgress(task,{stage:previousStage,repairs:previousEpoch},PRODUCTION_STAGES)){await stop('no_verified_progress');return task;}
+   if(!productionRecoveryProgress(repaired,from,PRODUCTION_STAGES)){await stop('no_verified_progress');return task;}
+   invalidateReconciledProductionStages(repaired,from);
+   Object.assign(task,repaired);
    await advance();
   }
   return task;
@@ -533,7 +558,7 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
   delete next.focusedBlueprintIssues;
   delete next.focusedAuthorChecks;
   next.blueprintFeedback=feedback.trim();delete next.blueprintFeedbackSummary;next.repairs++;next.stage='blueprint';
-  for(const stage of PRODUCTION_STAGES.slice(1))delete next.completed[stage];
+  clearProductionStagesFrom(next,'blueprint');
  }else{
   delete next.blueprintFeedback;
   delete next.blueprintFeedbackSummary;
@@ -612,7 +637,7 @@ export async function productionFeedback(task:ProductionTask,feedback:unknown,st
  const next=structuredClone(task);
  next.feedback=bound.text;next.feedbackUsed=true;next.repairContext={final_feedback:bound};
  next.stage=bound.kind==='execution'?'edit':'blueprint';next.status='queued';next.projectRevision=bound.saved_revision;
- for(const stage of PRODUCTION_STAGES.slice(PRODUCTION_STAGES.indexOf(next.stage)))delete next.completed[stage];
+ clearProductionStagesFrom(next,next.stage);
  await saveProductionControl(task,next,store,undefined,doc);Object.assign(task,next);return task;
 }
 export async function acceptProductionTask(task:ProductionTask,languageConfirmed:boolean,store=productionTaskStore,
