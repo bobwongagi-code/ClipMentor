@@ -32,6 +32,24 @@ try{
     const after=await sql.sqliteReadEntry(key);if(shape==='missing')assert.equal(after.found,false);else{assert(after.found);assert.deepEqual(after.value,value,'load cannot rewrite unsupported SQLite bytes');}
    }finally{for(const j of s.jobs.values())clearTimeout(j.expiryTimer);s.jobs.clear();}
   });
+  await test('SQLite concurrent reservations persist each operation and dispatch once',async()=>{
+   await sql.sqliteDeleteEntry(key);
+   const {createGenerationJob}=await import('./generation-job-lifecycle');
+   const ids=[randomUUID(),randomUUID()],completed=ids.map(()=>deferred()),runs:string[]=[];
+   const calls=ids.flatMap((id,index)=>[0,1].map(()=>createGenerationJob({kind:'fixture'},async jobId=>{
+    const saved=await sql.sqliteReadEntry(key);
+    const rows=(saved.value as {jobs:Array<{id:string}>}).jobs;
+    assert.equal(rows.filter(row=>row.id===jobId).length,1);
+    runs.push(jobId);return result(jobId);
+   },{operationId:id,onSettled:completed[index]!.resolve})));
+   const submitted=await Promise.all(calls);
+   assert.deepEqual(submitted.map(row=>row.jobId),[ids[0],ids[0],ids[1],ids[1]]);
+   await Promise.all(completed.map(done=>done.promise));
+   assert.deepEqual(runs.sort(),[...ids].sort());
+   const saved=await sql.sqliteReadEntry(key);
+   assert.deepEqual((saved.value as {jobs:Array<{id:string;status:string}>}).jobs.map(row=>[row.id,row.status]).sort(),
+    [...ids].sort().map(id=>[id,'succeeded']));
+  });
  }else{
  await test('failed local initialization recovers after the file is repaired',async()=>{
   await writeFile(storePath,'{bad');const path='./generation-job-lifecycle.ts?cold-init';const cold=await import(path) as typeof import('./generation-job-lifecycle');
@@ -80,6 +98,35 @@ try{
   return{id,done:done.promise};
  };
  const disk=async(id:string)=>JSON.parse(await readFile(storePath,'utf8')).jobs.find((j:any)=>j.id===id);
+ for(const writable of [false,true])await test(`concurrent admission follows the durable ledger (writable=${writable})`,async()=>{
+  const id=randomUUID(),backup=storePath+'.admission-backup',settled=deferred();let runs=0;
+  if(!writable){await rename(storePath,backup);await mkdir(storePath);}
+  try{
+   const submit=()=>api.createGenerationJob({kind:'export'},async jobId=>{
+    runs++;assert.equal((await disk(id))?.id,id,'a worker starts only after the original reservation exists on disk');
+    return result(jobId);
+   },{operationId:id,onSettled:()=>settled.resolve()});
+   const replies=await Promise.allSettled([submit(),submit()]);
+   if(writable){
+    assert(replies.every(reply=>reply.status==='fulfilled'&&reply.value.jobId===id));
+    await settled.promise;assert.equal(runs,1);assert.equal((await disk(id)).status,'succeeded');
+   }else{
+    assert(replies.every(reply=>reply.status==='rejected'),'a duplicate must never acknowledge an uncommitted ID');
+    assert.equal(api.getGenerationJobSnapshot(id),undefined);assert.equal(runs,0);
+   }
+  }finally{if(!writable){await rm(storePath,{recursive:true,force:true});await rename(backup,storePath);}}
+ });
+ await test('a reloaded lifecycle shares the reservation owner of its store',async()=>{
+  const url='./generation-job-lifecycle.ts?reloaded-reservation';const reloaded=await import(url) as typeof api;
+  await reloaded.initializeGenerationJobs();
+  const id=randomUUID(),done=deferred();let launches=0;
+  const submit=(owner:typeof api)=>owner.createGenerationJob({kind:'export'},async()=>{launches++;return result(id);},
+   {operationId:id,onSettled:done.resolve});
+  const replies=await Promise.all([submit(api),submit(reloaded)]);
+  await done.promise;await store.persistJobs();
+  assert.deepEqual(replies.map(reply=>reply.jobId),[id,id]);
+  assert.equal(launches,1,'the shared ledger must only grant one lifecycle permission to launch');
+ });
  for(const outcome of ['succeeded','failed'])for(const callback of ['progress','download','provider'])await test(`late ${callback} after ${outcome} cannot rewrite the ledger`,async()=>{
   let controls!:Parameters<GenerationJobTask>;
   const j=await start(async(...args)=>{controls=args;await args[2]('https://fixture.invalid/original',async()=>result(args[0]));await args[3]('fixture','original-task');if(outcome==='failed')throw new ResultDownloadError('https://fixture.invalid/original','fixture');return result(args[0]);});

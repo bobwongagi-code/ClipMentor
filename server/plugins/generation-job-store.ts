@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { runtimeProfile } from '../runtime-profile.ts';
 import {
@@ -36,6 +36,7 @@ const STORE_PATH = runtimeProfile().generationJobStore;
 let persistenceHydrated = false;
 let persistenceQueue: Promise<void> = Promise.resolve();
 let persistenceMigrationGate: Promise<void> | null = null;
+const pendingReservations = new Map<string, Promise<void>>();
 registerStorageMigrationBarrier(async () => {
   // Before hydration, only drain existing writes: writing the empty in-memory
   // map would destroy the configured legacy ledger before it is imported.
@@ -86,18 +87,46 @@ function persistedRows(): GenerationJobSnapshot[] {
 }
 
 export function persistJobs(): Promise<void> {
+  return queueLedgerWrite();
+}
+
+/** Publish a newly admitted job only after the ledger containing it is durable. */
+export async function persistGenerationJobReservation(job: GenerationJob): Promise<boolean> {
+  if (jobs.has(job.id)) return false;
+  const pending = pendingReservations.get(job.id);
+  if (pending) {
+    await pending;
+    return false;
+  }
+  const write = queueLedgerWrite(job);
+  pendingReservations.set(job.id, write);
+  try { await write; }
+  finally { pendingReservations.delete(job.id); }
+  return true;
+}
+
+function queueLedgerWrite(reservation?: GenerationJob): Promise<void> {
   const write = persistenceQueue.catch(() => undefined).then(async () => {
     const migrationGate = persistenceMigrationGate;
     if (migrationGate) await migrationGate;
+    const rows = persistedRows();
+    if (reservation) rows.push(snapshotOf(reservation));
+    const ledger = { version: 1, jobs: rows };
     if (sqliteStoreEnabled()) {
       // SQLite backend: the whole jobs snapshot lives under one kv key.
-      await sqliteWriteEntry(GENERATION_JOBS_KV_KEY, { version: 1, jobs: persistedRows() });
-      return;
+      await sqliteWriteEntry(GENERATION_JOBS_KV_KEY, ledger);
+    } else {
+      await mkdir(dirname(STORE_PATH), { recursive: true });
+      const temporary = `${STORE_PATH}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify(ledger), 'utf8');
+        await rename(temporary, STORE_PATH);
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
     }
-    await mkdir(dirname(STORE_PATH), { recursive: true });
-    const temporary = `${STORE_PATH}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, jobs: persistedRows() }), 'utf8');
-    await rename(temporary, STORE_PATH);
+    if (reservation) jobs.set(reservation.id, reservation);
   });
   persistenceQueue = write.then(() => undefined, () => undefined);
   return write;

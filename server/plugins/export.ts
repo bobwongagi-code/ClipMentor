@@ -6,9 +6,11 @@ import {
   unlinkWithRetry,
 } from './export-runtime.ts';
 import {
+  initializeGenerationJobs,
   registerGenerationCleanupPolicy,
   registerGenerationRetentionGuard,
 } from './generation-jobs.ts';
+import { jobs } from './generation-job-store.ts';
 import { getStoredEntry } from './project-store.ts';
 import { isUnresolvedExportRecovery } from './project-store-export-recovery.ts';
 import { resolveUploadFile, uploadDir } from '../media-dir.ts';
@@ -42,16 +44,33 @@ export function exportPlugin(): Plugin {
     name: 'openchatcut-export',
     configureServer(server) {
       setUploadsDirProvider(uploadDir);
-      const cleanStaleExports = () => cleanupStaleExportFiles(uploadDir(), {
-          shouldRetain: retainUnresolvedExportRecovery,
-          onError: (path, error) => server.config.logger.warn(
-            `[export] failed to clean stale artifact ${path}: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        }).then((removed) => {
+      const cleanStaleExports = async () => {
+        try {
+          await initializeGenerationJobs();
+          // A render operation and the attempt UUID in its filename can differ.
+          // Resolve legacy names through the hydrated job ledger before checking retention.
+          const owners = new Map<string, { id: string; active: boolean }>();
+          for (const job of jobs.values()) {
+            if (job.params.kind !== 'export') continue;
+            const attemptId = job.result?.assetId ?? job.params.exportAttemptId;
+            if (typeof attemptId === 'string') {
+              owners.set(attemptId, { id: job.id, active: job.status === 'queued' || job.status === 'running' });
+            }
+          }
+          const removed = await cleanupStaleExportFiles(uploadDir(), {
+            shouldRetain: (fileId) => {
+              const owner = owners.get(fileId);
+              return owner?.active || retainUnresolvedExportRecovery(owner?.id ?? fileId);
+            },
+            onError: (path, error) => server.config.logger.warn(
+              `[export] failed to clean stale artifact ${path}: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          });
           if (removed > 0) server.config.logger.info(`[export] removed ${removed} stale export artifact(s)`);
-        }).catch((error) => {
+        } catch (error) {
           server.config.logger.warn(`[export] stale artifact scan failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
+        }
+      };
       void cleanStaleExports();
       const cleanupTimer = setInterval(() => { void cleanStaleExports(); }, EXPORT_JOB_RETENTION_MS);
       cleanupTimer.unref?.();
