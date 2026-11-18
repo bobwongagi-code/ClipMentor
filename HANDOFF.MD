@@ -377,3 +377,15 @@ New repair checkpoints clear stage results from the rewind target onward and kee
 The panel checks current project identity and reviewed video bytes before advertising a finished delivery. It also checks the promised Storyboard inputs. The PDF route verifies its sources and returns the actual PDF bytes. Losing a required file suppresses delivery without rewriting the original acceptance or dispatching a new render. Fixtures exercised a real local project store, HTTP endpoints, same-ID recovery, missing/truncated bytes, and restoration of the original files.
 
 `verify:clipmentor-production`, the editor export and Agent export regressions, both TypeScript checks, lint, skill loading and the server tool catalog passed. Rendering used only synthetic fixtures. Reclaimed this task's temporary outputs and its generated Remotion cache.
+
+### 2026-11-18 · Exercise export transitions as sequences
+
+Batch base: ClipMentor `main` at `9de2c1a` (PR #10, Node 24 CI passed). The tested parent tree exactly matched the merge tree.
+
+Read the obligation, transition, sequence and invariant tables in [the state-machine inventory](docs/clipmentor-state-machines.md). Check authority from the saved ledger independently of the reply. In particular, disconnect A after preflight, admit B, use the real undo reducer, then query the original A. Compare both frozen revisions and keep both operation IDs.
+
+Pending generation reservations are private to the shared job store. Concurrent callers and reloaded lifecycle modules join the same write. A JSON write failure rejects both callers and starts no task. A successful reservation grants one launch after the row is on disk. Export request cancellation owns preflight only. The accepted asynchronous job can be queried by ID or cancelled through its own route. Startup sweep hydrates the ledger and maps attempt filenames back to operation IDs before checking recovery; active attempts and unresolved deliveries remain available.
+
+Check status, promotion, cancellation, and same-ID POST against an unreadable cold ledger. Each must return 503. After repairing the ledger, the old operation can be read back and missing IDs return 404. Failed durable deletion returns 503 and keeps the original record and file. Exercise it with an active cancellation and completed-output cleanup in parallel.
+
+This batch passed 34 JSON and 8 SQLite generation-ledger cases, the actual export HTTP combinations, the full ClipMentor production suite, export lifecycle and runtime checks, TypeScript, lint, skill loading and catalog consistency. The task used local fixtures, with no provider requests or real project writes.

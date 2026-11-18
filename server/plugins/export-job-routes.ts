@@ -61,18 +61,20 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     const segments = path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
     const id = segments[0] ?? '';
     const action = segments[1] ?? '';
-    const readExportJob = async () => {
-      let snapshot = getGenerationJobSnapshot(id);
+    const readJob = async (renderId: string) => {
+      let snapshot = getGenerationJobSnapshot(renderId);
       if (!snapshot) {
-        await initializeGenerationJobs();
-        snapshot = getGenerationJobSnapshot(id);
+        try { await initializeGenerationJobs(); }
+        catch { sendError(res, 503, 'render status unavailable; query the same render ID'); return null; }
+        snapshot = getGenerationJobSnapshot(renderId);
       }
-      return snapshot?.params.kind === 'export' ? snapshot : undefined;
+      return snapshot;
     };
 
     if (req.method === 'POST' && action === 'promote' && segments.length === 2) {
-      const snapshot = await readExportJob().catch(() => undefined);
-      if (!snapshot) { sendError(res, 404, `render job ${id} not found`); return; }
+      const snapshot = await readJob(id);
+      if (snapshot === null) return;
+      if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
       if (snapshot.status !== 'succeeded' || !snapshot.result) {
         sendError(res, 409, `render job ${id} is not complete`); return;
       }
@@ -86,16 +88,21 @@ export function registerExportJobRoute(server: ViteDevServer): void {
 
     if (req.method === 'DELETE') {
       if (!id || segments.length !== 1) { sendError(res, 400, 'render id is required'); return; }
-      const snapshot = await readExportJob().catch(() => undefined);
-      if (!snapshot) { sendError(res, 404, `render job ${id} not found`); return; }
-      if (snapshot.status === 'queued' || snapshot.status === 'running') {
-        if (!await cancelActiveExportJob(id)) {
-          sendError(res, 409, getGenerationJobSnapshot(id)?.status === 'succeeded'
-            ? 'render completed before cancellation; result retained'
-            : 'render job cancellation timed out'); return;
+      const snapshot = await readJob(id);
+      if (snapshot === null) return;
+      if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
+      try {
+        if (snapshot.status === 'queued' || snapshot.status === 'running') {
+          if (!await cancelActiveExportJob(id)) {
+            sendError(res, 409, getGenerationJobSnapshot(id)?.status === 'succeeded'
+              ? 'render completed before cancellation; result retained'
+              : 'render job cancellation timed out'); return;
+          }
+        } else if (!await deleteGenerationJob(id)) {
+          sendError(res, 409, 'render result is still retained'); return;
         }
-      } else if (!await deleteGenerationJob(id)) {
-        sendError(res, 409, 'render result is still retained'); return;
+      } catch {
+        sendError(res, 503, 'render cancellation or cleanup could not be confirmed; query the same render ID'); return;
       }
       res.statusCode = 204;
       res.end();
@@ -103,10 +110,9 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     }
     if (req.method === 'GET') {
       if (!id || segments.length !== 1) { sendError(res, 400, 'render id is required'); return; }
-      let snapshot;
-      try { snapshot = await readExportJob(); }
-      catch { sendError(res, 503, 'render status unavailable; query the same render ID'); return; }
-      if (!snapshot) { sendError(res, 404, `render job ${id} not found`); return; }
+      const snapshot = await readJob(id);
+      if (snapshot === null) return;
+      if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
       if (snapshot.status === 'succeeded') {
         const result = snapshot.result;
         const name = result && exportJobResultName(result.path, result.assetId);
@@ -137,7 +143,9 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       const body = (await readJsonBody(req)) as ExportRequest | null;
       controller.signal.throwIfAborted();
       const operationId = exportOperationId(body);
-      const previous=operationId?getGenerationJobSnapshot(operationId):undefined;
+      const previous=operationId?await readJob(operationId):undefined;
+      if(previous===null)return;
+      controller.signal.throwIfAborted();
       if(previous){
         if(previous.params.kind!=='export')throw new Error('Operation belongs to a different job kind');
         requestAbort.dispose();
@@ -153,6 +161,9 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       const filepath = join(outDir, filename);
       const publicPath = `/media/uploads/${filename}`;
       controller.signal.throwIfAborted();
+      // The request owns preflight. Once admission starts, only explicit
+      // cancellation can stop the asynchronous job, even if its reply is lost.
+      requestAbort.dispose();
       const jobParams: Record<string, unknown> = {
         kind: 'export',
         exportAttemptId: uuid,

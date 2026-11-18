@@ -26,6 +26,7 @@ import {
   isGenerationJobEvicting,
   loadPersistedJobs,
   normalizeRetentionMs,
+  persistGenerationJobReservation,
   persistJobs,
   resumerKey,
   resumers,
@@ -209,16 +210,11 @@ export async function createGenerationJob(
     retentionMs: normalizeRetentionMs(options.retentionMs),
     acceptance: makeAcceptanceWaiter(),
   };
-  jobs.set(id, job);
-  try {
-    await persistJobs();
-  } catch (error) {
-    jobs.delete(id);
-    throw error;
+  if (await persistGenerationJobReservation(job)) {
+    queueMicrotask(() => {
+      void runGenerationJob(job, task, options);
+    });
   }
-  queueMicrotask(() => {
-    void runGenerationJob(job, task, options);
-  });
   return { operationId: id, jobId: id, status: 'queued' };
 }
 
