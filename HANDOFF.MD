@@ -389,3 +389,11 @@ Pending generation reservations are private to the shared job store. Concurrent 
 Check status, promotion, cancellation, and same-ID POST against an unreadable cold ledger. Each must return 503. After repairing the ledger, the old operation can be read back and missing IDs return 404. Failed durable deletion returns 503 and keeps the original record and file. Exercise it with an active cancellation and completed-output cleanup in parallel.
 
 This batch passed 34 JSON and 8 SQLite generation-ledger cases, the actual export HTTP combinations, the full ClipMentor production suite, export lifecycle and runtime checks, TypeScript, lint, skill loading and catalog consistency. The task used local fixtures, with no provider requests or real project writes.
+
+### 2026-11-18 · Distinguish applied drafts from recoverable drafts after undo
+
+Export PR #11 passed GitHub CI and merged at `7ae42d0`. The offline-edit continuation uses that exact tree. The four tables in [the state-machine inventory](docs/clipmentor-state-machines.md) cover the MCP entry, browser save and undo, and the durable project and draft entries.
+
+Sanity-check both directions of A → B → A. If an offline session committed B, consume that session's checkpoint within the same serialized store operation and roll it back with the project on a caught write failure. A legacy checkpoint can be retired when the saved run proves the exact offline session finished applying. If B came from a browser and A's offline draft was still pending, restoring A should make that draft recoverable. Reject wrong-session requests without releasing the live lease. A stale discard must not acknowledge removal or touch a subsequent owner's draft.
+
+The loopback MCP, offline project store and process reopen suites passed with JSON and SQLite. The real undo reducer and browser document writer were exercised, with a JSON filesystem fault after removal. The production contract suite, both TypeScript checks and lint passed on the merged base with the local edits. Production inputs stayed outside the fixture. Cross-process write races and forced process death during a multi-entry commit remain outside this batch.

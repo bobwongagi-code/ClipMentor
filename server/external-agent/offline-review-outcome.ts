@@ -69,15 +69,11 @@ export async function publishOfflineReviewFailure(
 export async function publishAppliedOfflineReview(
   run: ExternalSessionRunLedger,
   proposalId: string | undefined,
-  cleanupWarning: string | undefined,
 ): Promise<string | undefined> {
   try {
     if (proposalId) await run.proposal(proposalId, 'applied');
     await run.finalize('completed', 'Offline external edit session applied.');
-    return cleanupWarning;
   } catch {
-    return cleanupWarning
-      ? `${cleanupWarning} The applied run ledger could not be finalized.`
-      : 'The edit was applied, but the run ledger could not be finalized.';
+    return 'The edit was applied, but the run ledger could not be finalized.';
   }
 }

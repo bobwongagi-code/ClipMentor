@@ -117,6 +117,16 @@ try {
     arguments: { editSessionId, ratio: '9:16', fit: 'contain' },
   });
   assert.notEqual(edit.isError, true);
+  for (const name of ['review_edit_session', 'discard_edit_session']) {
+    const wrong = await client.callTool({ name, arguments: { editSessionId: 'different-session' } });
+    assert.equal(wrong.isError, true);
+    const competingClient = await connect(`offline-competing-${name}`);
+    const competingTarget = await competingClient.callTool({
+      name: 'target_project', arguments: { projectId },
+    });
+    assert.equal(competingTarget.isError, true,
+      `a rejected ${name} must not release another session's live lease`);
+  }
   const review = await client.callTool({
     name: 'review_edit_session',
     arguments: { editSessionId, summary: 'Vertical edit' },
