@@ -355,3 +355,9 @@ Verified the full production suite, project-store transport and session rotation
 ### 2026-11-17 · Hand off production-state recovery
 
 The saved parent manifest is the authority for published continuation controls and cold-start dispatch. A child discovered in the project index does not inherit an independent right to run. Preserve detached and deleted child checkpoints, including prior receipts and counts. Check the audience against the saved child on the panel route. The checkout and paired frontend instructions, remaining race tests and verification commands are in [the handoff](CLIPMENTOR_STATE_HANDOFF.md).
+
+### 2026-11-18 · Distinguish project purge from an unreadable checkpoint
+
+The merged backend base is `50e6860` and the paired frontend main is `7c9c1dc`. These include the previous handoff, the subsequent lifecycle/session guards, and the cross-tab browser regressions. Start new audits from those merged versions or their successors.
+
+The cold-start fixture used to mark the follower deleted in the index while leaving its task readable. A production project purge also removes its runtime. Reproducing that path left the valid producer queued. The parent manifest still identifies both outputs. When the server's deletion registry confirms that the new-contact follower was purged, validate and recover the remaining existing-partner producer against that manifest, including any reciprocal shared-body marker. An unreadable follower with no deletion record stops recovery. Losing the producer does not establish the follower's shared-body authority.

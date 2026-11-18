@@ -15,7 +15,7 @@ import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-boa
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
 import { productionFeedbackAnchor,blueprintFeedbackPoints } from './production-feedback';
 import { panelDeliveryIssues,panelSalesEvidence } from './production-panel-delivery';
-import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations } from './production-continuation';
+import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {revisionOf} from '../../src/agent/external-edit-session';
@@ -163,7 +163,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       }
       if(!audience&&req.method==='POST'){
         const body=await readBody();
-        let children=await Promise.all(task.productionChildren.map(entry=>productionTaskStore.load(entry.projectId,entry.taskId)));
+        let children=await readProductionOutputs(task);
         if(body.action!=='produce_versions'||children.some(child=>child.blueprintApproval?.sourceRevision!==body.revision))
           throw Error('蓝图版本已变化，请刷新');
         children=await queueBlueprintContinuations(task);
