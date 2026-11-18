@@ -11,8 +11,10 @@ const { join } = require('node:path');
 let child;
 let keeper;
 let owned = false;
+let drained = false;
 let stopping = false;
 let startupTimeout;
+let closeTimeout;
 let gracefulStop;
 let exited = false;
 let temporary;
@@ -28,7 +30,14 @@ const ffmpegGate = [
 ].join('\n');
 function killTree() {
   if (windows) {
-    keeper?.stdin.end();
+    const closing = keeper;
+    if (!closing || closeTimeout) return;
+    closing.stdin.end();
+    // The kernel closes the sole job handle even if the keeper never reads EOF.
+    closeTimeout = setTimeout(() => {
+      send({ error: 'Windows render job shutdown timed out' });
+      closing.kill('SIGKILL');
+    }, 7000);
   } else if (child?.pid) {
     try { process.kill(-child.pid, 'SIGKILL'); }
     catch (error) { if (error.code !== 'ESRCH' && !exited) child.kill('SIGKILL'); }
@@ -80,7 +89,14 @@ function startChild(command, args, ipc) {
 }
 function startWindows({ command, args, input }) {
   const worker = input !== undefined;
-  const powerShell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot) {
+    send({ error: 'Windows render job unavailable: missing SystemRoot' });
+    outcome = { code: 1, signal: null };
+    finish();
+    return;
+  }
+  const powerShell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const job = spawn(powerShell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', process.argv[1]], {
     stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     env: { ...process.env, TEMP: temporary, TMP: temporary },
@@ -101,6 +117,12 @@ function startWindows({ command, args, input }) {
       if (child.pid) job.stdin.write(child.pid + '\n');
       else killTree();
     }
+    if (line === 'opened') {
+      // kill(0) checks Node's original process handle. The keeper already
+      // holds its handle, so an exit or PID reuse cannot redirect assignment.
+      if (!stopping && process.connected && child?.connected && child.kill(0)) job.stdin.write('attach\n');
+      else killTree();
+    }
     if (line === 'owned' && !owned) {
       owned = true;
       clearTimeout(startupTimeout);
@@ -109,13 +131,15 @@ function startWindows({ command, args, input }) {
         if (error) { send({ error: error.message }); killTree(); }
       });
     }
+    if (line === 'drained') drained = true;
   });
   job.once('error', (error) => send({ error: 'Windows render job unavailable: ' + error.message }));
   job.once('close', (code) => {
     clearTimeout(startupTimeout);
+    clearTimeout(closeTimeout);
     lines.close();
     keeper = undefined;
-    if ((!owned && !stopping) || code !== 0) {
+    if ((!owned && !stopping) || (owned && !drained) || code !== 0) {
       send({ error: 'Windows render job could not confirm ownership or shutdown: ' + diagnostic });
     }
     // The gated child cannot start an encoder without the keeper's ownership
@@ -203,7 +227,13 @@ export async function runOwnedProcess<T = void>({ command, args, input, signal, 
         reject(new Error(`native export process failed (${outcome?.signal ?? outcome?.code ?? 'no exit receipt'}): ${stderr.slice(-600)}`));
       } else resolve(result as T);
     });
-    owned.send({ command, args, input }, (error) => { if (error) failure ??= error; });
+    const failSend = (error: unknown) => {
+      failure ??= error instanceof Error ? error : new Error(String(error));
+      if (owned.connected) owned.disconnect();
+    };
+    try {
+      owned.send({ command, args, input }, (error) => { if (error) failSend(error); });
+    } catch (error) { failSend(error); }
     if (signal?.aborted) stop();
   });
 }

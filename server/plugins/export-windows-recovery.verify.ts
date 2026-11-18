@@ -82,7 +82,7 @@ function pidIsRunning(pid: number): boolean {
   }
 }
 
-async function until<T>(attempt: () => Promise<T | false>, label: string, waitMs = 15_000): Promise<T> {
+async function until<T>(attempt: () => Promise<T | false>, label: string, waitMs = 25_000): Promise<T> {
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
     const value = await attempt();
@@ -208,11 +208,24 @@ async function snapshot(origin: string, job: FixtureJob) {
   return await response.json() as GenerationJobSnapshot;
 }
 
-async function verifyBoundary(root: string, kill: 'owner' | 'worker') {
+async function findKeeper(worker: number): Promise<number> {
+  const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    `$w = Get-CimInstance Win32_Process -Filter 'ProcessId = ${worker}';
+    if (!$w) { exit 2 }
+    $sameParent = "ParentProcessId = " + $w.ParentProcessId + " AND Name = 'powershell.exe'";
+    $p = @(Get-CimInstance Win32_Process -Filter $sameParent);
+    if ($p.Count -ne 1) { exit 3 }
+    $p[0].ProcessId`]);
+  const pid = Number(stdout.trim());
+  assert(Number.isSafeInteger(pid) && pid > 0 && pid !== worker);
+  return pid;
+}
+
+async function verifyBoundary(root: string, kill: 'owner' | 'worker' | 'keeper') {
   const fixture = join(root, kill);
   const profile = join(fixture, 'profile');
   const profileId = randomUUID();
-  const sqlite = kill === 'worker';
+  const sqlite = kill !== 'owner';
   await mkdir(fixture);
   await Promise.all([
     writeFile(join(fixture, 'render-worker.cjs'), renderWorker),
@@ -251,7 +264,7 @@ async function verifyBoundary(root: string, kill: 'owner' | 'worker') {
     assert.equal((await snapshot(owner.url, interrupted)).status, 'running');
 
     if (kill === 'owner') await stopServer(owner.child);
-    else process.kill(native.worker, 'SIGKILL');
+    else process.kill(kill === 'keeper' ? await findKeeper(native.worker) : native.worker, 'SIGKILL');
     const sizeAfterSignal = await size();
     await until(async () => ![native.worker, native.middle, native.writer].some(pidIsRunning),
       'fixture tree termination after hard ' + kill + ' stop', 7_000).catch(async (error) => {
@@ -263,7 +276,7 @@ async function verifyBoundary(root: string, kill: 'owner' | 'worker') {
     assert(stoppedSize >= firstSize);
     assert.equal(await size(), stoppedSize, 'FFmpeg must no longer write');
 
-    if (kill === 'worker') {
+    if (kill !== 'owner') {
       await until(async () => (await snapshot(owner.url, interrupted)).status === 'failed', 'live owner failure receipt');
       await stopServer(owner.child);
     }
@@ -305,6 +318,8 @@ async function verifyDirectEncoder(root: string) {
   const output = join(root, 'direct.mp4');
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
     '-i', 'color=size=96x64:rate=15', '-t', '0.5', '-an', '-threads', '1', '-c:v', 'mpeg4', output];
+  await assert.rejects(runOwnedProcess({ command: ffmpegBin(), args, input: { invalid: 1n } }), /serialize/);
+  await assert.rejects(stat(output), { code: 'ENOENT' });
   const aborted = new AbortController();
   const cancelled = runOwnedProcess({ command: ffmpegBin(), args, signal: aborted.signal });
   aborted.abort(new Error('cancelled before encoder admission'));
@@ -326,7 +341,7 @@ async function verify() {
   const root = await mkdtemp(join(tmpdir(), 'cm windows native '));
   try {
     const errors: unknown[] = [];
-    for (const boundary of ['owner', 'worker'] as const) {
+    for (const boundary of ['owner', 'worker', 'keeper'] as const) {
       try { await verifyBoundary(root, boundary); }
       catch (error) { errors.push(error); console.error(boundary, error); }
     }

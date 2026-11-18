@@ -62,28 +62,36 @@ public static class RenderJob {
         const int BasicAccountingInformation = 1;
         var processHandle = OpenProcess(AssignAccess, false, pid);
         if (processHandle.IsInvalid) throw NativeError();
-        using (var process = processHandle)
-        using (var job = CreateJobObject(IntPtr.Zero, IntPtr.Zero)) {
-            if (job.IsInvalid) throw NativeError();
-            var limits = new ExtendedLimit();
-            limits.Basic.Flags = KillOnClose;
-            if (!SetInformationJobObject(job, ExtendedLimitInformation, ref limits, (uint)Marshal.SizeOf(limits)))
-                throw NativeError();
-            if (!AssignProcessToJobObject(job, process)) throw NativeError();
-            Console.WriteLine("owned");
+        using (var process = processHandle) {
+            Console.WriteLine("opened");
             Console.Out.Flush();
-            Console.ReadLine();
+            if (Console.ReadLine() != "attach") return;
+            using (var job = CreateJobObject(IntPtr.Zero, IntPtr.Zero)) {
+                if (job.IsInvalid) throw NativeError();
+                var limits = new ExtendedLimit();
+                limits.Basic.Flags = KillOnClose;
+                if (!SetInformationJobObject(job, ExtendedLimitInformation, ref limits, (uint)Marshal.SizeOf(limits)))
+                    throw NativeError();
+                if (!AssignProcessToJobObject(job, process)) throw NativeError();
+                Console.WriteLine("owned");
+                Console.Out.Flush();
+                Console.ReadLine();
 
-            if (!TerminateJobObject(job, 1)) throw NativeError();
-            var deadline = Stopwatch.StartNew();
-            while (deadline.ElapsedMilliseconds < 5000) {
-                Accounting info;
-                if (!QueryInformationJobObject(job, BasicAccountingInformation, out info,
-                    (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero)) throw NativeError();
-                if (info.ActiveProcesses == 0) return;
-                Thread.Sleep(20);
+                if (!TerminateJobObject(job, 1)) throw NativeError();
+                var deadline = Stopwatch.StartNew();
+                while (deadline.ElapsedMilliseconds < 5000) {
+                    Accounting info;
+                    if (!QueryInformationJobObject(job, BasicAccountingInformation, out info,
+                        (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero)) throw NativeError();
+                    if (info.ActiveProcesses == 0) {
+                        Console.WriteLine("drained");
+                        Console.Out.Flush();
+                        return;
+                    }
+                    Thread.Sleep(20);
+                }
+                throw new TimeoutException("Render job still has active processes after termination");
             }
-            throw new TimeoutException("Render job still has active processes after termination");
         }
     }
 }
