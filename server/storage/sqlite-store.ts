@@ -9,6 +9,8 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation.ts';
 import { runtimeProfile } from '../runtime-profile.ts';
+import { recoverLegacyProjectEdit } from '../plugins/project-store-edit-journal.ts';
+import { withProjectStoreProcessLock } from '../plugins/project-store-process-lock.ts';
 import {
   DELETED_PROJECTS_KV_KEY,
   GENERATION_JOBS_KV_KEY,
@@ -121,8 +123,22 @@ async function withMigrationLease<T>(task: () => T | Promise<T>): Promise<T> {
 }
 
 async function migrateUnderLease(): Promise<ImportSummary> {
+  const profile = runtimeProfile();
   processPhase = 'migrating';
   migrationError = undefined;
+  try {
+    return await withProjectStoreProcessLock(profile.rootDir, async () => {
+      await recoverLegacyProjectEdit(profile);
+      return importUnderLease();
+    });
+  } catch (error) {
+    processPhase = 'failed';
+    migrationError = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
+}
+
+async function importUnderLease(): Promise<ImportSummary> {
   const releases: MigrationBarrierRelease[] = [];
   try {
     for (const barrier of migrationBarriers) {
@@ -140,10 +156,6 @@ async function migrateUnderLease(): Promise<ImportSummary> {
     }
     processPhase = 'complete';
     return summary;
-  } catch (error) {
-    processPhase = 'failed';
-    migrationError = error instanceof Error ? error.message : String(error);
-    throw error;
   } finally {
     for (const release of releases.reverse()) {
       try {
@@ -166,8 +178,7 @@ export function runStorageMigration(): Promise<ImportSummary> {
  *
  * A requested migration, a receipt-less interrupted database, and a phase-1
  * authoritative database resume automatically. Explicit non-'1' values force
- * legacy mode. (The owner-safe JSON-dir lease was removed upstream, so legacy
- * JSON-and-directory mode needs no cross-process file lock to serialize.)
+ * legacy mode. The migration boundary also serializes with project writes.
  */
 export function initializeSqliteProjectStore(): Promise<SQLiteMigrationStatus> {
   return withMigrationLease(async () => {

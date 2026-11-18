@@ -54,8 +54,8 @@ try {
     loadOfflineEditCheckpoint,
     loadOfflineStoredProject,
     saveOfflineEditCheckpoint,
-    writeCommitEntries,
   } = await import('./offline-project-store.ts');
+  const { commitProjectEditRows } = await import('../plugins/project-store-edit-journal.ts');
   for (const failedKey of ['project', 'ownership', 'checkpoint']) {
     const initial = { project: 'old document', versions: 'old versions', checkpoint: 'saved draft' };
     const storage = new Map(Object.entries(initial));
@@ -73,7 +73,7 @@ try {
         throw new Error('directory fsync failed after publish');
       }
     }
-    await assert.rejects(writeCommitEntries({
+    await assert.rejects(commitProjectEditRows({
       writeEntry: async (key, value) => {
         storage.set(key, String(value));
         failAfterPublish(key);

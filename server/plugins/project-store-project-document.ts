@@ -12,6 +12,7 @@ import {
   type ProjectEditOwnershipClaim,
 } from '../external-agent/project-edit-ownership-codec.ts';
 import type { LockedProjectStore, StoredEntryValue } from './project-store.ts';
+import { commitProjectEditRows } from './project-store-edit-journal.ts';
 import { HANDOFF_PREFIX } from '../../shared/clipmentor-handoff';
 import { assertHandoffProjectWrite } from '../../shared/clipmentor-handoff-write';
 import { getRun } from '../agent-runs/store';
@@ -58,15 +59,6 @@ function mutationResponse(
   };
 }
 
-async function restoreEntry(
-  store: LockedProjectStore,
-  key: string,
-  original: StoredEntryValue,
-): Promise<void> {
-  if (original.found) await store.writeEntryExact(key, original.value);
-  else await store.removeEntry(key);
-}
-
 async function createProjectDocument(
   store: LockedProjectStore,
   request: ProjectDocumentWriteRequest,
@@ -109,24 +101,11 @@ async function updateProjectDocument(
   }
   const nextRevision = revisionOf(project);
   if (!activeAgentWrite(request, projectId, readRun)) return endedRun(current);
-  try {
-    await store.writeEntryExact(request.key, project);
-    await store.writeEntryExact(
-      ownershipKey,
-      renewedProjectEditOwnership(claim, nextRevision),
-    );
-    // Keep readers behind the same store lock until a cancellation racing the
-    // filesystem writes has either committed or restored BOTH original entries.
-    if (!activeAgentWrite(request, projectId, readRun)) {
-      await restoreEntry(store, request.key, current);
-      await restoreEntry(store, ownershipKey, ownership);
-      return endedRun(current);
-    }
-  } catch (error) {
-    await restoreEntry(store, request.key, current);
-    await restoreEntry(store, ownershipKey, ownership);
-    throw error;
-  }
+  const accepted = await commitProjectEditRows({ ...store, writeEntry: store.writeEntryExact }, {
+    [request.key]: { found: true, value: project },
+    [ownershipKey]: { found: true, value: renewedProjectEditOwnership(claim, nextRevision) },
+  }, { [request.key]: current, [ownershipKey]: ownership }, () => activeAgentWrite(request, projectId, readRun));
+  if (!accepted) return endedRun(current);
   return mutationResponse(
     { found: true, value: project },
     true,

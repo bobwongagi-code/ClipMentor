@@ -3,9 +3,9 @@ import { randomUUID } from 'node:crypto';
 import {
   getStoredEntry,
   withSerializedProjectStore,
-  type LockedProjectStore,
   type StoredEntryValue,
 } from '../plugins/project-store.ts';
+import { commitProjectEditRows } from '../plugins/project-store-edit-journal.ts';
 import { runProjectMigrations } from '../../src/persist/migrations/index.ts';
 import {
   revisionOf,
@@ -110,8 +110,6 @@ interface CommitAttemptInput extends OfflineProjectCommitInput {
   normalizedDoc: ProjectDoc;
 }
 
-class BrowserTakeoverError extends Error {}
-
 function normalizedProject(value: unknown): ProjectDoc | null {
   return runProjectMigrations(value)?.doc ?? null;
 }
@@ -185,40 +183,6 @@ function updatedProjectIndex(value: unknown, projectId: string, now: number): un
   });
 }
 
-async function restoreEntries(
-  store: Pick<LockedProjectStore, 'writeEntry'|'removeEntry'>,
-  written: readonly string[],
-  originals: Readonly<Record<string, StoredEntryValue>>,
-): Promise<void> {
-  for (const key of [...written].reverse()) {
-    const original = originals[key];
-    if (original.found) await store.writeEntry(key, original.value);
-    else await store.removeEntry(key);
-  }
-}
-
-export async function writeCommitEntries(
-  store: Pick<LockedProjectStore, 'writeEntry'|'removeEntry'>,
-  changes: Readonly<Record<string, StoredEntryValue>>,
-  originals: Readonly<Record<string, StoredEntryValue>>,
-  canCommit: () => boolean,
-): Promise<void> {
-  const written: string[] = [];
-  try {
-    for (const [key, entry] of Object.entries(changes)) {
-      if (!canCommit()) throw new BrowserTakeoverError();
-      // A write or removal can reach disk before its acknowledgement fails.
-      written.push(key);
-      if (entry.found) await store.writeEntry(key, entry.value);
-      else await store.removeEntry(key);
-    }
-    if (!canCommit()) throw new BrowserTakeoverError();
-  } catch (error) {
-    await restoreEntries(store, written, originals);
-    throw error;
-  }
-}
-
 async function readCommitMetadata(projectId: string): Promise<CommitMetadata> {
   const [projects, versions] = await Promise.all([
     getStoredEntry('projects'),
@@ -236,64 +200,61 @@ async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectC
   const projectKey = `project:${input.projectId}`;
   const versionsKey = `versions:${input.projectId}`;
   const checkpointKey = `${CHECKPOINT_PREFIX}${input.projectId}`;
-  try {
-    return await withSerializedProjectStore<OfflineProjectCommitResult>(async (store) => {
-      const project = await store.readEntry(projectKey);
-      const before = project.found ? normalizedProject(project.value) : null;
-      if (!before || revisionOf(before) !== input.expectedRevision) return { status: 'stale' };
-      const policy = await store.readEntry(`${HANDOFF_PREFIX}${input.projectId}`);
-      await assertHandoffProjectWrite(policy.found ? policy.value : undefined, before, input.normalizedDoc);
-      assertDeliveryPicturePreservation(before, input.normalizedDoc);
-      const currentMetadata = {
-        projects: await store.readEntry('projects'),
-        versions: await store.readEntry(versionsKey),
-      };
-      if (!metadataMatches(currentMetadata, input.metadata)) return { status: 'metadata-conflict' };
-      if (!input.canCommit()) return { status: 'browser-takeover' };
-      const ownershipKey = projectEditOwnershipKey(input.projectId);
-      const ownership = await store.readEntry(ownershipKey);
-      if (!projectEditOwnershipMatches(ownership.value, input.ownership)) {
-        return { status: 'browser-takeover' };
-      }
-      const now = Date.now();
-      const nextRevision = revisionOf(input.normalizedDoc);
-      const versions = automaticVersionEntries(currentMetadata.versions.value, before, now);
-      const changes: Record<string, StoredEntryValue> = {
-        [versionsKey]: { found: true, value: versions.entries },
-        projects: { found: true, value: updatedProjectIndex(currentMetadata.projects.value, input.projectId, now) },
-        [projectKey]: { found: true, value: input.normalizedDoc },
-        [ownershipKey]: { found: true, value: renewedProjectEditOwnership(input.ownership, nextRevision, now) },
-      };
-      const originals = {
-        [versionsKey]: currentMetadata.versions,
-        projects: currentMetadata.projects,
-        [projectKey]: project,
-        [ownershipKey]: ownership,
-      };
-      if (input.checkpointSessionId) {
-        const checkpoint = await store.readEntry(checkpointKey);
-        if (checkpoint.found && isRecord(checkpoint.value)
-          && checkpoint.value.sessionId === input.checkpointSessionId) {
-          if (!normalizedCheckpoint(checkpoint.value, input.expectedRevision)) {
-            throw new Error('offline edit checkpoint does not match the reviewed draft base');
-          }
-          changes[checkpointKey] = { found: false };
-          originals[checkpointKey] = checkpoint;
+  return withSerializedProjectStore<OfflineProjectCommitResult>(async (store) => {
+    const project = await store.readEntry(projectKey);
+    const before = project.found ? normalizedProject(project.value) : null;
+    if (!before || revisionOf(before) !== input.expectedRevision) return { status: 'stale' };
+    const policy = await store.readEntry(`${HANDOFF_PREFIX}${input.projectId}`);
+    await assertHandoffProjectWrite(policy.found ? policy.value : undefined, before, input.normalizedDoc);
+    assertDeliveryPicturePreservation(before, input.normalizedDoc);
+    const currentMetadata = {
+      projects: await store.readEntry('projects'),
+      versions: await store.readEntry(versionsKey),
+    };
+    if (!metadataMatches(currentMetadata, input.metadata)) return { status: 'metadata-conflict' };
+    if (!input.canCommit()) return { status: 'browser-takeover' };
+    const ownershipKey = projectEditOwnershipKey(input.projectId);
+    const ownership = await store.readEntry(ownershipKey);
+    if (!projectEditOwnershipMatches(ownership.value, input.ownership)) {
+      return { status: 'browser-takeover' };
+    }
+    const now = Date.now();
+    const nextRevision = revisionOf(input.normalizedDoc);
+    const versions = automaticVersionEntries(currentMetadata.versions.value, before, now);
+    const changes: Record<string, StoredEntryValue> = {
+      [versionsKey]: { found: true, value: versions.entries },
+      projects: { found: true, value: updatedProjectIndex(currentMetadata.projects.value, input.projectId, now) },
+      [projectKey]: { found: true, value: input.normalizedDoc },
+      [ownershipKey]: { found: true, value: renewedProjectEditOwnership(input.ownership, nextRevision, now) },
+    };
+    const originals = {
+      [versionsKey]: currentMetadata.versions,
+      projects: currentMetadata.projects,
+      [projectKey]: project,
+      [ownershipKey]: ownership,
+    };
+    if (input.checkpointSessionId) {
+      const checkpoint = await store.readEntry(checkpointKey);
+      if (checkpoint.found && isRecord(checkpoint.value)
+        && checkpoint.value.sessionId === input.checkpointSessionId) {
+        if (!normalizedCheckpoint(checkpoint.value, input.expectedRevision)) {
+          throw new Error('offline edit checkpoint does not match the reviewed draft base');
         }
+        changes[checkpointKey] = { found: false };
+        originals[checkpointKey] = checkpoint;
       }
-      await writeCommitEntries(store, changes, originals, input.canCommit);
-      const appliedOwnership = { ...input.ownership, baseRevision: nextRevision };
-      return {
-        status: 'applied',
-        revision: nextRevision,
-        automaticVersionCreated: versions.created,
-        ownership: appliedOwnership,
-      };
-    });
-  } catch (error) {
-    if (error instanceof BrowserTakeoverError) return { status: 'browser-takeover' };
-    throw error;
-  }
+    }
+    if (!await commitProjectEditRows(store, changes, originals, input.canCommit)) {
+      return { status: 'browser-takeover' };
+    }
+    const appliedOwnership = { ...input.ownership, baseRevision: nextRevision };
+    return {
+      status: 'applied',
+      revision: nextRevision,
+      automaticVersionCreated: versions.created,
+      ownership: appliedOwnership,
+    };
+  });
 }
 
 export async function loadOfflineStoredProject(projectId: string): Promise<OfflineStoredProject | null> {
@@ -358,17 +319,11 @@ export async function saveOfflineEditCheckpoint(
         throw new Error('offline edit checkpoint is corrupt');
       }
     }
-    await store.writeEntry(key, checkpoint);
-    if (input.canSave()) {
-      await store.writeEntry(
-        ownershipKey,
-        renewedProjectEditOwnership(input.ownership, input.expectedRevision),
-      );
-      return 'saved';
-    }
-    if (previous.found) await store.writeEntry(key, previous.value);
-    else await store.removeEntry(key);
-    return 'browser-takeover';
+    const saved = await commitProjectEditRows(store, {
+      [key]: { found: true, value: checkpoint },
+      [ownershipKey]: { found: true, value: renewedProjectEditOwnership(input.ownership, input.expectedRevision) },
+    }, { [key]: previous, [ownershipKey]: ownership }, input.canSave);
+    return saved ? 'saved' : 'browser-takeover';
   });
 }
 
