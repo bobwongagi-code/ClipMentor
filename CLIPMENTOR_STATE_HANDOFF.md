@@ -2,7 +2,7 @@
 
 ## 从哪里接手
 
-后端仓库为 `bobwongagi-code/ClipMentor`，前端在独立的 `Chimera-Prototype-Mockup` 仓库。2026-11-18 核对的合并基线是后端 `50e6860`、前端 `7c9c1dc`。两边的 `codex/clipmentor-state-handoff` 已合入各自的 `main`。前端仓库需要已有访问权限。
+后端仓库为 `bobwongagi-code/ClipMentor`，前端在独立的 `Chimera-Prototype-Mockup` 仓库。单机生产主链的专项治理已收口，配对基线为后端 Windows 修复合并提交 `749930f` 和前端 `7c9c1dc`。继续维护时从两边最新的 `main` 开始。前端仓库需要已有访问权限。[Windows 修复 PR](https://github.com/bobwongagi-code/ClipMentor/pull/19)
 
 从已克隆的对应仓库进入各自的接手工作树。若远端名有区别，使用 `git remote -v` 核对后替换。
 
@@ -16,7 +16,7 @@ git fetch origin main
 git worktree add --detach ../clipmentor-web-next origin/main
 ```
 
-先读 [HANDOFF.MD](HANDOFF.MD) 最新几节和 [原状态机盘点](docs/clipmentor-state-machines.md) 的批次验收、网页状态及双版本派发部分。范围是已盘点的 ClipMentor 生产状态机。用实际入口重现可确认的缺陷并修复，沿用现有状态和存储。测试使用隔离工程、合成媒体和本地服务替身。保留真实工程、媒体、历史审核判断及外部调用计数。
+先读 [收口范围与回归入口](docs/clipmentor-state-machines.md#专项收口与回归维护) 和 [HANDOFF.MD](HANDOFF.MD) 最近的交接。按变更触及的状态边界选择回归，用实际入口重现新增故障。测试使用隔离工程、合成媒体和本地服务替身。保留真实工程、媒体、历史审核判断及外部调用计数。
 
 ## 已落地的行为
 
@@ -27,15 +27,15 @@ git worktree add --detach ../clipmentor-web-next origin/main
 | 双版与旧版单结尾 | 直接恢复、网页控制、子任务唤醒和冷启动核对当前父清单。父清单错误或被替换时保留原子任务。删除的子任务不重排队，有效兄弟任务仍可恢复。旧单结尾清单按实际绑定读取。 | `production-panel.ts`、`server/plugins/clipmentor-production.ts` 及同名 `.verify.ts` |
 | 页面、代理与素材接续 | 版本指纹双向透传。旧轮询和旧草稿不影响当前稿件。重开读取保存的终审。上传断开时按四份素材哈希回读。 | 前端 `vite.config.ts`、`src/pages/ProductionPanel.tsx`、`src/pages/ClipMentorPage.tsx` |
 
-## 下一步
+## 日常回归维护
 
-父清单在控制提交途中变化、父子会话轮换、阶段保存失败以及实际处理器下的双标签页旧动作，均已有合入的回归。详见[盘点与组合证据](docs/clipmentor-state-machines.md)。继续从最新已合并版本复核，遇到可复现问题先加失败对照，再跑合法旧版正对照。
+父清单变更、父子会话轮换、阶段保存失败及双标签页旧动作都有已合入的回归。配对基线的 8 项浏览器联调全部通过。Windows 的原生 FFmpeg 进程树强杀和 JSON、SQLite 冷启动交付由现有 Windows MCP recovery 工作流验证。涉及原生进程或交付边界的修改，在 Windows runner 上复跑该工作流。遇到新增问题，在对应四张表记录入口和结果，再补同一入口的正反回归。[Windows CI](https://github.com/bobwongagi-code/ClipMentor/actions/runs/44270344508)
 
-待补的验证包括通用远程 project-store 的跨工程条件、Node 24 环境和多实例部署。现有本地回归可查持久化数据、派发次数、页面状态和导出字节。真实服务与成片质量仍需各自的直接证据。
+Node 24 已通过托管 CI。未实测的部署范围记录在[状态机盘点](docs/clipmentor-state-machines.md#专项收口与回归维护)，包括多实例和跨主机、通用远程 project-store 跨工程隔离及 Windows 安装版。真实服务与成片质量另有各自的验收范围。
 
 ## 本地验证入口
 
-交接前已复跑后端生产、外部调用、ASR、成片复核、源视频和 R2 套件，以及 Node 类型检查。前端应用与 Node 类型检查、17 项浏览器测试和 2 项浏览器联调均通过。联调包含真实本地 Vite 代理，以及实际制作处理器的端到端测试。两边使用合成数据和隔离存储，未发出真实外部服务调用。
+后端已有生产、外部调用、ASR、成片复核、源视频和 R2 套件及 Node 类型检查。收口时复跑了 8 项前后端浏览器联调，覆盖实际本地 Vite 代理、制作处理器、双版本下载和双标签页交错。联调使用合成数据、隔离存储和本地服务替身，模型及供应商调用为零。
 
 后端工作树已安装仓库依赖后执行以下命令。生产套件含合成 MP4 的小规模渲染。用任务专用临时目录，加一次运行前后的缓存清点。进程退出后回收本轮产物，保留简要结果。
 
@@ -60,4 +60,4 @@ CI=1 ./node_modules/.bin/playwright test -c playwright.integration.config.ts --o
 
 **可复制给接手 Agent**
 
-> 从 ClipMentor 和 Chimera 前端各自最新的 `main` 开始。先读 HANDOFF 和盘点中的最新验收，复跑制作 HTTP 与浏览器联调。保留真实工程、历史回执、额度和媒体。每轮用本地替身测试并回收本轮临时文件与生成缓存。
+> 从 ClipMentor 和 Chimera 前端各自最新的 `main` 开始。先读收口范围和交接记录，按变更选择已有回归。保留真实工程、历史回执、额度和媒体。用本地替身测试并回收本轮临时文件与生成缓存。
