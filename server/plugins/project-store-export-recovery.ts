@@ -96,7 +96,14 @@ function reconcileMutation(
   const incoming = recoveryRecord(input.value, input.renderId);
   if (retired) return mutation(stored, true);
   if (current) {
-    return mutation(stored, !!incoming && incoming.projectId === current.projectId);
+    if (!incoming || incoming.projectId !== current.projectId) return mutation(stored, false);
+    if (incoming.attemptId === undefined) return mutation(stored, true);
+    if (typeof incoming.attemptId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(incoming.attemptId)
+      || incoming.createdAt !== current.createdAt) return mutation(stored, false);
+    if (current.attemptId !== undefined) return mutation(stored, current.attemptId === incoming.attemptId);
+    // Attach the acknowledged attempt to the original registration without
+    // changing its stage, destination or delivery owner.
+    return mutation(stored, true, { ...current, attemptId: incoming.attemptId });
   }
   if (stored.found) return mutation(stored, false);
   if (input.authorityEstablished) {

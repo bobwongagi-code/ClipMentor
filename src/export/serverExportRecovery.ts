@@ -61,7 +61,22 @@ function joinRemoteRecord(
     && hasServerExportDestinationAuthority(local.destination)
     ? local.destination
     : remote.destination;
-  return { ...remote, destination, remoteAuthorityEstablished: true };
+  const attemptId = remote.attemptId ?? (local?.projectId === remote.projectId && local.createdAt === remote.createdAt
+    ? local.attemptId : undefined);
+  return { ...remote, destination, ...(attemptId === undefined ? {} : { attemptId }), remoteAuthorityEstablished: true };
+}
+
+export async function bindServerExportAttempt(original: PersistedServerExportJob, attemptId: string): Promise<void> {
+  if (projectStoreWriteCredential()) {
+    const bound = await reconcileRemoteRecord({ ...original, attemptId });
+    if (bound?.attemptId !== attemptId) throw new Error('导出尝试已更换');
+  }
+  await mutateLocalRecord(original.renderId, (record) => {
+    if (!record || record.attemptId === attemptId) return { result: undefined };
+    if (record.createdAt !== original.createdAt || record.projectId !== original.projectId) throw new Error('导出尝试已更换');
+    if (record.attemptId !== undefined) throw new Error('导出尝试已更换');
+    return { next: { ...record, attemptId }, result: undefined };
+  });
 }
 
 function sameDestinationBinding(a: PersistedServerExportJob, b: PersistedServerExportJob): boolean {
@@ -301,7 +316,7 @@ export async function releaseServerExportDelivery(
   }
 }
 
-async function recoveryRecordById(renderId: string): Promise<PersistedServerExportJob | null> {
+export async function recoveryRecordById(renderId: string): Promise<PersistedServerExportJob | null> {
   if (projectStoreRemoteAvailable()) {
     const response = await requestProjectStore({ operation: 'entry', key: `${REMOTE_PREFIX}${renderId}` });
     const row = response as { found: boolean; value?: unknown };

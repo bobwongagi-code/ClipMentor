@@ -25,13 +25,17 @@ import {
   markServerExportDeliveryAmbiguous,
   markServerExportOutputReady,
   markServerExportTargetCommitted,
+  recoveryRecordById,
   rebindServerExportJob,
   releaseServerExportDelivery,
+  retireServerExportJob,
   renewServerExportDelivery,
   type PersistedServerExportJob,
   type ServerExportDeliveryClaim,
 } from './serverExportRecovery';
 import {
+  cancelExportJob,
+  exportCancellationMessage,
   pollExport,
   renderCompleted,
   retireAndDeleteExportJob,
@@ -248,6 +252,7 @@ async function runRecoveredServerExport(
 ): Promise<void> {
   let claim = initialClaim;
   let targetCommitted = record.stage === 'target-committed';
+  let polling = false;
   setters.setClock(Date.now());
   setters.setBusy(t('正在恢复导出…'));
   setters.setRenderEngine(record.format === 'video' ? 'server' : 'idle');
@@ -263,6 +268,7 @@ async function runRecoveredServerExport(
       }
       const context = recoveredContext(record, record.destination, setters, t);
       const startedAt = performance.now();
+      polling = record.stage === 'polling';
       signal.throwIfAborted();
       await ensureExportDestinationWritable(record.destination).catch((error: unknown) => {
         if (record.destination.type === 'browser-directory' || record.destination.type === 'browser-file') {
@@ -271,6 +277,7 @@ async function runRecoveredServerExport(
         throw error;
       });
       const completed = await pollExport(context, record.renderId, signal);
+      polling = false;
       if (record.stage === 'polling') await markServerExportOutputReady(record.renderId, claim ?? undefined);
       if (record.format === 'video') updateActualEngine(context, completed);
       signal.throwIfAborted();
@@ -300,9 +307,13 @@ async function runRecoveredServerExport(
       finishedAt,
     } : current);
   } catch (reason) {
-    const cancelled = isAbortError(reason);
     const existing = exportFailureFrom(reason);
-    const message = exportDestinationErrorMessage(reason, t);
+    const stop = polling && isAbortError(reason) ? await cancelExportJob(record.renderId, record.attemptId) : null;
+    const cancelled = existing?.stage === 'cancel' || (stop ? stop === 'cancelled' : isAbortError(reason));
+    if (existing?.stage === 'cancel' || stop === 'cancelled') {
+      await retireServerExportJob(record.renderId).catch(() => false);
+    }
+    const message = stop && stop !== 'cancelled' ? exportCancellationMessage(stop, t) : exportDestinationErrorMessage(reason, t);
     const failure = existing ?? createExportFailure({
       stage: cancelled ? 'cancel' : reason instanceof ExportDestinationError ? 'destination' : 'render',
       code: cancelled ? 'export_cancelled'
@@ -377,5 +388,10 @@ export async function rebindAndResumePersistedServerExport({
 }
 
 export async function retirePersistedServerExport(renderId: string): Promise<boolean> {
+  const original = await recoveryRecordById(renderId);
+  if (original?.stage === 'polling') {
+    const outcome = await cancelExportJob(renderId, original.attemptId);
+    if (outcome !== 'cancelled') throw new Error(exportCancellationMessage(outcome, (key) => key));
+  }
   return retireAndDeleteExportJob(renderId);
 }

@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { createExportFailure } from '../../src/export/exportFailure.ts';
 import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
 import { assertDataDirRelocationReady } from '../data-dir.ts';
 import {
+  assertGenerationLedgerAuthority,
   initializeSqliteProjectStore,
   registerStorageMigrationBarrier,
   sqliteReadEntry,
@@ -28,6 +30,7 @@ import type {
   GenerationJob,
   GenerationJobResumer,
   GenerationJobSnapshot,
+  GenerationJobOptions,
   GenerationOperationTimestamps,
   GenerationRetentionGuard,
 } from './generation-job-types.ts';
@@ -42,7 +45,11 @@ const STORE_PATH = profile.generationJobStore;
 let persistenceQueue: Promise<void> = Promise.resolve();
 let persistenceMigrationGate: Promise<void> | null = null;
 const pendingReservations = new Map<string, Promise<void>>();
-type LedgerRow = GenerationJobSnapshot & { executionPid?: number; reservationId?: string };
+type LedgerRow = GenerationJobSnapshot & {
+  executionPid?: number;
+  reservationId?: string;
+  exportCancellationRequestedAt?: number;
+};
 const committed = new WeakMap<GenerationJob, LedgerRow>();
 
 registerStorageMigrationBarrier(async () => {
@@ -92,6 +99,7 @@ export async function persistJobs(): Promise<void> {
 }
 
 async function readLedger(): Promise<Map<string, LedgerRow>> {
+  assertGenerationLedgerAuthority();
   let parsed: unknown;
   if (sqliteStoreEnabled()) {
     const row = await sqliteReadEntry(GENERATION_JOBS_KV_KEY);
@@ -112,6 +120,7 @@ async function readLedger(): Promise<Map<string, LedgerRow>> {
   for (const value of ledger.jobs) {
     if (!normalizePersistedJob(value) || rows.has(value.id)
       || (value.executionPid !== undefined && (!Number.isSafeInteger(value.executionPid) || value.executionPid <= 0))
+      || (value.exportCancellationRequestedAt !== undefined && !Number.isFinite(value.exportCancellationRequestedAt))
       || (value.reservationId !== undefined && typeof value.reservationId !== 'string')) {
       throw new Error('generation job ledger contains unsupported or duplicate records');
     }
@@ -121,6 +130,7 @@ async function readLedger(): Promise<Map<string, LedgerRow>> {
 }
 
 async function saveLedger(rows: Map<string, LedgerRow>): Promise<void> {
+  assertGenerationLedgerAuthority();
   const ledger = { version: 1, jobs: [...rows.values()] };
   if (sqliteStoreEnabled()) {
     await sqliteWriteEntry(GENERATION_JOBS_KV_KEY, ledger);
@@ -160,7 +170,10 @@ function snapshotRow(job: GenerationJob, reservationId?: string): LedgerRow {
 
 function exposeRow(row: LedgerRow): void {
   const previous = jobs.get(row.id);
-  if (previous && isDeepStrictEqual(committed.get(previous), row)) return;
+  if (previous && sameExecutionRow(committed.get(previous), row)) {
+    committed.set(previous, row);
+    return;
+  }
   clearTimeout(previous?.expiryTimer);
   const job = normalizePersistedJob(row)!;
   committed.set(job, row);
@@ -183,13 +196,75 @@ export function hasLiveGenerationOwner(job: GenerationJob): boolean {
 export function committedGenerationSnapshot(job: GenerationJob): GenerationJobSnapshot | undefined {
   const row = committed.get(job);
   if (!row) return undefined;
-  const { executionPid: _pid, reservationId: _reservation, ...snapshot } = row;
+  const { executionPid: _pid, reservationId: _reservation, exportCancellationRequestedAt, ...snapshot } = row;
   return {
     ...snapshot,
     operationId: job.id,
     retryClass: snapshot.retryClass ?? job.retryClass,
     timestamps: snapshot.timestamps ?? job.timestamps,
+    ...(exportCancellationRequestedAt !== undefined && !TERMINAL.has(row.status) ? { cancellationRequested: true } : {}),
   };
+}
+
+function sameExecutionRow(a: LedgerRow | undefined, b: LedgerRow | undefined): boolean {
+  if (!a || !b) return false;
+  return isDeepStrictEqual({ ...a, exportCancellationRequestedAt: undefined }, { ...b, exportCancellationRequestedAt: undefined });
+}
+
+function cancelledExport(next: GenerationJob, current: LedgerRow): GenerationJob {
+  const now = Date.now();
+  const message = 'Export cancelled';
+  const failure = createExportFailure({
+    stage: 'cancel', code: 'export_cancelled', message, retryable: false, targetPath: null,
+  });
+  return {
+    ...next, status: 'failed', phase: 'failed', progress: 100, error: message, code: failure.code,
+    params: { ...current.params, exportFailure: failure }, retryable: false, retryClass: 'none',
+    updatedAt: now, timestamps: {
+      ...next.timestamps, ...current.timestamps, acceptedAt: current.timestamps?.acceptedAt,
+      succeededAt: undefined, failedAt: now, updatedAt: now,
+    },
+    result: undefined, results: undefined, pendingDownloadUrl: undefined, restored: false, resuming: false,
+  };
+}
+
+export function hasPendingExportCancellation(job: GenerationJob): boolean {
+  const row = committed.get(job);
+  return row?.exportCancellationRequestedAt !== undefined && !TERMINAL.has(row.status);
+}
+
+type ExportCancellation = 'missing' | 'conflict' | 'settled' | 'pending' | 'cancelled';
+
+/** Stop the observed operation. Result removal is a separate API. */
+export function requestExportCancellation(id: string, expectedAttempt?: string, recoverOnly = false): Promise<ExportCancellation> {
+  return queueLedgerMutation(async (rows) => {
+    const current = rows.get(id);
+    if (!current || current.params.kind !== 'export') return 'missing';
+    if ((current.params.exportAttemptId !== undefined || expectedAttempt !== undefined)
+      && current.params.exportAttemptId !== expectedAttempt) return 'conflict';
+    if (TERMINAL.has(current.status)) return current.code === 'export_cancelled' ? 'cancelled' : 'settled';
+    if (recoverOnly && current.exportCancellationRequestedAt === undefined) return 'conflict';
+    const requested = current.exportCancellationRequestedAt ?? Date.now();
+    const ownerAlive = current.executionPid !== undefined && isGenerationExecutionAlive(current.executionPid);
+    if (ownerAlive && current.exportCancellationRequestedAt !== undefined) return 'pending';
+    const next = ownerAlive ? current : snapshotRow(cancelledExport(normalizePersistedJob(current)!, current), current.reservationId);
+    const row = { ...next, exportCancellationRequestedAt: requested };
+    rows.set(id, row);
+    await commitLedgerRow(rows, id);
+    exposeRow(row);
+    return ownerAlive ? 'pending' : 'cancelled';
+  });
+}
+
+export async function pendingOwnedExportCancellations(activeAttempts: ReadonlyMap<string, string | undefined>): Promise<string[]> {
+  return withLedgerDirectory(async () => {
+    const rows = await readLedger();
+    return [...activeAttempts].flatMap(([id, attempt]) => {
+      const row = rows.get(id);
+      return row?.executionPid === process.pid && row.params.kind === 'export' && row.params.exportAttemptId === attempt
+        && row.exportCancellationRequestedAt !== undefined ? [id] : [];
+    });
+  });
 }
 
 /** Only the process that inserts the missing row may dispatch the task. */
@@ -215,15 +290,22 @@ export async function persistGenerationJobReservation(job: GenerationJob): Promi
 }
 
 /** Compare only the intended row and preserve all other processes' writes. */
-export function persistGenerationJob(job: GenerationJob, next = job): Promise<boolean> {
+export function persistGenerationJob(job: GenerationJob, next = job, publishResult?: GenerationJobOptions['publishResult']): Promise<boolean> {
   return queueLedgerMutation(async (rows) => {
     const expected = committed.get(job);
-    if (!expected || !isDeepStrictEqual(rows.get(job.id), expected)) return false;
-    const row = snapshotRow(next, expected.reservationId ?? randomUUID());
+    const current = rows.get(job.id);
+    if (!current || !expected || !sameExecutionRow(current, expected)) return false;
+    const cancellation = current.exportCancellationRequestedAt;
+    const outcome = cancellation !== undefined && TERMINAL.has(next.status) ? cancelledExport(next, current) : next;
+    if (outcome.status === 'succeeded' && outcome.result) await publishResult?.(outcome.result);
+    const row = {
+      ...snapshotRow(outcome, expected.reservationId ?? randomUUID()),
+      ...(cancellation !== undefined ? { exportCancellationRequestedAt: cancellation } : {}),
+    };
     rows.set(job.id, row);
     await commitLedgerRow(rows, job.id);
     committed.set(job, row);
-    if (next !== job) Object.assign(job, next);
+    if (outcome !== job) Object.assign(job, outcome);
     return true;
   });
 }
@@ -285,6 +367,7 @@ function normalizePersistedJob(value: unknown): GenerationJob | null {
 }
 
 export async function loadPersistedJobs(): Promise<void> {
+  assertGenerationLedgerAuthority(true);
   await initializeSqliteProjectStore();
   await refreshGenerationJobs();
 }

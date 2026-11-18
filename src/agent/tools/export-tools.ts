@@ -241,7 +241,7 @@ async function submitRenderJob(args: Args, ctx: AgentContext): Promise<unknown> 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = (await response.json().catch(() => ({}))) as { renderId?: string; error?: string };
+    const data = (await response.json().catch(() => ({}))) as { renderId?: string; attemptId?: string; error?: string };
     if (!response.ok || !data.renderId) return { error: data.error ?? `render job submit failed (${response.status})` };
     sessionJobs.push({ renderId: data.renderId, timelineId, saveToMediaPool: !!savePlan });
     if (projectId) {
@@ -251,6 +251,7 @@ async function submitRenderJob(args: Args, ctx: AgentContext): Promise<unknown> 
         : exportMediaExtension(format, codec);
       notifyAgentExportSubmitted({
         renderId: data.renderId,
+        ...(typeof data.attemptId === 'string' ? { attemptId: data.attemptId } : {}),
         projectId,
         label: typeof args.name === 'string' && args.name.trim()
           ? args.name

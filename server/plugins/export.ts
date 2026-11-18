@@ -50,18 +50,24 @@ export function exportPlugin(): Plugin {
           await refreshGenerationJobStatus();
           // A render operation and the attempt UUID in its filename can differ.
           // Resolve legacy names through the hydrated job ledger before checking retention.
-          const owners = new Map<string, { id: string; active: boolean }>();
+          const owners = new Map<string, { id: string; active: boolean; cancelled: boolean }>();
           for (const job of jobs.values()) {
             if (job.params.kind !== 'export') continue;
             const attemptId = job.result?.assetId ?? job.params.exportAttemptId;
             if (typeof attemptId === 'string') {
-              owners.set(attemptId, { id: job.id, active: job.status === 'queued' || job.status === 'running' });
+              owners.set(attemptId, {
+                id: job.id,
+                active: job.status === 'queued' || job.status === 'running',
+                cancelled: job.status === 'failed' && job.code === 'export_cancelled',
+              });
             }
           }
           const removed = await cleanupStaleExportFiles(uploadDir(), {
             profile: runtimeProfile(),
-            shouldRetain: (fileId) => {
+            shouldRetain: (fileId, privateStage) => {
               const owner = owners.get(fileId);
+              if (owner?.cancelled) return false;
+              if (privateStage) return owner?.active === true;
               return owner?.active || retainUnresolvedExportRecovery(owner?.id ?? fileId);
             },
             onError: (path, error) => server.config.logger.warn(

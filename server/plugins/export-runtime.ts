@@ -3,7 +3,7 @@ import { copyFile, link, lstat, open, readdir, stat, unlink } from 'node:fs/prom
 import { extname, join } from 'node:path';
 import { ffmpegBin } from '../media-binaries.ts';
 import { ffmpegThreadArgs, spawnMediaProcess } from '../media-process.ts';
-import { exportAttemptIdFromFilename } from '../media-dir.ts';
+import { exportAttemptIdFromFilename, uploadDir } from '../media-dir.ts';
 import {
   h264EncoderAttempts,
   h264EncoderFallbackReason,
@@ -16,11 +16,9 @@ import {
   type H264Encoder,
   type H264EncoderOutcome,
 } from '../media-acceleration.ts';
-import {
-  deleteGenerationJob,
-  readGenerationJobSnapshot,
-  type UpdateGenerationJob,
-} from './generation-jobs.ts';
+import type { UpdateGenerationJob } from './generation-jobs.ts';
+import { pendingOwnedExportCancellations } from './generation-job-store.ts';
+import { getGenerationJobSnapshot, retryOwnedExportSettlement } from './generation-job-lifecycle.ts';
 import { TaskLimiter, type ReleaseTaskPermit } from '../task-limiter.ts';
 import { sha256File } from '../../shared/node-content-hash.ts';
 import { withProjectStoreProcessLock } from './project-store-process-lock.ts';
@@ -31,7 +29,7 @@ const DEFAULT_MAX_ACTIVE_EXPORTS = 1;
 const MAX_ACTIVE_EXPORTS = 4;
 const FFMPEG_TIMEOUT_MS = 60 * 60_000;
 export const EXPORT_JOB_RETENTION_MS = 60 * 60_000;
-const EXPORT_CANCEL_TIMEOUT_MS = 15_000;
+const EXPORT_CANCEL_POLL_MS = 250;
 const EXPORT_JOB_FILE_PREFIX = 'openchatcut-export-job-';
 const EXPORT_JOB_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mp3', 'wav']);
 const EXPORT_JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -41,7 +39,7 @@ interface CleanupStaleExportOptions {
   now?: number;
   retentionMs?: number;
   onError?: (path: string, error: unknown) => void;
-  shouldRetain?: (renderId: string) => Promise<boolean> | boolean;
+  shouldRetain?: (renderId: string, privateStage: boolean) => Promise<boolean> | boolean;
   profile?: RuntimeProfile;
 }
 
@@ -168,6 +166,17 @@ export async function unlinkWithRetry(path: string, attempts = 3, delayMs = 100)
   }
 }
 
+/** Withdraw a cancelled attempt that was renamed before its ledger write failed. */
+export async function withdrawCancelledExportOutput(attemptId: unknown, profile: RuntimeProfile): Promise<void> {
+  if (typeof attemptId !== 'string' || !EXPORT_JOB_ID.test(attemptId)) return;
+  await withProjectStoreProcessLock(profile.rootDir, async () => {
+    assertCurrentStorageProfile(profile);
+    const directory = uploadDir(profile);
+    await Promise.all([...EXPORT_JOB_EXTENSIONS].map((extension) =>
+      unlinkWithRetry(join(directory, exportJobFilename(attemptId, extension)))));
+  });
+}
+
 /** Remove only expired async-export artifacts; ordinary user media is never matched. */
 export async function cleanupStaleExportFiles(
   directory: string,
@@ -188,16 +197,20 @@ export async function cleanupStaleExportFiles(
     if (!entry.isFile()) continue;
     const attemptId = exportAttemptIdFromFilename(entry.name);
     const staging = EXPORT_PROMOTION_STAGE.test(entry.name);
-    if (!attemptId && !staging) continue;
+    const privateAttempt = entry.name.startsWith('.')
+      ? exportAttemptIdFromFilename(entry.name.slice(1).replace(/(\.[a-z0-9]+)\.retimed\1$/i, '$1'))
+      : undefined;
+    if (!attemptId && !privateAttempt && !staging) continue;
     const path = join(directory, entry.name);
     try {
       const info = await stat(path);
       if (now - info.mtimeMs < retentionMs) continue;
       if (attemptId) {
-        if (await options.shouldRetain?.(attemptId)) continue;
+        if (await options.shouldRetain?.(attemptId, false)) continue;
         await unlinkWithRetry(path);
         removed += 1;
       } else {
+        if (privateAttempt && await options.shouldRetain?.(privateAttempt, true)) continue;
         const profile = options.profile;
         await withProjectStoreProcessLock(profile?.rootDir ?? directory, async () => {
           if (profile) assertCurrentStorageProfile(profile);
@@ -220,7 +233,9 @@ export function resolveMaxActiveExports(value = process.env.OPENCHATCUT_MAX_ACTI
 }
 
 const exportLimiter = new TaskLimiter(resolveMaxActiveExports());
-const exportJobControllers = new Map<string, AbortController>();
+const exportJobControllers = new Map<string, { controller: AbortController; attempt?: string }>();
+let cancelPoll: NodeJS.Timeout | undefined;
+let checkingCancels = false;
 
 function acquireExportPermitWithSignal(signal: AbortSignal): Promise<ReleaseTaskPermit> {
   signal.throwIfAborted();
@@ -246,31 +261,45 @@ function acquireExportPermitWithSignal(signal: AbortSignal): Promise<ReleaseTask
 export function acquireExportPermit(signal?: AbortSignal): Promise<ReleaseTaskPermit> {
   return signal ? acquireExportPermitWithSignal(signal) : exportLimiter.acquire();
 }
-export function trackExportJobController(jobId: string, controller: AbortController): void {
-  exportJobControllers.set(jobId, controller);
+export function trackExportJobController(jobId: string, controller: AbortController, attempt?: string): void {
+  exportJobControllers.set(jobId, { controller, attempt });
+  cancelPoll ??= setInterval(() => { void checkExportCancellations(); }, EXPORT_CANCEL_POLL_MS).unref();
 }
 
-export function forgetExportJobController(jobId: string): void {
+export function forgetExportJobController(jobId: string, controller?: AbortController): void {
+  if (controller && exportJobControllers.get(jobId)?.controller !== controller) return;
   exportJobControllers.delete(jobId);
-}
-
-export async function cancelActiveExportJob(jobId: string): Promise<boolean> {
-  const controller = exportJobControllers.get(jobId);
-  if (!controller) return false;
-  controller.abort();
-  const deadline = Date.now() + EXPORT_CANCEL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const snapshot = await readGenerationJobSnapshot(jobId);
-    if (!snapshot) return true;
-    if (snapshot.status === 'succeeded') return false;
-    if (snapshot.status === 'failed') {
-      return deleteGenerationJob(jobId);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  if (!exportJobControllers.size) {
+    clearInterval(cancelPoll);
+    cancelPoll = undefined;
   }
-  return false;
 }
 
+export async function checkExportCancellations(): Promise<void> {
+  if (checkingCancels) return;
+  for (const [id, { controller, attempt }] of exportJobControllers) {
+    const snapshot = getGenerationJobSnapshot(id);
+    if (!snapshot || (snapshot.status !== 'queued' && snapshot.status !== 'running')
+      || snapshot.params.exportAttemptId !== attempt) forgetExportJobController(id, controller);
+  }
+  const active = new Map(exportJobControllers);
+  if (!active.size) return;
+  checkingCancels = true;
+  try {
+    const requested = await pendingOwnedExportCancellations(new Map([...active].map(([id, item]) => [id, item.attempt])));
+    for (const id of requested) {
+      const item = active.get(id);
+      if (item && exportJobControllers.get(id) === item) {
+        if (!item.controller.signal.aborted) item.controller.abort();
+        if (await retryOwnedExportSettlement(id).catch(() => false)) forgetExportJobController(id, item.controller);
+      }
+    }
+  } catch {
+    // The next poll reads the durable intent after storage recovers.
+  } finally {
+    checkingCancels = false;
+  }
+}
 
 export async function withExportPermit<T>(
   task: () => Promise<T>,

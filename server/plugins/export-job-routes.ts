@@ -17,7 +17,7 @@ import { runtimeProfile } from '../runtime-profile.ts';
 import {
   acquireExportPermit,
   assertNonEmptyExportBytes,
-  cancelActiveExportJob,
+  checkExportCancellations,
   exportJobFilename,
   readExportJobResultFile,
   exportOutputSize,
@@ -26,6 +26,7 @@ import {
   retimeFps,
   trackExportJobController,
   withExportPermit,
+  withdrawCancelledExportOutput,
 } from './export-runtime.ts';
 import {
   createGenerationJob,
@@ -33,6 +34,8 @@ import {
   getGenerationJobSnapshot,
   readGenerationJobSnapshot,
 } from './generation-jobs.ts';
+import { requestExportCancellation } from './generation-job-store.ts';
+import { durableRename } from './project-store-durable.ts';
 import {
   bindRequestAbort,
   contentDisposition,
@@ -62,10 +65,41 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     const segments = path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
     const id = segments[0] ?? '';
     const action = segments[1] ?? '';
+    const withdrawCancelledOutput = (attemptId: unknown) => withdrawCancelledExportOutput(attemptId, runtimeProfile())
+      .catch(() => server.config.logger.warn('[export] could not withdraw the cancelled attempt output'));
     const readJob = async (renderId: string) => {
-      try { return await readGenerationJobSnapshot(renderId); }
+      try {
+        const snapshot = await readGenerationJobSnapshot(renderId);
+        if (snapshot?.params.kind === 'export' && snapshot.status === 'failed' && snapshot.code === 'export_cancelled') {
+          await withdrawCancelledOutput(snapshot.params.exportAttemptId);
+        }
+        return snapshot;
+      }
       catch { sendError(res, 503, 'render status unavailable; query the same render ID'); return null; }
     };
+
+    if (req.method === 'POST' && action === 'cancel' && segments.length === 2) {
+      try {
+        const expectedAttempt = new URL(req.url ?? '/', 'http://localhost').searchParams.get('attemptId') ?? undefined;
+        const outcome = await requestExportCancellation(id, expectedAttempt);
+        if (outcome === 'missing') { sendError(res, 404, `render job ${id} not found`); return; }
+        if (outcome === 'conflict' || outcome === 'settled') {
+          sendError(res, 409, 'render already settled or no longer the same attempt; its result was retained');
+          return;
+        }
+        if (outcome === 'pending') {
+          void checkExportCancellations();
+          sendJson(res, 202, { renderId: id, status: 'cancelling' });
+          return;
+        }
+        await withdrawCancelledOutput(expectedAttempt);
+        res.statusCode = 204;
+        res.end();
+      } catch {
+        sendError(res, 503, 'render cancellation could not be confirmed; query the same render ID');
+      }
+      return;
+    }
 
     if (req.method === 'POST' && action === 'promote' && segments.length === 2) {
       const snapshot = await readJob(id);
@@ -89,11 +123,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
       try {
         if (snapshot.status === 'queued' || snapshot.status === 'running') {
-          if (!await cancelActiveExportJob(id)) {
-            sendError(res, 409, getGenerationJobSnapshot(id)?.status === 'succeeded'
-              ? 'render completed before cancellation; result retained'
-              : 'render job cancellation timed out'); return;
-          }
+          sendError(res, 409, 'render is active; use the cancellation endpoint'); return;
         } else if (!await deleteGenerationJob(id)) {
           sendError(res, 409, 'render result is still retained'); return;
         }
@@ -142,7 +172,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       if(previous){
         if(previous.params.kind!=='export')throw new Error('Operation belongs to a different job kind');
         requestAbort.dispose();
-        sendJson(res,200,{renderId:previous.id,projectRevision:previous.params.projectRevision,timelineId:previous.params.timelineId});
+        sendJson(res,200,{renderId:previous.id,attemptId:previous.params.exportAttemptId,projectRevision:previous.params.projectRevision,timelineId:previous.params.timelineId});
         return;
       }
       acceptedSubmission = await acceptExportSubmission(body, { signal: controller.signal });
@@ -152,6 +182,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       const outDir = uploadDir();
       const filename = exportJobFilename(uuid, plan.media.ext);
       const filepath = join(outDir, filename);
+      const stagedFilepath = join(outDir, '.' + filename);
       const publicPath = `/media/uploads/${filename}`;
       controller.signal.throwIfAborted();
       // The request owns preflight. Once admission starts, only explicit
@@ -171,8 +202,8 @@ export function registerExportJobRoute(server: ViteDevServer): void {
         jobParams,
         async (_jobId, update) => {
           try {
-            const encoding = await renderExportPlan(plan, filepath, update, controller.signal);
-            const { size } = await stat(filepath);
+            const encoding = await renderExportPlan(plan, stagedFilepath, update, controller.signal);
+            const { size } = await stat(stagedFilepath);
             assertNonEmptyExportBytes(size);
             controller.signal.throwIfAborted();
             const sourceFps = plan.state.fps;
@@ -195,7 +226,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
               stage: 'encode',
               code: 'export_output_unreadable',
               retryable: true,
-              cleanupStatus: await cleanupExportOutputs([filepath]),
+              cleanupStatus: await cleanupExportOutputs([stagedFilepath]),
               targetPath: filepath,
               message: error instanceof Error ? error.message : String(error),
             });
@@ -225,8 +256,19 @@ export function registerExportJobRoute(server: ViteDevServer): void {
             }
           },
           cleanupPolicy: 'server-export',
+          publishResult: async (result) => {
+            try { await durableRename(stagedFilepath, filepath); }
+            catch (error) {
+              // A previous settlement may have published the exact owned attempt
+              // before a failed ledger acknowledgement.
+              const info = await stat(filepath).catch(() => null);
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !info?.isFile() || info.size !== result.sizeBytes) throw error;
+            }
+          },
+          onCancelled: async () => { await cleanupExportOutputs([stagedFilepath, filepath]); },
           onSettled: (jobId) => {
-            forgetExportJobController(jobId);
+            const status = getGenerationJobSnapshot(jobId)?.status;
+            if (status !== 'queued' && status !== 'running') forgetExportJobController(jobId, controller);
             void cleanupRenderMedia().catch((error) => {
               server.config.logger.warn(
                 `[export] failed to clean materialized media: ${error instanceof Error ? error.message : String(error)}`,
@@ -241,14 +283,13 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       // the request that created the job may own its controller/media cleanup.
       if(snapshot?.params.exportAttemptId!==uuid){
         await cleanupRenderMedia();requestAbort.dispose();
-        sendJson(res,200,{renderId:jobId,projectRevision:snapshot?.params.projectRevision,timelineId:snapshot?.params.timelineId});
+        sendJson(res,200,{renderId:jobId,attemptId:snapshot.params.exportAttemptId,projectRevision:snapshot.params.projectRevision,timelineId:snapshot.params.timelineId});
         return;
       }
       queued = true;
-      trackExportJobController(jobId, controller);
-      controller.signal.throwIfAborted();
+      trackExportJobController(jobId, controller, uuid);
       requestAbort.dispose();
-      sendJson(res, 200, { renderId: jobId,projectRevision:snapshot?.params.projectRevision,timelineId:snapshot?.params.timelineId });
+      sendJson(res, 200, { renderId: jobId, attemptId: uuid, projectRevision:snapshot.params.projectRevision,timelineId:snapshot.params.timelineId });
     } catch (error) {
       if (acceptedSubmission && !queued) await acceptedSubmission.cleanup().catch(() => undefined);
       if (controller.signal.aborted) return;

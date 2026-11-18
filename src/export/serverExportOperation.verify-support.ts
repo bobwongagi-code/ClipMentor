@@ -5,7 +5,6 @@ const renderIds = [
   'render-failed',
   'render-succeeded',
   'render-active',
-  'render-cancelled',
   'render-save-cancelled',
   'render-qa-cancelled',
   'render-save-completed',
@@ -36,9 +35,9 @@ export function deferred(): Deferred {
   return { promise, resolve };
 }
 
-export function exporter(exportDestination: ExportDestination = destination) {
+export function exporter(exportDestination: ExportDestination = destination, createOperationId = nextRenderId) {
   return createServerExporter({
-    createOperationId: nextRenderId,
+    createOperationId,
     autoQaEnabled: false,
     destination: exportDestination,
     beginTargetCommit: noop,

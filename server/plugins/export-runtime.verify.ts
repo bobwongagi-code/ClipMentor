@@ -7,19 +7,15 @@ import { randomUUID } from 'node:crypto';
 import { exportScale } from './export-plan.ts';
 import {
   assertNonEmptyExportBytes,
-  cancelActiveExportJob,
   cleanupStaleExportFiles,
   exportJobFilename,
-  forgetExportJobController,
   finalH264EncoderOutcome,
   exportOutputSize,
   promoteExportResult,
   resolveMaxActiveExports,
   retimeFps,
   retimeVideoEncodingArgs,
-  trackExportJobController,
 } from './export-runtime.ts';
-import { createGenerationJob, getGenerationJobSnapshot } from './generation-jobs.ts';
 import { ffmpegThreadArgs } from '../media-process.ts';
 
 assert.doesNotThrow(() => assertNonEmptyExportBytes(1));
@@ -93,6 +89,8 @@ try {
   const promotionSourceName = exportJobFilename(promotedId, 'mp4');
   const staleStage = '.openchatcut-derived-00000000-0000-4000-8000-000000000006.mp4.pending';
   const freshStage = '.openchatcut-derived-00000000-0000-4000-8000-000000000007.mp4.pending';
+  const abandonedRetime = '.openchatcut-export-job-00000000-0000-4000-8000-000000000008.mp4.retimed.mp4';
+  const liveRetime = '.openchatcut-export-job-00000000-0000-4000-8000-000000000004.mp4.retimed.mp4';
   const unrelatedName = 'user-owned-video.mp4';
   const prefixedUserName = 'openchatcut-export-job-project.mp4';
   await Promise.all([
@@ -103,6 +101,8 @@ try {
     writeFile(join(exportDir, promotionSourceName), 'saved sequence export'),
     writeFile(join(exportDir, staleStage), 'interrupted promotion'),
     writeFile(join(exportDir, freshStage), 'fresh promotion'),
+    writeFile(join(exportDir, abandonedRetime), 'interrupted retime'),
+    writeFile(join(exportDir, liveRetime), 'active private retime'),
     writeFile(join(exportDir, unrelatedName), 'user media'),
     writeFile(join(exportDir, prefixedUserName), 'user media with reserved-looking prefix'),
   ]);
@@ -112,6 +112,8 @@ try {
   await utimes(join(exportDir, prefixedUserName), staleDate, staleDate);
   await utimes(join(exportDir, promotionSourceName), staleDate, staleDate);
   await utimes(join(exportDir, staleStage), staleDate, staleDate);
+  await utimes(join(exportDir, abandonedRetime), staleDate, staleDate);
+  await utimes(join(exportDir, liveRetime), staleDate, staleDate);
 
   const promoted = await promoteExportResult({
     assetId: promotedId,
@@ -139,7 +141,9 @@ try {
     retentionMs: 60 * 60_000,
     shouldRetain: (renderId) => renderId === '00000000-0000-4000-8000-000000000004',
   });
-  assert.equal(removed, 3);
+  assert.equal(removed, 4);
+  assert.equal(existsSync(join(exportDir, abandonedRetime)), false);
+  assert.equal(existsSync(join(exportDir, liveRetime)), true);
   assert.equal(existsSync(join(exportDir, staleStage)), false, 'interrupted promotion staging is reclaimed');
   assert.equal(existsSync(join(exportDir, freshStage)), true, 'fresh promotion staging is retained');
   assert.equal(existsSync(join(exportDir, staleName)), false, 'stale temporary export should be removed');
@@ -163,20 +167,5 @@ await assert.rejects(
   /ffmpeg fps retime failed/,
 );
 assert.equal(existsSync(staleOutput), false, 'failed FPS conversion must remove partial output');
-
-const controller = new AbortController();
-const { jobId } = await createGenerationJob(
-  { kind: 'export-cancellation-check' },
-  async () => {
-    controller.signal.throwIfAborted();
-    return new Promise((_, reject) => {
-      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
-    });
-  },
-  { onSettled: forgetExportJobController },
-);
-trackExportJobController(jobId, controller);
-assert.equal(await cancelActiveExportJob(jobId), true);
-assert.equal(getGenerationJobSnapshot(jobId), undefined);
 
 console.log('export runtime checks passed');
