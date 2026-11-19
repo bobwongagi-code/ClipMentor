@@ -15,6 +15,7 @@ import {observationTaskWithBoundaryContext,validateSourceVideoTask,type SourceVi
 import {loadAgentRuntimeSidecar,loadAgentArtifact,storeAgentArtifact} from '../../src/persist/agentRuntimeStore';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {checkCopyProduction,copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
+import {openingComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {copyPreparationReady,checkSourceBreakdown,originalPlaybackRanges} from '../../src/clipmentor/source-breakdown';
 import {completedSourceEvidenceOperations,importProductionSourceEvidence,productionEvidenceInspection,productionSourceObservationAllowed,productionReviewObservation} from './production-source-evidence';
 import {invalidateChangedReviews,isClipMentorAnalysis} from '../../src/clipmentor/analysis';
@@ -414,8 +415,13 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const doc=editor.getDoc(),a=doc.clipMentorAnalysis!;
   if(a.source.asset_id!==task.input.sourceAssetId)throw new Error('Task/source binding changed');
   const policy=await productionReviewRequirements(task.projectId),criteria=boundVisualCriteria(policy);
+  const openingComparison=(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??task.input.openingComparison;
   if(task.stage==='copy_review'){
+   const authorCriteria=productionAuthorCriteria(task,policy),authorCriteriaDigest=digestValue(authorCriteria);
+   const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
    const prepared=await createProductionPreparation(doc);
+   if(openingComparison&&prepared.rawPacket.delivery_sections?.filter(section=>section.kind==='performance_opening').length!==1)
+    return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
    try{assertVisualCriteriaPlan(criteria,prepared.rawPacket.delivery_sections,prepared.rawPacket.units.map(u=>u.unit_id),doc.activeTimelineId);}catch(e){
     return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify([{code:String((e as Error).message),id:'delivery'}])}`},repair:'blueprint'};
    }
@@ -427,23 +433,33 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }
    const digest=prepared.reviewed.subject.digest;
    if(task.input.humanBlueprintReview){
-    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),policy?.brief.doneCriteria??[]);
+    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria);
     if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
     const issues=check.checks.filter(entry=>entry.status!=='ok');
     if(issues.length)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
    }
+   if(digestValue(productionAuthorCriteria(task,await productionReviewRequirements(task.projectId)))!==authorCriteriaDigest)return repairRequirements();
    if((stage.remaining?.('review')??1)<=0&&!stage.hasEffect?.('review',operation('independent-review')))
     throw new Error('review budget exhausted');
    const result=await (task.input.budget.routine?executeWithRecovery:editor.execute)('request_clipmentor_copy_review',{operationId:operation('independent-review'),maxRequests:1,expectedRevision:a.revision},'copy-review') as Record<string,unknown>;
    if(result.error){
+    const diagnostic=result.diagnostic as {code?:string;requestsAttempted?:number}|undefined;
+    if(diagnostic?.code==='opening_comparison_section_missing'&&diagnostic.requestsAttempted===0)
+     return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
+    if(diagnostic?.code==='review_requirements_changed')
+     return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
     if(task.input.budget.routine&&(stage.remaining?.('review')??0)<=0
-     &&(result.diagnostic as {requestsAttempted?:number}|undefined)?.requestsAttempted===1)throw new Error('review budget exhausted');
+     &&diagnostic?.requestsAttempted===1)throw new Error('review budget exhausted');
     throw new Error(String(result.error));
    }
    if(criteria&&!visualCriteriaPlanReceiptMatches(criteria,editor.getDoc().clipMentorAnalysis?.production_copy_review))
     throw Error('handoff_visual_criteria_review_missing_or_stale');
-   const gate=await checkCopyProduction(editor.getDoc(),'clipmentor');
+   const currentPolicy=await productionReviewRequirements(task.projectId);
+   if(digestValue(productionAuthorCriteria(task,currentPolicy))!==authorCriteriaDigest)return repairRequirements();
+   const gate=await checkCopyProduction(editor.getDoc(),'clipmentor',undefined,(currentPolicy?openingComparisonCriterion(currentPolicy.brief.doneCriteria):undefined)??task.input.openingComparison);
    if(!gate.allowed){
+    if('delivery_issues' in gate&&gate.delivery_issues?.includes('opening_comparison_review_missing_or_stale'))
+     return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
     const repair=await currentReviewRepair(editor.getDoc());
     if(task.input.humanBlueprintReview&&(repair.status!=='bound'||
      !/^copy_(?:(?:group|teaching|narration|delivery)_)?review_not_passed$/.test(gate.code))){
@@ -458,6 +474,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }
   if(['audio','edit','export','self_check'].includes(task.stage)){
    assertSharedProduction(task,doc);
+   if(openingComparison&&!(await checkCopyProduction(doc,'clipmentor',undefined,openingComparison)).allowed)
+    throw Error('handoff_opening_comparison_review_missing_or_stale');
    if(policy&&task.input.humanBlueprintReview&&task.completed.copy_review?.artifact.requirementsDigest!==digestValue(policy.brief.doneCriteria))
     throw Error('handoff_original_requirements_review_missing_or_stale');
    if(criteria){
@@ -743,6 +761,10 @@ export function assertCanvasReflowPreservation(before:ProjectDoc,after:ProjectDo
 }
 
 /** The actual model message is generated from the saved plan, never from a path-only handoff. */
+function productionAuthorCriteria(task:ProductionTask,policy:Awaited<ReturnType<typeof productionReviewRequirements>>){
+ const criteria=policy?.brief.doneCriteria??[];
+ return !openingComparisonCriterion(criteria)&&task.input.openingComparison?[...criteria,task.input.openingComparison]:criteria;
+}
 export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDoc){
  if(task.input.panelDelivery&&!isBoundCanvasReflow(task,doc))assertProductionCanvas(doc);
  const policy=await productionReviewRequirements(task.projectId);
@@ -751,7 +773,7 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
  return {evidenceInspection:productionEvidenceInspection(doc,task),task:task.input.brief,stage:task.stage,goal,feedback:task.stage==='blueprint'?task.blueprintFeedback??task.feedback??null:task.feedback??null,repairContext:task.repairContext?.repair?{repair:task.repairContext.repair,revision:task.repairContext.revision,final_feedback:task.repairContext.final_feedback??null}:task.repairContext??null,
   ...(task.sharedProduction?.prepared?{sharedBody:{end_frame:task.sharedProduction.endFrame,
    instruction:'片头和教学主体已从同批另一版本复用，实际时间线中此前的画面、音频、字幕和样式全部保持。只为本版本补齐片尾，不能重新剪主体、重复配同文音频或改动前段。'}}:{}),
-  ...(policy?{doneCriteria:policy.brief.doneCriteria}:{}),
+  ...(policy||task.input.openingComparison?{doneCriteria:productionAuthorCriteria(task,policy)}:{}),
   ...(task.stage==='blueprint'&&task.input.panelDelivery?{deliveryRequirements:{
    ...task.input.panelDelivery,
    ...(partnerStoryboardRequired(task.input.panelDelivery)?{partnerEndingPicture:panelPartnerPicture(doc,task.input.panelDelivery,await currentCreatorDocument(doc))??null}:{}),

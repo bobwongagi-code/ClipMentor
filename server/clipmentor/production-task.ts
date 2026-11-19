@@ -15,7 +15,7 @@ import {LLM_PROVIDER_PRESETS} from '../../shared/llm-providers';
 import {confirmedUnsubmittedGateway} from './production-recovery';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ReviewApiConfig} from './copy-review-api';
-import type {HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {openingComparisonCriterion,openingComparisonShape,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest} from './production-feedback';
@@ -41,6 +41,7 @@ type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
  projectId:string;sourceAssetId:string;product:{name:string;category:string};brief:string;
+ openingComparison?:OpeningComparisonCriterion;
  author:ReviewApiConfig;reviewer:ReviewApiConfig;
  voice?:{provider:string;voiceId:string};
  humanBlueprintReview?:true;
@@ -132,18 +133,21 @@ export const productionTaskStore:TaskStore={
  }
 };
 export async function latestPanelProductionTask(projectId:string){
+  const rank=(value:ProductionTask)=>value.input.openingComparison?2:value.input.panelDelivery?1:0;
  const sidecar=await loadAgentRuntimeSidecar(projectId);
  const records=newestProductionCheckpoints(sidecar.artifacts.filter(a=>a.toolName==='clipmentor-production-task'));
  const seen=new Set<string>();
  let latest:ProductionTask|undefined;
  for(const record of records){
-  // A task's first checkpoint cannot predate its creation. Older checkpoint
-  // timestamps cannot contain a newer task once this bound is crossed.
-  if(latest&&record.createdAt<=latest.createdAt)break;
+  // Older checkpoints cannot contain a newer task, but may still contain the
+  // highest-ranked authority. Only use the date shortcut after finding one.
+  if(latest&&rank(latest)===2&&record.createdAt<=latest.createdAt)break;
   if(seen.has(record.runId))continue;
   seen.add(record.runId);
   const task=await productionTaskStore.load(projectId,record.runId);
-  if(task.input.humanBlueprintReview&&(!latest||task.createdAt>latest.createdAt))latest=task;
+  if(!task.input.humanBlueprintReview)continue;
+  // An auxiliary generic task cannot replace the panel's frozen delivery authority.
+  if(!latest||rank(task)>rank(latest)||rank(task)===rank(latest)&&task.createdAt>latest.createdAt)latest=task;
  }
  return latest;
 }
@@ -151,6 +155,13 @@ export async function latestPanelProductionTask(projectId:string){
 export async function productionReviewRequirements(projectId:string){
  const {readHandoffPolicy}=await import('./handoff');
  return await readHandoffPolicy(projectId)??(await latestPanelProductionTask(projectId))?.blueprintApproval?.requirements??null;
+}
+export async function productionCopyRequirements(projectId:string){
+ const {readHandoffPolicy}=await import('./handoff');
+ const saved=await readHandoffPolicy(projectId),task=await latestPanelProductionTask(projectId);
+ const policy=saved??task?.blueprintApproval?.requirements??null;
+ const opening=(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??task?.input.openingComparison;
+ return {policy,opening};
 }
 function isInterruptedReviewCheckpoint(task:ProductionTask){
  return task.status==='blocked'&&task.stage==='copy_review'
@@ -281,6 +292,7 @@ export function cancelActiveProductionTask(projectId:string,id:string){
 }
 export function validateProductionInput(v:ProductionInput){
  if(!v||!/^[A-Za-z0-9_-]{1,160}$/.test(v.projectId)||!v.sourceAssetId||!v.product?.name?.trim()||typeof v.brief!=='string'||!v.brief.trim()||v.brief.length>32000)throw new Error('Invalid production input');
+ if(v.openingComparison!==undefined&&(!v.panelDelivery||!openingComparisonShape(v.openingComparison)))throw Error('Invalid opening comparison requirement');
  if(v.gatewayRecovery!==undefined&&!['bounded','none'].includes(v.gatewayRecovery))throw Error('Invalid gateway recovery policy');
  for(const config of [v.author,v.reviewer])if(!config?.model?.trim()||!LLM_PROVIDER_PRESETS.some(p=>p.id===config.provider)||!['responses','chat'].includes(config.apiMode))throw new Error('Explicit API author/reviewer configuration required');
  if(v.panelDelivery){

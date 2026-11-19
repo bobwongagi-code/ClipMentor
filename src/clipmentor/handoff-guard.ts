@@ -1,4 +1,4 @@
-import {HANDOFF_PREFIX,HANDOFF_RUN_PREFIX,HANDOFF_TEMPLATE_VERSION,handoffRecord,parseHandoffPolicy,handoffToolAccess,handoffAssetsOf,handoffDigest} from '../../shared/clipmentor-handoff';
+import {HANDOFF_PREFIX,HANDOFF_RUN_PREFIX,HANDOFF_TEMPLATE_VERSION,handoffRecord,parseHandoffPolicy,openingComparisonCriterion,handoffToolAccess,handoffAssetsOf,handoffDigest} from '../../shared/clipmentor-handoff';
 import {kvGetAuthoritative} from '../persist/sharedKv';
 import type {AgentContext} from '../agent/context';
 import { assertHandoffCopy } from './handoff-copy';
@@ -18,7 +18,10 @@ export async function clipMentorHandoffBlock(name:string,args:Record<string,unkn
   const doc=ctx.getDoc();
   if(p.brief.phase==='execution'){
    if(doc.activeTimelineId!==p.brief.timelineId)throw new Error('handoff_active_timeline_changed');
-   const {copyReviewSubject}=await import('./production-gate');const subject=await copyReviewSubject(doc);
+   const {copyReviewSubject,checkCopyProduction}=await import('./production-gate');const subject=await copyReviewSubject(doc);
+   const comparison=openingComparisonCriterion(p.brief.doneCriteria);
+   if(comparison&&!(await checkCopyProduction(doc,ctx.getCreativeMode(),undefined,comparison)).allowed)
+    throw Error('handoff_opening_comparison_review_missing_or_stale');
    if(p.brief.blueprint?.revision!==subject.revision||p.brief.blueprint?.digest!==subject.digest)throw new Error('handoff_blueprint_changed');
    if(await handoffDigest(handoffAssetsOf(doc.assets,p.assetBindings.map(x=>String(x.id))))!==await handoffDigest(p.assetBindings))throw new Error('handoff_assets_changed');
    assertHandoffCopy(name,args,ctx);

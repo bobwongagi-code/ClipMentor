@@ -12,11 +12,13 @@ export interface VisualDoneCriterion {
  pictureSha256?:string;
  reference:{assetId:string;fileName:string;seconds:number};
 }
-export const visualDoneCriteria=(criteria:HandoffBrief['doneCriteria'])=>criteria.filter((entry):entry is VisualDoneCriterion=>typeof entry!=='string');
+export interface OpeningComparisonCriterion {kind:'opening_comparison';quote:string}
+export const visualDoneCriteria=(criteria:HandoffBrief['doneCriteria'])=>criteria.filter((entry):entry is VisualDoneCriterion=>typeof entry!=='string'&&'layout' in entry);
+export const openingComparisonCriterion=(criteria:HandoffBrief['doneCriteria'])=>criteria.find((entry):entry is OpeningComparisonCriterion=>typeof entry!=='string'&&'kind' in entry&&entry.kind==='opening_comparison');
 export interface HandoffBrief {
  version:1;briefId:string;revision:number;mode:'collaborative'|'autonomous';phase:'planning'|'execution';
  planner:'external_codex'|'builtin_agent';executor:'builtin_agent';projectId:string;timelineId:string;
- objective:string;doneCriteria:Array<string|VisualDoneCriterion>;blueprint:{revision:number;digest:string}|null;
+ objective:string;doneCriteria:Array<string|VisualDoneCriterion|OpeningComparisonCriterion>;blueprint:{revision:number;digest:string}|null;
  budget:{maxModelTurns:number;maxToolCalls:number;maxElapsedMs:number;paidToolCalls:Record<string,number>};
 }
 export interface HandoffPolicy {
@@ -44,6 +46,8 @@ function visualCriterion(v:unknown):v is VisualDoneCriterion{
   &&boundedText(v.reference.assetId,160)&&boundedText(v.reference.fileName,240)&&!/[\/\\\r\n]/.test(v.reference.fileName)
   &&typeof v.reference.seconds==='number'&&Number.isFinite(v.reference.seconds)&&v.reference.seconds>=0;
 }
+export const openingComparisonShape=(value:unknown):value is OpeningComparisonCriterion=>handoffRecord(value)
+ &&keys(value,['kind','quote'])&&value.kind==='opening_comparison'&&boundedText(value.quote,1000);
 export function parseHandoffBrief(v:unknown):HandoffBrief {
  if(!handoffRecord(v)||!keys(v,['version','briefId','revision','mode','phase','planner','executor','projectId','timelineId','objective','doneCriteria','blueprint','budget'])
   ||v.version!==1||typeof v.briefId!=='string'||!ID.test(v.briefId)||!integer(v.revision,1,1_000_000)
@@ -52,7 +56,8 @@ export function parseHandoffBrief(v:unknown):HandoffBrief {
   ||typeof v.projectId!=='string'||!ID.test(v.projectId)||typeof v.timelineId!=='string'||!ID.test(v.timelineId)
   ||typeof v.objective!=='string'||!v.objective.trim()||v.objective.length>2000
   ||!Array.isArray(v.doneCriteria)||!v.doneCriteria.length||v.doneCriteria.length>20
-  ||!v.doneCriteria.every(x=>boundedText(x,1000)||visualCriterion(x)))throw new Error('handoff_brief_invalid');
+  ||!v.doneCriteria.every(x=>boundedText(x,1000)||visualCriterion(x)||openingComparisonShape(x)))throw new Error('handoff_brief_invalid');
+ if(v.doneCriteria.filter(openingComparisonShape).length>1)throw Error('handoff_opening_comparison_duplicate');
  const visuals=visualDoneCriteria(v.doneCriteria as HandoffBrief['doneCriteria']);
  if(visuals.length>4||new Set(visuals.map(x=>x.id)).size!==visuals.length)throw Error('handoff_visual_criteria_invalid');
  if(v.blueprint!==null&&(!handoffRecord(v.blueprint)||!keys(v.blueprint,['revision','digest'])

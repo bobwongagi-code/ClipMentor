@@ -79,6 +79,7 @@ export function productionOutputsMatch(parent:ProductionTask,children:Production
  if(children.some((task,index)=>{const entry=entries[index];return entry.projectId!==task.projectId||entry.taskId!==task.taskId
   ||entry.audience!==task.input.panelDelivery?.audience||task.input.sourceAssetId!==parent.input.sourceAssetId
   ||task.input.panelDelivery?.partnerEnding!==parent.input.panelDelivery?.partnerEnding
+  ||task.input.openingComparison?.quote!==parent.input.openingComparison?.quote
   ||task.blueprintApproval?.sourceProjectId!==parent.projectId||task.blueprintApproval.sourceTaskId!==parent.taskId;}))return false;
  const first=children.find(t=>t.input.panelDelivery?.audience==='existing_partner'),second=children.find(t=>t.input.panelDelivery?.audience==='new_contact');
  if(!first||!second||!first.blueprintApproval?.sourceRevision||first.blueprintApproval.sourceRevision!==second.blueprintApproval?.sourceRevision)return false;

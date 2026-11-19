@@ -91,6 +91,213 @@ try{const result=await reviewClipMentorCopy(req,deps);assert.equal(result.receip
 }catch(e){console.error('delivery service regression',e);throw e;}finally{await rm(dir,{recursive:true,force:true});}
 // Existing voice submission must persist its actual text/config and measured
 // duration, so a new approved opening can be bound without restamping a review.
+// Current contract on the same real review service. Fakes only supply frames and raw replies.
+{
+ const {parseHandoffBrief,openingComparisonCriterion,visualDoneCriteria}=await import('../../shared/clipmentor-handoff');
+ const {assessGroupReview}=await import('./production-gate');
+ const {copyReviewDependencies}=await import('../../server/clipmentor/copy-review');
+ const quote='同样拍这款商品，问为什么这支视频能拿到这个成绩。';
+ const opening={kind:'opening_comparison',quote} as const;
+ const parse=(doneCriteria:unknown[])=>parseHandoffBrief({version:1,briefId:'strict-review',revision:1,mode:'autonomous',
+  phase:'planning',planner:'builtin_agent',executor:'builtin_agent',projectId:req.projectId,timelineId:t.id,
+  objective:'Fixture only',doneCriteria,blueprint:null,budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:2000,paidToolCalls:{}}});
+ const policy=(doneCriteria:unknown[])=>({version:1 as const,brief:parse(doneCriteria),digest:'a'.repeat(64),
+  assetBindings:[],runIds:[],startedAt:null,modelTurns:0,toolCalls:0,paidCalls:{},callIds:[]});
+ assert.deepEqual(openingComparisonCriterion(policy([opening]).brief.doneCriteria),opening);
+ assert.deepEqual(visualDoneCriteria(policy([opening]).brief.doneCriteria),[]);
+ assert.throws(()=>policy([opening,opening]),/duplicate/);
+ assert.throws(()=>policy([{...opening,quote:' '}]),/invalid/);
+ assert(copyReviewDependencies().requirements,'the actual host always selects the current contract');
+ const makeCurrent=async(narration:string)=>{
+  const copy=structuredClone(doc);
+  const ir=(copy.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  ir[ir.current_picture_plan].delivery_sections[0].line.narration_ms=narration;
+  ir[ir.current_picture_plan].delivery_sections[0].line.caption_lines=[narration];
+  const subject=await copyReviewSubject(copy),packet=await copyTeachingPacketFromDoc(copy);
+  return {copy,input:{...req,operationId:randomUUID(),subject:{...req.subject,digest:subject.digest},packet}};
+ };
+ const premise='Produk yang sama',question='kenapa video ini dapat lebih lima juta tontonan?';
+ const {copy,input}=await makeCurrent(premise+', '+question+' Jom tengok caranya.');
+ const response=structuredClone(raw);
+ const grouped=response.copy_units[0];
+ const currentUnit=input.packet.units[0];
+ // This saved fixture has four known playback groups. In the last group there are two lines.
+ const groupLineIndexes=[0,1,2,3];
+ const groupReply=groupLineIndexes.map((lineIndex,index)=>{
+  const line=currentUnit.lines[lineIndex];
+  return {...structuredClone(grouped.group_checks),group_id:'G'+(index+1),
+   L1:{...grouped.group_checks.L1,evidence:[{kind:'copy',line_id:line.line_id,channel:'narration',quote:line.narration_ms}]}};
+ });
+ const reply={...response,copy_units:[{...grouped,group_checks:groupReply}],
+  delivery_checks:[{...response.delivery_checks[0],opening_comparison:{status:'preserved',same_product_quote:premise,
+   outcome_question_quote:question,reason:'Compare the opening on the same product with the named result of this video.'}},response.delivery_checks[1]]};
+ const root=await mkdtemp(join(tmpdir(),'content-review-'));
+ let requests=0;
+ let taskPolicy=policy([opening]);
+ const service:CopyReviewDependencies={...deps,directory:root,requirements:async()=>({policy:taskPolicy,opening:openingComparisonCriterion(taskPolicy.brief.doneCriteria)}),run:async(prompt)=>{
+  requests++;
+  assert(prompt.includes('L1.evidence'));
+  assert.equal(prompt.includes(quote),!!openingComparisonCriterion(taskPolicy.brief.doneCriteria));
+  return structuredClone(reply);
+ }};
+ const changed=(test:(value:typeof reply)=>void)=>{
+  const altered=structuredClone(reply);test(altered);
+  return {...service,run:async()=>{requests++;return altered;}};
+ };
+ try{
+  const positive=await reviewClipMentorCopy(input,service);
+  assert.equal(positive.receipt.verdict,'pass');
+  copy.clipMentorAnalysis!.production_copy_review=positive.receipt;
+  assert.equal((await checkCopyProduction(copy,'clipmentor',undefined,opening)).allowed,true);
+  assert.equal((await checkCopyProduction(copy,'clipmentor',undefined,{...opening,quote:'Changed current requirement'})).code,'copy_delivery_review_not_passed');
+  const forged=structuredClone(copy);
+  const review=forged.clipMentorAnalysis!.production_copy_review!;
+  review.units[0].group_checks!.group_reviews![1].L1.evidence=groupReply[0].L1.evidence;
+  assert.equal((await checkCopyProduction(forged,'clipmentor')).code,'copy_group_review_not_passed','saved overall pass cannot bless a neighboring playback group');
+
+  const cases=[
+   {id:'missing-opening',mutate:(v:typeof reply)=>delete (v.delivery_checks[0] as any).opening_comparison,verdict:'insufficient_evidence'},
+   {id:'overlapping-opening-quotes',mutate:(v:typeof reply)=>(v.delivery_checks[0] as any).opening_comparison.outcome_question_quote='yang sama',verdict:'insufficient_evidence'},
+   {id:'invented-opening-quote',mutate:(v:typeof reply)=>(v.delivery_checks[0] as any).opening_comparison.same_product_quote='A quote absent from Malay copy',verdict:'insufficient_evidence'},
+   {id:'opening-question-swapped',mutate:(v:typeof reply)=>(v.delivery_checks[0] as any).opening_comparison.status='changed',verdict:'needs_revision'},
+   {id:'missing-L1',mutate:(v:typeof reply)=>delete (v.copy_units[0].group_checks[1].L1 as any).evidence,verdict:'insufficient_evidence'},
+   {id:'neighboring-group-quote',mutate:(v:typeof reply)=>v.copy_units[0].group_checks[1].L1.evidence=v.copy_units[0].group_checks[0].L1.evidence,verdict:'insufficient_evidence'},
+   {id:'invented-L1-quote',mutate:(v:typeof reply)=>v.copy_units[0].group_checks[0].L1.evidence[0].quote='A fabricated teaching line',verdict:'insufficient_evidence'},
+   {id:'group-aggregate-only',mutate:(v:typeof reply)=>(v.copy_units[0] as any).group_checks=grouped.group_checks,verdict:'insufficient_evidence'},
+  ];
+  for(const test of cases){
+   const result=await reviewClipMentorCopy({...input,operationId:randomUUID()},changed(test.mutate));
+   assert.equal(result.receipt.verdict,test.verdict,test.id);
+   const rejected=structuredClone(copy);rejected.clipMentorAnalysis!.production_copy_review=result.receipt;
+   assert.equal((await checkCopyProduction(rejected,'clipmentor',undefined,opening)).allowed,false,test.id);
+  }
+  const topicSwap=await makeCurrent('Video ini mendapat lebih lima juta tontonan. Sebelum kenalkan produk, apa yang dia tunjuk dulu?');
+  assert.equal((await reviewClipMentorCopy(topicSwap.input,service)).receipt.verdict,'insufficient_evidence','the old question has no matching required quotes');
+  taskPolicy=policy(['plain reporting allowed']);
+  assert.equal((await reviewClipMentorCopy({...req,operationId:randomUUID()},changed(v=>delete (v.delivery_checks[0] as any).opening_comparison))).receipt.verdict,'pass','a task without a specified comparison can report performance plainly');
+  // Simulate a policy change after the service settled, just before the
+  // actual review tool tries to attach the old response to the current draft.
+  const {configureSharedKvBackend}=await import('../persist/sharedKv');
+  const {HANDOFF_PREFIX}=await import('../../shared/clipmentor-handoff');
+  const {requestClipMentorCopyReview}=await import('./request-copy-review');
+  const draft=makeDraft(copy),before=draft.getDoc();
+  configureSharedKvBackend({get:async(key:string)=>{
+   assert.equal(key,HANDOFF_PREFIX+input.projectId);return policy([{...opening,quote:'Changed before tool bind'}]);
+  }} as unknown as Parameters<typeof configureSharedKvBackend>[0]);
+  try{
+   const rejected=await requestClipMentorCopyReview({operationId:input.operationId,maxRequests:1,expectedRevision:input.subject.revision},
+    {...draft,getCreativeMode:()=> 'clipmentor',getProjectId:()=>input.projectId,getAgentRunId:()=>input.authorRunId,
+     templates:[],audio:[],hostFetch:async()=>Response.json(positive)}) as {diagnostic?:{code:string;requestsAttempted:number}};
+   assert.equal(rejected.diagnostic?.code,'review_requirements_changed');
+   assert.equal(rejected.diagnostic?.requestsAttempted,1);
+   assert.equal(draft.getDoc(),before,'a stale receipt never replaces the current saved approval');
+  }finally{configureSharedKvBackend(undefined);}
+  const used=requests;
+  assert.equal((await reviewClipMentorCopy(input,service,undefined,true)).receipt.verdict,'pass','history remains readable with the original verdict');
+  await assert.rejects(reviewClipMentorCopy(input,service),/operation_unavailable/);
+  assert.equal(requests,used,'changing the required scope cannot resubmit a consumed operation');
+
+  taskPolicy=policy([opening]);
+  const visual={kind:'visual',phase:'original',evidence_id:'BT-E001',source_seconds:1.5};
+  assert(input.packet.source_evidence.some(item=>item.evidence_id===visual.evidence_id&&item.time_seconds?.includes(1.5)));
+  const viaVisual=await reviewClipMentorCopy({...input,operationId:randomUUID()},changed(v=>
+   Object.assign(v.copy_units[0].group_checks[0].L1,{evidence:[visual]})));
+  assert.equal(viaVisual.receipt.verdict,'pass','ordinary teaching can cite an actual registered visual');
+  for(const ref of [{...visual,source_seconds:8},{...visual,evidence_id:'BT-E002',source_seconds:9}]){
+   const wrong=await reviewClipMentorCopy({...input,operationId:randomUUID()},changed(v=>
+    Object.assign(v.copy_units[0].group_checks[0].L1,{evidence:[ref]})));
+   assert.equal(wrong.receipt.verdict,'insufficient_evidence','an in-group timestamp cannot replace the actual evidence time');
+  }
+  const visualReply=structuredClone(viaVisual.receipt.units[0].group_checks!);
+  visualReply.group_reviews![1].L1.evidence=visualReply.group_reviews![0].L1.evidence;
+  assert.equal(assessGroupReview(visualReply,currentUnit,true,input.packet.source_evidence).verdict,'insufficient_evidence','registered visual from another group fails');
+  const sliced=structuredClone(copy);
+  const slicedIr=(sliced.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  const firstExplanation=slicedIr[slicedIr.current_picture_plan].phases[1];
+  const lineSource=currentUnit.picture_plan!.line_source_ranges.find(line=>line.line_id===firstExplanation.line_id)!;
+  const segment=lineSource.evidence_source_ranges![0];
+  const [start,end]=lineSource.source_range_seconds;
+  firstExplanation.context_source_ranges=[
+   {segment_id:segment.segment_id,source_range_seconds:[start,1],purpose:'first retained slice'},
+   {segment_id:segment.segment_id,source_range_seconds:[7,end],purpose:'second retained slice'},
+  ];
+  const slicedPacket=await copyTeachingPacketFromDoc(sliced);
+  const evidenceInGap=structuredClone(viaVisual.receipt.units[0].group_checks!);
+  evidenceInGap.group_reviews![0].L1.evidence=[{...visual,phase:'explanation'}];
+  assert.equal(assessGroupReview(evidenceInGap,slicedPacket.units[0],true,slicedPacket.source_evidence).verdict,'insufficient_evidence','the explanation envelope does not admit an unselected frame');
+
+  const stillDoc=structuredClone(copy);
+  const stillAnalysis=stillDoc.clipMentorAnalysis!,stillLedger=stillAnalysis.source_breakdown!;
+  const stillFrame={...stillAnalysis.evidence.find(item=>item.evidence_id==='BT-E001')!,
+   evidence_id:'BT-EDGE',time_seconds:10.2,source_frame:306};
+  stillAnalysis.evidence.push(stillFrame);
+  const originalSegment=stillLedger.segments.find(item=>item.segment_id==='BT-S01')!;
+  originalSegment.visible_evidence_ids.push(stillFrame.evidence_id);
+  stillLedger.segments.push({...originalSegment,segment_id:'BT-STILL',source_range_seconds:[10.2,11],
+   visible_evidence_ids:[stillFrame.evidence_id],claim_evidence_ids:[],interpretation_evidence_ids:[]});
+  stillLedger.units[0].explanation_segment_ids.push('BT-STILL');
+  const stillInternal=(stillAnalysis.blueprint[0] as any).internal_review;
+  stillInternal[stillInternal.current_picture_plan].phases[1].context_source_ranges=[
+   {source_range_seconds:[10.2,10.2],segment_id:'BT-STILL',purpose:'Declared supporting still'}];
+  const stillPacket=await copyTeachingPacketFromDoc(stillDoc);
+  const atEnd=structuredClone(evidenceInGap);
+  atEnd.group_reviews![0].L1.evidence=[{kind:'visual',phase:'explanation',source_seconds:10.2,evidence_id:stillFrame.evidence_id}];
+  assert.equal(assessGroupReview(atEnd,stillPacket.units[0],true,stillPacket.source_evidence).verdict,'pass','an explicitly planned endpoint still from the registered packet is usable evidence');
+  delete stillPacket.units[0].picture_plan!.line_source_ranges[0].context_source_ranges;
+  assert.equal(assessGroupReview(atEnd,stillPacket.units[0],true,stillPacket.source_evidence).verdict,'insufficient_evidence','a dynamic half-open endpoint remains excluded');
+
+  // The real adapter archives late raw bytes after cancellation. Turn over the
+  // active requirement before readback and keep the original result auditable.
+  const lateInput={...input,operationId:randomUUID()};
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+  const controller=new AbortController();
+  const late=reviewClipMentorCopy(lateInput,{...service,run:async()=>{requests++;entered.resolve();await release.promise;return reply;}},controller.signal);
+  await entered.promise;controller.abort();
+  const settled=assert.rejects(late,/review_cancelled_or_timed_out/);
+  release.resolve();await settled;
+  const {readSavedExternalResponse}=await import('../../server/clipmentor/external-call');
+  for(let i=0;i<50&&!await readSavedExternalResponse(root,lateInput.operationId);i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert(await readSavedExternalResponse(root,lateInput.operationId),'the late raw review really reached durable storage');
+  taskPolicy=policy([{...opening,quote:'New live requirement'}]);
+  const recovered=await reviewClipMentorCopy(lateInput,service,undefined,true);
+  assert(recovered.cached);assert.equal(recovered.receipt.verdict,'pass');
+  assert.equal(recovered.receipt.opening_comparison_digest,positive.receipt.opening_comparison_digest);
+  const consumed=requests;
+  await assert.rejects(reviewClipMentorCopy(lateInput,service),/operation_unavailable/);
+  assert.equal(requests,consumed);
+  const lateCompleted={...input,operationId:randomUUID()};
+  taskPolicy=policy([opening]);
+  await assert.rejects(reviewClipMentorCopy(lateCompleted,{...service,run:async()=>{
+   requests++;taskPolicy=policy([{...opening,quote:'Superseded while active'}]);return reply;
+  }}),/review_requirements_changed/);
+  assert.equal((await reviewClipMentorCopy(lateCompleted,service,undefined,true)).receipt.verdict,'pass','the stale result survives as an original historical receipt');
+  const beforePrepare=requests;
+  const preparing={...input,operationId:randomUUID()};
+  taskPolicy=policy([opening]);
+  await assert.rejects(reviewClipMentorCopy(preparing,{...service,frame:async()=>{
+   taskPolicy=policy([{...opening,quote:'Changed during source frame preparation'}]);
+   return Buffer.from('synthetic image').toString('base64');
+  }}),error=>{
+   const diagnostic=(error as {diagnostic?:{requestsAttempted?:number;code?:string}}).diagnostic;
+   return diagnostic?.code==='review_requirements_changed'&&diagnostic.requestsAttempted===0;
+  });
+  assert.equal(requests,beforePrepare,'a known obsolete review does not submit after preparation');
+  const {confirmedUnsubmittedGateway}=await import('../../server/clipmentor/production-recovery');
+  const unsubmittedBody={projectId:input.projectId,diagnostic:{code:'review_requirements_changed',stage:'reservation',
+   requestsAttempted:0,retryable:false,operationId:preparing.operationId}};
+  assert(confirmedUnsubmittedGateway('review',{body:unsubmittedBody},preparing.operationId,input.projectId));
+  assert(!confirmedUnsubmittedGateway('review',{body:unsubmittedBody},randomUUID(),input.projectId));
+  assert(!confirmedUnsubmittedGateway('review',{body:unsubmittedBody},preparing.operationId,'other-project'));
+  assert(!confirmedUnsubmittedGateway('review',{body:{...unsubmittedBody,diagnostic:{...unsubmittedBody.diagnostic,requestsAttempted:1}}},preparing.operationId,input.projectId));
+  const unsubmitted=requests;
+  const {CopyReviewError}=await import('../../server/clipmentor/copy-review');
+  await assert.rejects(reviewClipMentorCopy({...input,operationId:randomUUID(),packet:{...input.packet,delivery_sections:undefined}},service),
+   error=>error instanceof CopyReviewError&&error.diagnostic.code==='opening_comparison_section_missing'&&error.diagnostic.requestsAttempted===0);
+  assert.equal(requests,unsubmitted);
+  console.log('Content contract: current comparison, retained verdict, no extra requests, grouped L1 and visual/source controls; zero real providers.');
+ }finally{await rm(root,{recursive:true,force:true});}
+}
+
 const nativeFetch=globalThis.fetch;let voiceRequests=0;
 globalThis.fetch=(async()=>{voiceRequests++;return new Response(JSON.stringify({path:'/media/uploads/synthetic-voice.mp3',durationSeconds:3}),{status:200,headers:{'Content-Type':'application/json'}});})as typeof fetch;
 try{const{submitVoice}=await import('../generate/voice');const generated=await submitVoice({provider:'minimax',voiceId:'test-voice',text:'Approved new opening.',speed:1},t);assert.equal((generated.props?.generation as any).text,'Approved new opening.');assert.equal((generated.props?.generation as any).durationSeconds,3);assert.equal(voiceRequests,1);}finally{globalThis.fetch=nativeFetch;}

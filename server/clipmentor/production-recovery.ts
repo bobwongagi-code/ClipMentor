@@ -89,8 +89,13 @@ function checkedReadback(kind:GatewayKind,value:unknown,original:unknown,operati
 }
 
 export function confirmedUnsubmittedGateway(kind:string,result:unknown,operationId:string,projectId:string) {
-  if(kind!=='observation'&&kind!=='preview_review')return false;
   const body=record(record(result)?.body);
+  if(kind==='review'){
+    const diagnostic=body?.diagnostic;
+    return body?.projectId===projectId&&isCopyReviewFailure(diagnostic)&&diagnostic.operationId===operationId
+      &&(diagnostic.code==='opening_comparison_section_missing'||diagnostic.code==='review_requirements_changed')&&diagnostic.requestsAttempted===0;
+  }
+  if(kind!=='observation'&&kind!=='preview_review')return false;
   const preparation=kind==='observation'?record(body?.receipt):body;
   if(preparation?.model_retry_policy==='no_automatic_retry'&&preparation.status==='failed'
     &&preparation.operationId===operationId&&preparation.projectId===projectId&&preparation.receipt_persisted===true

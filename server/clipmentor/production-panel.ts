@@ -18,6 +18,7 @@ import { panelDeliveryIssues,panelDeliveryFindings,panelSalesEvidence,verifyPane
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
+import {openingComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {handoffKey,readHandoffPolicy} from './handoff';
@@ -412,9 +413,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const index = (await getStoredEntry('projects')).value;
         const name = Array.isArray(index) ? index.find(row => row?.id === projectId)?.name : undefined;
         const salesFact=panelSalesEvidence(source.id,sales.id);
+        const openingComparison={kind:'opening_comparison',quote:'这么多人拍这个品，为什么这支视频可以拿到多少播放量，多少多少这个GA的成绩，我们一起来看看他是怎怎么拍的'} as const;
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
-          brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“这么多人拍这个品，为什么这支视频可以拿到多少播放量，多少多少这个GA的成绩，我们一起来看看他是怎怎么拍的”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
+          openingComparison,
+          brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
           panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
@@ -488,7 +491,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           }
           if(body.action==='approve_blueprint'){
             assertVisualCriteriaPlan(latestCriteria,deliverySectionsFromDoc(latest.doc),latest.doc.clipMentorAnalysis?.source_breakdown?.units.map(u=>u.unit_id),latest.doc.activeTimelineId);
-            const gate=await checkCopyProduction(latest.doc,'clipmentor');
+            const gate=await checkCopyProduction(latest.doc,'clipmentor',undefined,(latestPolicy?openingComparisonCriterion(latestPolicy.brief.doneCriteria):undefined)??existing.input.openingComparison);
             if(!gate.allowed||latestPolicy&&existing.completed.copy_review?.artifact.requirementsDigest!==latestRequirements
               ||latestCriteria&&!visualCriteriaPlanApproved(latestCriteria,latest.doc.clipMentorAnalysis?.production_copy_review))
               throw new Error('当前蓝图待独立审核，暂不能进入制作。');

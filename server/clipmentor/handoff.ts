@@ -2,7 +2,7 @@ import {currentExecutionView} from './execution-view';
 import { runProjectMigrations } from '../../src/persist/migrations';
 import { revisionOf } from '../../src/agent/external-edit-session';
 import {randomUUID,createHash} from 'node:crypto';
-import {HANDOFF_PREFIX,HANDOFF_RUN_PREFIX,HANDOFF_HISTORY_PREFIX,HANDOFF_TEMPLATE_VERSION,parseHandoffBrief,parseHandoffPolicy,handoffRecord,handoffToolAccess,handoffControlText,handoffAssetsOf,type HandoffPolicy,type HandoffRunBinding} from '../../shared/clipmentor-handoff';
+import {HANDOFF_PREFIX,HANDOFF_RUN_PREFIX,HANDOFF_HISTORY_PREFIX,HANDOFF_TEMPLATE_VERSION,parseHandoffBrief,parseHandoffPolicy,openingComparisonCriterion,handoffRecord,handoffToolAccess,handoffControlText,handoffAssetsOf,type HandoffPolicy,type HandoffRunBinding} from '../../shared/clipmentor-handoff';
 import {getStoredEntry,withSerializedProjectStore} from '../plugins/project-store';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
@@ -27,6 +27,11 @@ export async function assertHandoffSubject(policy:HandoffPolicy,doc:ProjectDoc):
   const prepared=await createProductionPreparation(doc),packet=prepared.rawPacket;
   assertVisualCriteriaPlan(visual,packet.delivery_sections,packet.units.map(u=>u.unit_id),doc.activeTimelineId);
   if(!packet.units.length||packet.units.some(u=>!u.picture_plan?.execution_plan))throw new Error('handoff_picture_plan_required');
+  const comparison=openingComparisonCriterion(policy.brief.doneCriteria);
+  if(comparison){
+   const {checkCopyProduction}=await import('../../src/clipmentor/production-gate');
+   if(!(await checkCopyProduction(doc,'clipmentor',undefined,comparison)).allowed)throw Error('handoff_opening_comparison_review_missing_or_stale');
+  }
   const subject=prepared.reviewed.subject,b=policy.brief.blueprint;
   if(!b||b.revision!==subject.revision||b.digest!==subject.digest)throw new Error('handoff_blueprint_changed');
  }

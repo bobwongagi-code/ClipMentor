@@ -173,6 +173,7 @@ export function groupedPlaybackRelations(phases: unknown, lineIds: string[], uni
   const originals: Array<[number, number]> = [];
   const revisits: Array<{ from_source_range: [number, number]; to_source_range: [number, number] }> = [];
   const explanationLines: string[] = [];
+  const groups: Array<{original:[number,number]; explanations:Array<{lineId:string;source:[number,number]}>}> = [];
   let current: [number, number] | undefined, explained = false;
   for (const [i, phase] of phases.entries()) {
     if (!row(phase) || (phase.mode !== 'original' && phase.mode !== 'explanation')) throw new Error(`picture_plan_phase_mode_invalid:${unitId}:${i}`);
@@ -182,16 +183,18 @@ export function groupedPlaybackRelations(phases: unknown, lineIds: string[], uni
     if (phase.mode === 'original') {
       if (current && !explained) throw new Error(`picture_plan_group_explanation_missing:${unitId}:${i}`);
       current = source; explained = false; originals.push(source);
+      groups.push({original:source,explanations:[]});
     } else {
       if (!current) throw new Error(`picture_plan_phase_original_missing:${unitId}:${i}`);
       if (!text(phase.line_id) || !lineIds.includes(phase.line_id)) throw new Error(`picture_plan_phase_line_invalid:${unitId}:${i}`);
       explanationLines.push(phase.line_id); explained = true;
+      groups.at(-1)!.explanations.push({lineId:phase.line_id,source});
       const revisit = { from_source_range: current, to_source_range: source };
       if (!revisits.some(r => JSON.stringify(r) === JSON.stringify(revisit))) revisits.push(revisit);
     }
   }
   if (!explained || !lineIds.every(id => explanationLines.includes(id))) throw new Error(`picture_plan_group_explanation_missing:${unitId}`);
-  return { originals, revisits, explanationLines };
+  return { originals, revisits, explanationLines, groups };
 }
 
 /** A revisit records evidence segment IDs. Grouped phases supply the actual
