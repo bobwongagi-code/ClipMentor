@@ -69,7 +69,7 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  if(selectedRequirements){
   const ids=new Set(deliverySectionsFromDoc(doc).map(s=>s.section_id));
   selectedRequirements.brief.projectId=projectId;
-  selectedRequirements.brief.doneCriteria=selectedRequirements.brief.doneCriteria.filter(c=>typeof c==='string'||c.layout==='native_composition'||ids.has(c.sectionId));
+  selectedRequirements.brief.doneCriteria=selectedRequirements.brief.doneCriteria.filter(c=>typeof c==='string'||'kind' in c||c.layout==='native_composition'||ids.has(c.sectionId));
   selectedRequirements.digest=digestValue({templateVersion:HANDOFF_TEMPLATE_VERSION,brief:selectedRequirements.brief,assetBindings:selectedRequirements.assetBindings});
  }
  await withSerializedProjectStore(async store=>{

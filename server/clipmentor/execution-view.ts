@@ -1,7 +1,7 @@
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import type {ProjectDoc} from '../../src/editor/types';
-import {copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
-import {deliveryAudio,deliveryPictureBindings} from '../../src/clipmentor/delivery-sections';
+import {assessGroupReview,copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
+import {deliveryAudio,deliveryPictureBindings,deliveryReview} from '../../src/clipmentor/delivery-sections';
 import {handoffAssetsOf} from '../../shared/clipmentor-handoff';
 import {matchMeasuredNarration,createProductionPreparation} from './production-readiness';
 import {digestValue} from '../agent-runs/store-values';
@@ -65,14 +65,17 @@ export async function currentReviewRepair(doc:ProjectDoc){
  const subject=await copyReviewSubject(doc);
  if(receipt.content_digest!==subject.digest||receipt.analysis_revision!==subject.revision)return {status:'receipt_stale' as const,original_receipt:receipt,review_approved:false};
  const packet=await copyTeachingPacketFromDoc(doc);
+ const delivery=deliveryReview(packet.delivery_sections??[],receipt.delivery_checks,!!receipt.opening_comparison_digest);
  return {status:'bound' as const,subject,original_receipt:{scope:receipt.scope,protocol:receipt.protocol,verdict:receipt.verdict,analysis_revision:receipt.analysis_revision,content_digest:receipt.content_digest,reviewer_run_id:receipt.reviewer_run_id,reviewed_at:receipt.reviewed_at},review_approved:false,
   units:receipt.units.filter(u=>u.verdict!=='pass'||u.findings.length>0).map(u=>({unit_id:u.unit_id,candidate_id:u.candidate_id,
    verdict:u.verdict,findings:u.findings.map((f,index)=>({...f,finding_id:`${receipt.content_digest}:${u.unit_id}:finding:${index}`})),narration_checks:u.narration_checks,group_checks:u.group_checks,
    point_checks:structuredClone(receipt.teaching_review?.review.units.find(v=>v.unit_id===u.unit_id)?.points??[]),
-   context:packet.units.find(v=>v.unit_id===u.unit_id)??null})),
+   context:packet.units.find(v=>v.unit_id===u.unit_id)??null,
+   ...(receipt.l1_evidence_contract?{group_validation:assessGroupReview(u.group_checks,packet.units.find(v=>v.unit_id===u.unit_id),true,packet.source_evidence)}:{})})),
   delivery_sections:packet.delivery_sections??[],delivery_checks:receipt.delivery_checks??[],
+  ...(delivery.issues.length?{delivery_issues:delivery.issues}:{}),
   ...(receipt.visual_criteria_checks?{visual_criteria_checks:receipt.visual_criteria_checks.filter(c=>c.answer!=='yes')}:{}),
-  instruction:'Locate the original quote and group relation; retain original verdict. Missing evidence is not an instruction to invent a replacement or approve a partial group.'};
+  instruction:'Locate the original quote and group relation; retain original verdict. If the reviewer omitted or misquoted the evidence, check the unchanged candidate before deciding whether copy needs repair. Missing evidence is not an instruction to invent a replacement or approve a partial group.'};
 }
 
 /** A missing stage label is a reviewer-output problem, not an instruction to rewrite passed copy. */

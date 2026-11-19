@@ -2,6 +2,8 @@ import type { AgentContext } from '../agent/context';
 import {canonicalProjectJson} from '../agent/external-edit-session';
 import type { CopyReviewRequest, CopyReviewResult } from '../../shared/clipmentor-copy-review';
 import { isCopyReviewFailure } from '../../shared/clipmentor-copy-review';
+import {HANDOFF_PREFIX,openingComparisonCriterion,parseHandoffPolicy} from '../../shared/clipmentor-handoff';
+import {kvGetAuthoritative} from '../persist/sharedKv';
 import { bindCopyProductionReview, checkCopyProduction, copyReviewSubject, copyTeachingPacketFromDoc, isCopyProductionReview } from './production-gate';
 
 /** Always an isolated current-subject review, even when its author worked collaboratively.
@@ -52,8 +54,15 @@ export async function requestClipMentorCopyReview(args: Record<string, unknown>,
     const receipt = await bindCopyProductionReview(doc, result.receipt);
     if (!current()) return { error: 'Project changed or run cancelled during binding; no stale approval applied' };
     const next = { ...doc, clipMentorAnalysis: { ...analysis, production_copy_review: receipt } };
-    const gate = await checkCopyProduction(next, ctx.getCreativeMode());
+    const requirements=await kvGetAuthoritative(HANDOFF_PREFIX+project);
+    const opening=requirements===undefined?undefined:openingComparisonCriterion(parseHandoffPolicy(requirements).brief.doneCriteria);
+    const gate = await checkCopyProduction(next, ctx.getCreativeMode(), undefined, opening);
     if (!current()) return { error: 'Project changed or run cancelled before saving review; no result applied' };
+    if ('delivery_issues' in gate && gate.delivery_issues?.includes('opening_comparison_review_missing_or_stale'))
+      return {error:'Opening comparison requirement changed. Original result retained by operationId.',operationId:result.operationId,
+        diagnostic:{code:'review_requirements_changed',stage:'reservation',operationId:result.operationId,
+          requestsAttempted:result.requestsAttempted,retryable:false},
+        requestsAttempted:result.requestsAttempted,production_gate:gate,production_approved:false};
     const unconfirmed={error:'Review received but project write could not be confirmed. Read the current project and saved receipt.',operationId:args.operationId,production_approved:false};
     const expected=canonicalProjectJson(next);
     try{ctx.commands.applyDoc(next);if(!current(expected))return unconfirmed;}

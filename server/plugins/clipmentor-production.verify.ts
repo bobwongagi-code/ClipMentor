@@ -1113,6 +1113,48 @@ try{
   assert.equal(replay.status,200,'retrying the parent action also tolerates the confirmed deletion');
   assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId,legacyOutput.taskId,liveOutput.taskId]));
  }finally{await new Promise<void>((r,e)=>coldServer.close(err=>err?e(err):r()));}
+ // Normal page start must freeze the comparison in the task read by the
+ // real copy service. Fake stage worker and keys stay inside this temp profile.
+ {
+  const projectId='panel-opening-admission';
+  const panelDoc=structuredClone(deliveryDoc);
+  delete panelDoc.clipMentorAnalysis;
+  for(const timeline of panelDoc.timelines)timeline.items=[];
+  const assets:typeof panelDoc.assets=[];
+  for(const [index,kind] of ['video','image','image','image'].entries()){
+   const id='opening-fixture-'+index,file=id+(kind==='video'?'.mp4':'.png');
+   const bytes=kind==='video'?await readFile(join(media,'fixture-preview.mp4')):
+    await sharp({create:{width:10,height:10,channels:3,background:['red','blue','green'][index-1]}}).png().toBuffer();
+   await writeFile(join(media,file),bytes);
+   assets.push({id,name:id,kind:kind as 'video'|'image',src:'/media/uploads/'+file,durationInFrames:15,
+    sourceContentHash:createHash('sha256').update(bytes).digest('hex')});
+  }
+  panelDoc.assets=assets;await setStoredEntry('project:'+projectId,panelDoc);
+  const {setKeys}=await import('../keystore');
+  await setKeys({MINIMAX_API_KEY:'local-fixture-only',LLM_OPENAI_MODEL:'fixture',LLM_OPENAI_API_KEY:'local-fixture-only'});
+  const response=await fetch(origin+'/api/clipmentor/production-task?view=panel&projectId='+projectId,{method:'POST',
+   headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'start'})});
+  assert(response.ok,await response.text());
+  const {latestPanelProductionTask,productionExecutionActive}=await import('../clipmentor/production-task');
+  const started=await latestPanelProductionTask(projectId);
+  assert.equal(started?.input.openingComparison?.kind,'opening_comparison');
+  assert(started.input.brief.includes(started.input.openingComparison.quote),'the author and reviewer get the same verbatim requirement');
+  const {copyReviewDependencies}=await import('../clipmentor/copy-review');
+  const bound=await copyReviewDependencies().requirements!(projectId);
+  assert.deepEqual(bound.opening,started.input.openingComparison,'actual copy host reads the frozen ordinary panel input');
+  assert.notEqual((await post({action:'create',input:{...input,projectId:'unsupported-comparison',openingComparison:bound.opening}})).status,202);
+  for(let i=0;i<100&&productionExecutionActive(projectId,started.taskId);i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert(!productionExecutionActive(projectId,started.taskId),'the prior panel must be quiescent before a newer generic checkpoint exists');
+  await new Promise(resolve=>setTimeout(resolve,10));
+  const unrelated=await post({action:'create',input:{...input,projectId,humanBlueprintReview:true}});
+  assert.equal(unrelated.status,202);
+  const auxiliary=(await unrelated.json()).taskId;
+  assert.equal((await latestPanelProductionTask(projectId))?.taskId,started.taskId);
+  assert.deepEqual((await copyReviewDependencies().requirements!(projectId)).opening,bound.opening,'a generic human-review job cannot shadow the panel requirement');
+  for(let i=0;i<100&&productionExecutionActive(projectId,started.taskId);i++)await new Promise(resolve=>setTimeout(resolve,5));
+  for(let i=0;i<100&&productionExecutionActive(projectId,auxiliary);i++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert(!productionExecutionActive(projectId,started.taskId)&&!productionExecutionActive(projectId,auxiliary));
+ }
  console.log('production cold start: resumes queued/running tasks, reuses a reserved effect, keeps unknown outcomes, skips prior versions, review gates and deleted projects');
  console.log('production HTTP: origin guard, async no-page execution, duplicate launch refusal, canonical artifact cold recovery/read and final human acceptance passed; mocked stages, zero provider calls');
 }finally{release();await flushServerRunPersistence();await new Promise<void>((r,e)=>server.close(err=>err?e(err):r()));resetServerRunStoreForTest();resetAgentRuntimeStoreMemory();resetSharedKvMemory();if(previousData===undefined)delete process.env.OPENCHATCUT_DATA_DIR;else process.env.OPENCHATCUT_DATA_DIR=previousData;await rm(directory,{recursive:true,force:true});}

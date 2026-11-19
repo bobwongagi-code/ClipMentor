@@ -1,4 +1,5 @@
 import {assertHandoffCopy} from './handoff-copy';
+import {handoffDigest,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {assertNoReferenceMedia} from './delivery-bindings';
 import {deliverySectionsFromDoc,deliverySectionsShape,deliveryReview,deliveryReviewCriteria,type DeliverySection} from './delivery-sections';
 import { buildSourceContext, sourceReviewRanges, isSourceContext, assessSourceAlignment, sourceRelationsShape, type SourceContext, type SourceRelation } from './source-alignment';
@@ -48,7 +49,7 @@ export interface GroupReview {
   scope: 'planned_group_teaching_only';
   /** Optional for historical receipts; current source-bound packets require this accounting. */
   source_relations?: SourceRelation[];
-  L1: { verdict: Verdict; learner_takeaway: string; reason: string };
+  L1: { verdict: Verdict; learner_takeaway: string; reason: string; evidence?: unknown };
   L2: { verdict: Verdict; viewer_chain: string; stage_cues: string | string[]; reason: string };
   /** Original playback-group judgments; unit totals are a deterministic view, not a new opinion. */
   group_reviews?: PlaybackGroupReview[];
@@ -83,6 +84,8 @@ export interface CopyProductionReview {
   units: CopyUnitJudgment[];
   teaching_review?: TeachingEnvelope;
   delivery_checks?: unknown[];
+  l1_evidence_contract?: 'v1';
+  opening_comparison_digest?: string;
   visual_criteria_digest?: string;
   visual_criteria_checks?: Array<{id:string;answer:'yes'|'no'|'unknown';observation:string;picture_stage:string}>;
 }
@@ -108,10 +111,13 @@ function groupReviewShape(v: unknown): v is GroupReview {
     || (Array.isArray(v.group_reviews) && v.group_reviews.length > 0 && v.group_reviews.every(playbackGroupReviewShape)
       && new Set(v.group_reviews.map(g => g.group_id)).size === v.group_reviews.length));
 }
-function playbackGroupIds(unit: TeachingPacket['units'][number]) {
+function playbackGroups(unit: TeachingPacket['units'][number]) {
   const content = unit.picture_plan?.execution_plan?.content;
   const grouped = groupedPlaybackRelations(content?.phases, unit.lines.map(l => l.line_id), unit.unit_id);
-  return grouped?.originals.map((_, i) => `G${i + 1}`) ?? [];
+  return grouped?.groups ?? [];
+}
+function playbackGroupIds(unit: TeachingPacket['units'][number]) {
+  return playbackGroups(unit).map((_, i) => `G${i + 1}`);
 }
 const combinedVerdict = (values: Verdict[]): Verdict => values.includes('needs_revision') ? 'needs_revision'
   : values.includes('insufficient_evidence') ? 'insufficient_evidence' : 'pass';
@@ -158,8 +164,56 @@ export function normalizeGroupReview(value: unknown, unit: TeachingPacket['units
     group_reviews: groups,
   } satisfies GroupReview;
 }
+function groupL1EvidenceIssues(review: GroupReview, unit: TeachingPacket['units'][number], source: TeachingPacket['source_evidence']) {
+  const groups = playbackGroups(unit);
+  if (groups.length > 1 && !review.group_reviews) return ['l1_playback_group_evidence_missing'];
+  const rows = review.group_reviews?.map(group => ({id: group.group_id, l1: group.L1,
+    window: groups[Number(group.group_id.slice(1)) - 1]})) ?? [{id: unit.unit_id, l1: review.L1, window: groups[0]}];
+  return rows.flatMap(({id, l1, window}) => {
+    const refs = l1.evidence;
+    if (!Array.isArray(refs) || !refs.length || refs.length > 8) return [id + ':l1_evidence_missing_or_invalid'];
+    const valid = refs.every(ref => {
+      if (!row(ref)) return false;
+      if (ref.kind === 'copy') {
+        const line = unit.lines.find(line => line.line_id === ref.line_id);
+        if (!line || !text(ref.quote) || window && !window.explanations.some(part => part.lineId === line.line_id)) return false;
+        const candidates = ref.channel === 'narration' ? [line.narration_ms] : ref.channel === 'caption'
+          ? [line.caption_lines.join(' ')] : ref.channel === 'label' ? line.labels : [];
+        return matchesCopyQuote(ref.quote, candidates);
+      }
+      if (ref.kind !== 'visual' || (ref.phase !== 'original' && ref.phase !== 'explanation') || typeof ref.source_seconds !== 'number') return false;
+      const time = ref.source_seconds;
+      if (ref.phase === 'original') {
+        const windows = window ? [window.original] : unit.picture_plan?.original_source_ranges;
+        if (!windows?.some(range => l1SourceAt(time,range))) return false;
+      } else {
+        const parts = window?.explanations ?? unit.picture_plan?.line_source_ranges.map(line => ({lineId:line.line_id,source:line.source_range_seconds}));
+        if (!parts?.some(part => {
+          const line = unit.picture_plan?.line_source_ranges.find(line => line.line_id === part.lineId);
+          if (time===part.source[1]&&line?.context_source_ranges?.some(({source_range_seconds:[start,end]})=>time===start&&time===end)) return true;
+          if (!l1SourceAt(time,part.source)) return false;
+          const selected = [...(line?.evidence_source_ranges??[]),...(line?.context_source_ranges??[])];
+          return !selected.length || selected.some(slice => l1SourceAt(time,slice.source_range_seconds));
+        })) return false;
+      }
+      const item = source.find(evidence => evidence.evidence_id === ref.evidence_id);
+      // The observation header is generated from the registered evidence kind.
+      if (!item?.time_seconds?.length || !/^\[(?:source_frame|visible_action); /u.test(item.observation)) return false;
+      const [start, end] = item.time_seconds;
+      if (!(end === undefined || start === end ? time === start : time >= start && time < end)) return false;
+      return unit.points.some(point => point.treatment !== 'omit' && point.evidence_ids.includes(item.evidence_id));
+    });
+    return valid ? [] : [id + ':l1_evidence_does_not_match_group'];
+  });
+}
+
+function l1SourceAt(time:number,[start,end]:[number,number]) {
+  return start===end ? time===start : time>=start&&time<end;
+}
+
 /** Structural completeness and declared verdicts only; this cannot prove teaching quality. */
-export function assessGroupReview(v: unknown, unit?: TeachingPacket['units'][number]) {
+export function assessGroupReview(v: unknown, unit?: TeachingPacket['units'][number], requireL1Evidence = false,
+  sourceEvidence: TeachingPacket['source_evidence'] = []) {
   if (!groupReviewShape(v)) return { verdict: 'insufficient_evidence' as Verdict, layer: 'structure' as const };
   if (v.group_reviews) {
     try {
@@ -175,10 +229,16 @@ export function assessGroupReview(v: unknown, unit?: TeachingPacket['units'][num
   }
   const first = combinedVerdict([v.L1.verdict, ...(v.group_reviews ?? []).flatMap(g => [g.L1.verdict, ...(g.verdict ? [g.verdict] : [])])]);
   if (first !== 'pass') return { verdict: first, layer: 'L1' as const };
+  if (requireL1Evidence) {
+    const issues = unit ? groupL1EvidenceIssues(v, unit, sourceEvidence) : ['l1_evidence_scope_missing'];
+    if (issues.length) return { verdict: 'insufficient_evidence' as Verdict, layer: 'L1' as const, issues };
+  }
   return { verdict: combinedVerdict([v.L2.verdict, ...(v.group_reviews ?? []).map(g => g.L2.verdict)]), layer: 'L2' as const };
 }
 export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
   return row(v) && v.scope === 'copy_and_planned_picture_only' && text(v.protocol)
+    && (v.l1_evidence_contract === undefined || v.l1_evidence_contract === 'v1')
+    && (v.opening_comparison_digest === undefined || typeof v.opening_comparison_digest === 'string' && /^[a-f0-9]{64}$/.test(v.opening_comparison_digest))
     && Number.isSafeInteger(v.analysis_revision) && Number(v.analysis_revision) > 0
     && typeof v.content_digest === 'string' && /^[a-f0-9]{64}$/.test(v.content_digest)
     && text(v.author_run_id) && text(v.reviewer_run_id) && v.author_run_id !== v.reviewer_run_id
@@ -306,6 +366,7 @@ export async function checkCopyProduction(
   doc: ProjectDoc, creativeMode: string | null,
   // Pure-policy test seam; runtime tool callers always use the measured calibration.
   calibration = copyReviewCalibration(),
+  openingComparison?: OpeningComparisonCriterion,
 ) {
   const result = (code: string, allowed = false) => ({ allowed, code, scope: 'copy_and_planned_picture_only' as const,
     complete_film_accepted: false as const });
@@ -322,6 +383,8 @@ export async function checkCopyProduction(
   let subject: Awaited<ReturnType<typeof copyReviewSubject>>;
   try { subject = await copyReviewSubject(doc); } catch { return result('copy_candidate_missing_or_incomplete'); }
   if (subject.digest !== r.content_digest) return result('copy_review_stale');
+  if(openingComparison&&r.opening_comparison_digest!==await handoffDigest(openingComparison))
+    return {...result('copy_delivery_review_not_passed'),delivery_issues:['opening_comparison_review_missing_or_stale']};
   if (r.units.length !== subject.units.length || !subject.units.every((u) => r.units.some((v) => v.unit_id === u.unit_id && v.candidate_id === u.candidate_id))) return result('copy_review_scope_incomplete');
   const breakdown = checkSourceBreakdown(doc);
   if (breakdown.status !== 'structurally_ready') return { ...result('source_breakdown_not_ready'), breakdown_issues: breakdown.issues };
@@ -331,7 +394,7 @@ export async function checkCopyProduction(
   if (canonical(registered) !== canonical(r.teaching_review.packet)) return result('copy_teaching_ledger_mismatch');
   for (const unit of subject.units) {
     const reviewed = r.units.find((u) => u.unit_id === unit.unit_id)!;
-    const group = assessGroupReview(reviewed.group_checks, registered.units.find(u => u.unit_id === unit.unit_id));
+    const group = assessGroupReview(reviewed.group_checks, registered.units.find(u => u.unit_id === unit.unit_id), r.l1_evidence_contract === 'v1', registered.source_evidence);
     if (group.verdict !== 'pass') return { ...result('copy_group_review_not_passed'),
       group_unit_id: unit.unit_id, group_layer: group.layer, group_verdict: group.verdict,
       ...('issues' in group?{group_issues:group.issues}:{}),
@@ -352,7 +415,7 @@ export async function checkCopyProduction(
   }
   if (r.verdict !== 'pass' || r.units.some((u) => u.verdict !== 'pass' || u.findings.some((f) => f.severity !== 'suggestion'))) return result('copy_review_not_passed');
   if (calibration.protocol !== COPY_REVIEW_PROTOCOL || !calibration.qualified) return result('copy_review_method_unqualified');
-  const delivery=deliveryReview(registered.delivery_sections??[],r.delivery_checks);
+  const delivery=deliveryReview(registered.delivery_sections??[],r.delivery_checks,!!(openingComparison||r.opening_comparison_digest));
   if(delivery.verdict!=='pass')return {...result('copy_delivery_review_not_passed'),delivery_issues:delivery.issues};
   return result('copy_and_plan_ready', true);
 }

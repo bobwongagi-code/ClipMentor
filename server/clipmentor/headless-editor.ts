@@ -70,8 +70,15 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
    const dependencies=options.reviewBackend==='codex'?copyReviewDependencies():apiCopyReviewDependencies(options.review);
    const result=await options.effect('review',body.operationId,async()=>{
     try{return {body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined),status:200};}
-    catch(e){const error=e as {status?:number;diagnostic?:unknown};return {body:{error:'Independent API review failed',diagnostic:error.diagnostic},status:error.status??500};}
-   },async()=>({body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined,'resume_preparation'),status:200}));
+    catch(e){const error=e as {status?:number;diagnostic?:unknown};return {body:{error:'Independent API review failed',diagnostic:error.diagnostic,projectId:options.projectId},status:error.status??500};}
+   },async()=>{
+    try{return {body:await reviewClipMentorCopy(body,dependencies,init?.signal??undefined,'resume_preparation'),status:200};}
+    catch(e){
+     const error=e as {status?:number;diagnostic?:{code?:string;requestsAttempted?:number}};
+     if(error.diagnostic?.requestsAttempted!==0||!['opening_comparison_section_missing','review_requirements_changed'].includes(error.diagnostic.code??''))throw e;
+     return {body:{error:'Independent API review preparation no longer applies',diagnostic:error.diagnostic,projectId:options.projectId},status:error.status??500};
+    }
+   });
    return Response.json(result.body,{status:result.status});
   }
   if(body.action==='read'||path==='/api/clipmentor/observe-video'&&body.action==='read_receipt')return local(path,init);

@@ -9,7 +9,9 @@ type Row=Record<string,unknown>;
 const row=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown):v is string=>typeof v==='string'&&!!v.trim();
 const strings=(v:unknown):v is string[]=>Array.isArray(v)&&v.length>0&&v.every(text)&&new Set(v).size===v.length;
-export function deliveryReview(sections:DeliverySection[],raw:unknown):{verdict:'pass'|'needs_revision'|'insufficient_evidence';issues:string[]}{
+export function deliveryReview(sections:DeliverySection[],raw:unknown,openingComparisonRequired=false):{verdict:'pass'|'needs_revision'|'insufficient_evidence';issues:string[]}{
+ if(openingComparisonRequired&&sections.filter(section=>section.kind==='performance_opening').length!==1)
+  return {verdict:'insufficient_evidence',issues:['opening_comparison_section_missing_or_duplicate']};
  if(!sections.length)return {verdict:raw===undefined?'pass':'insufficient_evidence',issues:raw===undefined?[]:['unexpected_delivery_review']};
  if(!Array.isArray(raw)||raw.length!==sections.length||new Set(raw.filter(row).map(r=>r.section_id)).size!==sections.length)return{verdict:'insufficient_evidence',issues:['delivery_review_missing_or_duplicate']};
  let verdict:'pass'|'needs_revision'|'insufficient_evidence'='pass';const issues:string[]=[];
@@ -19,10 +21,34 @@ export function deliveryReview(sections:DeliverySection[],raw:unknown):{verdict:
    ||!strings(r.evidence_ids)||r.evidence_ids.length!==s.evidence_ids.length||r.evidence_ids.some(id=>!s.evidence_ids.includes(id))||!Array.isArray(r.narration_checks)||r.narration_checks.length!==1){issues.push(s.section_id+':incomplete');if(verdict!=='needs_revision')verdict='insufficient_evidence';continue;}
   const n=r.narration_checks[0];
   if(!row(n)||n.line_id!==s.line.line_id||!['necessary','redundant','uncertain'].includes(String(n.necessity))||!['natural','awkward','uncertain'].includes(String(n.naturalness))||!text(n.omission_loss)||!text(n.reason)){issues.push(s.section_id+':narration_incomplete');if(verdict!=='needs_revision')verdict='insufficient_evidence';continue;}
+  if(openingComparisonRequired&&s.kind==='performance_opening'){
+   const comparison=r.opening_comparison;
+   if(!row(comparison)||!['preserved','changed','uncertain'].includes(String(comparison.status))||!text(comparison.reason)){
+    issues.push(s.section_id+':opening_comparison_missing');if(verdict!=='needs_revision')verdict='insufficient_evidence';
+   }else if(comparison.status==='changed'){
+    issues.push(s.section_id+':opening_comparison_changed');verdict='needs_revision';
+   }else if(comparison.status!=='preserved'||!openingQuotesMatch(s,comparison)){
+    issues.push(s.section_id+':opening_comparison_evidence_invalid');if(verdict!=='needs_revision')verdict='insufficient_evidence';
+   }
+  }
   if(r.verdict==='needs_revision'||r.claims_supported==='contradicted'||!r.purpose_clear||n.necessity==='redundant'||n.naturalness==='awkward'){issues.push(s.section_id+':needs_revision');verdict='needs_revision';}
   else if(r.verdict!=='pass'||r.claims_supported!=='supported'||n.necessity!=='necessary'||n.naturalness!=='natural'){issues.push(s.section_id+':uncertain');if(verdict!=='needs_revision')verdict='insufficient_evidence';}
  }
  return{verdict,issues};
+}
+function openingQuotesMatch(section:DeliverySection,comparison:Row){
+ const wrap=(value:string)=>value.trim().replace(/\s+/gu,' ');
+ const words=[section.line.narration_ms,section.line.caption_lines.join(' ')].map(wrap);
+ const premise=comparison.same_product_quote,question=comparison.outcome_question_quote;
+ if(!text(premise)||!text(question))return false;
+ const [sameProduct,outcome]=[premise,question].map(wrap);
+ const phrase=(part:string)=>(part.match(/[\p{L}\p{N}]+/gu)?.length??0)>=2;
+ const separate=(copy:string,first:string,second:string)=>{
+  const index=copy.indexOf(first);
+  return index>=0&&copy.includes(second,index+first.length);
+ };
+ return sameProduct!==outcome&&phrase(sameProduct)&&phrase(outcome)
+  &&words.every(copy=>separate(copy,sameProduct,outcome)||separate(copy,outcome,sameProduct));
 }
 /** The plan uses original-image margins; edit_item uses composition pixels.
  * Resolve through the same fitted source rectangle as preview and export.
