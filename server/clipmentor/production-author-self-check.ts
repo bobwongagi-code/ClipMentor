@@ -188,7 +188,8 @@ export async function checkProductionAuthorBlueprint(
  originalRequirements:HandoffBrief['doneCriteria'],
 ){
  const {reviewed}=prepared;
- const source={...productionAuthorSelfCheckSource(doc,prepared,[task.input.brief,...originalRequirements]),
+ const requirements=[task.input.brief,...originalRequirements,...(task.blueprintFeedback?[task.blueprintFeedback]:[])];
+ const source={...productionAuthorSelfCheckSource(doc,prepared,requirements),
   repairReview:productionRepairTargets(task,prepared.rawPacket),
   unchangedReviewedDelivery:unchangedReviewedDelivery(task,prepared.rawPacket)};
  const sourceDigest=digestValue({source,guide});

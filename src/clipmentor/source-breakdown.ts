@@ -194,6 +194,29 @@ export function groupedPlaybackRelations(phases: unknown, lineIds: string[], uni
   return { originals, revisits, explanationLines };
 }
 
+/** A revisit records evidence segment IDs. Grouped phases supply the actual
+ * playback endpoints, which can be wider at departure and tighter at arrival. */
+export function registeredRevisitRanges(
+  unit: SourceBreakdown['units'][number],
+  segmentRange: (id: string) => [number, number] | undefined,
+  grouped: ReturnType<typeof groupedPlaybackRelations>,
+) {
+  if (grouped && grouped.revisits.length !== unit.revisits.length) return null;
+  const result: NonNullable<ReturnType<typeof groupedPlaybackRelations>>['revisits'] = [];
+  for (const [index, entry] of unit.revisits.entries()) {
+    const from = segmentRange(entry.from_segment_id), to = segmentRange(entry.to_segment_id);
+    if (!from || !to) return null;
+    if (!grouped) { result.push({ from_source_range: from, to_source_range: to }); continue; }
+    const phase = grouped.revisits[index];
+    const contains = (outer: [number, number], inner: [number, number]) => outer[0] <= inner[0] && outer[1] >= inner[1];
+    if ((!unit.original_segment_ids.includes(entry.from_segment_id) && JSON.stringify(from) !== JSON.stringify(phase.from_source_range))
+      || (!unit.explanation_segment_ids.includes(entry.to_segment_id) && JSON.stringify(to) !== JSON.stringify(phase.to_source_range))
+      || !contains(phase.from_source_range, from) || !contains(to, phase.to_source_range)) return null;
+    result.push(phase);
+  }
+  return result;
+}
+
 function rangesCover(ranges: Array<[number, number]>, target: [number, number], tolerance: number) {
   let end = target[0];
   for (const r of [...ranges].sort((x, y) => x[0] - y[0])) {
@@ -575,9 +598,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
         row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row).map(l => String(l.id)) : [], u.unit_id);
       if (grouped) {
         if (JSON.stringify(grouped.originals) !== JSON.stringify(originalRanges)) issue('picture_plan_original_order_mismatch', u.unit_id);
-        const declared = u.revisits.map(r => ({ from_source_range: segments.get(r.from_segment_id)?.source_range_seconds,
-          to_source_range: segments.get(r.to_segment_id)?.source_range_seconds }));
-        if (JSON.stringify(grouped.revisits) !== JSON.stringify(declared)) issue('picture_plan_revisits_mismatch', u.unit_id);
+        if (!registeredRevisitRanges(u, id => segments.get(id)?.source_range_seconds, grouped)) issue('picture_plan_revisits_mismatch', u.unit_id);
       }
     } catch (error) { issue(error instanceof Error ? error.message.split(':')[0] : 'picture_plan_phase_invalid', u.unit_id); }
     if (!grouped) for (let i = 1; i < order.length; i++) {

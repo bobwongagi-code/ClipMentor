@@ -7,6 +7,7 @@ import { join, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import saved from '../agent/tools/fixtures/barely-there-bookend-replacement-20261029.json';
 import type { ProjectDoc } from '../editor/types';
+import * as bindings from './delivery-bindings';
 import {
   assertDeliveryPicturePreservation, deliverySectionsFromDoc, deliverySectionsShape,
   deliveryTimeline, deliveryPictureBinding, deliveryPictureBindings, type DeliverySection,
@@ -48,6 +49,21 @@ async function check(name: string, work: () => void | Promise<void>) {
 const nativeFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error('Network forbidden in display-contract verification'); };
 try {
+  await check('opening-overlay-reports-the-exact-overlong-line', () => {
+    const d=structuredClone(base), section=opening(d);
+    const asset=d.assets.find(item=>item.kind==='video')!;
+    const long='apa yang menarik tentang cara video ini dirakam?';
+    section.picture.layout={kind:'original_underlay',source:{asset_id:asset.id,src:asset.src,sha256:'a'.repeat(64)},
+      range:[0,4.5],shade:0.63,show_sales:true,headline:['339.32k Views'],
+      transition:['Kalau nak rakam palet yang sama,',long,'Jom tengok cara dia rakam demo palet ini.']};
+    assert.equal(deliverySectionsShape([section]),false);
+    assert.deepEqual(bindings.deliveryOpeningTextIssue([section]),{
+      section_id:section.section_id,field:'picture.layout.transition',line:2,characters:48,max_characters:42,
+    });
+    section.picture.layout.transition.splice(1,1,'apa yang menarik tentang','cara video ini dirakam?');
+    assert.equal(deliverySectionsShape([section]),true);
+    assert.equal(bindings.deliveryOpeningTextIssue([section]),undefined);
+  });
   await check('layered-opening-requires-original-matte-and-exit', () => {
     const d=phased(),t=timeline(d),s=opening(d),photo=picture(d),source=t.items.find(i=>i.kind==='video')!;
     const a=d.assets.find(a=>a.id===source.sourceAssetId)!;

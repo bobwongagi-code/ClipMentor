@@ -50,6 +50,7 @@ export interface BoardInput {
  value:unknown;sha256:string;hashMode:'file'|'project';assertUnchanged:()=>Promise<void>;
  bindings?:ProjectDoc[];bindingSha256?:string;mediaDir?:string;
  visualReferences?:VisualReferenceFrame[];
+ deliveryFindings?:ReturnType<typeof lintBlueprint>['findings'];
 }
 export async function loadReviewBoardInput(input:string,options:{bindings?:string[];mediaDir?:string}={}):Promise<BoardInput>{
  let value:unknown,sha256:string,hashMode:'file'|'project',assertUnchanged:()=>Promise<void>;
@@ -73,7 +74,7 @@ function lineView(line:ReturnType<typeof readBlueprint>['lines'][number]){
  return{id:line.id,ms:line.text,zh:line.zh,cards:cards.length?cards:[caption],labels:arr(raw.labels).map(v=>typeof v==='string'?v:txt(obj(v).text)).filter(Boolean)};
 }
 export function planReviewBoards(input:BoardInput,variant?:string):{plans:ReviewBoardPlan[];doc:ProjectDoc;assets:Map<string,MediaAsset>;data:ReturnType<typeof readBlueprint>;lint:ReturnType<typeof lintBlueprint>}{
- const data=readBlueprint(input.value),lint=lintBlueprint(input.value);
+ const data=readBlueprint(input.value),lint=lintBlueprint(input.value,{deliveryFindings:input.deliveryFindings});
  if(data.issues.length||lint.findings.some(f=>f.rule_id==='INPUT'))fail('候选读取/副本冲突: '+[...data.issues.map(i=>i.message),...lint.findings.filter(f=>f.rule_id==='INPUT').map(f=>f.message)].join('; '));
  const source=obj(data.analysis.source),fps=Number(source.fps),duration=Number(source.duration_seconds),sourceHash=txt(source.sourceContentHash);
  if(!txt(source.asset_id)||!/^[a-f0-9]{64}$/.test(sourceHash)||!Number.isFinite(fps)||fps<=0||!Number.isFinite(duration)||duration<=0)fail('原片身份或时钟无效');

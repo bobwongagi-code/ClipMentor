@@ -40,10 +40,29 @@ export function assertNoReferenceMedia(doc:ProjectDoc,previous?:ProjectDoc):void
  if(doc.timelines.some(t=>t.items.some(i=>used([i,doc.assets.find(a=>a.id===i.sourceAssetId||a.src===i.src)]))))
   throw Error('reference_only_asset_cannot_enter_timeline');
 }
+const openingMaxLineCharacters=42;
+export function deliveryOpeningTextIssue(sections:unknown){
+ if(!Array.isArray(sections))return;
+ for(const section of sections){
+  if(!row(section)||section.kind!=='performance_opening'||!text(section.section_id)||!row(section.picture)
+   ||!row(section.picture.layout)||section.picture.layout.kind!=='original_underlay')continue;
+  for(const field of ['headline','transition'] as const){
+   const lines=section.picture.layout[field];
+   if(!Array.isArray(lines))continue;
+   for(const [index,line] of lines.entries()){
+    if(typeof line!=='string')continue;
+    const characters=Array.from(line).length;
+    if(characters>openingMaxLineCharacters)return {section_id:section.section_id,field:`picture.layout.${field}`,line:index+1,
+     characters,max_characters:openingMaxLineCharacters};
+   }
+  }
+ }
+}
+
 function deliveryLayoutShape(v:unknown):v is DeliveryLayout {
  if(!row(v))return false;
  const titles=(lines:unknown,min:number)=>Array.isArray(lines)&&lines.length>=min&&lines.length<=4
-  &&lines.every(line=>text(line)&&Array.from(line).length<=42&&!/[\p{Cc}\p{Cf}]/u.test(line));
+  &&lines.every(line=>text(line)&&Array.from(line).length<=openingMaxLineCharacters&&!/[\p{Cc}\p{Cf}]/u.test(line));
  if(v.kind==='original_underlay')return Object.keys(v).length===7&&row(v.source)&&Object.keys(v.source).length===3
   &&text(v.source.asset_id)&&typeof v.source.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(v.source.src)&&hash(v.source.sha256)
   &&Array.isArray(v.range)&&v.range.length===2&&v.range.every(n=>typeof n==='number'&&Number.isFinite(n))
@@ -80,7 +99,7 @@ export function deliverySectionsShape(v:unknown):v is DeliverySection[]{
   &&['performance_opening','creator_invitation'].includes(String(s.kind))&&strings(s.evidence_ids)
   &&row(s.line)&&text(s.line.line_id)&&text(s.line.narration_ms)&&text(s.line.meaning_zh)&&Array.isArray(s.line.caption_lines)&&s.line.caption_lines.length>0&&s.line.caption_lines.every(text)
   &&normalize(s.line.narration_ms)===normalize(s.line.caption_lines.join(' '))&&Array.isArray(s.line.labels)&&s.line.labels.every(text)&&labelTranslationsShape(s.line.labels_zh,s.line.labels)
-  &&row(s.picture)&&text(s.picture.asset_id)&&typeof s.picture.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.picture.src)&&hash(s.picture.sha256)&&text(s.picture.description)
+  &&row(s.picture)&&text(s.picture.asset_id)&&typeof s.picture.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.picture.src)&&hash(s.picture.sha256)&&typeof s.picture.description==='string'
   &&(s.picture.crop===undefined||deliveryCropShape(s.picture.crop))
   &&(s.picture.layout===undefined||(s.picture.crop===undefined&&deliveryLayoutShape(s.picture.layout)
     &&(s.picture.layout.kind==='original_underlay'?s.kind==='performance_opening':s.kind==='creator_invitation'

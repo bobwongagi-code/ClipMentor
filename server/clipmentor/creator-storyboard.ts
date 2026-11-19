@@ -49,7 +49,7 @@ export async function verifyCreatorStoryboardEvidence(doc:ProjectDoc,signal?:Abo
    if(receipt.result.raw_observation.windows.flatMap(w=>w.evidence).some(e=>Math.abs(e.start_seconds-claim.range[0])<.01
     &&Math.abs(e.end_seconds-claim.range[1])<.01&&normal(evidence.kind==='visible_action'?e.visible:e.audible).includes(normal(claim.text)))){verified=true;break;}
   }
-  if(!verified)throw Error('storyboard_original_excerpt_changed');
+  if(!verified)throw Error(`storyboard_original_excerpt_changed:${evidence.evidence_id}`);
  }
  const name=asset?.src.startsWith('/media/uploads/')?asset.src.slice('/media/uploads/'.length):'';
  const file=asset?.kind==='video'&&isSafeUploadName(name)?resolveUploadFile(name):null;

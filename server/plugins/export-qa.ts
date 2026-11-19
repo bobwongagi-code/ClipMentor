@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import { exportAttemptIdFromFilename, isSafeUploadName, resolveUploadFile } from '../media-dir.ts';
 import { resolveCommittedExport } from './export-delivery.ts';
 import { ffmpegBin, ffprobeBin } from '../media-binaries.ts';
@@ -148,51 +149,127 @@ async function analyzeAudio(file: string): Promise<string> {
   return stderr;
 }
 
-async function extractFrame(file: string, seconds: number, output: string): Promise<void> {
-  await runProcess(ffmpegBin(), [
-    '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+async function extractFrame(file: string, seconds: number, output: string, measure: boolean): Promise<number | null> {
+  const {stderr}=await runProcess(ffmpegBin(), [
+    '-nostdin', '-hide_banner', '-loglevel', measure?'info':'error', '-y',
+    ...(measure?['-copyts','-start_at_zero']:[]),
     '-ss', String(Math.max(0, seconds)), '-i', file,
-    '-frames:v', '1', '-q:v', '4', output,
+    ...(measure?['-vf','showinfo']:[]),
+    '-map','0:v:0','-frames:v', '1', '-q:v', '4', output,
   ]);
+  if(!measure)return seconds;
+  const pts=stderr.match(/\bn:\s*0\s+pts:\s*-?\d+\s+pts_time:\s*(-?[\d.eE+-]+)/)?.[1];
+  return pts!==undefined&&Number.isFinite(Number(pts))?Number(pts):null;
+}
+
+interface LabelProbe {
+  id: string;
+  cutSeconds: number;
+  side: 'before' | 'after';
+  region: [number, number, number, number];
+  inkMinChannel: number;
+}
+type LabelMeasurement = LabelProbe &
+  ({ status: 'measured'; sampleSeconds: number; backgroundRgb: number[]; inkHeightPx: number | null }
+   | { status: 'unmeasured'; reason: 'cut_not_sampled' | 'frame_unavailable' | 'wrong_side' | 'timestamp_unavailable' });
+function parseLabelProbes(value: unknown): LabelProbe[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_EVIDENCE_CUTS * 2) throw Error('Invalid export QA label probes');
+  const ids = new Set<string>();
+  return value.map(probe => {
+    if (!probe || typeof probe.id !== 'string' || !probe.id.trim() || probe.id.length > 80 || ids.has(probe.id)
+      || !Number.isFinite(probe.cutSeconds) || !['before','after'].includes(probe.side)
+      || !Number.isInteger(probe.inkMinChannel) || probe.inkMinChannel < 1 || probe.inkMinChannel > 255
+      || !Array.isArray(probe.region) || probe.region.length !== 4 || !probe.region.every(Number.isFinite))
+      throw Error('Invalid export QA label probe');
+    const [left,top,width,height] = probe.region;
+    if (left < 0 || top < 0 || width <= 0 || height <= 0 || left + width > 1 || top + height > 1)
+      throw Error('Invalid export QA label region');
+    ids.add(probe.id);
+    return {id:probe.id,cutSeconds:probe.cutSeconds,side:probe.side,region:[left,top,width,height],inkMinChannel:probe.inkMinChannel};
+  });
+}
+
+/** The crop and ink threshold are supplied by the reviewer. No color or font verdict is inferred. */
+async function measureLabel(jpeg: Buffer, probe: LabelProbe, sampleSeconds: number): Promise<LabelMeasurement> {
+  const image = sharp(jpeg);
+  const {width,height} = await image.metadata();
+  const [left,top,w,h] = probe.region;
+  const x = Math.floor(left * width), y = Math.floor(top * height);
+  const rect = {left:x,top:y,width:Math.max(1,Math.floor((left + w) * width) - x),
+    height:Math.max(1,Math.floor((top + h) * height) - y)};
+  const {data,info} = await image.extract(rect).toColourspace('srgb').removeAlpha().raw().toBuffer({resolveWithObject:true});
+  const channels = [new Uint32Array(256),new Uint32Array(256),new Uint32Array(256)];
+  let first = info.height, last = -1;
+  for (let offset=0;offset<data.length;offset+=3) {
+    for (let index=0;index<3;index++) channels[index][data[offset+index]]++;
+    if (Math.min(data[offset],data[offset+1],data[offset+2]) >= probe.inkMinChannel) {
+      const row=Math.floor(offset/(3*info.width));
+      first=Math.min(first,row);last=Math.max(last,row);
+    }
+  }
+  const backgroundRgb=channels.map(bins=>{
+    let seen=0;
+    return bins.findIndex(count=>(seen+=count)>=info.width*info.height/2);
+  });
+  return {...probe,status:'measured',sampleSeconds,backgroundRgb,inkHeightPx:last<0?null:last-first+1};
 }
 
 async function buildCutEvidence(
   file: string,
   durationSeconds: number,
+  fps: number,
   cutTimesSeconds: number[],
   maxCuts: number,
-): Promise<{ base64?: string; samples: { cutSeconds: number; sampleSeconds: number; side: 'before' | 'after' }[] }> {
-  const cuts = [...new Set(cutTimesSeconds)]
-    .filter((value) => Number.isFinite(value) && value > 0 && value < durationSeconds)
-    .sort((a, b) => a - b)
-    .slice(0, Math.max(1, Math.min(MAX_EVIDENCE_CUTS, maxCuts)));
-  if (!cuts.length) return { samples: [] };
+  probes: LabelProbe[],
+): Promise<{ base64?: string; samples: { cutSeconds: number; sampleSeconds: number; side: 'before' | 'after' }[];
+  labelMeasurements?: LabelMeasurement[]; labelMeasurementMs?: number }> {
+  const cuts = [...new Set([...probes.map(probe=>probe.cutSeconds),...cutTimesSeconds.filter(Number.isFinite).sort((a,b)=>a-b)])]
+    .filter(value=>value>0&&value<durationSeconds)
+    .slice(0,Math.max(1,Math.min(MAX_EVIDENCE_CUTS,maxCuts))).sort((a,b)=>a-b);
+  const missing=(probe:LabelProbe):LabelMeasurement=>({...probe,status:'unmeasured',
+  reason:cuts.includes(probe.cutSeconds)?'frame_unavailable':'cut_not_sampled'});
+  if (!cuts.length) return { samples: [],...(probes.length?{labelMeasurements:probes.map(missing),labelMeasurementMs:0}:{}) };
 
   const work = await mkdtemp(join(tmpdir(), 'occ-export-qa-'));
   try {
     const samples: { cutSeconds: number; sampleSeconds: number; side: 'before' | 'after' }[] = [];
     const cells: { jpeg: Buffer; label: string }[] = [];
+    const measured=new Map<string,LabelMeasurement>();
+    let labelMeasurementMs=0;
     const offset = Math.min(0.18, Math.max(0.04, 1 / 12));
     for (let cutIndex = 0; cutIndex < cuts.length; cutIndex += 1) {
       const cut = cuts[cutIndex]!;
       for (const side of ['before', 'after'] as const) {
-        const sampleSeconds = Math.max(0, Math.min(durationSeconds - 0.001, cut + (side === 'before' ? -offset : offset)));
+        const frameProbes=probes.filter(probe=>probe.cutSeconds===cut&&probe.side===side);
+        const framePeriod=frameProbes.length&&fps>0?1/fps:0;
+        const seek=Math.max(0,Math.min(durationSeconds-0.001,cut+(side==='before'?-offset-framePeriod:offset)));
         const output = join(work, `cut-${cutIndex}-${side}.jpg`);
         try {
-          await extractFrame(file, sampleSeconds, output);
+          const sampleSeconds=await extractFrame(file,seek,output,frameProbes.length>0);
+          if(sampleSeconds===null||(frameProbes.length>0&&(side==='before'?sampleSeconds>=cut:sampleSeconds<cut))){
+            for(const probe of frameProbes)measured.set(probe.id,{...probe,status:'unmeasured',
+              reason:sampleSeconds===null?'timestamp_unavailable':'wrong_side'});
+            continue;
+          }
+          const jpeg=await readFile(output);
           samples.push({ cutSeconds: cut, sampleSeconds, side });
-          cells.push({
-            jpeg: await readFile(output),
-            label: `cut ${cutIndex + 1} ${side === 'before' ? 'before' : 'after'} · ${formatTimeLabel(Math.round(sampleSeconds * 1000))}`,
-          });
+          cells.push({jpeg,label:`cut ${cutIndex + 1} ${side} · ${formatTimeLabel(Math.round(sampleSeconds * 1000))}`});
+          for(const probe of frameProbes){
+            const start=performance.now();
+            try{measured.set(probe.id,await measureLabel(jpeg,probe,sampleSeconds));}
+            catch{/* Keep the frame evidence when a measurement cannot be read. */}
+            finally{labelMeasurementMs+=performance.now()-start;}
+          }
         } catch {
           // A damaged sample should not erase the rest of the QA report.
         }
       }
     }
-    if (!cells.length) return { samples };
+    const labels=probes.length?{labelMeasurements:probes.map(probe=>measured.get(probe.id)??missing(probe)),labelMeasurementMs}:{};
+    if (!cells.length) return { samples,...labels };
     const sheet = await tileContactSheet(cells, { cols: 2, cellWidth: 360 });
-    return { base64: sheet.toString('base64'), samples };
+    return { base64: sheet.toString('base64'), samples,...labels };
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});
   }
@@ -201,10 +278,12 @@ async function buildCutEvidence(
 export interface AnalyzeExportFileOptions extends ExportQaExpectations {
   cutTimesSeconds?: number[];
   maxEvidenceCuts?: number;
+  labelProbes?: LabelProbe[];
 }
 
 /** Analyze one completed export and return both structured findings and cut evidence. */
 export async function analyzeExportFile(file: string, options: AnalyzeExportFileOptions) {
+  const probes=parseLabelProbes(options.labelProbes);
   const probe = await probeMedia(file);
   const [videoLog, audioLog] = await Promise.all([
     probe.hasVideo ? analyzeVideo(file) : Promise.resolve(''),
@@ -216,10 +295,12 @@ export async function analyzeExportFile(file: string, options: AnalyzeExportFile
     ? await buildCutEvidence(
         file,
         probe.durationSeconds,
+        probe.fps,
         options.cutTimesSeconds ?? [],
         options.maxEvidenceCuts ?? MAX_EVIDENCE_CUTS,
+        probes,
       )
-    : { samples: [] };
+    : { samples: [],...(probes.length?{labelMeasurements:probes.map((entry):LabelMeasurement=>({...entry,status:'unmeasured',reason:'frame_unavailable'})),labelMeasurementMs:0}:{}) };
   return { report, evidence };
 }
 
@@ -254,6 +335,7 @@ export function exportQaPlugin(): Plugin {
               ? body.cutTimesSeconds.map(Number).filter(Number.isFinite)
               : [],
             maxEvidenceCuts: Math.max(1, Math.min(MAX_EVIDENCE_CUTS, Math.round(Number(body.maxEvidenceCuts) || MAX_EVIDENCE_CUTS))),
+            labelProbes: body.labelProbes,
           };
           const { report, evidence } = await analyzeExportFile(file, expected);
           sendJson(res, 200, {
@@ -264,12 +346,13 @@ export function exportQaPlugin(): Plugin {
               mediaType: evidence.base64 ? 'image/jpeg' : undefined,
               base64: evidence.base64,
               samples: evidence.samples,
+              ...('labelMeasurements' in evidence?{labelMeasurements:evidence.labelMeasurements,labelMeasurementMs:evidence.labelMeasurementMs}:{}),
             },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           server.config.logger.error(`[export-qa] ${message}`);
-          const status = /ENOENT|spawn|ffmpeg|ffprobe/i.test(message) ? 503 : 500;
+          const status = message.startsWith('Invalid export QA label') ? 400 : /ENOENT|spawn|ffmpeg|ffprobe/i.test(message) ? 503 : 500;
           sendJson(res, status, { error: message });
         }
       });

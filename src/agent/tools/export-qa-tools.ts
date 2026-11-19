@@ -23,6 +23,8 @@ interface ExportQaResponse {
   evidence?: {
     mediaType?: string;
     base64?: string;
+    labelMeasurements?: Array<{status:'measured'|'unmeasured'}>;
+    labelMeasurementMs?: number;
     samples?: { cutSeconds: number; sampleSeconds: number; side: 'before' | 'after' }[];
   };
 }
@@ -82,6 +84,7 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
         ...expected,
         cutTimesSeconds,
         maxEvidenceCuts: maxCuts,
+        ...(args.labelProbes===undefined?{}:{labelProbes:args.labelProbes}),
       }),
     });
     const result = (await response.json().catch(() => null)) as ExportQaResponse | null;
@@ -96,6 +99,9 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
     const faceIssues = await captionFaceQaIssues(ctx.getDoc(), state);
     const merged = faceIssues.length ? mergeExportQaIssues(report, faceIssues) : report;
     const evidence = result.evidence;
+    const labelEvidenceComplete=args.labelProbes===undefined||(Array.isArray(args.labelProbes)
+      && evidence?.labelMeasurements?.length===args.labelProbes.length
+      && evidence.labelMeasurements.every(row=>row.status==='measured'));
     const manifestTimingMismatch = transitions && (!Number.isFinite(merged.durationSeconds) || !Number.isFinite(merged.fps)
       || Math.abs(transitions.duration_seconds - merged.durationSeconds) > 1 / transitions.fps
       || Math.abs(transitions.fps - merged.fps) > Number.EPSILON * Math.max(transitions.fps, merged.fps) * 4);
@@ -111,11 +117,13 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
       report: merged,
       cutCount: cutTimesSeconds.length,
       evidenceSamples: evidence?.samples ?? [],
+      ...(args.labelProbes===undefined?{}:{labelMeasurements:evidence?.labelMeasurements??[],
+        labelMeasurementMs:evidence?.labelMeasurementMs,labelEvidenceOnly:true,labelEvidenceComplete}),
       ...(evidence?.base64 ? { __images: [{ frame: 0, base64: evidence.base64 }] } : {}),
       note: evidence?.base64
         ? 'Cut evidence is a two-column sheet: each row shows the frame immediately before and after one edit boundary.'
         : 'No adjacent edit boundaries were available for visual evidence; stream-level QA still completed.',
-      next: transitions ? manifestTimingMismatch
+      next: !labelEvidenceComplete ? 'Requested label evidence is incomplete. Inspect the unmeasured probes without claiming label verification.' : transitions ? manifestTimingMismatch
         ? 'Agent读取本次导出的实际执行清单再自检；时基不符不能当已检查，不询问用户逐条核对。'
         : transitions.next
         : merged.ok && merged.summary.warnings === 0

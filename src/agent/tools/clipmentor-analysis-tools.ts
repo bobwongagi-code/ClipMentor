@@ -15,10 +15,10 @@ import { editClipMentorPreview } from '../../clipmentor/preview-edit';
 import { requestPreviewReview } from '../../clipmentor/request-preview-review';
 import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-review';
 import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmentor/append-findings';
-import { checkCopyProduction, copyReviewSubject, isCopyProductionReview } from '../../clipmentor/production-gate';
+import { checkCopyProduction, copyReviewSubject, isCopyProductionReview, validatePicturePlanProjection } from '../../clipmentor/production-gate';
 import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
-import {deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
+import {deliveryOpeningTextIssue,deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
 import {readClipMentorStoryboard} from '../../clipmentor/read-storyboard';
 import {renderClipMentorReviewBoard} from '../../clipmentor/render-review-board';
 
@@ -216,6 +216,14 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     const { doc, isCurrent, projectId } = captureAnalysisSnapshot(ctx, initial, signal);
     let a = doc.clipMentorAnalysis ? structuredClone(doc.clipMentorAnalysis) : undefined;
     const now = Date.now();
+    if (name === 'revise_clipmentor_analysis' && ['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(args.action))
+      && object(args.record) && object(args.record.plan)) {
+      try { validatePicturePlanProjection(args.record.plan); }
+      catch (error) {
+        if (!(error instanceof Error) || !/^picture_plan_[a-z_]+(?::[a-z_]+)?$/.test(error.message)) throw error;
+        return { error: error.message, next_step: 'Use the declared picture-plan fields, including mode rather than kind for a phase. Nothing changed.' };
+      }
+    }
     if (name === 'revise_clipmentor_analysis' && args.action === 'append') {
       if (!a) return { error: 'Source analysis required before findings' };
       if (!a.source.sourceContentHash || doc.assets.find((v) => v.id === a!.source.asset_id)?.sourceContentHash !== a.source.sourceContentHash) return { error: 'Source hash missing or changed; findings not applied' };
@@ -409,6 +417,9 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     try{deliverySectionsFromDoc(next);}
     catch(error){
       if(!(error instanceof Error)||!/^delivery_[a-z_]+(?::|$)/.test(error.message))throw error;
+      const submittedPlan=(args.record as {plan?:{delivery_sections?:unknown}}|undefined)?.plan;
+      const issue=error.message==='delivery_sections_invalid'&&deliveryOpeningTextIssue(submittedPlan?.delivery_sections);
+      if(issue)return {error:error.message,issue,next_step:'Split the indicated display line at a word boundary. Keep at most four lines and preserve narration, subtitles and media bindings.'};
       return {error:error.message,next_step:'Fix the current delivery declaration before saving. Use section_id, kind, line, evidence_ids, picture and voice. picture must be a bound image, not a video source range. Move delivery lines out of the body candidate atomically with the new plan.'};
     }
     const handoff = await checkAnalysisHandoff(next);

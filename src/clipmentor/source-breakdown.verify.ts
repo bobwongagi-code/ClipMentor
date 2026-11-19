@@ -839,11 +839,67 @@ await verifyCopyCandidateCheckpoint(actor);
 // reviewer projection, not just validate an already-projected review packet.
 const groupedRegistration = JSON.parse(readFileSync(new URL('./fixtures/grouped-registration-v1.json', import.meta.url), 'utf8')) as ProjectDoc;
 const { prepareProductionBlueprint } = await import('../../server/clipmentor/production-readiness');
+const { lintBlueprint } = await import('./blueprint-lint');
+const registeredPhase = (doc: ProjectDoc) => {
+  const internal = (doc.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  return internal[internal.current_picture_plan].phases[0];
+};
+for (const [field, value, code] of [
+  ['kind', 'original', 'picture_plan_phase_field_unsupported:kind'],
+  ['source_seconds', [0, 1], 'picture_plan_phase_source_range_conflict'],
+] as const) {
+  const divergent = structuredClone(groupedRegistration);
+  registeredPhase(divergent)[field] = value;
+  assert(lintBlueprint(divergent).findings.some(finding => finding.rule_id === 'PLAN_STRUCTURE' && finding.message === code));
+  await assert.rejects(prepareProductionBlueprint(divergent), new RegExp(code));
+}
+const {default: phaseHistory}=await import('./fixtures/production-saved-projects-20261028.json');
+for(const saved of phaseHistory.cases){
+  const historical=saved.doc as unknown as ProjectDoc;
+  await prepareProductionBlueprint(historical);
+  const malformed=structuredClone(historical);
+  for(const unit of malformed.clipMentorAnalysis!.blueprint){
+    const internal=(unit as any).internal_review;
+    for(const phase of internal[internal.current_picture_plan].phases)phase.mode='misspelled';
+  }
+  assert(lintBlueprint(malformed).findings.some(finding=>finding.rule_id==='INPUT'&&finding.message.includes('Unknown or missing picture stage')));
+  await assert.rejects(prepareProductionBlueprint(malformed),/picture_plan_phase_mode_invalid/);
+}
+const matchingAliases = structuredClone(groupedRegistration);
+registeredPhase(matchingAliases).source_seconds = registeredPhase(matchingAliases).source_range_seconds;
+assert(!lintBlueprint(matchingAliases).findings.some(finding => finding.rule_id === 'PLAN_STRUCTURE'));
+await prepareProductionBlueprint(matchingAliases);
+
 assert.equal(checkSourceBreakdown(groupedRegistration).status, 'structurally_ready', 'four groups must not acquire a fictitious full-playback-first revisit');
 const preparedGroup = await prepareProductionBlueprint(groupedRegistration);
 assert.equal((preparedGroup.packet.units[0].picture_plan!.execution_plan!.content.phases as unknown[]).length, 9);
 assert.equal(preparedGroup.packet.units[0].picture_plan!.registered_revisits.length, 5);
 assert.equal((await checkCopyProduction(groupedRegistration, 'clipmentor')).allowed, false, 'valid grouped structure never replaces independent production approval');
+const groupedSubwindow = structuredClone(groupedRegistration);
+const subAnalysis = groupedSubwindow.clipMentorAnalysis!;
+const subLedger = subAnalysis.source_breakdown!;
+const subUnit = subLedger.units[0];
+const firstRevisit = subUnit.revisits[0];
+const sourceAnchor = subLedger.segments.find(segment => segment.segment_id === firstRevisit.from_segment_id)!;
+subLedger.segments.push({ ...sourceAnchor, segment_id: 'combined-playback-anchor', source_range_seconds: [0, 5],
+  visible_evidence_ids: [], claim_evidence_ids: [], interpretation_evidence_ids: [] });
+subAnalysis.evidence.push({ evidence_id: 'anchor-frame', kind: 'source_frame', text: 'Local fixture frame', status: 'fixture',
+  source_ids: [], supporting_evidence_ids: [], source_frame: 30, time_seconds: 1, observation_method: 'fixture', call_status: 'succeeded' });
+subLedger.segments.at(-1)!.visible_evidence_ids.push('anchor-frame');
+subUnit.original_segment_ids.push('combined-playback-anchor');
+firstRevisit.from_segment_id = 'combined-playback-anchor';
+const subInternal = (subAnalysis.blueprint[0] as any).internal_review;
+subInternal[subInternal.current_picture_plan].phases[1].source_range_seconds = [1, 4];
+assert.deepEqual((await prepareProductionBlueprint(groupedSubwindow)).packet.units[0].picture_plan!.registered_revisits[0],
+  { from_source_range: [0, 10.733333333333333], to_source_range: [1, 4] });
+for (const change of [
+  (doc: ProjectDoc) => { doc.clipMentorAnalysis!.source_breakdown!.units[0].revisits[0].from_segment_id = 'BT-G2-original'; },
+  (doc: ProjectDoc) => { const ir = (doc.clipMentorAnalysis!.blueprint[0] as any).internal_review; ir[ir.current_picture_plan].phases[1].source_range_seconds = [1, 10.5]; },
+]) {
+  const invalid = structuredClone(groupedSubwindow); change(invalid);
+  assert(checkSourceBreakdown(invalid).issues.some(issue => issue.code === 'picture_plan_revisits_mismatch'));
+  await assert.rejects(prepareProductionBlueprint(invalid));
+}
 const gInternal = (groupedRegistration.clipMentorAnalysis!.blueprint[0] as any).internal_review;
 for (const change of [
   (doc: ProjectDoc) => { doc.clipMentorAnalysis!.source_breakdown!.units[0].revisits.pop(); },
