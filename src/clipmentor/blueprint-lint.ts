@@ -1,7 +1,11 @@
-/** Advisory, deterministic author checks. No IO, provider, gate or approval dependency. */
+/** Advisory author checks using local, deterministic validators. No IO or approval claim. */
 import corpus from './fixtures/blueprint-self-check-cases.json';
 import { blueprintPictureNotices, pictureNoticeRows, verifyPictureNoticeSources, currentPicturePhases } from './blueprint-picture-notices';
 import {labelTranslationsConflict} from './author-translations';
+import {validatePicturePlanProjection} from './production-gate';
+import {checkSourceBreakdown} from './source-breakdown';
+import {deliveryOpeningTextIssue} from './delivery-bindings';
+import type {ProjectDoc} from '../editor/types';
 
 type Row = Record<string, unknown>;
 type Range = [number, number];
@@ -261,10 +265,37 @@ export function repeatedRootCandidates(text: string) {
   return result;
 }
 
-export function lintBlueprint(input: unknown, options: { markdown?: MarkdownCheck; samples?: SpeechSample[] } = {}) {
-  const findings: BlueprintFinding[] = [], data = readBlueprint(input);
+export function lintBlueprint(input: unknown, options: { markdown?: MarkdownCheck; samples?: SpeechSample[]; deliveryFindings?: BlueprintFinding[] } = {}) {
+  const findings: BlueprintFinding[] = [...(options.deliveryFindings??[])], data = readBlueprint(input);
   const add = (rule_id: string, level: BlueprintFinding['level'], location: string, excerpt: string, message: string) => findings.push({ rule_id, level, location, excerpt, message });
   for (const issue of data.issues) add('INPUT', 'notice', issue.path, '', issue.message);
+  for (const selected of data.selectedPlans) {
+    if (!selected.plan_id || selected.resolved?.legacy) continue;
+    const planPath = selected.path + '.internal_review[' + JSON.stringify(selected.plan_id) + ']';
+    const operational = obj(obj(selected.plan.execution_plan).content);
+    try {
+      validatePicturePlanProjection(Object.keys(operational).length ? operational : selected.plan);
+    } catch (error) {
+      add('PLAN_STRUCTURE', 'warn', planPath, '', (error as Error).message);
+    }
+    const opening = deliveryOpeningTextIssue(selected.plan.delivery_sections);
+    if (opening) add('PLAN_STRUCTURE', 'warn', planPath + '.delivery_sections', '',
+      `${opening.section_id} ${opening.field} line ${opening.line} has ${opening.characters} characters (maximum ${opening.max_characters}).`);
+  }
+  if (data.analysis.source_breakdown && data.analysis.source && Array.isArray(data.root.assets) && Array.isArray(data.root.timelines)) {
+    const breakdown = obj(data.analysis.source_breakdown);
+    const locations = new Map<string, string>();
+    for (const [field, key] of [['segments', 'segment_id'], ['units', 'unit_id']]) {
+      arr(breakdown[field]).forEach((row, index) => {
+        locations.set(str(obj(row)[key]), `$.clipMentorAnalysis.source_breakdown.${field}[${index}]`);
+      });
+    }
+    for (const issue of checkSourceBreakdown(data.root as unknown as ProjectDoc).issues) {
+      if (issue.code === 'original_segment_outside_playback' || issue.code === 'picture_plan_revisits_mismatch') {
+        add('PLAN_STRUCTURE', 'warn', locations.get(issue.id) ?? '$.clipMentorAnalysis.source_breakdown', '', issue.code);
+      }
+    }
+  }
   if (!input || !data.lines.length && !data.groups.length) add('INPUT', 'notice', '$', '', 'No readable candidate object; no approval or complete-check claim.');
   walk(input, (s, path) => {
     // Ellipses are quoted omissions, not doubled sentence terminators.
@@ -357,6 +388,7 @@ export function lintBlueprint(input: unknown, options: { markdown?: MarkdownChec
   for (const issue of pictures.issues) add('INPUT', 'notice', issue.path, '', issue.message);
   findings.push(...pictures.notices.map(({ row_keys: _rows, ...finding }) => finding));
   return { advisory_only: true, scope: 'saved_blueprint_author_preparation_not_approval', findings,
+    delivery_scope: options.deliveryFindings===undefined?'unverified_without_task_scope':'checked_against_task_scope',
     calibration, name_inventory: { declared: names, visible_text: visibleTextInventory, note: 'Declared names and visible text only; no semantic brand recognition or automatic alias correction.' }, line_estimates: lineEstimates, groups, durations, reuse,
     disabled_rules: [{ rule_id: 'B08', reason: 'Pilot on frozen accepted copy has more false-positive candidates than known hits; see regression statistics. No root-based lint is shipped.' }],
     limitations: ['Source-coordinate overlap cannot identify the same action in disjoint montage shots.', 'Written claims and word counts do not prove audible wording, visual clarity or teaching value.', 'No markdown comparison when --md is omitted.', 'Picture descriptions and unstructured image pixels are not decoded for text or duration.', 'B10/B11 are text-risk questions, not semantic conflicts or edit coordinates. Three sampled images cannot establish action absence or audible boundaries.'] };

@@ -18,6 +18,13 @@ export const EXPORT_QA_TOOL_SCHEMAS: AgentToolSchema[] = [
         renderId: { type: 'string', description: 'Completed render job ID returned by submit_render_job.' },
         src: { type: 'string', description: 'Alternative completed export path under /media/uploads/.' },
         executionManifest: { type: 'object', description: 'Existing frame-based execution output with fps, total_frames, scenes and audios (lines optional). Do not invent layout/Shot records. Without audios, audio checks remain not_provided.' },
+        labelProbes: { type: 'array', maxItems: 16,
+          description: 'Optional local evidence only. Use a calibrated normalized [left,top,width,height] crop and a minimum RGB channel threshold for light ink. cutSeconds is relative to the completed export.',
+          items: {type: 'object', required:['id','cutSeconds','side','region','inkMinChannel'], properties:{
+            id:{type:'string'},cutSeconds:{type:'number'},side:{type:'string',enum:['before','after']},
+            region:{type:'array',minItems:4,maxItems:4,items:{type:'number'}},
+            inkMinChannel:{type:'integer',minimum:1,maximum:255},
+          }} },
         maxCuts: { type: 'integer', minimum: 1, maximum: 8, description: 'Maximum edit boundaries to include in the evidence sheet; defaults to 8.' },
       },
     },

@@ -18,7 +18,10 @@ import {isProjectConnected} from '../external-agent/broker';
 import {assertDeliveryPicturePreservation} from '../../src/clipmentor/delivery-bindings';
 import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {copyTeachingPacketFromDoc,clipMentorProductionBlock} from '../../src/clipmentor/production-gate';
+import {clipMentorHandoffBlock} from '../../src/clipmentor/handoff-guard';
 import {execClipMentorAnalysisTool} from '../../src/agent/tools/clipmentor-analysis-tools';
+import {execEditAssetTool} from '../../src/agent/tools/edit-asset-tools';
+import {assertCreatorDocumentEdit} from './creator-storyboard-document';
 import {executeCoreEditItem} from './headless-edit-item';
 import {pickFrames,constrainSourceFrameArgs} from '../../src/agent/tools/frame-coordinates';
 import {sourceWindowForTimelineRange} from '../../src/editor/sourceLimit';
@@ -36,6 +39,7 @@ export interface HeadlessOptions {
  retryGateway?:boolean;
  voice?:{provider:string;voiceId:string};signal?:AbortSignal;
  finalFeedback?:Record<string,unknown>;
+ creatorStoryboardDraft?:boolean;
  stageEditWrites?:boolean;
  assertCanvas?:(doc:ProjectDoc)=>void;
  assertCurrent?:()=>Promise<void>;
@@ -172,7 +176,10 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   await validate();await options.assertCurrent?.();active();const before=engine.getDoc(),beforeRevision=revision;
   if(args.projectId!==undefined&&args.projectId!==options.projectId)throw new Error('Tool project binding mismatch');
   try{
-   const blocked=await clipMentorProductionBlock(name,args,ctx);if(blocked)return {...blocked,issues:before.clipMentorAnalysis?checkSourceBreakdown(before,true).issues:[]};
+   const creatorStoryboardDraft=options.creatorStoryboardDraft&&name==='edit_asset';
+   if(creatorStoryboardDraft)assertCreatorDocumentEdit(before,args);
+   const blocked=await (creatorStoryboardDraft?clipMentorHandoffBlock(name,args,ctx):clipMentorProductionBlock(name,args,ctx));
+   if(blocked)return {...blocked,issues:before.clipMentorAnalysis?checkSourceBreakdown(before,true).issues:[]};
    if(name==='save_clipmentor_source_frame'){
     const asset=before.assets.find(a=>a.id===args.assetId);const seconds=args.seconds;
     if(!asset||asset.kind!=='video'||typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0||seconds>=asset.durationInFrames/engine.getState().fps)throw new Error('Invalid source frame');
@@ -256,7 +263,8 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     if(!res.ok)throw new Error('Timeline frame render failed');const data=await res.json();return {...data,__images:data.frames};
    }
    let result:unknown;
-   if(name==='edit_item')result=executeCoreEditItem(args,ctx);
+   if(creatorStoryboardDraft)result=await execEditAssetTool(name,args,ctx);
+   else if(name==='edit_item')result=executeCoreEditItem(args,ctx);
    else if(name.includes('clipmentor'))result=await execClipMentorAnalysisTool(name,args,ctx);
    else if(isExternalServerDirectCall(name,args))result=await executeOfflineTool(name,args,ctx);
    else throw new Error(`Tool/action requires an unsupported browser host: ${name}`);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {savePendingBlueprintFeedback} from './production-task';
+import * as production from './production-task';
 import {bindBlueprintFeedbackSummary,blueprintFeedbackPoints,captureBlueprintFeedbackSummary} from './production-feedback';
 import {advanceProductionTask,productionFeedback,acceptProductionTask,PRODUCTION_STAGES,validateProductionInput,cancelActiveProductionTask,runProductionWithRecovery,type ProductionInput,type ProductionTask,type TaskStore} from './production-task';
 const input:ProductionInput={projectId:'test',sourceAssetId:'source',product:{name:'Fixture',category:'test'},brief:'Fixture production without a provider',
@@ -41,6 +41,8 @@ for(const committed of [false,true]){
  assert.equal(lostReviewAck,committed);
 }
 const pending=fresh();pending.input.humanBlueprintReview=true;pending.status='blocked';pending.stage='copy_review';
+pending.error='old repair blocked';pending.completed.blueprint={at:1,artifact:{revision:'preceding-draft'}};
+pending.repairContext={pending_review_repair:{status:'bound'},pending_blueprint_feedback:{text:'old note',revision:'current-draft'}};
 const budgetBefore=structuredClone(pending.attempts);
 for(const [reviewedDigest,allowed,requirementsDigest,expected] of [['approved',true,'requirements','awaiting_review'],['changed',true,'requirements','awaiting_blueprint'],['approved',true,'new-requirements','awaiting_blueprint'],['approved',false,'requirements','blocked']] as const){
  const confirmed=fresh();confirmed.input.humanBlueprintReview=true;confirmed.stage='copy_review';confirmed.projectRevision='confirmed-r1';
@@ -50,8 +52,10 @@ for(const [reviewedDigest,allowed,requirementsDigest,expected] of [['approved',t
  assert.equal(confirmed.status,expected);
  assert.equal(visited.includes('audio'),expected==='awaiting_review','human intent cannot skip failed review or authorize changed content');
 }
-await savePendingBlueprintFeedback(pending,'current-draft','保留成绩钩子',store);
-assert.equal(pending.status,'blocked');assert.equal(pending.stage,'copy_review');
+assert.equal(await production.queueDraftBlueprintFeedback(pending,'current-draft','保留成绩钩子',store),'queued');
+assert.equal(pending.status,'queued');assert.equal(pending.stage,'blueprint');assert.equal(pending.projectRevision,'current-draft');
+assert.equal(pending.error,undefined);assert.equal(pending.blueprintApproval,undefined);
+assert.deepEqual(pending.repairContext?.pending_review_repair,{status:'bound'});
 const spoken=fresh();spoken.blueprintFeedback='嗯，第一个片头要成绩和提问。第二个呢，两个片尾一个CTA一个Storyboard。还有人审版不要技术报告，补原话中文。'.repeat(3);
 const rawSpoken=spoken.blueprintFeedback;
 assert.deepEqual(blueprintFeedbackPoints(spoken),[],'long speech is never shown verbatim or mechanically truncated');
@@ -65,15 +69,21 @@ assert(captureBlueprintFeedbackSummary(spoken,rawSpoken,'Done. <feedback_summary
 spoken.blueprintFeedback='新的修改意见'.repeat(30);
 assert.deepEqual(blueprintFeedbackPoints(spoken),[],'a summary for another raw-feedback digest must disappear');
 
-assert.equal(pending.repairContext?.pending_blueprint_feedback&&pending.blueprintFeedback,'保留成绩钩子');
+assert.equal(pending.repairContext?.pending_blueprint_feedback,undefined);
+assert.equal(pending.blueprintFeedback,'保留成绩钩子');
 assert.deepEqual(pending.attempts,budgetBefore);assert.deepEqual(pending.completed,{});
 const changedAfterReview=fresh();changedAfterReview.input.humanBlueprintReview=true;
 changedAfterReview.status='awaiting_blueprint';changedAfterReview.stage='copy_review';changedAfterReview.projectRevision='reviewed-old';
-await savePendingBlueprintFeedback(changedAfterReview,'current-new','核对当前原CTA',store);
-assert.equal(changedAfterReview.status,'awaiting_blueprint');assert.equal(changedAfterReview.projectRevision,'reviewed-old');
+assert.equal(await production.queueDraftBlueprintFeedback(changedAfterReview,'current-new','核对当前原CTA',store),'queued');
+assert.equal(changedAfterReview.status,'queued');assert.equal(changedAfterReview.projectRevision,'current-new');
 assert.deepEqual(changedAfterReview.attempts,fresh().attempts);
-await assert.rejects(savePendingBlueprintFeedback(changedAfterReview,'reviewed-old','不能伪造旧审核的当前反馈',store));
-await assert.rejects(savePendingBlueprintFeedback(pending,'current-draft','',store));
+await assert.rejects(production.queueDraftBlueprintFeedback(changedAfterReview,'reviewed-old','不能伪造旧审核的当前反馈',store));
+await assert.rejects(production.queueDraftBlueprintFeedback(pending,'current-draft','',store));
+const expiredDraft=fresh();expiredDraft.input.humanBlueprintReview=true;expiredDraft.stage='blueprint';expiredDraft.status='blocked';
+expiredDraft.createdAt-=expiredDraft.input.budget.maxElapsedMs+100;
+assert.equal(await production.queueDraftBlueprintFeedback(expiredDraft,'current-draft','过期时只保留原话',store),'limit');
+assert.equal(expiredDraft.status,'blocked');assert.equal(expiredDraft.repairs,0);
+assert.deepEqual(expiredDraft.repairContext?.pending_blueprint_feedback,{text:'过期时只保留原话',revision:'current-draft'});
 validateProductionInput(input);assert.throws(()=>validateProductionInput({...input,budget:{...input.budget,model:-1}}));
 let calls:string[]=[];const task=fresh();
 await advanceProductionTask(task,async(t,c)=>{calls.push(t.stage);await c.effect('model',t.stage,async()=>({value:1}));return {artifact:{saved:true}};},store);

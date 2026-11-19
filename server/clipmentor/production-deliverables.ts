@@ -6,12 +6,20 @@ import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
 import {isSafeUploadName,resolveUploadFile} from '../media-dir';
 import {creatorStoryboard,creatorStoryboardSource} from './creator-storyboard';
 import {deliveryFileName} from './delivery-filename';
-import {loadCreatorStoryboardDocument} from './creator-storyboard-document';
+import {partnerStoryboardRequired,panelStoryboardAsset} from './production-panel-delivery';
+import type {ProductionInput} from './production-task';
+import {sha256File} from '../../shared/node-content-hash';
+import {loadCreatorStoryboardDocument,currentCreatorDocument} from './creator-storyboard-document';
 
-/** Required outputs come from the current bound plan; pool registration is not delivery. */
-export async function productionAttachmentSlots(doc:ProjectDoc,io={resolve:resolveUploadFile,read:readFile},at=Date.now()){
- const outputs=[];
- for(const section of deliverySectionsFromDoc(doc)){
+/** The task determines obligations. The current plan supplies the bound output slots. */
+export async function productionAttachmentSlots(doc:ProjectDoc,io={resolve:resolveUploadFile,read:readFile},at=Date.now(),scope?:ProductionInput['panelDelivery']){
+ const outputs=[],sections=deliverySectionsFromDoc(doc);
+ if(partnerStoryboardRequired(scope)){
+  const layout=sections.find(s=>s.section_id==='existing_partner')?.picture.layout;
+  if(layout?.kind!=='product_storyboard'||panelStoryboardAsset(doc,await currentCreatorDocument(doc))?.id!==layout.attachment.asset_id)
+   throw Error('required_delivery_output_unbound:existing_partner');
+ }
+ for(const section of sections){
   const layout=section.picture.layout;
   if(layout?.kind!=='product_storyboard')continue;
   const expected=layout.attachment,asset=doc.assets.find(a=>a.id===expected.asset_id);
@@ -31,6 +39,8 @@ export async function productionAttachmentSlots(doc:ProjectDoc,io={resolve:resol
    ?io.resolve(sourceName):null;
   const sourceInfo=sourceFile?await stat(sourceFile).catch(()=>null):null;
   if(!sourceInfo?.isFile()||!sourceInfo.size)throw Error('required_delivery_source_unavailable:'+section.section_id);
+  if(partnerStoryboardRequired(scope)&&await sha256File(sourceFile!)!==source.sourceContentHash)
+   throw Error('required_delivery_source_changed:'+section.section_id);
   await loadCreatorStoryboardDocument(doc);
   outputs.push({sectionId:section.section_id,assetId:asset.id,
    fileName:deliveryFileName(doc.clipMentorAnalysis!.product.name,undefined,'storyboard',at)});
@@ -38,10 +48,11 @@ export async function productionAttachmentSlots(doc:ProjectDoc,io={resolve:resol
  return outputs;
 }
 
-export async function productionDeliverables(doc:ProjectDoc,io={resolve:resolveUploadFile,read:readFile,storyboard:creatorStoryboard},at=Date.now()){
- const slots=await productionAttachmentSlots(doc,io,at);
+export async function productionDeliverables(doc:ProjectDoc,io={resolve:resolveUploadFile,read:readFile,storyboard:creatorStoryboard},at=Date.now(),scope?:ProductionInput['panelDelivery']){
+ const slots=await productionAttachmentSlots(doc,io,at,scope);
  if(!slots.length)return [];
  const document=await io.storyboard(doc);
+ if(document.bytes.subarray(0,5).toString('ascii')!=='%PDF-'||document.pages<1)throw Error('required_delivery_pdf_unreadable');
  // assetId is the authorized attachment slot, not a claim that the screen PNG
  // contains these PDF bytes. No PNG URL is published as the document's location.
  return slots.map(slot=>({...slot,mimeType:'application/pdf',sha256:createHash('sha256').update(document.bytes).digest('hex'),bytes:document.bytes}));

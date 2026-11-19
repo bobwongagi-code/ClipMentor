@@ -12,7 +12,7 @@ const {creatorStoryboard}=await import('./creator-storyboard');
 const {validateCreatorDocument,assertCreatorDocumentEdit,saveCreatorStoryboardDocument,loadCreatorStoryboardDocument}=await import('./creator-storyboard-document');
 const {assertCreatorDocumentPdf,renderCreatorDocument}=await import('./creator-storyboard-pdf');
 const {installedRenderBrowserExecutable}=await import('../render-browser');
-const {createPanelStoryboard,panelStoryboardAsset,preparePanelStoryboardForAuthor}=await import('./production-panel-delivery');
+const {createPanelStoryboard,panelStoryboardAsset,preparePanelStoryboardForAuthor,preparePanelPartnerCard,panelPartnerPicture,verifyPanelPartnerCard}=await import('./production-panel-delivery');
 const {deliveryFileName,attachmentDisposition}=await import('./delivery-filename');
 const {uploadDir}=await import('../media-dir');
 const {ffmpegBin}=await import('../media-binaries');
@@ -60,7 +60,7 @@ try{
  silent.clipMentorAnalysis!.evidence=silent.clipMentorAnalysis!.evidence.filter(e=>e.kind!=='original_claim');assert.equal((await creatorStoryboard(silent)).pages,1,'no speech is required for a visible-only source segment');
  const mixed=structuredClone(doc);mixed.clipMentorAnalysis!.evidence[0].source_ids.unshift('source','missing-reference');assert.equal((await creatorStoryboard(mixed)).pages,1);
  const duplicate=structuredClone(doc),quote=structuredClone(duplicate.clipMentorAnalysis!.evidence[0]);duplicate.clipMentorAnalysis!.evidence[0].source_ids=['source'];quote.evidence_id='duplicate';duplicate.clipMentorAnalysis!.evidence.push(quote);assert.equal((await creatorStoryboard(duplicate)).pages,1,'equivalent evidence unions valid receipt origins');
- const direct=structuredClone(doc);direct.clipMentorAnalysis!.evidence[0].source_ids=['source'];await assert.rejects(creatorStoryboard(direct),/excerpt_changed/);
+ const direct=structuredClone(doc);direct.clipMentorAnalysis!.evidence[0].source_ids=['source'];await assert.rejects(creatorStoryboard(direct),/excerpt_changed:claim/);
  const tampered=structuredClone(doc);tampered.clipMentorAnalysis!.evidence[0].text='Beli sekarang.';await assert.rejects(creatorStoryboard(tampered),/excerpt_changed/);
  await saveCreatorStoryboardDocument(doc,content);const stored=structuredClone(doc);delete stored.assets[0].props!.clipmentorCreatorStoryboard;assert.deepEqual(await loadCreatorStoryboardDocument(stored),content);
  const changedEvidence=structuredClone(stored);changedEvidence.clipMentorAnalysis!.evidence[0].text='changed';await assert.rejects(loadCreatorStoryboardDocument(changedEvidence),/evidence_changed/);
@@ -70,8 +70,59 @@ try{
  assert.equal((await preparePanelStoryboardForAuthor(tooLong,new AbortController().signal)).issue,'storyboard_document_layout_overflow','recovery also exposes the same author-repairable issue');
  assert((await preparePanelStoryboardForAuthor(doc,new AbortController().signal)).asset,'corrected author copy can resume local generation');
  const first=await createPanelStoryboard(doc,new AbortController().signal);assert(first);doc.assets.push(first!);
+ const canonicalOrder=JSON.parse(JSON.stringify(doc,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)
+  ?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0)):value)) as ProjectDoc;
+ assert.equal(panelStoryboardAsset(canonicalOrder)?.id,first!.id,'the saved cover survives project key sorting');
+ assert.equal(await createPanelStoryboard(canonicalOrder,new AbortController().signal),undefined,'unchanged cold-read document reuses its existing cover');
  const coverPath=join(media,first.src.split('/').at(-1)!);
  const originalCover=await readFile(coverPath);
+ const sharp=(await import('sharp')).default;
+ const scope={productAssetId:'partner-product',productAssetHash:'',salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'c'.repeat(64),
+  partnerEnding:'product_storyboard_pdf' as const};
+ for(const [number,color] of ['#135a9a','#691764'].entries()){
+  const product=await sharp({create:{width:160,height:200,channels:3,background:color}}).png().toBuffer();
+  const id='partner-product-'+number,name=id+'.png';await writeFile(join(media,name),product);
+  scope.productAssetId=id;scope.productAssetHash=createHash('sha256').update(product).digest('hex');
+  doc.assets.push({id,kind:'image',name,src:'/media/uploads/'+name,sourceContentHash:scope.productAssetHash,durationInFrames:1});
+  const built=await preparePanelPartnerCard(doc,scope,new AbortController().signal);
+  assert(built);doc.assets.push(built);
+  const picture=panelPartnerPicture(doc,scope);assert(picture);
+  assert.equal(picture.layout.product.asset_id,id);
+  assert.equal(picture.layout.storyboard.asset_id,first.id);
+  assert.equal(await verifyPanelPartnerCard(doc,scope,undefined,picture),true);
+  assert.equal(await preparePanelPartnerCard(doc,scope,new AbortController().signal),undefined,'same assets reuse their composition');
+  const output=await readFile(join(media,built.src.split('/').at(-1)!));
+  const [left,right]=await Promise.all([[160,532],[503,532]].map(([x,y])=>sharp(output)
+   .extract({left:x,top:y,width:1,height:1}).raw().toBuffer()));
+  assert.equal(left.toString('hex'),color.slice(1),'actual pixels contain the product on the left');
+  assert.notDeepEqual(left,right,'actual arrangement did not replicate the product on both sides');
+  const verifyRegisteredReplacement=async(bytes:Buffer)=>{
+   const sha256=createHash('sha256').update(bytes).digest('hex'),assetId='clipmentor-partner-'+sha256;
+   const src='/media/uploads/'+assetId+'.png';
+   await writeFile(join(media,assetId+'.png'),bytes);
+   const replaced={...doc,assets:doc.assets.map(asset=>asset.id===built.id?{...asset,id:assetId,src,sourceContentHash:sha256}:asset)};
+   const impostor=panelPartnerPicture(replaced,scope);
+   assert.equal(impostor?.asset_id,assetId,'the replacement passes registration before pixel verification');
+   return verifyPanelPartnerCard(replaced,scope,undefined,impostor);
+  };
+  const fake=await sharp(originalCover).resize(720,1280,{fit:'contain'}).png().toBuffer();
+  assert.equal(await verifyRegisteredReplacement(fake),false,'correct role IDs cannot certify cover-only pixels');
+  const rgba=await sharp(output).ensureAlpha().raw().toBuffer();
+  for(let offset=3;offset<rgba.length;offset+=4)rgba[offset]=0;
+  const transparent=await sharp(rgba,{raw:{width:720,height:1280,channels:4}}).png().toBuffer();
+  assert.equal(await verifyRegisteredReplacement(transparent),false,'hidden pixels cannot certify visible roles');
+
+ }
+
+ const wrongCover=await sharp({create:{width:1190,height:1684,channels:3,background:'#162222'}}).jpeg().toBuffer();
+ const wrongHash=createHash('sha256').update(wrongCover).digest('hex'),wrongId='clipmentor-storyboard-'+wrongHash;
+ await writeFile(join(media,wrongId+'.jpg'),wrongCover);
+ const forged={...doc,assets:doc.assets.map(asset=>asset.id===first.id?
+  {...asset,id:wrongId,src:'/media/uploads/'+wrongId+'.jpg',sourceContentHash:wrongHash}:asset)};
+ assert.equal(panelStoryboardAsset(forged)?.id,wrongId,'the forged cover has matching claims and file identity');
+ const regenerated=await createPanelStoryboard(forged,new AbortController().signal,true);
+ assert.equal(regenerated?.id,first.id,'the strict repair produces the current source cover from canonical evidence');
+ assert.deepEqual(await readFile(coverPath),originalCover);
  await rm(coverPath);
  assert.equal(await createPanelStoryboard(doc,new AbortController().signal),undefined,'a recovered cover retains the registered asset');
  assert.deepEqual(await readFile(coverPath),originalCover);
@@ -83,6 +134,32 @@ try{
  const fresh=await createPanelStoryboard(doc,new AbortController().signal);assert(fresh);doc.assets.push(fresh!);assert.equal(panelStoryboardAsset(doc)?.id,fresh!.id,'old assets remain saved but cannot shadow the new cover');
  assert.doesNotThrow(()=>assertCreatorDocumentEdit(doc,{action:'update',assetId:'source',props:{clipmentorCreatorStoryboard:content}}));
  for(const patch of [{action:'delete'},{assetId:'source-poster'},{code:'x'},{props:{other:1,clipmentorCreatorStoryboard:content}}])assert.throws(()=>assertCreatorDocumentEdit(doc,{action:'update',assetId:'source',props:{clipmentorCreatorStoryboard:content},...patch}),/only_creator_document/);
+ const {openHeadlessEditor}=await import('./headless-editor');
+ const {MemoryPersistence,projectDoc,projectId}=await import('../external-agent/offline-runtime.verify-fixtures');
+ const original=JSON.parse(await readFile(new URL('../../src/clipmentor/fixtures/grouped-registration-v1.json',import.meta.url),'utf8')) as ProjectDoc;
+ const analysis=original.clipMentorAnalysis!,duration=analysis.source.duration_seconds,sourceId=analysis.source.asset_id;
+ const source=original.assets.find(asset=>asset.id===sourceId)!;
+ const storyboardFixture={...projectDoc(),assets:[{...source,props:{marker:'preserve'}}],clipMentorAnalysis:analysis};
+ analysis.evidence.push({evidence_id:'draft-fixture-action',kind:'visible_action',text:'The product is visible.',source_range_seconds:[0,duration],source_ids:[sourceId],supporting_evidence_ids:[],status:'fixture',observation_method:'fixture',call_status:'succeeded'});
+ const draftDocument={source_sha256:analysis.source.sourceContentHash,rows:[{source_range_seconds:[0,duration],source_frames:[0],shot_ms:'Produk kelihatan.',information_ms:'Produk dipaparkan.',visible_evidence_ids:['draft-fixture-action'],claim_evidence_ids:[]}]};
+ const write={action:'update',assetId:sourceId,props:{clipmentorCreatorStoryboard:draftDocument}};
+ for(const creatorStoryboardDraft of [false,true]){
+  const persistence=new MemoryPersistence(storyboardFixture);
+  const editor=await openHeadlessEditor({projectId,runId:'storyboard-fixture',origin:'http://127.0.0.1:5199',review:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199'},
+   creatorStoryboardDraft,persistence,browserConnected:()=>false,fetch:async()=>{throw Error('unexpected request');},effect:async()=>{throw Error('unexpected effect');}});
+  try{
+   const result=await editor.execute('edit_asset',write,'storyboard-draft') as {saved?:boolean;production_gate?:{allowed:boolean}};
+   if(!creatorStoryboardDraft){assert.equal(result.production_gate?.allowed,false);assert.equal(persistence.commitCount,0);continue;}
+   assert.equal(result.saved,true,'the real planning editor must save valid storyboard metadata before copy review');
+   assert.deepEqual(persistence.current.assets[0].props,{marker:'preserve',clipmentorCreatorStoryboard:draftDocument});
+   assert.deepEqual(persistence.current.timelines,storyboardFixture.timelines);
+   assert.deepEqual(persistence.current.clipMentorAnalysis,analysis);
+   await assert.rejects(editor.execute('edit_asset',{...write,name:'changed'},'unrelated-write'),/only_creator_document/);
+   const denied=await editor.execute('clear_timeline',{},'unreviewed-edit') as {production_gate?:{allowed:boolean}};
+   assert.equal(denied.production_gate?.allowed,false);
+   assert.equal(persistence.commitCount,1);
+  }finally{await editor.close();}
+ }
  await assert.rejects(creatorStoryboard(doc,AbortSignal.abort(Error('cancelled'))),/cancelled/);
  await writeFile(file,'changed');await assert.rejects(creatorStoryboard(doc),/source_changed/);
  const name=deliveryFileName('../JUDYDOLL\r\n','new_contact','video',Date.UTC(2026,10,9,1,2,3));assert.match(name,/JUDYDOLL_视频拆解_新建联达人版_20261109_090203.mp4$/);assert(!/[\r\n/]/.test(name));

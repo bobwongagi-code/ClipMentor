@@ -10,7 +10,7 @@ import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest} from '../../sr
 import {isClipMentorAnalysis} from '../../src/clipmentor/analysis';
 import {deliverySectionsShape} from '../../src/clipmentor/delivery-bindings';
 import {deliveryTimeline} from '../../src/clipmentor/delivery-sections';
-import {panelDeliveryIssues,panelStoryboardTimes,panelSalesEvidence} from './production-panel-delivery';
+import {panelDeliveryFindings,panelDeliveryIssues,panelStoryboardTimes,panelSalesEvidence} from './production-panel-delivery';
 import type {ProjectDoc} from '../../src/editor/types';
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex'),clone=structuredClone;
 let network=0;const fetchBefore=globalThis.fetch;globalThis.fetch=async()=>{network++;throw Error('Network forbidden');};
@@ -45,6 +45,21 @@ try{
   const scope={productAssetId:opening.picture.asset_id,productAssetHash:opening.picture.sha256,salesAssetId:'unconfirmed-sales-image',
    ctaAssetId:newContact.picture.asset_id,ctaAssetHash:newContact.picture.sha256};
   assert(deliverySectionsShape(sections));assert.deepEqual(panelDeliveryIssues(doc,scope),[]);
+  const strict={...scope,partnerEnding:'product_storyboard_pdf' as const};
+  for(const description of ['', '商品图 + 本片 Storyboard + 独立PDF附件同屏说明']){
+   const coverOnly=clone(doc);
+   endings(coverOnly).find(row=>row.section_id==='existing_partner').picture.description=description;
+   assert(panelDeliveryIssues(coverOnly,strict).includes('existing_partner_product_image'),
+    'a cover-only ending cannot satisfy the requested product binding, regardless of prose');
+  }
+  const notes=panelDeliveryFindings(doc,strict,null);
+  const board=planReviewBoards({value:doc,bindings:[doc],sha256:'a'.repeat(64),hashMode:'file',assertUnchanged:async()=>{},deliveryFindings:notes});
+  const plan=board.plans.find(candidate=>candidate.rows.some(row=>row.unit_id==='existing_partner'));
+  assert(plan);
+  const page=humanReviewBoardPage(plan,board.data,board.lint,[doc]);
+  assert.match(page,/已合作片尾缺本商品图绑定/);
+  assert.match(page,/已合作片尾缺独立 Storyboard PDF 交付绑定/);
+  assert(!page.includes('existing_partner_pdf_binding'),'the human board uses Chinese business language');
   assert(panelDeliveryIssues(doc,{...scope,audience:'new_contact'}).includes('delivery_audience_scope_mismatch'));
   for(const audience of ['new_contact','existing_partner'] as const){
    const one=clone(doc),onePlan=(one.clipMentorAnalysis!.blueprint[0] as any).internal_review;

@@ -240,6 +240,115 @@ try{
   (clipMentorProductionPlugin(async()=>{throw Error('No worker permitted');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
   try{const draft=makeDraft(doc),ctx={...draft,templates:[],audio:[],getProjectId:()=> 'review-board-test',getCreativeMode:()=> 'clipmentor',hostFetch:async(path:string,init:RequestInit)=>realFetch(new URL(path,origin),{...init,headers:{Origin:origin}})} as never;const result=await executeTool('render_clipmentor_review_board',{},ctx) as any;assert(!result.error,JSON.stringify(result));assert(result.artifacts.length);const beforeDraft=JSON.stringify(draft.getDoc());const blocked=await executeTool('set_aspect_ratio',{ratio:'1:1'},ctx) as any;assert(blocked.production_gate?.code,'read preparation must not permit editing without current approval');assert.equal(JSON.stringify(draft.getDoc()),beforeDraft);assert.equal(result.review_approved,false);const human=await executeTool('render_clipmentor_review_board',{view:'human'},ctx) as any;assert(!human.error,JSON.stringify(human));assert.equal(human.artifacts.length,1);const humanPage=await realFetch(new URL(human.artifacts[0].url,origin),{headers:{Origin:origin}});const humanBytes=await humanPage.text();assert.match(humanBytes,/人审版/);const changed=clone(doc);(changed.clipMentorAnalysis!.product as any).name='QA later board only';await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',changed));try{const next=await executeTool('render_clipmentor_review_board',{view:'human'},{...ctx,getDoc:()=>changed}) as any;assert(!next.error,JSON.stringify(next));assert.notEqual(next.artifacts[0].url,human.artifacts[0].url,'human links must bind inspected HTML bytes, not mutable project filenames');const retained=await realFetch(new URL(human.artifacts[0].url,origin),{headers:{Origin:origin}});assert.equal(await retained.text(),humanBytes,'a later board cannot replace an already inspected link');}finally{await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',doc));}const wrongView=await executeTool('render_clipmentor_review_board',{view:'typo'},ctx) as any;assert.match(wrongView.error,/INPUT/);const stale=await realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'review_board',projectId:'review-board-test',expectedRevision:'stale'}),{headers:{Origin:origin}});assert.equal(stale.status,409);const page=await realFetch(new URL(result.artifacts[0].url,origin),{headers:{Origin:origin}});assert.equal(page.status,200);assert.match(await page.text(),/策划自查板/);assert.deepEqual(await loadOfflineStoredProject('review-board-test'),before);assert.equal((await realFetch(origin+'/api/clipmentor/production-task?view=review_board&projectId=review-board-test')).status,403);}finally{await new Promise<void>(r=>server.close(()=>r()));}
  });
+ await test('Blocked panel blueprint feedback starts the saved revision without a resume request',async()=>{
+  const {withSerializedProjectStore}=await import('../plugins/project-store');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {clipMentorProductionPlugin}=await import('../plugins/clipmentor-production');
+  const {createProductionTask,productionTaskStore}=await import('./production-task');
+  const projectId='feedback-board-recovery',doc=clone(bindings[0]);
+  const {default:savedProjects}=await import('../../src/clipmentor/fixtures/production-saved-projects-20261028.json');
+  const priorDoc=savedProjects.cases[0].doc as unknown as ProjectDoc;
+  const priorReview=clone(priorDoc.clipMentorAnalysis!.production_copy_review!);
+  assert(priorReview);
+  doc.clipMentorAnalysis!.production_copy_review={...priorReview,verdict:'needs_revision'};
+  await withSerializedProjectStore(s=>s.writeEntry('project:'+projectId,doc));
+  const snapshot=(await loadOfflineStoredProject(projectId))!;
+  const app=createMiniConnect(e=>{throw e;}),server=createServer((req,res)=>app.handle(req,res));
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const address=server.address() as {port:number},origin='http://127.0.0.1:'+address.port;
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+  const received:Array<{stage:string;feedback?:string;revision?:string}>=[];
+  (clipMentorProductionPlugin(async item=>{
+   if(item.stage==='copy_review')throw Error('fixture: stop at the new draft checkpoint');
+   received.push({stage:item.stage,feedback:item.blueprintFeedback,revision:item.projectRevision});
+   entered.resolve();await release.promise;
+   const {openHeadlessEditor}=await import('./headless-editor');
+   const editor=await openHeadlessEditor({projectId:item.projectId,runId:item.taskId,origin,review:api,
+    fetch:async()=>{throw Error('unexpected request');},effect:async()=>{throw Error('unexpected effect');}});
+   try{
+    const current=editor.getDoc(),analysis=current.clipMentorAnalysis!;
+    editor.context.commands.applyDoc({...current,clipMentorAnalysis:{...analysis,revision:analysis.revision+1,
+     product:{...analysis.product,name:'Saved fixture feedback revision'}}});
+    return {artifact:await editor.commit()};
+   }finally{await editor.close();}
+  }).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
+  const api={provider:'openai' as const,model:'fixture',apiMode:'responses' as const,origin};
+  try{
+   const task=await createProductionTask({projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:{name:'Fixture',category:'test'},
+    author:api,reviewer:api,brief:'Fixture',humanBlueprintReview:true,
+    budget:{model:10,observation:0,review:0,tts:0,render:0,preview_review:0,maxElapsedMs:60_000,maxRepairs:2}});
+   task.status='blocked';task.stage='copy_review';task.projectRevision=snapshot.revision;task.error='fixture old block';
+   await productionTaskStore.save(task);
+   const panel=origin+'/api/clipmentor/production-task?view=panel&projectId='+projectId;
+   const headers={Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'};
+   const {task:visible}=await (await realFetch(panel,{headers})).json();
+   const boardUrl=origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'panel_board',projectId,revision:snapshot.revision,boardIdentity:visible.boardIdentity});
+   const board=await realFetch(boardUrl,{headers});
+   assert.equal(board.status,200,await (board.ok?Promise.resolve(''):board.text()));
+   await board.arrayBuffer();
+   const text='片头保留本片成绩。已合作片尾同屏展示产品和本片 Storyboard。';
+   const submit=(boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:snapshot.revision,boardIdentity,text})});
+   const stale=await submit('wrong');assert.equal(stale.status,409);assert.equal(received.length,0);
+   assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintFeedback,undefined);
+   const action=await submit(visible.boardIdentity);
+   assert.equal(action.status,200);
+   assert.deepEqual(await action.json(),{accepted:true,saved:true,dispatched:true});
+   await entered.promise;
+   const running=await productionTaskStore.load(projectId,task.taskId);
+   assert.deepEqual(received,[{stage:'blueprint',feedback:text,revision:snapshot.revision}]);
+   assert.equal(running.status,'running');assert.equal(running.repairs,task.repairs+1);
+   assert.deepEqual(running.attempts,task.attempts);assert.deepEqual(running.effects,task.effects);
+   assert.equal(running.blueprintApproval,undefined);
+   assert.equal((await submit(visible.boardIdentity)).status,409,'a duplicate POST cannot start a parallel author');
+   assert.equal(received.length,1);
+   const {task:panelStatus}=await (await realFetch(panel,{headers})).json();
+   assert.equal(panelStatus.status,'running');assert.equal(panelStatus.hasBlueprintFeedback,true);
+   release.resolve();
+   let final=running;
+   for(let i=0;final.status!=='blocked'&&i<200;i++){
+    await new Promise(resolve=>setTimeout(resolve,5));
+    final=await productionTaskStore.load(projectId,task.taskId);
+   }
+   const revised=(await loadOfflineStoredProject(projectId))!;
+   assert.equal(final.stage,'copy_review');assert.equal(final.status,'blocked');
+   assert.equal(final.projectRevision,revised.revision);
+   assert.notEqual(revised.revision,snapshot.revision);
+   assert.equal(revised.doc.clipMentorAnalysis!.product.name,'Saved fixture feedback revision');
+   assert.equal(revised.doc.clipMentorAnalysis!.production_copy_review?.verdict,'needs_revision');
+   assert.deepEqual(revised.doc.clipMentorAnalysis!.production_copy_review,snapshot.doc.clipMentorAnalysis!.production_copy_review);
+   assert.deepEqual(final.attempts,task.attempts);
+
+   // Saved-only feedback still changes the subject even when the project revision cannot advance.
+   final.attempts.model=final.input.budget.model;
+   await productionTaskStore.save(final);
+   const currentBoard=async()=>{
+    const {task:current}=await (await realFetch(panel,{headers})).json();
+    const link=origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'panel_board',projectId,revision:revised.revision,boardIdentity:current.boardIdentity});
+    const response=await realFetch(link,{headers});assert.equal(response.status,200);await response.arrayBuffer();
+    return current.boardIdentity as string;
+   };
+   const reviseCurrent=(boardIdentity:string,text:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:revised.revision,boardIdentity,text})});
+   const first=await currentBoard();
+   assert.deepEqual(await (await reviseCurrent(first,'旧意见')).json(),{accepted:true,saved:true,dispatched:false,reason:'limit'});
+   const second=await currentBoard();
+   assert.notEqual(first,second);
+   assert.deepEqual(await (await reviseCurrent(second,'新意见')).json(),{accepted:true,saved:true,dispatched:false,reason:'limit'});
+   assert.equal((await reviseCurrent(first,'旧意见')).status,409,'late A cannot overwrite B on the same project revision');
+   assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintFeedback,'新意见');
+   const third=await currentBoard();
+   assert.equal((await reviseCurrent(third,'旧意见')).status,200,'a deliberate repeat on the fresh board is a new submission');
+   assert.notEqual(await currentBoard(),second,'repeating the text cannot revive an older board control token');
+   assert.equal((await reviseCurrent(second,'新意见')).status,409,'the previous middle request stays stale after A-B-A');
+   assert.equal(received.length,1);
+
+  }finally{
+   release.resolve();
+   await new Promise<void>(r=>server.close(()=>r()));
+   const {productionExecutionActive,latestPanelProductionTask}=await import('./production-task');
+   const task=await latestPanelProductionTask(projectId);
+   for(let i=0;task&&productionExecutionActive(projectId,task.taskId)&&i<200;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  }
+ });
  await test('P5 optional Chinese persists through the original temporary project store and cold read',async()=>{
   const {withSerializedProjectStore}=await import('../plugins/project-store'),{loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
   const doc=clone(bindings[0]);for(const e of doc.clipMentorAnalysis!.evidence)if(e.kind==='original_claim')e.meaning_zh='测试策划译文';

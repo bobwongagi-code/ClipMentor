@@ -14,7 +14,7 @@ import { isSafeUploadName, resolveUploadFile, serveDiskFile } from '../media-dir
 import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-board';
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
 import { productionFeedbackAnchor,blueprintFeedbackPoints,feedbackProjectDigest } from './production-feedback';
-import { panelDeliveryIssues,panelSalesEvidence } from './production-panel-delivery';
+import { panelDeliveryIssues,panelDeliveryFindings,panelSalesEvidence,verifyPanelPartnerCard } from './production-panel-delivery';
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
@@ -30,7 +30,7 @@ import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,
-  savePendingBlueprintFeedback,
+  queueDraftBlueprintFeedback,
   latestPanelProductionTask,productionReviewRequirements,
   type ProductionTask,
 } from './production-task';
@@ -117,7 +117,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     }
     return preflight.result;
   };
-  const boards = new Map<string,{ identity:string; revision:string; criteriaDigest?:string; requirementsDigest?:string; siblingRevision?:string; assertUnchanged?:()=>Promise<void>; file:Promise<string> }>();
+  const boards = new Map<string,{ identity:string; artifactIdentity:string; revision:string; criteriaDigest?:string; requirementsDigest?:string; siblingRevision?:string; assertUnchanged?:()=>Promise<void>; file:Promise<string> }>();
   const verifiedPreviews = new Map<string,Promise<void>>();
   async function openVerifiedPreview(task:ProductionTask,file:string){
     const receipt=task.completed.self_check?.artifact.receipt as {videoSha256?:string}|undefined;
@@ -209,11 +209,12 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const siblingEntry=currentTask?.input.panelDelivery?.audience==='existing_partner'
         ?parent?.productionChildren?.find(entry=>entry.audience==='new_contact'):undefined;
       const sibling=siblingEntry?await loadOfflineStoredProject(siblingEntry.projectId):undefined;
-      const identity=digestValue({version:1,projectId,taskId:currentTask?.taskId,revision,
+      const artifactIdentity=digestValue({version:1,projectId,taskId:currentTask?.taskId,revision,
         criteriaDigest:boundVisualCriteria(currentPolicy)?.digest,
         requirementsDigest:currentPolicy?digestValue(currentPolicy.brief.doneCriteria):undefined,
         siblingProjectId:siblingEntry?.projectId,siblingRevision:sibling?.revision,siblingMissing:!!siblingEntry&&!sibling});
-      return {identity,siblingEntry,sibling,siblingRevision:sibling?.revision};
+      const identity=digestValue({artifactIdentity,feedbackSequence:currentTask?.blueprintFeedback?currentTask.sequence:undefined});
+      return {identity,artifactIdentity,siblingEntry,sibling,siblingRevision:sibling?.revision};
     };
     if (req.method === 'GET') {
       const preview=task&&previewFile(task);
@@ -237,7 +238,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const saved=(await verifyPreview())??await snapshot();
         if(!task.input.panelDelivery&&(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision))
           throw Error('预览已变化，请刷新');
-        return productionDeliverables(saved.doc,undefined,task.completed.export!.at);
+        return productionDeliverables(saved.doc,undefined,task.completed.export!.at,task.input.panelDelivery);
       };
       if(view==='panel_attachment'){
         const output=(await deliveryOutputs()).find(o=>o.assetId===query.get('assetId'));
@@ -255,12 +256,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         // A shared-body task owns the current teaching plan; its sibling owns only
         // the other ending. Join read-only presentation, never execution documents.
         const subject=await boardSubject(revision);
-        const {identity,siblingEntry,sibling,siblingRevision}=subject;
+        const {identity,artifactIdentity,siblingEntry,sibling,siblingRevision}=subject;
         if(siblingEntry&&!sibling)throw Error('新建联片尾工程缺失');
         if(query.has('boardIdentity')&&query.get('boardIdentity')!==identity)throw Error('审片板已变化，请刷新');
         let board = boards.get(projectId);
         if (board?.identity !== identity) {
-          const file = (async () => {
+          const reusable=board?.artifactIdentity===artifactIdentity?board:undefined;
+          const file = reusable?.file??(async () => {
             const input = await loadReviewBoardInput(projectId);
             if(sibling){
               const primary=input.value as import('../../src/editor/types').ProjectDoc;
@@ -273,16 +275,22 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
                 if(current?.revision!==siblingRevision)throw Error('片尾方案已变化，请刷新蓝图');
               };
             }
+            if(task.input.panelDelivery){
+              const doc=input.value as import('../../src/editor/types').ProjectDoc;
+              const scope=task.input.panelDelivery;
+              input.deliveryFindings=panelDeliveryFindings(doc,sibling?{...scope,audience:undefined}:scope,await currentCreatorDocument(doc));
+            }
             const cached=boards.get(projectId);
             if(cached?.identity===identity)cached.assertUnchanged=input.assertUnchanged;
             // Raw requirements and cross-project reference frames remain internal.
             // Human product review shows this project's storyboard and actual preview.
             if ((await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
-            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel', identity), undefined, 'human');
+            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel', artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
             return result.artifacts[0].path;
           })();
-          board = { identity, revision, criteriaDigest:criteria?.digest,requirementsDigest,siblingRevision,file };
+          board = { identity, artifactIdentity, revision, criteriaDigest:criteria?.digest,requirementsDigest,siblingRevision,
+            assertUnchanged:reusable?.assertUnchanged,file };
           boards.set(projectId,board);
           void file.catch(() => { if (boards.get(projectId)?.file === file) boards.delete(projectId); });
         }
@@ -311,7 +319,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if (view === 'panel_download' && task.status !== 'completed') throw new Error('请先完成终审');
         if(task.input.panelDelivery){
           const saved=await boundPreviewProject();
-          if(view==='panel_download')await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at);
+          if(view==='panel_download')await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at,task.input.panelDelivery);
         }
         const handle=task.input.panelDelivery?await openVerifiedPreview(task,file):undefined;
         try{
@@ -355,7 +363,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           if((!verifiedProject||!task.completed.self_check?.artifact.receipt)
             &&(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision))
             throw Error('Preview changed');
-          attachments=(await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at)).map(({assetId,fileName})=>({assetId,fileName}));
+          attachments=(await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at,task.input.panelDelivery)).map(({assetId,fileName})=>({assetId,fileName}));
         }catch{deliveryUnavailable=true;}
       }
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
@@ -407,7 +415,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
           brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“这么多人拍这个品，为什么这支视频可以拿到多少播放量，多少多少这个GA的成绩，我们一起来看看他是怎怎么拍的”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
-          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',
+          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
           voice:{provider:'minimax',voiceId:'Malay_female_1_v1'},
@@ -471,8 +479,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             send({accepted:true});return;
           }
           if(draftFeedback){
-            await savePendingBlueprintFeedback(existing,saved.revision,body.text,productionTaskStore,guards);
-            send({accepted:true,saved:true,dispatched:false});
+            if(latest.doc.clipMentorAnalysis?.source.asset_id!==existing.input.sourceAssetId)
+              throw Error('蓝图对应的原片已变化，请重新打开审片板');
+            const result=await queueDraftBlueprintFeedback(existing,latest.revision,body.text,productionTaskStore,guards);
+            if(result==='queued')launch(existing);
+            send({accepted:true,saved:true,dispatched:result==='queued'||result==='already_dispatched',...(result==='limit'?{reason:'limit'}:{})});
             return;
           }
           if(body.action==='approve_blueprint'){
@@ -482,9 +493,12 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
               ||latestCriteria&&!visualCriteriaPlanApproved(latestCriteria,latest.doc.clipMentorAnalysis?.production_copy_review))
               throw new Error('当前蓝图待独立审核，暂不能进入制作。');
           }
-          if(body.action==='approve_blueprint'&&existing.input.panelDelivery&&
-           panelDeliveryIssues(saved.doc,{...existing.input.panelDelivery,bookends:'layered-v1'},await currentCreatorDocument(saved.doc)).length)
-            throw new Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
+          if(body.action==='approve_blueprint'&&existing.input.panelDelivery){
+            const content=await currentCreatorDocument(latest.doc);
+            if(panelDeliveryIssues(latest.doc,{...existing.input.panelDelivery,bookends:'layered-v1'},content).length
+              ||!await verifyPanelPartnerCard(latest.doc,existing.input.panelDelivery,content))
+              throw new Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
+          }
           await resolveHumanBlueprint(existing,body.revision,saved.revision,body.action === 'revise_blueprint' ? body.text : undefined,productionTaskStore,guards);
           launch(existing);
         } else if (body.action === 'revise_preview' || body.action === 'accept') {

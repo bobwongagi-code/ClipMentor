@@ -1,13 +1,16 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {rename,rm,writeFile} from 'node:fs/promises';
+import {readFile,rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import sharp from 'sharp';
+import {digestValue} from '../agent-runs/store-values';
 import type {MediaAsset,ProjectDoc} from '../../src/editor/types';
-import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
-import {resolveUploadFile,uploadDir} from '../media-dir';
+import {deliverySectionsFromDoc,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
+import {isSafeUploadName,resolveUploadFile,uploadDir} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
 import {creatorStoryboard,verifyCreatorStoryboardEvidence} from './creator-storyboard';
-import {loadCreatorStoryboardDocument,creatorDocumentHash,creatorDocumentFromSourceAsset,isCreatorDocumentIssue,type CreatorStoryboardDocument} from './creator-storyboard-document';
+import {loadCreatorStoryboardDocument,currentCreatorDocument,creatorDocumentHash,creatorDocumentFromSourceAsset,isCreatorDocumentIssue,type CreatorStoryboardDocument} from './creator-storyboard-document';
 import type {ProductionTask} from './production-task';
+import type {BlueprintFinding} from '../../src/clipmentor/blueprint-lint';
 import type {AnalysisEvidence} from '../../src/clipmentor/analysis';
 
 /** The operator uploads this slot as the source video's performance evidence. */
@@ -31,21 +34,23 @@ function storyboardSourceMatches(doc:ProjectDoc,asset:MediaAsset|undefined,times
 }
 export function panelStoryboardAsset(doc:ProjectDoc,content:CreatorStoryboardDocument|null|undefined=creatorDocumentFromSourceAsset(doc)){
  if(!content)return undefined;
- const times=panelStoryboardTimes(doc,content),documentHash=creatorDocumentHash(content);
- return doc.assets.find(asset=>storyboardSourceMatches(doc,asset,times)&&asset.props?.clipmentorCreatorDocumentHash===documentHash);
+ const times=panelStoryboardTimes(doc,content),documentHash=creatorDocumentHash(content),legacySortedHash=digestValue(content);
+ return doc.assets.find(asset=>storyboardSourceMatches(doc,asset,times)
+  &&[documentHash,legacySortedHash].includes(String(asset.props?.clipmentorCreatorDocumentHash)));
 }
 
 /** Previewable original-frame reference for the existing partner ending. */
-export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):Promise<MediaAsset|undefined>{
+export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal,verifyCover=false):Promise<MediaAsset|undefined>{
  signal.throwIfAborted();
  const source=doc.clipMentorAnalysis?.source;
  if(!source)throw Error('panel_storyboard_source_plan_missing');
  let content:Awaited<ReturnType<typeof loadCreatorStoryboardDocument>>;
  content=await loadCreatorStoryboardDocument(doc);
  const times=panelStoryboardTimes(doc,content);
- const contentHash=createHash('sha256').update(JSON.stringify(content)).digest('hex');
- const registered=doc.assets.find(a=>storyboardSourceMatches(doc,a,times)&&a.props?.clipmentorCreatorDocumentHash===contentHash);
- if(registered){
+ const contentHash=creatorDocumentHash(content);
+ const prior=panelStoryboardAsset(doc,content);
+ if(prior&&!verifyCover){
+  const registered=prior;
   const file=resolveUploadFile(`${registered.id}.jpg`);
   if(file&&await sha256File(file).catch(()=>null)===registered.sourceContentHash){const verified=await verifyCreatorStoryboardEvidence(doc,signal);if(creatorDocumentHash(verified.document)!==contentHash)throw Error('storyboard_document_evidence_changed');signal.throwIfAborted();return;}
  }
@@ -56,19 +61,21 @@ export async function createPanelStoryboard(doc:ProjectDoc,signal:AbortSignal):P
  const document=await creatorStoryboard(doc,signal);
  signal.throwIfAborted();
  const bytes=document.preview,hash=createHash('sha256').update(bytes).digest('hex'),id=`clipmentor-storyboard-${hash}`;
- if(registered&&registered.sourceContentHash!==hash)throw Error('storyboard_document_cover_recovery_mismatch');
+ if(prior&&!verifyCover&&prior.sourceContentHash!==hash)throw Error('storyboard_document_cover_recovery_mismatch');
+ const registered=doc.assets.find(candidate=>candidate.id===id);
  const target=join(uploadDir(),`${id}.jpg`),temp=`${target}.${randomUUID()}.tmp`;
+ if(prior?.id===id&&await sha256File(target).catch(()=>null)===hash)return;
  try{await writeFile(temp,bytes,{flag:'wx'});signal.throwIfAborted();await rename(temp,target);}finally{await rm(temp,{force:true});}
  signal.throwIfAborted();
- if(registered)return;
+ if(registered?.id===prior?.id&&registered)return;
  return {id,name:'Storyboard video asal · Rootify',kind:'image',src:`/media/uploads/${id}.jpg`,sourceContentHash:hash,
   width:1190,height:1684,durationInFrames:1,props:{clipmentorStoryboardSource:source.asset_id,
    clipmentorStoryboardHash:source.sourceContentHash,clipmentorStoryboardTimes:times,clipmentorStoryboardDocument:2,clipmentorCreatorDocumentHash:contentHash}};
 }
 
 /** A local document problem must return to the author, not block the author from running. */
-export async function preparePanelStoryboardForAuthor(doc:ProjectDoc,signal:AbortSignal){
- try{return {asset:await createPanelStoryboard(doc,signal)};}
+export async function preparePanelStoryboardForAuthor(doc:ProjectDoc,signal:AbortSignal,verifyCover=false){
+ try{return {asset:await createPanelStoryboard(doc,signal,verifyCover)};}
  catch(error){if(!isCreatorDocumentIssue(error))throw error;return {issue:(error as Error).message};}
 }
 
@@ -102,6 +109,101 @@ export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionT
   ...(scope.audience==='new_contact'?[]:partnerLayout?.kind==='product_storyboard'
    ?partnerLayout.product.asset_id!==scope.productAssetId||partnerLayout.product.sha256!==scope.productAssetHash?['existing_partner_product_image']
     :panelStoryboardAsset(doc,content)?.id!==partnerLayout.storyboard.asset_id?['existing_partner_storyboard']:[]
-   :!partner||panelStoryboardAsset(doc,content)?.id!==partner.picture.asset_id?['existing_partner_storyboard']:[]),
+   :partnerStoryboardRequired(scope)?['existing_partner_product_image', 'existing_partner_storyboard', 'existing_partner_pdf_binding']
+    :!partner||panelStoryboardAsset(doc,content)?.id!==partner.picture.asset_id?['existing_partner_storyboard']:[]),
+  ...(partnerStoryboardRequired(scope)&&partnerLayout?.kind==='product_storyboard'
+   &&panelStoryboardAsset(doc,content)?.id!==partnerLayout.attachment.asset_id?['existing_partner_pdf_binding']:[]),
  ];
+}
+
+type PanelScope=NonNullable<ProductionTask['input']['panelDelivery']>;
+export function panelDeliveryFindings(doc:ProjectDoc,scope:PanelScope,content:CreatorStoryboardDocument|null):BlueprintFinding[]{
+ let issues:string[];
+ try{issues=panelDeliveryIssues(doc,scope,content);}
+ catch(error){issues=[error instanceof Error?error.message:'delivery_invalid'];}
+ return issues.map(issue=>({
+  rule_id:'DELIVERY_BINDING',level:'warn',location:issue.startsWith('existing_partner')?'delivery_sections.existing_partner':
+   issue.startsWith('new_contact')?'delivery_sections.new_contact':issue.startsWith('opening')?'delivery_sections.performance_opening':'delivery_sections',
+  excerpt:'',message:issue,
+ }));
+}
+
+type PartnerLayout=Extract<NonNullable<DeliverySection['picture']['layout']>,{kind:'product_storyboard'}>;
+export function partnerStoryboardRequired(scope?:PanelScope){
+ return scope?.partnerEnding==='product_storyboard_pdf'&&scope.audience!=='new_contact';
+}
+const imageRef=({id,src,sourceContentHash}:MediaAsset)=>({asset_id:id,src,sha256:sourceContentHash!});
+function partnerCardInputs(doc:ProjectDoc,scope:PanelScope,content?:CreatorStoryboardDocument|null){
+ const product=doc.assets.find(a=>a.id===scope.productAssetId&&a.kind==='image'&&a.sourceContentHash===scope.productAssetHash&&!a.props?.clipmentorReferenceOnly);
+ const storyboard=panelStoryboardAsset(doc,content);
+ if(!product||!storyboard||product.id===storyboard.id)return;
+ const layout:PartnerLayout={kind:'product_storyboard',product:imageRef(product),storyboard:imageRef(storyboard),attachment:imageRef(storyboard)};
+ return {layout,key:digestValue({version:1,layout})};
+}
+
+/** The author binds the host-created picture and separately declares the PDF slot. */
+export function panelPartnerPicture(doc:ProjectDoc,scope:PanelScope,content?:CreatorStoryboardDocument|null){
+ const inputs=partnerCardInputs(doc,scope,content);
+ if(!inputs)return;
+ const card=doc.assets.find(a=>a.kind==='image'&&a.width===720&&a.height===1280
+  &&a.props?.clipmentorPartnerCardInputs===inputs.key
+  &&a.id==='clipmentor-partner-'+a.sourceContentHash&&a.src==='/media/uploads/'+a.id+'.png');
+ if(card)return {...imageRef(card),layout:inputs.layout};
+}
+
+async function partnerRoleBytes(ref:PartnerLayout['product']){
+ const name=ref.src.startsWith('/media/uploads/')?ref.src.slice('/media/uploads/'.length):'';
+ const file=isSafeUploadName(name)?resolveUploadFile(name):null;
+ if(!file)throw Error('existing_partner_composition_source_missing');
+ const bytes=await readFile(file);
+ if(createHash('sha256').update(bytes).digest('hex')!==ref.sha256)throw Error('existing_partner_composition_source_changed');
+ return bytes;
+}
+async function renderPartnerCard(layout:PartnerLayout){
+ const fit=async(ref:PartnerLayout['product'],width:number,height:number)=>sharp(await partnerRoleBytes(ref))
+  .rotate().resize(width,height,{fit:'contain',background:'#ffffff'}).flatten({background:'#ffffff'}).png().toBuffer();
+ const [product,storyboard]=await Promise.all([fit(layout.product,262,542),fit(layout.storyboard,374,542)]);
+ return sharp({create:{width:720,height:1280,channels:3,background:'#f6f4f0'}})
+  .composite([{input:product,left:30,top:260},{input:storyboard,left:316,top:260}]).removeAlpha().png().toBuffer();
+}
+export async function preparePanelPartnerCard(doc:ProjectDoc,scope:PanelScope,signal:AbortSignal):Promise<MediaAsset|undefined>{
+ if(!partnerStoryboardRequired(scope))return;
+ const content=await currentCreatorDocument(doc);
+ const inputs=partnerCardInputs(doc,scope,content);
+ if(!inputs)return;
+ signal.throwIfAborted();
+ const existing=panelPartnerPicture(doc,scope,content);
+ if(existing&&await verifyPanelPartnerCard(doc,scope,content,existing,signal))return;
+ const bytes=await renderPartnerCard(inputs.layout);
+ signal.throwIfAborted();
+ const hash=createHash('sha256').update(bytes).digest('hex'),id='clipmentor-partner-'+hash;
+ const path=join(uploadDir(),id+'.png'),temp=path+'.'+randomUUID()+'.tmp';
+ try{await writeFile(temp,bytes,{flag:'wx'});signal.throwIfAborted();await rename(temp,path);}
+ finally{await rm(temp,{force:true});}
+ signal.throwIfAborted();
+ if(existing?.asset_id===id)return;
+ return {id,kind:'image',name:'Produk + Storyboard',src:'/media/uploads/'+id+'.png',
+  width:720,height:1280,durationInFrames:1,sourceContentHash:hash,props:{clipmentorPartnerCardInputs:inputs.key}};
+}
+
+/** Check the actual planned image against the composition made from both frozen inputs. */
+export async function verifyPanelPartnerCard(doc:ProjectDoc,scope:PanelScope,content?:CreatorStoryboardDocument|null,
+ picture?:Pick<DeliverySection['picture'],'asset_id'|'src'|'sha256'|'layout'>,signal?:AbortSignal){
+ if(!partnerStoryboardRequired(scope))return true;
+ picture??=deliverySectionsFromDoc(doc).find(s=>s.section_id==='existing_partner')?.picture;
+ const inputs=partnerCardInputs(doc,scope,content);
+ if(!inputs||!picture?.layout||digestValue(picture.layout)!==digestValue(inputs.layout))return false;
+ try{
+  const document=await creatorStoryboard(doc,signal);
+  if(createHash('sha256').update(document.preview).digest('hex')!==inputs.layout.storyboard.sha256)return false;
+  const registered=panelPartnerPicture(doc,scope,content);
+  if(!registered||registered.asset_id!==picture.asset_id||registered.src!==picture.src||registered.sha256!==picture.sha256)return false;
+  const actual=await partnerRoleBytes(picture);
+  const meta=await sharp(actual).metadata();
+  if(meta.format!=='png'||(meta.pages??1)!==1||(meta.orientation??1)!==1)return false;
+  const expected=await renderPartnerCard(inputs.layout);
+  const [pixels,reference]=await Promise.all([sharp(actual).ensureAlpha().raw().toBuffer({resolveWithObject:true}),
+   sharp(expected).ensureAlpha().raw().toBuffer({resolveWithObject:true})]);
+  return pixels.info.width===reference.info.width&&pixels.info.height===reference.info.height&&pixels.data.equals(reference.data);
+ }catch(error){if(signal?.aborted)throw error;return false;}
 }

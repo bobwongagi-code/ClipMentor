@@ -1,4 +1,6 @@
 import {outputProductionBudget} from './production-budget';
+import {panelDeliveryIssues,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
+import {currentCreatorDocument} from './creator-storyboard-document';
 import {productionOutputsMatch} from './production-decisions';
 import {digestValue} from '../agent-runs/store-values';
 import {withSerializedProjectStore,getStoredEntry,isStoredProjectDeleted} from '../plugins/project-store';
@@ -102,6 +104,13 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
 /** Persist both outputs before dispatch. A duplicate click or restart reuses the same children. */
 export async function createBlueprintContinuations(parent:ProductionTask,source:{doc:ProjectDoc;revision:string},requirements:HandoffPolicy|null,origin:string,guards?:EntryPreconditions){
  // Validate BOTH scopes before creating either output.
+ const scope=parent.input.panelDelivery;
+ if(scope&&partnerStoryboardRequired(scope)){
+  const content=await currentCreatorDocument(source.doc);
+  const issues=panelDeliveryIssues(source.doc,scope,content);
+  if(issues.length||!await verifyPanelPartnerCard(source.doc,scope,content))
+   throw Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
+ }
  selectProductionAudience(source.doc,'existing_partner');selectProductionAudience(source.doc,'new_contact');
  const first=await createBlueprintContinuation(parent,source,'existing_partner',requirements,origin);
  const second=await createBlueprintContinuation(parent,source,'new_contact',requirements,origin);

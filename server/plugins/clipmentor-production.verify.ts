@@ -232,6 +232,53 @@ try{
  const delivered=await download();assert.equal(delivered.status,200);assert.match(delivered.headers.get('content-disposition')! ,/attachment/);assert.equal(delivered.headers.get('content-type'),'application/pdf');assert.equal(Buffer.from(await delivered.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
  assert.equal((await panelGet()).task.attachments[0].assetId,'fixture-attachment');
  assert.equal((await download('fixture-product')).status,409,'pool assets are not automatically deliverables');
+ const {assertCreatorDocumentPdf}=await import('../clipmentor/creator-storyboard-pdf');
+ const pdfResponse=await download(),pdf=Buffer.from(await pdfResponse.arrayBuffer());
+ assert.equal(pdfResponse.status,200);
+ const creatorDoc=await (await import('../clipmentor/creator-storyboard-document')).loadCreatorStoryboardDocument(deliveryDoc);
+ await assertCreatorDocumentPdf(pdf,creatorDoc.rows.flatMap(row=>[row.shot_ms,row.information_ms]),Math.ceil(creatorDoc.rows.length/3));
+ const {productionAttachmentSlots}=await import('../clipmentor/production-deliverables');
+ const {createPanelStoryboard,preparePanelPartnerCard,panelPartnerPicture}=await import('../clipmentor/production-panel-delivery');
+ const strictDoc=structuredClone(deliveryDoc),strictScope={productAssetId:'fixture-product',productAssetHash:pngHash,
+  salesAssetId:'strict-sales',ctaAssetId:'strict-cta',ctaAssetHash:'e'.repeat(64),partnerEnding:'product_storyboard_pdf' as const};
+ const cover=await createPanelStoryboard(strictDoc,new AbortController().signal);assert(cover);
+ strictDoc.assets.push(cover);await writeFile(join(media,'fixture-product.png'),png);
+ const card=await preparePanelPartnerCard(strictDoc,strictScope,new AbortController().signal);assert(card);strictDoc.assets.push(card);
+ const strictReview=(strictDoc.clipMentorAnalysis!.blueprint[0] as unknown as {internal_review:Record<string,unknown>}).internal_review;
+ const strictEnding=(strictReview[String(strictReview.current_picture_plan)] as {delivery_sections:typeof deliveryRows}).delivery_sections.find(s=>s.section_id==='existing_partner')!;
+ const support=strictDoc.clipMentorAnalysis!.evidence.filter(e=>strictEnding.evidence_ids.includes(e.evidence_id));
+ for(const e of support)e.source_ids.push(cover.id,card.id);
+ const strictPicture=panelPartnerPicture(strictDoc,strictScope)!;
+ strictEnding.picture={asset_id:cover.id,src:cover.src,sha256:cover.sourceContentHash!,description:''};
+ await assert.rejects(productionAttachmentSlots(strictDoc,undefined,1,strictScope),/required_delivery_output_unbound:existing_partner/);
+ const strictProject='strict-pdf-retrieval';
+ const strictTask=await createProductionTask({...panelTask.input,projectId:strictProject,sourceAssetId:sourceId,
+  panelDelivery:{...strictScope,audience:'existing_partner'}});
+ const saveStrict=async()=>{
+  await setStoredEntry('project:'+strictProject,strictDoc);
+  strictTask.projectRevision=(await loadOfflineStoredProject(strictProject))!.revision;strictTask.status='awaiting_review';
+  strictTask.completed=structuredClone(panelTask.completed);strictTask.completed.export!.artifact.revision=strictTask.projectRevision;
+  await productionTaskStore.save(strictTask);
+ };
+ const downloadStrict=()=>fetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'panel_attachment',
+  projectId:strictProject,assetId:cover.id,renderId:'delivery-fixture'}),{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
+ // Verify the independent attachment route against a real playable MP4 in this fixture.
+ const placeholder=await readFile(join(media,'fixture-preview.mp4'));
+ execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=720x1280:r=10',
+  '-frames:v','1','-c:v','libx264','-pix_fmt','yuv420p',join(media,'fixture-preview.mp4')]);
+ await saveStrict();assert.equal((await downloadStrict()).status,409,'cover-only output has no downloadable PDF under the task requirement');
+ strictEnding.picture={...strictPicture,description:'Complete'};
+ await saveStrict();
+ const strictResponse=await downloadStrict();assert.equal(strictResponse.status,200,strictResponse.statusText);
+ assert.match(strictResponse.headers.get('content-disposition')??'',/Storyboard_.*\.pdf/);
+ await assertCreatorDocumentPdf(Buffer.from(await strictResponse.arrayBuffer()),creatorDoc.rows.flatMap(row=>[row.shot_ms,row.information_ms]),Math.ceil(creatorDoc.rows.length/3));
+ const coverPath=join(media,cover.src.split('/').at(-1)!);
+ await writeFile(coverPath,png);
+ assert.equal((await downloadStrict()).status,409,'a nonempty replacement cannot satisfy the original attachment binding');
+ await rm(coverPath);
+ assert.equal((await downloadStrict()).status,409,'losing the bound attachment source makes the actual endpoint unavailable');
+ await writeFile(join(media,'fixture-preview.mp4'),placeholder);
+
  assert.equal((await download(undefined,'old-render')).status,409,'old export links cannot serve current attachments');
  await writeFile(join(media,'fixture-attachment.png'),'changed');assert.equal((await download()).status,409);assert.equal((await panelGet()).task.deliveryUnavailable,true);
  await writeFile(join(media,'fixture-attachment.png'),png);

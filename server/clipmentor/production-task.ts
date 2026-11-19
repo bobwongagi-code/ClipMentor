@@ -46,7 +46,7 @@ export interface ProductionInput {
  humanBlueprintReview?:true;
  gatewayRecovery?:'bounded'|'none';
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
-  bookends?:'layered-v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
+  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
  reviewerBackend?:'codex';
  budget:EffectCounts&{maxElapsedMs:number;maxRepairs:number;routine?:EffectCounts};
@@ -59,6 +59,8 @@ export interface ProductionTask {
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
+ blueprintFeedbackRevision?:string;
+ blueprintFeedbackRepair?:number;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
  visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
  createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
@@ -186,7 +188,7 @@ export function grantFocusedBlueprintRepair(task:ProductionTask,issue:unknown){
  try{rows=JSON.parse(issue.slice('blueprint_stage_incomplete:'.length));}catch{return false;}
  if(!Array.isArray(rows)||!rows.length||rows.some(row=>!row||typeof row.id!=='string'
   ||!(['picture_plan_group_explanation_missing','picture_plan_revisits_mismatch','picture_plan_original_order_mismatch'].includes(row.code)
-    ||task.input.panelDelivery&&row.id==='delivery'&&['opening_product_image','opening_sales_attribution_unconfirmed','new_contact_cta_image','existing_partner_storyboard'].includes(row.code))))return false;
+    ||task.input.panelDelivery&&row.id==='delivery'&&['opening_product_image','opening_sales_attribution_unconfirmed','new_contact_cta_image','existing_partner_storyboard','existing_partner_product_image','existing_partner_pdf_binding','existing_partner_composition_invalid'].includes(row.code))))return false;
  const keys=[...new Set(rows.map(row=>`${row.id}:${row.code}`))].sort();
  const previous=task.focusedBlueprintIssues;
  if(previous&&(keys.length>=previous.length||keys.some(key=>!previous.includes(key))))return false;
@@ -287,6 +289,7 @@ export function validateProductionInput(v:ProductionInput){
   if(v.panelDelivery.audience!==undefined&&!['new_contact','existing_partner'].includes(v.panelDelivery.audience))throw Error('Invalid panel audience');
   if(!v.humanBlueprintReview||ids.some(id=>typeof id!=='string'||!id.trim())||new Set(ids).size!==ids.length
    ||(v.panelDelivery.bookends!==undefined&&v.panelDelivery.bookends!=='layered-v1')
+   ||(v.panelDelivery.partnerEnding!==undefined&&v.panelDelivery.partnerEnding!=='product_storyboard_pdf')
    ||((v.panelDelivery.salesEvidenceId!==undefined||v.panelDelivery.salesEvidenceSha256!==undefined)
     &&(v.panelDelivery.bookends!=='layered-v1'||typeof v.panelDelivery.salesEvidenceId!=='string'||!v.panelDelivery.salesEvidenceId.trim()
      ||![v.panelDelivery.salesEvidenceSha256,v.panelDelivery.salesAssetHash].every(hash=>typeof hash==='string'&&/^[a-f0-9]{64}$/.test(hash))))
@@ -557,10 +560,12 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
   if(next.attempts.model>=next.input.budget.model)throw new Error('本次制作已达到资源上限');
   delete next.focusedBlueprintIssues;
   delete next.focusedAuthorChecks;
-  next.blueprintFeedback=feedback.trim();delete next.blueprintFeedbackSummary;next.repairs++;next.stage='blueprint';
+  next.blueprintFeedback=feedback.trim();next.blueprintFeedbackRevision=displayedRevision;delete next.blueprintFeedbackSummary;next.repairs++;next.blueprintFeedbackRepair=next.repairs;next.stage='blueprint';
   clearProductionStagesFrom(next,'blueprint');
  }else{
   delete next.blueprintFeedback;
+  delete next.blueprintFeedbackRevision;
+  delete next.blueprintFeedbackRepair;
   delete next.blueprintFeedbackSummary;
   next.stage='audio';
  }
@@ -568,18 +573,44 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
  if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
  Object.assign(task,next);return task;
 }
-/** Accept business feedback while a saved draft waits for review, without spending effects or changing approval state. */
-export async function savePendingBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
+/** Publish the revision request before dispatch. A cold worker can claim the same queue. */
+export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
  if(!task.input.humanBlueprintReview||!(task.status==='blocked'
   ||task.status==='awaiting_blueprint'&&revision!==task.projectRevision)||!['blueprint','copy_review'].includes(task.stage)
   ||typeof revision!=='string'||!revision.trim()
   ||typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw Error('蓝图当前不能接收修改意见');
+ const text=feedback.trim(),pending=task.repairContext?.pending_blueprint_feedback;
+ if(task.blueprintFeedbackRevision===revision&&task.blueprintFeedback===text&&!pending)return 'already_dispatched';
  const next=structuredClone(task);
- next.blueprintFeedback=feedback.trim();
+ next.blueprintFeedback=text;
  delete next.blueprintFeedbackSummary;
- next.repairContext={...next.repairContext,pending_blueprint_feedback:{text:feedback.trim(),revision}};
+ const exhausted=next.attempts.model>=next.input.budget.model||Date.now()>=next.createdAt+next.input.budget.maxElapsedMs;
+ const savedOnly=exhausted||!!next.blueprintApproval;
+ if(savedOnly){
+  next.repairContext={...next.repairContext,pending_blueprint_feedback:{text:next.blueprintFeedback,revision}};
+ }else{
+  delete next.error;
+  delete next.focusedBlueprintIssues;
+  delete next.focusedAuthorChecks;
+  if(next.repairContext)delete next.repairContext.pending_blueprint_feedback;
+  next.projectRevision=revision;
+  next.blueprintFeedbackRevision=revision;
+  next.stage='blueprint';
+  next.status='queued';
+  next.repairs++;
+  next.blueprintFeedbackRepair=next.repairs;
+  clearProductionStagesFrom(next,'blueprint');
+ }
  if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
+ delete task.blueprintFeedbackSummary;
+ if(!savedOnly){
+  delete task.error;
+  delete task.focusedBlueprintIssues;
+  delete task.focusedAuthorChecks;
+  delete task.editPublication;
+ }
  Object.assign(task,next);
+ return exhausted?'limit':savedOnly?'saved':'queued';
 }
 
 /** Control intents keep the preview they were based on, but may merge a
@@ -654,7 +685,7 @@ export async function acceptProductionTask(task:ProductionTask,languageConfirmed
   if(!normalized||revisionOf(normalized)!==saved.revision)throw Error('final_output_evidence_missing_or_stale');
   entryPreconditions=[{key:'project:'+task.projectId,digest:digestValue(projectEntry.value)}];
   assertFinalPreviewEvidence(task,saved.revision,await sha256File(file));
-  await productionDeliverables(saved.doc);
+  await productionDeliverables(saved.doc,undefined,task.completed.export?.at,task.input.panelDelivery);
  }
  const {readHandoffPolicy}=await import('./handoff');
  const {boundVisualCriteria}=await import('./visual-done-criteria');

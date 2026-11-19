@@ -25,7 +25,7 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {readSourceVideoReceipt,recoverSourceVideoReceipt,sourceVideoDependencies} from './source-video';
 import {recoverProductionGateway,type GatewayRecoveryDecision} from './production-recovery';
 import {checkProductionAuthorBlueprint} from './production-author-self-check';
-import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence} from './production-panel-delivery';
+import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence,preparePanelPartnerCard,panelPartnerPicture,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
 import {assertCreatorDocumentEdit,currentCreatorDocument} from './creator-storyboard-document';
 import {createProductionPreparation,verifyProductionNarrationFiles,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
 import {openHeadlessEditor} from './headless-editor';
@@ -319,7 +319,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
 /** The same service worker is used by the HTTP task and by zero-provider regression fixtures. */
 export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
- const editor=await openHeadlessEditor({projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
+ const editor=await openHeadlessEditor({creatorStoryboardDraft:task.stage==='blueprint'&&!!task.input.panelDelivery,projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
   ...(task.input.panelDelivery?{assertCanvas:(next:ProjectDoc)=>{assertProductionCanvas(next);if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);}}:{}),
   stageEditWrites:task.stage==='edit',assertCurrent:stage.assertCurrent,effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
  const openedRevision=editor.revision;
@@ -390,13 +390,26 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }
    if(changed&&task.stage==='copy_review')return {artifact:{revision:editor.revision,source_evidence_import:'saved_receipts'},repair:'blueprint'};
   }
-  if(task.stage==='blueprint'&&task.input.panelDelivery&&editor.getDoc().clipMentorAnalysis?.source_breakdown?.units.length){
-   const current=editor.getDoc();
-   const prepared=await preparePanelStoryboardForAuthor(current,stage.signal),storyboard=prepared.asset;
+  const panelScope=task.input.panelDelivery;
+  const preparePanelAssets=async():Promise<{issue?:string}>=>{
+   if(panelScope?.audience==='new_contact')return {};
+   const initial=editor.getDoc();
+   const prepared=await preparePanelStoryboardForAuthor(initial,stage.signal,partnerStoryboardRequired(panelScope));
+   if(prepared.issue)return prepared;
+   const withAsset=(doc:ProjectDoc,asset:ProjectDoc['assets'][number],prefix:string)=>{
+    const assets=doc.assets.filter(prior=>prior.id!==asset.id);
+    const index=assets.findIndex(prior=>prior.kind==='image'&&prior.id.startsWith(prefix));
+    assets.splice(index<0?assets.length:index,0,asset);
+    return {...doc,assets};
+   };
+   const withStoryboard=prepared.asset?withAsset(initial,prepared.asset,'clipmentor-storyboard-'):initial;
+   const card=panelScope?await preparePanelPartnerCard(withStoryboard,panelScope,stage.signal):undefined;
+   if(prepared.asset||card)editor.context.commands.applyDoc(card?withAsset(withStoryboard,card,'clipmentor-partner-'):withStoryboard);
+   return prepared;
+  };
+  if(task.stage==='blueprint'&&panelScope&&editor.getDoc().clipMentorAnalysis?.source_breakdown?.units.length){
+   const prepared=await preparePanelAssets();
    if(prepared.issue)task.repairContext={...task.repairContext,creator_storyboard_issue:prepared.issue};
-   if(storyboard){
-    editor.context.commands.applyDoc({...current,assets:[...current.assets,storyboard]});
-   }
   }
   const doc=editor.getDoc(),a=doc.clipMentorAnalysis!;
   if(a.source.asset_id!==task.input.sourceAssetId)throw new Error('Task/source binding changed');
@@ -407,7 +420,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify([{code:String((e as Error).message),id:'delivery'}])}`},repair:'blueprint'};
    }
    if(task.input.panelDelivery){
-    const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},await currentCreatorDocument(doc));
+    const content=await currentCreatorDocument(doc);
+    const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
+    if(!issues.length&&!await verifyPanelPartnerCard(doc,task.input.panelDelivery,content,undefined,stage.signal))issues.push('existing_partner_composition_invalid');
     if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues.map(code=>({code,id:'delivery'})))}`},repair:'blueprint'};
    }
    const digest=prepared.reviewed.subject.digest;
@@ -496,7 +511,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    const packet=await copyTeachingPacketFromDoc(doc),t=editor.context.getState();
    const facts=productionPreviewFacts(doc,t,packet);
    assertPreviewExportBinding(exported,editor.revision,facts);
-   const deliverables=(await productionDeliverables(doc)).map(({bytes:_bytes,...output})=>output);
+   const deliverables=(await productionDeliverables(doc,undefined,task.completed.export?.at,task.input.panelDelivery)).map(({bytes:_bytes,...output})=>output);
    const {input,executionManifest}=facts;
    const reviewed=await executeWithRecovery('review_clipmentor_preview',{action:'request',operationId:operation('independent-review'),maxRequests:1,src,videoSha256:await sha256File(file),input,
     executionManifest},'preview-review') as Record<string,unknown>;
@@ -509,10 +524,11 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   // Only these author stages may call the API model; review/export have separate host paths.
   const prefix=`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
   if(Object.entries(task.effects).some(([id,e])=>id.startsWith(prefix)&&e.kind==='model'))throw new Error('author_stage_already_attempted; inspect saved run before explicit reconciliation, no repeat submission');
-  const authorDecision=productionAuthorDecision(task,!!reflowBaseline);
+  const operatorRevision=task.stage==='blueprint'&&!!task.blueprintFeedback&&(task.blueprintFeedbackRepair??(task.blueprintFeedbackRevision===openedRevision?task.repairs:-1))===task.repairs;
+  const authorDecision=productionAuthorDecision(task,!!reflowBaseline,operatorRevision);
   const {pictureOnly:pictureOnlyRepair,independent:repairingIndependent,selfCheck:fixingSelfCheck}=authorDecision;
   await recordProductionDecision(task,{scope:'author',action:'select',reason:authorDecision.mode});
-  const goal=reflowBaseline?'修复现存横版误用：先只读现有工程和已审蓝图，再用原set_aspect_ratio将活动画布设为9:16；第一笔保存起就必须满足竖版。随后逐段重新安排原生实例，不能仅裁横片或只改画布尺寸交差。保持全部现有实例ID、源窗、时间位置、原声/旁白音量、稿件、字幕原文、短标及9条音频；只调整视觉几何和排版。原片完整竖版主体、讲解参照关系、原片/讲解标识与下方实底字幕区均须在竖版清楚可读。片头仍为压暗原片铺底+成绩前景，片尾完整使用已审商品+Storyboard整卡。图片裁切参数必须在改成竖版后从现行原入口回读，不沿用横版像素换算；不修改蓝图或素材。不要新增配音/审核/观察，不自行导出。用实际组合帧检查片头、每组、片尾后保存，由宿主使用剩余渲染额度导出。':pictureOnlyRepair?'仅修复任务 audio_picture_repair 中的画面承载问题。读取现行稿、原片证据和实测音频，按整组而不是锁死单句短窗安排画面。只用 set_picture_plan 给受影响组登记新画面计划（必须沿用 current_script_candidate），保留原有交付段、结构、口播、字幕与短标文字。可读取或保存原片证据帧，不新增配音或观察。每段必须有实际信息任务，不循环、慢放或空长定格凑秒数。现行稿、音频和实测锚点随任务附带。保存后交现有审核，不自签通过。':repairingIndependent
+  const goal=operatorRevision?'按网页提交的现行原话逐项返修，并复核整套仍适用的交付要求。使用原片和当前中马稿、实际画面找对应缺口。既有审核指出的问题仍需保留及核对。用户明确要求修改的片头、片尾和教学组纳入本轮，保留其余已通过内容。先保存再回读新候选，按现有自检和审核继续。不能补写未确认事实或覆盖原审核回执。':reflowBaseline?'修复现存横版误用：先只读现有工程和已审蓝图，再用原set_aspect_ratio将活动画布设为9:16；第一笔保存起就必须满足竖版。随后逐段重新安排原生实例，不能仅裁横片或只改画布尺寸交差。保持全部现有实例ID、源窗、时间位置、原声/旁白音量、稿件、字幕原文、短标及9条音频；只调整视觉几何和排版。原片完整竖版主体、讲解参照关系、原片/讲解标识与下方实底字幕区均须在竖版清楚可读。片头仍为压暗原片铺底+成绩前景，片尾完整使用已审商品+Storyboard整卡。图片裁切参数必须在改成竖版后从现行原入口回读，不沿用横版像素换算；不修改蓝图或素材。不要新增配音/审核/观察，不自行导出。用实际组合帧检查片头、每组、片尾后保存，由宿主使用剩余渲染额度导出。':pictureOnlyRepair?'仅修复任务 audio_picture_repair 中的画面承载问题。读取现行稿、原片证据和实测音频，按整组而不是锁死单句短窗安排画面。只用 set_picture_plan 给受影响组登记新画面计划（必须沿用 current_script_candidate），保留原有交付段、结构、口播、字幕与短标文字。可读取或保存原片证据帧，不新增配音或观察。每段必须有实际信息任务，不循环、慢放或空长定格凑秒数。现行稿、音频和实测锚点随任务附带。保存后交现有审核，不自签通过。':repairingIndependent
    ? '只修独立审核回执列出的未通过项；逐项同步口播、字幕、教学重点、画面计划和证据边界。仅换候选版本、改说明或收窄口播却保留旧教学断言不算完成；补证则登记实际来源与支持关系，不把观察等同审核批准。保留原判、已通过单元、片头片尾及实际素材。旁白若在原片和明确登记的短标或关系卡之外没有独立教学损失，撤掉重复旁白和其同文字幕，保留画面承载及教学重点，回读对应计划。当前稿件和画面安排保存后交重新自检及审核。'
    : fixingSelfCheck
    ? '修订已保存的蓝图，逐项回应任务附带的作者自检。根据已有原片证据核实混色、色号、晕染及促单，证据不足就收窄或标未知；保留未受影响的教学。只修实际缺项。凡同一对象、色号或动作无法从已登记证据确认，就收窄口播和短标，避免反复补证。口播指到的动作必须在当句选材范围实际可见。字幕分卡按意群拆分且保持同文。正文 phases 使用 {mode:"original",source_range_seconds:[起,止],picture:"画面"} 或 {mode:"explanation",line_id:"单句ID",source_range_seconds:[起,止],picture:"画面"}；不用 kind、line_ids 或 source_ranges。每条讲解跟对应原声，先逐个点名现行稿件里的所有 line_id，每句均覆盖，匹配 source_breakdown 已登记的播放窗和回看。viewer_stage_cues.original 用 text/enter/exit，revisit 为逐句关联的 {line_ids,text,enter,exit} 数组。片头片尾留在各自交付段，不塞进正文 phases。字幕分卡不改口播文字。保存后用 read_clipmentor_analysis 的 current_copy/单元 ID 回读。保留现有版本和失败回执，不配音、不剪辑。'
@@ -625,10 +641,11 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      if(task.stage==='blueprint'&&name==='edit_asset'){
       assertCreatorDocumentEdit(editor.getDoc(),args);
       const result=await executeWithRecovery(name,args,id);
-      const prepared=await preparePanelStoryboardForAuthor(editor.getDoc(),stage.signal),storyboard=prepared.asset;
-      if(storyboard)editor.context.commands.applyDoc({...editor.getDoc(),assets:[...editor.getDoc().assets,storyboard]});
+      if(result&&typeof result==='object'&&'error' in result)return result;
+      const prepared=await preparePanelAssets(),current=editor.getDoc();
       return {...(typeof result==='object'&&result?result:{result}),...(prepared.issue?{creatorStoryboard:{status:'needs_revision',reason:prepared.issue}}
-       :{creatorStoryboardAssetId:storyboard?.id??panelStoryboardAsset(editor.getDoc())?.id})};
+       :{creatorStoryboardAssetId:panelStoryboardAsset(current)?.id,
+        ...(panelScope?{partnerEndingPicture:panelPartnerPicture(current,panelScope,await currentCreatorDocument(current))}:{})})};
      }
      return name==='load_skill'?editor.loadSkillTool(args):executeWithRecovery(name,args,id);
     }}});
@@ -638,9 +655,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   if(!isClipMentorAnalysis(analysis)||!analysis.points.length||!analysis.blueprint.length||!analysis.evidence.length)throw new Error('analysis_stage_incomplete');
   if(task.stage==='blueprint'){
    if(task.input.panelDelivery){
-    const document=await preparePanelStoryboardForAuthor(next,stage.signal);
+    const document=await preparePanelAssets();
     if(document.issue){await editor.commit();return {artifact:{revision:editor.revision,blueprint_structure_issue:document.issue},repair:'blueprint'};}
-    if(document.asset){editor.context.commands.applyDoc({...next,assets:[...next.assets,document.asset]});next=editor.getDoc();}
+    next=editor.getDoc();
    }
    try{await prepareProductionBlueprint(next);}catch(error){
     const issue=error instanceof Error?error.message:'';
@@ -736,12 +753,17 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    instruction:'片头和教学主体已从同批另一版本复用，实际时间线中此前的画面、音频、字幕和样式全部保持。只为本版本补齐片尾，不能重新剪主体、重复配同文音频或改动前段。'}}:{}),
   ...(policy?{doneCriteria:policy.brief.doneCriteria}:{}),
   ...(task.stage==='blueprint'&&task.input.panelDelivery?{deliveryRequirements:{
-   ...task.input.panelDelivery,storyboardAssetId:panelStoryboardAsset(doc,await currentCreatorDocument(doc))?.id??null,
+   ...task.input.panelDelivery,
+   ...(partnerStoryboardRequired(task.input.panelDelivery)?{partnerEndingPicture:panelPartnerPicture(doc,task.input.panelDelivery,await currentCreatorDocument(doc))??null}:{}),
+   ...(task.input.panelDelivery.audience==='new_contact'?{}:{storyboardAssetId:panelStoryboardAsset(doc,await currentCreatorDocument(doc))?.id??null,
    storyboardDocument:{source_sha256:doc.clipMentorAnalysis?.source.sourceContentHash,
-    instruction:'原片 Storyboard 是另一个交付文档，不是教学蓝图。用原片证据整理逐段的镜头动作说明与原片信息，按三列 PDF 组织，不交零散听写或空白动作栏。若 storyboardAssetId 缺失，先用现有 edit_asset 更新 sourceAssetId，props 仅写 clipmentorCreatorStoryboard:{source_sha256,rows:[{source_range_seconds:[起,止],source_frames:[已核原帧],shot_ms:马来语客观动作说明,information_ms:马来语原片信息整理,visible_evidence_ids:[可见证据],claim_evidence_ids:[原话证据]}]}。覆盖完整原片，不把说明写成拍摄指令或因果点评。工具会返回本片文档封面资产ID，再将它绑定到已合作片尾；不新增配音或模型调用步骤。'},
+    instruction:'原片 Storyboard 是另一个交付文档，不是教学蓝图。用原片证据整理逐段的镜头动作说明与原片信息，按三列 PDF 组织，不交零散听写或空白动作栏。若 storyboardAssetId 缺失，先用现有 edit_asset 更新 sourceAssetId，props 仅写 clipmentorCreatorStoryboard:{source_sha256,rows:[{source_range_seconds:[起,止],source_frames:[已核原帧],shot_ms:马来语客观动作说明,information_ms:马来语原片信息整理,visible_evidence_ids:[可见证据],claim_evidence_ids:[原话证据]}]}。覆盖完整原片，不把说明写成拍摄指令或因果点评。工具会返回本片文档封面资产ID，再将它绑定到已合作片尾；不新增配音或模型调用步骤。'}}),
    instructions:(task.input.panelDelivery.audience?`本次只制作 ${task.input.panelDelivery.audience}，保留一个 performance_opening 和该达人阶段的一个 creator_invitation。`:'在现行 picture_plan.delivery_sections 登记一个 performance_opening 和两个 creator_invitation，分别使用 section_id new_contact、existing_partner。')+'每段各有独立 line_id、马来语口播、同文字幕、中文、图片绑定和对应证据。'+
    '片头参照 NIUMO V7 和 Green Makes 定稿。picture.layout={kind:original_underlay,source:{asset_id,src,sha256},range:[原片起止秒],shade:0.63,show_sales:布尔,headline:[成绩标题各行],transition:[同款提问和邀请看拍法各行]}。用本片原片压暗铺底、同款提问、接清晰原片。只有冻结 salesEvidenceId 时，绑定 salesAssetId 作成绩前景并引用该证据；否则 picture 用 productAssetId 作商品身份证据，show_sales=false，headline=[]，不上商品静图或未确认数字。新建联 picture 用 ctaAssetId，默认 layout={kind:recruitment_card,poster:{asset_id:ctaAssetId,src,sha256:ctaAssetHash}}，原海报整图等比适配，不自制替代卡。只有本项目原话明确要求分裁时才用 product_commission，保留商品与佣金同屏及素材身份。参照只比较构图，不作为上屏素材或本项目业绩事实。口播不替海报中的未核条件追加承诺，保留联系合作动作。'+
-   '制作已合作版本时，用 storyboardAssetId 展示并交本片原片拍摄参考，邀请到货后按自己的风格开拍。蓝图默认登记两种结尾；执行子任务按自身输出范围落实。将原话中文和阶段标识中文分别登记。证据只引用核实的素材及其实际用途。'
+   (partnerStoryboardRequired(task.input.panelDelivery)
+    ?'已合作版用 partnerEndingPicture 的 asset_id、src、sha256 和 layout 登记现成同屏图并保留独立 PDF 槽。首次未准备时，先保存本片的原片 Storyboard；根据工具返回的 partnerEndingPicture 登记。证据要绑定这张合成图和实际来源，不补写未经确认的事实。'
+    :task.input.panelDelivery.audience==='new_contact'?'':'制作已合作版本时，用 storyboardAssetId 展示并交本片原片拍摄参考。')+
+   '邀请到货后按自己的风格开拍。将原话中文和阶段标识中文分别登记。证据只引用核实的素材及其实际用途。'
   }}:{}),
   voice:task.input.voice??null,sourceAssetId:task.input.sourceAssetId,revision:doc.clipMentorAnalysis?.revision,
   frozenBlueprint:prepared?.view??null,blueprintReadiness:prepared?.readiness??await productionBlueprintReadiness(doc,task.input.voice),

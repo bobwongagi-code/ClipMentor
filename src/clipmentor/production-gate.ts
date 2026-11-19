@@ -11,7 +11,7 @@ import type { AgentContext } from '../agent/context';
 import type { ProjectDoc } from '../editor/types';
 import regression from './fixtures/copy-review-blind-20261019.json';
 import teachingRegression from './fixtures/copy-teaching-blind-v2-20261019.json';
-import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations } from './source-breakdown';
+import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations, registeredRevisitRanges } from './source-breakdown';
 
 export const COPY_REVIEW_PROTOCOL = 'creator-copy-v2';
 // Included in the subject digest: old approvals cannot silently certify changed review criteria.
@@ -485,7 +485,7 @@ const PLAN_CHILDREN: Partial<Record<PlanContainer, Record<string, { container: P
   viewer_stage_cues: { layout: { container: 'layout' }, original: { container: 'original' }, revisit: { container: 'revisit', many: true } },
   original_playback: { person_visual_only: { container: 'person_visual_only' } },
 };
-function reviewablePlan(value: unknown, container: PlanContainer = 'root'): unknown {
+function reviewablePlan(value: unknown, container: PlanContainer = 'root', currentPhases = false): unknown {
   if (!row(value)) throw new Error('picture_plan_shape_invalid');
   const allowed: readonly string[] = PLAN_FIELDS[container];
   const projected = Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
@@ -501,7 +501,7 @@ function reviewablePlan(value: unknown, container: PlanContainer = 'root'): unkn
     if (child) {
       if (child.many) {
         if (!Array.isArray(entry) || !entry.every(row)) throw new Error('picture_plan_shape_invalid');
-        return [[key, entry.map(part => reviewablePlan(part, child.container))]];
+        return [[key, entry.map(part => reviewablePlan(part, child.container, currentPhases && key === 'phases'))]];
       }
       return [[key, reviewablePlan(entry, child.container)]];
     }
@@ -511,7 +511,10 @@ function reviewablePlan(value: unknown, container: PlanContainer = 'root'): unkn
   }));
   if (container === 'phases') {
     if (!Object.keys(projected).length) throw new Error('picture_plan_phase_empty');
-    if (Object.hasOwn(value, 'mode') && !text(value.mode)) throw new Error('picture_plan_phase_mode_invalid');
+    if (Object.hasOwn(value, 'mode') && (!text(value.mode)
+      || currentPhases && !['original', 'explanation'].includes(value.mode as string))) throw new Error('picture_plan_phase_mode_invalid');
+    if (Object.hasOwn(value, 'source_range_seconds') && Object.hasOwn(value, 'source_seconds')
+      && canonical(value.source_range_seconds) !== canonical(value.source_seconds)) throw new Error('picture_plan_phase_source_range_conflict');
     // Do not silently discard attempted operational aliases. Use the existing declared
     // plan fields; author metadata remains excluded rather than becoming reviewer input.
     for (const key of ['kind', 'group', 'source_frames', 'line_ids', 'source_audio', 'stage', 'revisit_explicit']) {
@@ -519,6 +522,12 @@ function reviewablePlan(value: unknown, container: PlanContainer = 'root'): unkn
     }
   }
   return projected;
+}
+
+export function validatePicturePlanProjection(plan: unknown): void {
+  // Active plans use the native phase modes. Settled reviewer packets keep their
+  // historical wording so an old verdict can still be read and replayed exactly.
+  reviewablePlan(plan, 'root', true);
 }
 
 /** Mechanical grouped handoff consistency only; this never grants semantic approval. */
@@ -593,6 +602,9 @@ export async function copyTeachingPacketFromDoc(doc: ProjectDoc): Promise<Teachi
       const planId = internal.current_picture_plan;
       const execution = text(planId) ? internal[planId] : undefined;
       if (planId !== undefined && (!text(planId) || !row(execution) || execution.script_candidate_id !== internal.current_script_candidate)) throw new Error('picture_plan_candidate_mismatch');
+      const grouped = groupedPlaybackRelations(row(execution) ? execution.phases : undefined, u.lines.map(line => line.line_id), u.unit_id);
+      const revisits = registeredRevisitRanges(unit, sourceRange, grouped);
+      if (!revisits) throw new Error(`picture_plan_revisits_mismatch:${u.unit_id}`);
       const lineBindings = candidate.lines.map((l) => ({ line_id: l.id, source_range_seconds: l.source_seconds, ...copyLineSourceBinding(b, unit, l, execution)! }));
       // The server samples positive ranges. A selected context still needs its own one-frame window;
       // sampling a broad comparison segment does not guarantee seeing the chosen context frame.
@@ -602,8 +614,8 @@ export async function copyTeachingPacketFromDoc(doc: ProjectDoc): Promise<Teachi
         source_context: buildSourceContext(a, sourceReviewRanges(a), sourceEvidence),
         picture_plan: { original_source_ranges: originalPlaybackRanges(b, unit), explanation_source_ranges: [...unit.explanation_segment_ids.map(sourceRange), ...contextSamples],
           line_source_ranges: lineBindings,
-          registered_revisits: unit.revisits.map((r) => ({ from_source_range: sourceRange(r.from_segment_id), to_source_range: sourceRange(r.to_segment_id) })),
-          ...(text(planId) && row(execution) ? { execution_plan: { plan_id: planId, script_candidate_id: String(internal.current_script_candidate), content: reviewablePlan(execution) as Row } } : {}) },
+          registered_revisits: revisits,
+          ...(text(planId) && row(execution) ? { execution_plan: { plan_id: planId, script_candidate_id: String(internal.current_script_candidate), content: reviewablePlan(execution, 'root', true) as Row } } : {}) },
         points: unit.coverage.map((c) => {
         const p = b.points.find((v) => v.point_id === c.point_id)!;
         const visual: VisualEvidenceBinding[] = [];

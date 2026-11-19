@@ -11,6 +11,10 @@ export interface CreatorStoryboardDocument {
   visible_evidence_ids:string[];claim_evidence_ids:string[]}>;
 }
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+function orderedCreatorDocument({source_sha256,rows}:CreatorStoryboardDocument):CreatorStoryboardDocument{
+ return {source_sha256,rows:rows.map(({source_range_seconds,source_frames,shot_ms,information_ms,visible_evidence_ids,claim_evidence_ids})=>
+  ({source_range_seconds,source_frames,shot_ms,information_ms,visible_evidence_ids,claim_evidence_ids}))};
+}
 export function validateCreatorDocument(doc:ProjectDoc,value:unknown):CreatorStoryboardDocument{
  const a=doc.clipMentorAnalysis,v=value as CreatorStoryboardDocument;
  if(!a?.source.sourceContentHash||!v||v.source_sha256!==a.source.sourceContentHash||!Array.isArray(v.rows)||!v.rows.length||v.rows.length>24)
@@ -34,19 +38,19 @@ export function validateCreatorDocument(doc:ProjectDoc,value:unknown):CreatorSto
   end=range[1];
  }
  if(Math.abs(end-a.source.duration_seconds)>.01)throw Error('storyboard_document_coverage_incomplete');
- return structuredClone(v);
+ return structuredClone(orderedCreatorDocument(v));
 }
 function evidenceDigest(doc:ProjectDoc,content:CreatorStoryboardDocument){
  const ids=[...new Set(content.rows.flatMap(r=>[...r.visible_evidence_ids,...r.claim_evidence_ids]))].sort();
  return hash(ids.map(id=>{const e=doc.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===id)!;
   return [id,e.kind,e.text,e.source_range_seconds,e.source_ids,e.call_status];}));
 }
-export const creatorDocumentHash=(content:CreatorStoryboardDocument)=>hash(content);
+export const creatorDocumentHash=(content:CreatorStoryboardDocument)=>hash(orderedCreatorDocument(content));
 function documentFromSourceAsset(doc:ProjectDoc){
  return doc.assets.find(a=>a.id===doc.clipMentorAnalysis?.source.asset_id)?.props?.clipmentorCreatorStoryboard;
 }
 export function creatorDocumentHashFromAssets(doc:ProjectDoc){
- const value=documentFromSourceAsset(doc);return value?hash(validateCreatorDocument(doc,value)):undefined;
+ const value=documentFromSourceAsset(doc);return value?creatorDocumentHash(validateCreatorDocument(doc,value)):undefined;
 }
 export function creatorDocumentFromSourceAsset(doc:ProjectDoc){
  const value=documentFromSourceAsset(doc);return value?validateCreatorDocument(doc,value):undefined;
@@ -66,7 +70,7 @@ export async function saveCreatorStoryboardDocument(doc:ProjectDoc,value:unknown
  await mkdir(join(runtimeProfile().rootDir,'clipmentor-creator-storyboards'),{recursive:true});
  try{await writeFile(temp,JSON.stringify({content,evidence_sha256:evidenceDigest(doc,content)}),{flag:'wx'});await rename(temp,file);}
  finally{await rm(temp,{force:true});}
- return hash(content);
+ return creatorDocumentHash(content);
 }
 export async function loadCreatorStoryboardDocument(doc:ProjectDoc){
  // Existing asset props are the authoring surface. No new blueprint field or author tool.

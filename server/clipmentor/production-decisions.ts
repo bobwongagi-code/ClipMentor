@@ -5,8 +5,9 @@ import {createHash} from 'node:crypto';
  * the worker must still verify current source, receipts, ownership and budgets. */
 export type RecoveryRoute='picture_capacity'|'review_source_observation'|'visual_review_contract'|'continuation_brief'
  |'source_evidence_import'|'focused_author'|'focused_independent'|'focused_structure'|'author_checkpoint';
-export type AuthorMode='ordinary'|'canvas_reflow'|'picture_capacity'|'independent_review'|'author_self_check';
-export function productionAuthorDecision(task:Pick<ProductionTask,'stage'|'repairContext'>,boundCanvasReflow:boolean){
+export type AuthorMode='ordinary'|'canvas_reflow'|'picture_capacity'|'independent_review'|'author_self_check'|'operator_revision';
+export function productionAuthorDecision(task:Pick<ProductionTask,'stage'|'repairContext'>,boundCanvasReflow:boolean,operatorRevision=false){
+ if(operatorRevision&&task.stage==='blueprint')return {mode:'operator_revision' as const,pictureOnly:false,independent:false,selfCheck:false};
  const pictureOnly=task.stage==='blueprint'&&!!task.repairContext?.audio_picture_repair;
  const independent=task.stage==='blueprint'&&!!(task.repairContext?.repair??task.repairContext?.pending_review_repair);
  // Obligations may overlap even though the selected instruction has one priority.
@@ -77,6 +78,7 @@ export function productionOutputsMatch(parent:ProductionTask,children:Production
   ||new Set(children.map(t=>t.projectId)).size!==2)return false;
  if(children.some((task,index)=>{const entry=entries[index];return entry.projectId!==task.projectId||entry.taskId!==task.taskId
   ||entry.audience!==task.input.panelDelivery?.audience||task.input.sourceAssetId!==parent.input.sourceAssetId
+  ||task.input.panelDelivery?.partnerEnding!==parent.input.panelDelivery?.partnerEnding
   ||task.blueprintApproval?.sourceProjectId!==parent.projectId||task.blueprintApproval.sourceTaskId!==parent.taskId;}))return false;
  const first=children.find(t=>t.input.panelDelivery?.audience==='existing_partner'),second=children.find(t=>t.input.panelDelivery?.audience==='new_contact');
  if(!first||!second||!first.blueprintApproval?.sourceRevision||first.blueprintApproval.sourceRevision!==second.blueprintApproval?.sourceRevision)return false;
