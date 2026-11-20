@@ -18,7 +18,7 @@ import { panelDeliveryIssues,panelDeliveryFindings,panelSalesEvidence,verifyPane
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
-import {openingComparisonCriterion} from '../../shared/clipmentor-handoff';
+import {openingComparisonCriterion,type HandoffPolicy} from '../../shared/clipmentor-handoff';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {handoffKey,readHandoffPolicy} from './handoff';
@@ -32,6 +32,7 @@ import { copyReviewDependencies } from './copy-review';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
+  isPanelBlueprintDraft, panelAuthorCheckMatches,panelBlueprintRequirementsDigest,
   latestPanelProductionTask,productionReviewRequirements,
   type ProductionTask,
 } from './production-task';
@@ -204,6 +205,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     const policy=task?await readRequirements():null;
     const criteria=boundVisualCriteria(policy);
     const requirementsDigest=policy?digestValue(policy.brief.doneCriteria):undefined;
+    const draftChecked=(current:ProductionTask,revision:string,currentPolicy:HandoffPolicy|null)=>
+      !isPanelBlueprintDraft(current)||panelAuthorCheckMatches(current,revision,panelBlueprintRequirementsDigest(currentPolicy));
     // This identity belongs to the HTTP review surface, never to the authored blueprint.
     const boardSubject=async(revision:string,currentTask=task,currentPolicy=policy)=>{
       const parent=currentTask?.blueprintApproval?await productionTaskStore.load(currentTask.blueprintApproval.sourceProjectId,currentTask.blueprintApproval.sourceTaskId):undefined;
@@ -212,7 +215,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const sibling=siblingEntry?await loadOfflineStoredProject(siblingEntry.projectId):undefined;
       const artifactIdentity=digestValue({version:1,projectId,taskId:currentTask?.taskId,revision,
         criteriaDigest:boundVisualCriteria(currentPolicy)?.digest,
-        requirementsDigest:currentPolicy?digestValue(currentPolicy.brief.doneCriteria):undefined,
+        requirementsDigest:currentPolicy?panelBlueprintRequirementsDigest(currentPolicy):undefined,
         siblingProjectId:siblingEntry?.projectId,siblingRevision:sibling?.revision,siblingMissing:!!siblingEntry&&!sibling});
       const identity=digestValue({artifactIdentity,feedbackSequence:currentTask?.blueprintFeedback?currentTask.sequence:undefined});
       return {identity,artifactIdentity,siblingEntry,sibling,siblingRevision:sibling?.revision};
@@ -254,6 +257,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           ||!['blueprint','copy_review'].includes(task.stage)) throw new Error('审片板尚未就绪');
         const revision = query.get('revision');
         if (!revision || (await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
+        if(!draftChecked(task,revision,policy))throw Error('蓝图尚未完成教学自检');
         // A shared-body task owns the current teaching plan; its sibling owns only
         // the other ending. Join read-only presentation, never execution documents.
         const subject=await boardSubject(revision);
@@ -297,7 +301,10 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }
         const bytes = await readFile(await board.file);
         await board.assertUnchanged?.();
-        if((await boardSubject(revision,task,await readRequirements())).identity!==identity)throw Error('审片板已变化，请刷新');
+        const currentTask=isPanelBlueprintDraft(task)?await currentPanelTask(projectId):task;
+        const currentPolicy=await readRequirements();
+        if(!currentTask||currentTask.taskId!==task.taskId||active(currentTask.taskId,projectId)||!draftChecked(currentTask,revision,currentPolicy)
+          ||(await boardSubject(revision,currentTask,currentPolicy)).identity!==identity)throw Error('审片板已变化，请刷新');
         res.setHeader('X-ClipMentor-Board-Identity',identity);
         res.setHeader('Content-Type','text/html; charset=utf-8');
         res.setHeader('Content-Security-Policy',"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'");
@@ -337,7 +344,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const draft=task&&!running&&['blocked','awaiting_blueprint'].includes(task.status)&&['blueprint','copy_review'].includes(task.stage)
         ?await loadOfflineStoredProject(projectId):null;
       const draftRevision=draft?.doc.clipMentorAnalysis?.blueprint.length?draft.revision:undefined;
-      const blueprintRevision=draftRevision;
+      const uncheckedDraft=!!task&&!!draftRevision&&!draftChecked(task,draftRevision,policy);
+      const blueprintRevision=uncheckedDraft?undefined:draftRevision;
       const checked=task?.completed.copy_review?.artifact;
       const approvalUnavailable=blueprintRevision
         ? task?.status!=='awaiting_blueprint'||blueprintRevision!==task.projectRevision
@@ -350,11 +358,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         :undefined;
       const canConfirmBlueprint=!!blueprintRevision&&task?.status==='awaiting_blueprint'
         &&blueprintRevision===task.projectRevision&&!!task.input.panelDelivery&&!task.input.panelDelivery.audience
-        &&!task.blueprintApproval&&!running&&task.attempts.model<task.input.budget.model;
+        &&!task.blueprintApproval&&!task.repairContext?.pending_blueprint_feedback&&!running
+        &&task.attempts.model<task.input.budget.model&&Date.now()<task.createdAt+task.input.budget.maxElapsedMs;
       const stopReason = stopped
         ? /^(?:Error: )?(?:Original video asset missing|Original upload unavailable|Original source changed)$/.test(task.error ?? '') ? 'materials'
           : /^(?:Error: )?(?:Production deadline exceeded|(?:model|review|observation|tts|render|preview_review) budget exhausted)$/.test(task.error ?? '')
-            || task.stage==='copy_review'&&task.attempts.review>=task.input.budget.review&&task.error?.startsWith('Error: 已用完自动返修额度') ? 'limit'
+            || task.error?.startsWith('Error: 已用完自动返修额度')
+              &&(isPanelBlueprintDraft(task)||task.stage==='copy_review'&&task.attempts.review>=task.input.budget.review) ? 'limit'
           : 'service'
         : undefined;
       let attachments:Array<{assetId:string;fileName:string}>=[],deliveryUnavailable=false;
@@ -374,9 +384,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
       send({ task:task ? {
         taskId:task.taskId,...(task.blueprintApproval?{sourceTaskId:task.blueprintApproval.sourceTaskId}:{}),
-        status: outputUnavailable?'blocked':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
+        status: outputUnavailable||!running&&uncheckedDraft?'blocked':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
         stage: task.stage, revision: task.projectRevision, sequence: task.sequence,
-        active: running, stopReason:outputUnavailable?'service':stopReason, feedbackUsed: task.feedbackUsed,
+        active: running, stopReason:outputUnavailable?'service':stopReason??(uncheckedDraft
+          ?Date.now()>=task.createdAt+task.input.budget.maxElapsedMs||task.attempts.model>=task.input.budget.model?'limit':'service'
+          :undefined), feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
         ...(blueprintRevision?{blueprintRevision,boardIdentity:(await boardSubject(blueprintRevision)).identity,canApproveBlueprint:!approvalUnavailable,
@@ -421,7 +433,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
           openingComparison,
-          brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
+          brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。教学主体说明原作者怎样让购买理由可见，让达人能借鉴拍法。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
           panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
@@ -455,9 +467,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const productionConfirmation=body.action==='produce_versions'&&!!existing.input.panelDelivery&&!existing.input.panelDelivery.audience
             &&!existing.blueprintApproval&&existing.status==='awaiting_blueprint'&&existing.stage==='copy_review'
             &&saved.revision===existing.projectRevision;
-          if(body.action==='produce_versions'&&!productionConfirmation)throw Error('当前版本尚不能开始制作');
+          if(body.action==='produce_versions'&&(!productionConfirmation||existing.attempts.model>=existing.input.budget.model
+            ||Date.now()>=existing.createdAt+existing.input.budget.maxElapsedMs))throw Error('当前版本尚不能开始制作');
           if ((!draftFeedback&&!productionConfirmation&&(existing.status !== 'awaiting_blueprint'||body.revision !== existing.projectRevision)) || body.revision !== saved.revision) throw new Error('蓝图版本已变化，请重新打开审片板');
-          const subject=await boardSubject(saved.revision,existing,await readRequirements());
+          const actionPolicy=await readRequirements();
+          if(!draftChecked(existing,saved.revision,actionPolicy)||productionConfirmation&&existing.repairContext?.pending_blueprint_feedback)
+            throw Error('蓝图尚未完成教学自检');
+          const subject=await boardSubject(saved.revision,existing,actionPolicy);
           if(body.boardIdentity!==subject.identity){res.statusCode=409;send({reason:'review_board_changed'});return;}
           const board = boards.get(projectId);
           if (!board || board.identity!==subject.identity || board.revision !== body.revision || board.criteriaDigest!==criteria?.digest||board.requirementsDigest!==requirementsDigest) {
@@ -470,7 +486,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const latest=await snapshot();
           const latestPolicy=await readRequirements(),latestCriteria=boundVisualCriteria(latestPolicy);
           const latestRequirements=latestPolicy?digestValue(latestPolicy.brief.doneCriteria):undefined;
-          if(latest.revision!==body.revision||(await boardSubject(latest.revision,existing,latestPolicy)).identity!==body.boardIdentity||latestCriteria?.digest!==board.criteriaDigest||latestRequirements!==board.requirementsDigest)
+          if(latest.revision!==body.revision||!draftChecked(existing,latest.revision,latestPolicy)||(await boardSubject(latest.revision,existing,latestPolicy)).identity!==body.boardIdentity||latestCriteria?.digest!==board.criteriaDigest||latestRequirements!==board.requirementsDigest)
             throw new Error('蓝图版本已变化，请重新打开审片板');
           const projectKey='project:'+projectId,policyKey=handoffKey(projectId);
           const projectEntry=await getStoredEntry(projectKey),policyEntry=await getStoredEntry(policyKey);

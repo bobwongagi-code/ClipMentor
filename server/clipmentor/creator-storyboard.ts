@@ -84,7 +84,7 @@ export async function verifyCreatorStoryboardEvidence(doc:ProjectDoc,signal?:Abo
  return {model,document,file};
 }
 
-const running=new Map<string,Promise<{bytes:Buffer;preview:Buffer;pages:number}>>();
+const running=new Map<string,Promise<{bytes:Buffer;preview:Buffer;pages:number;inputDigest:string}>>();
 /** Content-addressed reuse; callers still recheck actual source bytes before using cached output. */
 export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
  signal?.throwIfAborted();
@@ -115,7 +115,8 @@ export async function creatorStoryboard(doc:ProjectDoc,signal?:AbortSignal){
     const html=creatorDocumentHtml(model.title,document,images,'data:image/png;base64,'+logoImage.toString('base64'));
     const result=await renderCreatorDocument(html,deadline);
     // Source identity is rechecked independently for each subscriber below.
-    return {...result,pages:Math.ceil(document.rows.length/3)};
+    // PDF creation dates change when an identical document is rendered again.
+    return {...result,pages:Math.ceil(document.rows.length/3),inputDigest:key};
    }finally{await rm(work,{recursive:true,force:true});}
   })();
   running.set(key,job);

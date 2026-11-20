@@ -142,6 +142,18 @@ async function request(operationId = randomUUID()): Promise<CopyReviewRequest> {
 const nativeFetch = globalThis.fetch;
 try {
   await verifyGroupedReviewReceipts({root,deps,base,request,goodRaw});
+  const teachingBrief={instruction:'拆解原作者怎样展示产品购买理由。',objective:'读证据判断原片的表达关系。',feedback:'讲清效果如何引出两盘比较。'};
+  const teachingRequest=await request();
+  let teachingRequests=0;
+  const teachingDeps={...deps,requirements:async()=>({policy:null,teachingBrief}),frame:async()=> 'aGVsbG8=',async run(prompt:string){
+    teachingRequests++;
+    assert(prompt.includes(JSON.stringify(teachingBrief)));
+    assert(!prompt.includes('AUTHOR_REVISIT_REASON_MUST_NOT_LEAK'));
+    return goodRaw();
+  }};
+  const rawTeaching=await reviewClipMentorCopy(teachingRequest,teachingDeps);
+  assert.equal((await reviewClipMentorCopy(teachingRequest,teachingDeps)).receipt.verdict,rawTeaching.receipt.verdict);
+  assert.equal(teachingRequests,1,'reopening the original review does not ask an independent reviewer again');
   const diagnosticEnvelope = { error: 'Offline saved failure', operationId: contract171.request.operationId,
     diagnostic: contract171.diagnostic, requestsAttempted: 1, production_approved: false };
   assert.deepEqual(structuredToolFailure({ ...diagnosticEnvelope, raw_review: 'must-not-reach-author', private_path: '/private' }), diagnosticEnvelope,

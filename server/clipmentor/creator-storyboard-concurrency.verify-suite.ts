@@ -74,6 +74,24 @@ await check('SM37: abort only requester while shared render is pending',async()=
  const reason=Error('only-requester-A');controller.abort(reason);assert.equal((await first).error,reason);assert.equal(gates[index].signal.aborted,false);assert.equal(gates.length,index+1);
  release(index);const result=(await second).value;assert(result);assert.deepEqual(result.bytes,expected(index).bytes);assert.deepEqual(result.preview,expected(index).preview);assert.equal(result.pages,1);assert.equal(frames,frameBefore+1);assert.equal(snap(a),beforeA);assert.equal(snap(b),beforeB);
 });
+await check('Identical Storyboard inputs keep one identity after the rendered PDF cache is evicted',async()=>{
+ const doc=fixture('cold-render-input'),index=gates.length,first=settle(api.creatorStoryboard(doc));
+ await until(()=>gates.length===index+1);release(index);
+ const before=(await first).value;assert(before);
+ // Evict only by rendering other verified documents, as a cold renderer would.
+ for(let i=0;i<8;i++){
+  const slot=gates.length,temp=settle(api.creatorStoryboard(fixture('unrelated-'+i)));
+  await until(()=>gates.length===slot+1);release(slot);assert((await temp).value);
+ }
+ const nextIndex=gates.length,second=settle(api.creatorStoryboard(doc));
+ await until(()=>gates.length===nextIndex+1);
+ const rerendered=expected(nextIndex);
+ gates[nextIndex].resolve({...rerendered,bytes:Buffer.concat([rerendered.bytes,Buffer.from(' new PDF metadata')])});
+ const after=(await second).value;assert(after);
+ assert.notDeepEqual(before.bytes,after.bytes);
+ assert.match(before.inputDigest,/^[a-f0-9]{64}$/);
+ assert.equal(after.inputDigest,before.inputDigest);
+});
 await check('SM66: changed document forks bytes; invalid evidence cannot borrow pending/cache',async()=>{
  const a=fixture('fork'),before=snap(a),index=gates.length,old=settle(api.creatorStoryboard(a));await until(()=>gates.length===index+1);
  const changed=structuredClone(a);changed.assets[0].props.clipmentorCreatorStoryboard.rows[0].shot_ms='Updated authored shot';const changedBefore=snap(changed),next=settle(api.creatorStoryboard(changed));await until(()=>gates.length===index+2);

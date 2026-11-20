@@ -84,7 +84,10 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  const saved=await loadOfflineStoredProject(projectId);
  if(!saved)throw Error('制作副本未保存');
  const approval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
-  digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),...(selectedRequirements?{requirements:selectedRequirements}:{})};
+  digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),
+  ...(selectedRequirements?{requirements:selectedRequirements}:{}),
+  ...(parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
+   objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback}}:{})};
  const task=await createProductionTask({...parent.input,projectId,
   author:{...parent.input.author,origin},reviewer:{...parent.input.reviewer,origin},
   brief:continuationBrief(parent.input.product.name,audience),

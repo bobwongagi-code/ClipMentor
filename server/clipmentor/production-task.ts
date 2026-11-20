@@ -27,6 +27,7 @@ import {resolveUploadFile,isSafeUploadName} from '../media-dir';
 export function productionRepairContext(previous:Record<string,unknown>|undefined,artifact:Record<string,unknown>){
  const pending=artifact.repair??previous?.pending_review_repair??previous?.repair;
  return {...artifact,...(previous?.audio_picture_repair?{audio_picture_repair:previous.audio_picture_repair}:{}),...(pending?{pending_review_repair:pending}:{}),
+  ...(artifact.teaching_rebuild??previous?.teaching_rebuild?{teaching_rebuild:artifact.teaching_rebuild??previous?.teaching_rebuild}:{}),
   ...(previous?.final_feedback?{final_feedback:previous.final_feedback}:{})};
 }
 
@@ -37,6 +38,11 @@ export interface EditPublication {
  baseRevision:string;outputDigest:string;requirementsDigest:string;repairEpoch:number;feedbackUsed:boolean;
  artifact:Record<string,unknown>;
 }
+export interface TeachingAnalysisPublication {
+ baseRevision:string;revision:string;repairEpoch:number;inputDigest:string;outputDigest:string;artifact:Record<string,unknown>;
+ analysis:NonNullable<ProjectDoc['clipMentorAnalysis']>;
+}
+export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string};
 type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
@@ -56,7 +62,7 @@ export interface ProductionTask {
  productionChild?:{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'};
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
  sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
- blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;confirmedAt:number};
+ blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedAt:number};
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
@@ -69,12 +75,58 @@ export interface ProductionTask {
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
  editPublication?:EditPublication;
+ teachingAnalysisPublication?:TeachingAnalysisPublication;
 }
 export interface TaskStore {save(task:ProductionTask,entryPreconditions?:EntryPreconditions):Promise<void>;load(projectId:string,id:string):Promise<ProductionTask>}
+
+export function isPanelBlueprintDraft(task:ProductionTask){
+ return !!(task.input.humanBlueprintReview&&task.input.panelDelivery&&!task.input.panelDelivery.audience&&!task.blueprintApproval);
+}
+
+export function panelBlueprintRequirementsDigest(policy:HandoffPolicy|null|undefined){
+ return digestValue({objective:policy?.brief.objective??null,doneCriteria:policy?.brief.doneCriteria??[]});
+}
+
+export function panelAuthorCheckMatches(task:ProductionTask,revision:string,requirementsDigest:string,
+ artifact=task.completed.blueprint?.artifact){
+ return task.projectRevision===revision&&artifact?.revision===revision
+  &&artifact.authorSelfCheck==='passed'
+  &&typeof artifact.author_self_check_source_digest==='string'&&/^[a-f0-9]{64}$/.test(artifact.author_self_check_source_digest)
+  &&typeof artifact.teaching_baseline_digest==='string'&&/^[a-f0-9]{64}$/.test(artifact.teaching_baseline_digest)
+  &&artifact.requirementsDigest===requirementsDigest;
+}
+
+/** Requalify a saved unchecked draft only when its original execution is still authorized. */
+export async function requeuePanelAuthorCheck(task:ProductionTask){
+ const revision=task.projectRevision;
+ if(!isPanelBlueprintDraft(task)||task.productionChild||task.productionChildren?.length
+  ||task.status!=='awaiting_blueprint'||task.stage!=='copy_review'||!revision||task.completed.blueprint?.artifact.revision!==revision
+  ||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs||task.attempts.model>=task.input.budget.model)return false;
+ if((await latestPanelProductionTask(task.projectId))?.taskId!==task.taskId)return false;
+ const policy=await productionReviewRequirements(task.projectId);
+ if(panelAuthorCheckMatches(task,revision,panelBlueprintRequirementsDigest(policy)))return false;
+ const key='project:'+task.projectId,project=await getStoredEntry(key);
+ const doc=project.found?runProjectMigrations(project.value)?.doc:undefined;
+ if(!doc||revisionOf(doc)!==revision||doc.clipMentorAnalysis?.source.asset_id!==task.input.sourceAssetId)return false;
+ const {handoffKey}=await import('./handoff');
+ const policyKey=handoffKey(task.projectId),policyEntry=await getStoredEntry(policyKey);
+ if((policyEntry.found&&digestValue(policyEntry.value)!==digestValue(policy))
+  ||(await productionReviewRequirements(task.projectId))?.digest!==policy?.digest)return false;
+ const guards=[{key,digest:digestValue(project.value)},{key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null}];
+ const pending=task.repairContext?.pending_blueprint_feedback as {text?:string;revision?:string}|undefined;
+ if(pending)return pending.revision===revision&&(await queueDraftBlueprintFeedback(task,revision,pending.text,productionTaskStore,guards))==='queued';
+ const next={...structuredClone(task),status:'queued' as const};
+ delete next.error;
+ delete next.completed.copy_review;
+ await saveProductionControl(task,next,productionTaskStore,guards);
+ Object.assign(task,next);
+ return true;
+}
 
 function clearProductionStagesFrom(task:ProductionTask,stage:ProductionStage){
  for(const invalidated of PRODUCTION_STAGES.slice(PRODUCTION_STAGES.indexOf(stage)))delete task.completed[invalidated];
  if(PRODUCTION_STAGES.indexOf(stage)<=PRODUCTION_STAGES.indexOf('edit'))delete task.editPublication;
+ if(stage==='analysis')delete task.teachingAnalysisPublication;
 }
 
 export function invalidateReconciledProductionStages(task:ProductionTask,before:Pick<ProductionTask,'stage'|'repairs'>){
@@ -161,7 +213,7 @@ export async function productionCopyRequirements(projectId:string){
  const saved=await readHandoffPolicy(projectId),task=await latestPanelProductionTask(projectId);
  const policy=saved??task?.blueprintApproval?.requirements??null;
  const opening=(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??task?.input.openingComparison;
- return {policy,opening};
+ return {policy,opening,teachingBrief:task?.blueprintApproval?.teachingBrief};
 }
 function isInterruptedReviewCheckpoint(task:ProductionTask){
  return task.status==='blocked'&&task.stage==='copy_review'
@@ -344,8 +396,9 @@ export interface StageContext {
  remaining?(kind:EffectKind):number;
  hasEffect?(kind:EffectKind,key:string):boolean;
  checkpointEditPublication?(publication:EditPublication):Promise<void>;
+ checkpointTeachingAnalysis?(publication:TeachingAnalysisPublication):Promise<void>;
 }
-export interface StageResult {artifact:Record<string,unknown>;repair?:'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
+export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
 /** Observational context in the existing bounded run log, never a checkpoint or authority.
  * It intentionally has no serverEvent envelope: terminal transport replay stays closed. */
@@ -415,6 +468,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    throw Error('production_edit_publication_binding_mismatch');
   task.editPublication=structuredClone(publication);await publishStage();
  },
+ async checkpointTeachingAnalysis(publication){
+  if(task.stage!=='analysis'||!isPanelBlueprintDraft(task)||publication.repairEpoch!==task.repairs
+   ||task.projectRevision!==undefined&&task.projectRevision!==publication.baseRevision)
+   throw Error('production_teaching_analysis_publication_binding_mismatch');
+  task.teachingAnalysisPublication=structuredClone(publication);await publishStage();
+ },
  hasEffect:(kind,name)=>task.effects[effectKey(name)]?.kind===budgetKind(kind),async effect<T>(kind:EffectKind,name:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>){
   check();await published();check();const id=effectKey(name);
   const old=task.effects[id];
@@ -469,8 +528,10 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      &&(result.repair!=='blueprint'||(!grantFocusedBlueprintRepair(task,result.artifact.blueprint_structure_issue)
       &&!grantFocusedAuthorRepair(task,result.artifact.author_self_check)
       &&!grantFocusedIndependentRepair(task,result.artifact.repair)))){
-     const selfCheck=(result.artifact.author_self_check as {reason?:string}[]|undefined)?.[0]?.reason;
-     const detail=selfCheck??result.artifact.blueprint_structure_issue;
+     const check=(result.artifact.author_self_check as {reason?:string;teaching_units?:Array<{status:string;unit_id:string;reason:string}>}[]|undefined)?.[0];
+     const teachingIssue=check?.teaching_units?.find(unit=>unit.status!=='ok');
+     const selfCheck=teachingIssue?teachingIssue.unit_id+' '+teachingIssue.reason:check?.reason;
+     const detail=selfCheck??result.artifact.teaching_baseline_issue??result.artifact.blueprint_structure_issue;
      throw new Error(`已用完自动返修额度${typeof detail==='string'?`。未解决：${detail.slice(0,360)}`:''}`);
     }
     task.repairs++;task.stage=result.repair;index=PRODUCTION_STAGES.indexOf(result.repair);
@@ -479,14 +540,18 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    }
    if(!result.artifact||Object.keys(result.artifact).length===0)throw new Error('Stage has no verified artifact');
    if(result.awaitBlueprintFeedback){
-    if(task.stage!=='copy_review'||!task.input.humanBlueprintReview||!task.input.panelDelivery
-     ||task.input.panelDelivery.audience||task.blueprintApproval||!task.completed.blueprint
-     ||!task.projectRevision||result.artifact.revision!==task.projectRevision)
+    const blueprint=task.completed.blueprint, requirementsDigest=result.artifact.requirementsDigest;
+    if(task.stage!=='copy_review'||!isPanelBlueprintDraft(task)||!blueprint
+     ||!task.projectRevision||blueprint.artifact.revision!==task.projectRevision||typeof requirementsDigest!=='string'
+     ||!/^[a-f0-9]{64}$/.test(requirementsDigest)
+     ||!panelAuthorCheckMatches(task,task.projectRevision,requirementsDigest,result.artifact))
      throw Error('human_blueprint_draft_binding_missing');
+    blueprint.artifact={...blueprint.artifact,...result.artifact};
     task.status='awaiting_blueprint';await publishStage();break;
    }
    task.completed[task.stage]={at:now(),artifact:result.artifact};
    if(task.stage==='edit')delete task.editPublication;
+   if(task.stage==='analysis')delete task.teachingAnalysisPublication;
    if(task.stage==='copy_review'&&(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed===true&&task.repairContext){
     delete task.repairContext.pending_review_repair;delete task.repairContext.repair;
    }
@@ -580,6 +645,7 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
   delete next.focusedBlueprintIssues;
   delete next.focusedAuthorChecks;
   next.blueprintFeedback=feedback.trim();next.blueprintFeedbackRevision=displayedRevision;delete next.blueprintFeedbackSummary;next.repairs++;next.blueprintFeedbackRepair=next.repairs;next.stage='blueprint';
+  if(next.repairContext)delete next.repairContext.teaching_rebuild;
   clearProductionStagesFrom(next,'blueprint');
  }else{
   delete next.blueprintFeedback;
@@ -607,6 +673,7 @@ export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:s
  if(task.blueprintFeedbackRevision===revision&&task.blueprintFeedback===text&&!pending)return 'already_dispatched';
  const next=structuredClone(task);
  next.blueprintFeedback=text;
+ if(next.repairContext&&(task.blueprintFeedback!==text||task.blueprintFeedbackRevision!==revision))delete next.repairContext.teaching_rebuild;
  delete next.blueprintFeedbackSummary;
  const exhausted=next.attempts.model>=next.input.budget.model||Date.now()>=next.createdAt+next.input.budget.maxElapsedMs;
  const savedOnly=exhausted||!!next.blueprintApproval;

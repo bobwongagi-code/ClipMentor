@@ -1,0 +1,1542 @@
+{
+  "source": {
+    "asset_id": "source",
+    "sourceContentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "duration_seconds": 67.33333333333333,
+    "fps": 30
+  },
+  "product": {
+    "name": "JUDYDOLL Highlight & Contour Palette (9g)",
+    "category": "四格高光修容盘"
+  },
+  "source_breakdown": {
+    "version": 1,
+    "review_scope": {
+      "kind": "full_source",
+      "instruction": "以完整原片和商品资料制作马来西亚达人拆解蓝图。共用片头用原片铺底和本片成绩；新建联用原CTA，已合作用本商品原片Storyboard。"
+    },
+    "segments": [
+      {
+        "segment_id": "S-01",
+        "source_range_seconds": [
+          0,
+          12.72
+        ],
+        "visible_evidence_ids": [
+          "VIS-1-1"
+        ],
+        "claim_evidence_ids": [],
+        "interpretation_evidence_ids": [
+          "WHY-1"
+        ],
+        "unknowns": [
+          "开场完整反应词和HXS所指未核；与后段是否完全同一镜头待核。"
+        ]
+      },
+      {
+        "segment_id": "S-02",
+        "source_range_seconds": [
+          12.72,
+          29
+        ],
+        "visible_evidence_ids": [
+          "VIS-2-1"
+        ],
+        "claim_evidence_ids": [
+          "CL-1"
+        ],
+        "interpretation_evidence_ids": [
+          "WHY-2"
+        ],
+        "unknowns": [
+          "具体混用格位和24–29秒原话尚未核。"
+        ]
+      },
+      {
+        "segment_id": "S-03",
+        "source_range_seconds": [
+          29,
+          45.28
+        ],
+        "visible_evidence_ids": [
+          "VIS-3-1",
+          "VIS-3-2"
+        ],
+        "claim_evidence_ids": [
+          "CL-2"
+        ],
+        "interpretation_evidence_ids": [
+          "WHY-3"
+        ],
+        "unknowns": [
+          "晕开完成点、色号对应脸侧与肤色适用原话待连续核，不推及所有人。"
+        ]
+      },
+      {
+        "segment_id": "S-04",
+        "source_range_seconds": [
+          45.28,
+          59.76
+        ],
+        "visible_evidence_ids": [
+          "VIS-4-1",
+          "VIS-4-2"
+        ],
+        "claim_evidence_ids": [
+          "CL-3",
+          "CL-4"
+        ],
+        "interpretation_evidence_ids": [
+          "WHY-4"
+        ],
+        "unknowns": [
+          "左右色号、具体高光格与底色结论待核；不由盘色推断所有肤色妆效。"
+        ]
+      },
+      {
+        "segment_id": "S-05",
+        "source_range_seconds": [
+          59.76,
+          67.33333333333333
+        ],
+        "visible_evidence_ids": [
+          "VIS-5-1",
+          "VIS-5-2"
+        ],
+        "claim_evidence_ids": [],
+        "interpretation_evidence_ids": [
+          "WHY-5"
+        ],
+        "unknowns": [
+          "手背每条归属、适用底调、末句是否明确促单及入口未知。"
+        ]
+      }
+    ],
+    "points": [
+      {
+        "point_id": "P-01",
+        "segment_ids": [
+          "S-01"
+        ],
+        "buying_concern": "结果先行",
+        "teaching_question": "如何用鼻侧棕色与鼻尖亮点开场，让人先看到修容和高光各看哪里？",
+        "filming_conditions": [
+          "近脸，保留鼻侧棕痕、鼻尖亮点和原作者反应"
+        ],
+        "role": "supporting",
+        "supports_point_id": "P-02",
+        "importance": "must_explain"
+      },
+      {
+        "point_id": "P-02",
+        "segment_ids": [
+          "S-02"
+        ],
+        "buying_concern": "日常盘参照",
+        "teaching_question": "怎样用取粉和鼻侧/眼下的落点建立日常盘参照？",
+        "filming_conditions": [
+          "保留打开的盘和刷头同框，随后保留鼻侧与眼下近景"
+        ],
+        "role": "primary",
+        "importance": "must_explain"
+      },
+      {
+        "point_id": "P-03",
+        "segment_ids": [
+          "S-03"
+        ],
+        "buying_concern": "新盘初始显色",
+        "teaching_question": "怎样保留从取粉到鼻侧落刷、再到后续刷拭的过程，让人分辨初始显色？",
+        "filming_conditions": [
+          "取粉→鼻侧落刷→近景停看→后续刷拭；不要跳过初始痕迹"
+        ],
+        "role": "primary",
+        "importance": "must_explain"
+      },
+      {
+        "point_id": "P-04",
+        "segment_ids": [
+          "S-04"
+        ],
+        "buying_concern": "双盘同框再上脸",
+        "teaching_question": "怎样在画面里对照两盘颜色，再让人看清高光落在脸上哪里？",
+        "filming_conditions": [
+          "两打开盘在脸两侧一道入镜，能辨色格；随后保留眼下/颧上刷头落点"
+        ],
+        "role": "primary",
+        "importance": "must_explain"
+      },
+      {
+        "point_id": "P-05",
+        "segment_ids": [
+          "S-05"
+        ],
+        "buying_concern": "手背补看深浅",
+        "teaching_question": "怎样用同一手背的多条试色补充盘内颜色对照？",
+        "filming_conditions": [
+          "同一手背、同一画面看多条深浅差异，不标未核的色号"
+        ],
+        "role": "supporting",
+        "supports_point_id": "P-04",
+        "importance": "must_explain"
+      }
+    ],
+    "units": [
+      {
+        "unit_id": "U-01",
+        "original_segment_ids": [
+          "S-01",
+          "S-02"
+        ],
+        "original_source_ranges": [
+          [
+            0,
+            29
+          ]
+        ],
+        "explanation_segment_ids": [
+          "S-01",
+          "S-02"
+        ],
+        "coverage": [
+          {
+            "point_id": "P-01",
+            "treatment": "explain",
+            "role": "supporting"
+          },
+          {
+            "point_id": "P-02",
+            "treatment": "explain",
+            "role": "primary"
+          }
+        ],
+        "revisits": [
+          {
+            "from_segment_id": "S-02",
+            "to_segment_id": "S-01",
+            "reason": "原声结束后标示回看，聚焦结果先行"
+          },
+          {
+            "from_segment_id": "S-02",
+            "to_segment_id": "S-02",
+            "reason": "原声结束后标示回看，聚焦日常盘参照"
+          }
+        ]
+      },
+      {
+        "unit_id": "U-02",
+        "original_segment_ids": [
+          "S-03"
+        ],
+        "original_source_ranges": [
+          [
+            29,
+            45.28
+          ]
+        ],
+        "explanation_segment_ids": [
+          "S-03"
+        ],
+        "coverage": [
+          {
+            "point_id": "P-03",
+            "treatment": "explain",
+            "role": "primary"
+          }
+        ],
+        "revisits": [
+          {
+            "from_segment_id": "S-03",
+            "to_segment_id": "S-03",
+            "reason": "原声结束后标示回看，聚焦新盘初始显色"
+          }
+        ]
+      },
+      {
+        "unit_id": "U-03",
+        "original_segment_ids": [
+          "S-04",
+          "S-05"
+        ],
+        "original_source_ranges": [
+          [
+            45.28,
+            67.33333333333333
+          ]
+        ],
+        "explanation_segment_ids": [
+          "S-04",
+          "S-05"
+        ],
+        "coverage": [
+          {
+            "point_id": "P-04",
+            "treatment": "explain",
+            "role": "primary"
+          },
+          {
+            "point_id": "P-05",
+            "treatment": "explain",
+            "role": "supporting"
+          }
+        ],
+        "revisits": [
+          {
+            "from_segment_id": "S-05",
+            "to_segment_id": "S-04",
+            "reason": "原声结束后标示回看，聚焦双盘同框再上脸"
+          },
+          {
+            "from_segment_id": "S-05",
+            "to_segment_id": "S-05",
+            "reason": "原声结束后标示回看，聚焦手背补看深浅"
+          }
+        ]
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_id": "panel-sales-14511f4fc7a555c8ef85",
+      "kind": "operator_supplied",
+      "text": "用户提供的原片成绩图，图中成绩属于本任务原片。统计窗口按图中信息；没有显示的日期留未知。",
+      "status": "operator_provided_not_independently_verified",
+      "source_ids": [
+        "source",
+        "2049427a-e08d-4284-900b-b74d992abc32"
+      ],
+      "supporting_evidence_ids": [],
+      "provenance": "操作者在原片成绩图上传槽提供，按用户确认的业务口径登记"
+    },
+    {
+      "evidence_id": "panel-ending-new_contact-37a22c4e2793e35153bc",
+      "kind": "operator_supplied",
+      "status": "operator_provided_not_independently_verified",
+      "source_ids": [
+        "76c9b43b-9448-4a6f-b971-d05624153445"
+      ],
+      "supporting_evidence_ids": [],
+      "provenance": "用户上传与任务的冻结片尾要求",
+      "text": "用户上传的本商品 CTA 行动号召海报。仅登记素材来源与用途，合作条件须按海报实际可见信息核对。"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f15",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 0.5,
+      "source_frame": 15,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f90",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 3,
+      "source_frame": 90,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f180",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 6,
+      "source_frame": 180,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f315",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 10.5,
+      "source_frame": 315,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f420",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 14,
+      "source_frame": 420,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f540",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 18,
+      "source_frame": 540,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f660",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 22,
+      "source_frame": 660,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f780",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 26,
+      "source_frame": 780,
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f891",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 29.7,
+      "source_frame": 891,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f960",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 32,
+      "source_frame": 960,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1164",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 38.8,
+      "source_frame": 1164,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1290",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 43,
+      "source_frame": 1290,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1410",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 47,
+      "source_frame": 1410,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1500",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 50,
+      "source_frame": 1500,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1695",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 56.5,
+      "source_frame": 1695,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1995",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 66.5,
+      "source_frame": 1995,
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f924",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 30.8,
+      "source_frame": 924,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1011",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 33.7,
+      "source_frame": 1011,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1221",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 40.7,
+      "source_frame": 1221,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1338",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 44.6,
+      "source_frame": 1338,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1554",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 51.8,
+      "source_frame": 1554,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1635",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 54.5,
+      "source_frame": 1635,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1800",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 60,
+      "source_frame": 1800,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1905",
+      "kind": "source_frame",
+      "text": "Source frame extracted and returned; interpretation pending",
+      "status": "frame_extracted_not_interpreted",
+      "time_seconds": 63.5,
+      "source_frame": 1905,
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "supporting_evidence_ids": [],
+      "source_ids": [],
+      "observation_method": "local_frame_extraction_only",
+      "call_status": "succeeded"
+    },
+    {
+      "evidence_id": "VIS-1-1",
+      "kind": "visible_action",
+      "text": "鼻侧棕色痕迹、鼻尖亮点，举起方盘",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        0.5,
+        10.5
+      ],
+      "supporting_evidence_ids": [
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f15",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f90",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f180",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f315"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "WHY-1",
+      "kind": "expression_analysis_not_verified_causal_effect",
+      "text": "如何用鼻侧棕色与鼻尖亮点开场，让人先看到修容和高光各看哪里？",
+      "status": "inferred_not_verified_causal_effect",
+      "source_range_seconds": [
+        0,
+        12.72
+      ],
+      "supporting_evidence_ids": [
+        "VIS-1-1"
+      ],
+      "source_ids": []
+    },
+    {
+      "evidence_id": "VIS-2-1",
+      "kind": "visible_action",
+      "text": "开盘与刷头同框；刷在鼻侧、眼下",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        14,
+        26
+      ],
+      "supporting_evidence_ids": [
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f420",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f540",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f660",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f780"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "WHY-2",
+      "kind": "expression_analysis_not_verified_causal_effect",
+      "text": "怎样用取粉和鼻侧/眼下的落点建立日常盘参照？",
+      "status": "inferred_not_verified_causal_effect",
+      "source_range_seconds": [
+        12.72,
+        29
+      ],
+      "supporting_evidence_ids": [
+        "VIS-2-1"
+      ],
+      "source_ids": []
+    },
+    {
+      "evidence_id": "VIS-3-1",
+      "kind": "visible_action",
+      "text": "举盘、鼻侧棕色痕迹及后续刷拭",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        29.7,
+        43
+      ],
+      "supporting_evidence_ids": [
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f891",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f960",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1164",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1290"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "VIS-3-2",
+      "kind": "visible_action",
+      "text": "举盘、鼻侧棕色痕迹及后续刷拭",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        30.8,
+        44.6
+      ],
+      "supporting_evidence_ids": [
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f924",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1011",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1221",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1338"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "WHY-3",
+      "kind": "expression_analysis_not_verified_causal_effect",
+      "text": "怎样保留从取粉到鼻侧落刷、再到后续刷拭的过程，让人分辨初始显色？",
+      "status": "inferred_not_verified_causal_effect",
+      "source_range_seconds": [
+        29,
+        45.28
+      ],
+      "supporting_evidence_ids": [
+        "VIS-3-1",
+        "VIS-3-2"
+      ],
+      "source_ids": []
+    },
+    {
+      "evidence_id": "VIS-4-1",
+      "kind": "visible_action",
+      "text": "打开的两盘在脸两侧同框；眼下刷头可见",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        47,
+        56.5
+      ],
+      "supporting_evidence_ids": [
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1410",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1500",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1695"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "VIS-4-2",
+      "kind": "visible_action",
+      "text": "打开的两盘在脸两侧同框；眼下刷头可见",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        51.8,
+        54.5
+      ],
+      "supporting_evidence_ids": [
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1554",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1635"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "WHY-4",
+      "kind": "expression_analysis_not_verified_causal_effect",
+      "text": "怎样在画面里对照两盘颜色，再让人看清高光落在脸上哪里？",
+      "status": "inferred_not_verified_causal_effect",
+      "source_range_seconds": [
+        45.28,
+        59.76
+      ],
+      "supporting_evidence_ids": [
+        "VIS-4-1",
+        "VIS-4-2"
+      ],
+      "source_ids": []
+    },
+    {
+      "evidence_id": "VIS-5-1",
+      "kind": "visible_action",
+      "text": "转脸对镜；结尾举手背，四条棕色试色同框",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        60,
+        63.5
+      ],
+      "supporting_evidence_ids": [
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1800",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1905"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "VIS-5-2",
+      "kind": "visible_action",
+      "text": "转脸对镜；结尾举手背，四条棕色试色同框",
+      "status": "agent_observed_candidate",
+      "source_range_seconds": [
+        66.5,
+        66.5
+      ],
+      "supporting_evidence_ids": [
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1995"
+      ],
+      "source_ids": [],
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "observation_method": "main_agent_direct_image_read_not_independently_verified",
+      "call_status": "unknown"
+    },
+    {
+      "evidence_id": "WHY-5",
+      "kind": "expression_analysis_not_verified_causal_effect",
+      "text": "怎样用同一手背的多条试色补充盘内颜色对照？",
+      "status": "inferred_not_verified_causal_effect",
+      "source_range_seconds": [
+        59.76,
+        67.33333333333333
+      ],
+      "supporting_evidence_ids": [
+        "VIS-5-1",
+        "VIS-5-2"
+      ],
+      "source_ids": []
+    },
+    {
+      "evidence_id": "CL-1",
+      "kind": "original_claim",
+      "status": "candidate_unverified_speech",
+      "text": "Saya memang selalu pakai … ni, dan saya suka mixkan …",
+      "meaning_zh": "平时常用这盘，喜欢混用；具体对象待核。",
+      "source_range_seconds": [
+        12.72,
+        15.68
+      ],
+      "supporting_evidence_ids": [],
+      "source_ids": [
+        "local-asr:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "evidence_id": "CL-2",
+      "kind": "original_claim",
+      "status": "candidate_unverified_speech",
+      "text": "Ini bukan untuk saya.",
+      "meaning_zh": "这不适合我，个人判断。",
+      "source_range_seconds": [
+        40.52,
+        41.96
+      ],
+      "supporting_evidence_ids": [],
+      "source_ids": [
+        "local-asr:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "evidence_id": "CL-3",
+      "kind": "original_claim",
+      "status": "candidate_unverified_speech",
+      "text": "… sangat velvety, creamy.",
+      "meaning_zh": "她形容质地绒滑绵柔。",
+      "source_range_seconds": [
+        54.16,
+        56.16
+      ],
+      "supporting_evidence_ids": [],
+      "source_ids": [
+        "local-asr:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "evidence_id": "CL-4",
+      "kind": "original_claim",
+      "status": "candidate_unverified_speech",
+      "text": "Senang sangat nak blend …",
+      "meaning_zh": "她觉得很好晕开。",
+      "source_range_seconds": [
+        56.16,
+        57.84
+      ],
+      "supporting_evidence_ids": [],
+      "source_ids": [
+        "local-asr:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "evidence_id": "panel-ending-existing_partner-96bf569cf93a613f22e2",
+      "kind": "operator_supplied",
+      "status": "operator_provided_not_independently_verified",
+      "source_ids": [
+        "clipmentor-partner-e6138fce18de3748d49d38d423b650ddb63e62ab0fc056445bf3f9502fcff73a",
+        "511aea18-17df-403b-aea5-9bc6ac5729c2",
+        "clipmentor-storyboard-57877828932f1d9d0df8dfc83ee35ffda9dc565022e3194c0663fd51bfa3dbd0"
+      ],
+      "supporting_evidence_ids": [],
+      "provenance": "用户上传与任务的冻结片尾要求",
+      "text": "已合作版固定展示本商品图和本片原片 Storyboard，另附同源 PDF。仅登记来源与用途。"
+    }
+  ],
+  "points": [
+    {
+      "point_id": "P-01",
+      "unit_id": "U-01",
+      "source_range_seconds": [
+        0,
+        12.72
+      ],
+      "buying_reason_or_function": "如何用鼻侧棕色与鼻尖亮点开场，让人先看到修容和高光各看哪里？",
+      "filming_conditions": [
+        "近脸，保留鼻侧棕痕、鼻尖亮点和原作者反应"
+      ],
+      "evidence_ids": [
+        "VIS-1-1",
+        "WHY-1"
+      ],
+      "uncertainties": [
+        "开场完整反应词和HXS所指未核；与后段是否完全同一镜头待核。"
+      ],
+      "required": true,
+      "explanation_priority": "supporting",
+      "status": "candidate",
+      "review_status": "pending",
+      "provenance": "本次主Agent直接抽帧分析，未独立审核"
+    },
+    {
+      "point_id": "P-02",
+      "unit_id": "U-01",
+      "source_range_seconds": [
+        12.72,
+        29
+      ],
+      "buying_reason_or_function": "怎样用取粉和鼻侧/眼下的落点建立日常盘参照？",
+      "filming_conditions": [
+        "保留打开的盘和刷头同框，随后保留鼻侧与眼下近景"
+      ],
+      "evidence_ids": [
+        "VIS-2-1",
+        "WHY-2"
+      ],
+      "uncertainties": [
+        "具体混用格位和24–29秒原话尚未核。"
+      ],
+      "required": true,
+      "explanation_priority": "primary",
+      "status": "candidate",
+      "review_status": "pending",
+      "provenance": "本次主Agent直接抽帧分析，未独立审核"
+    },
+    {
+      "point_id": "P-03",
+      "unit_id": "U-02",
+      "source_range_seconds": [
+        29,
+        45.28
+      ],
+      "buying_reason_or_function": "怎样保留从取粉到鼻侧落刷、再到后续刷拭的过程，让人分辨初始显色？",
+      "filming_conditions": [
+        "取粉→鼻侧落刷→近景停看→后续刷拭；不要跳过初始痕迹"
+      ],
+      "evidence_ids": [
+        "VIS-3-1",
+        "VIS-3-2",
+        "WHY-3"
+      ],
+      "uncertainties": [
+        "晕开完成点、色号对应脸侧与肤色适用原话待连续核，不推及所有人。"
+      ],
+      "required": true,
+      "explanation_priority": "primary",
+      "status": "candidate",
+      "review_status": "pending",
+      "provenance": "本次主Agent直接抽帧分析，未独立审核"
+    },
+    {
+      "point_id": "P-04",
+      "unit_id": "U-03",
+      "source_range_seconds": [
+        45.28,
+        59.76
+      ],
+      "buying_reason_or_function": "怎样在画面里对照两盘颜色，再让人看清高光落在脸上哪里？",
+      "filming_conditions": [
+        "两打开盘在脸两侧一道入镜，能辨色格；随后保留眼下/颧上刷头落点"
+      ],
+      "evidence_ids": [
+        "VIS-4-1",
+        "VIS-4-2",
+        "WHY-4"
+      ],
+      "uncertainties": [
+        "左右色号、具体高光格与底色结论待核；不由盘色推断所有肤色妆效。"
+      ],
+      "required": true,
+      "explanation_priority": "primary",
+      "status": "candidate",
+      "review_status": "pending",
+      "provenance": "本次主Agent直接抽帧分析，未独立审核"
+    },
+    {
+      "point_id": "P-05",
+      "unit_id": "U-03",
+      "source_range_seconds": [
+        59.76,
+        67.33333333333333
+      ],
+      "buying_reason_or_function": "怎样用同一手背的多条试色补充盘内颜色对照？",
+      "filming_conditions": [
+        "同一手背、同一画面看多条深浅差异，不标未核的色号"
+      ],
+      "evidence_ids": [
+        "VIS-5-1",
+        "VIS-5-2",
+        "WHY-5"
+      ],
+      "uncertainties": [
+        "手背每条归属、适用底调、末句是否明确促单及入口未知。"
+      ],
+      "required": true,
+      "explanation_priority": "supporting",
+      "status": "candidate",
+      "review_status": "pending",
+      "provenance": "本次主Agent直接抽帧分析，未独立审核"
+    }
+  ],
+  "blueprint": [
+    {
+      "unit_id": "U-01",
+      "point_ids": [
+        "P-01",
+        "P-02"
+      ],
+      "intent_zh": "先看鼻侧修容和鼻尖高光，再看取粉到上脸的过程",
+      "line_guidance": "先看完整同组原声，再以 Ulasan 回看。保留直幅清晰主体；未配音，仅按语义锚点分配画面。原消费者购买语义仍待连续核验，勿以达人邀约替代。",
+      "internal_review": {
+        "current_script_candidate": "script_candidate_judy_u1_v1",
+        "current_picture_plan": "picture_plan_judy_u1_delivery",
+        "script_candidate_judy_u1_v1": {
+          "lines": [
+            {
+              "id": "JUDY-L1-1",
+              "point_ids": [
+                "P-01"
+              ],
+              "narration_ms": "Mula-mula, dia rapatkan wajah ke kamera. Garis coklat di sisi hidung dan kilau di hujung hidung terus tunjuk beza contour dengan highlighter.",
+              "caption_lines": [
+                "Mula-mula, dia rapatkan wajah ke kamera.",
+                "Garis coklat di sisi hidung dan kilau di hujung hidung terus tunjuk beza contour dengan highlighter."
+              ],
+              "zh": "她先把脸靠近镜头；鼻侧棕痕和鼻尖亮点直接区分修容与高光。",
+              "source_seconds": [
+                0.5,
+                3
+              ]
+            },
+            {
+              "id": "JUDY-L1-2",
+              "point_ids": [
+                "P-02"
+              ],
+              "narration_ms": "Lepas itu, dia tunjuk palet yang biasa dipakai bersama berus. Bila berus sampai ke sisi hidung dan bawah mata, kita ada rujukan sebelum tengok palet baharu.",
+              "caption_lines": [
+                "Lepas itu, dia tunjuk palet yang biasa dipakai bersama berus.",
+                "Bila berus sampai ke sisi hidung dan bawah mata, kita ada rujukan sebelum tengok palet baharu."
+              ],
+              "zh": "随后她把常用盘和刷子一起展示，再给出鼻侧和眼下落点，为比较新盘建立参照。",
+              "source_seconds": [
+                14,
+                26
+              ]
+            }
+          ],
+          "source_candidate_id": null,
+          "status": "candidate"
+        },
+        "picture_plan_judy_u1_delivery": {
+          "script_candidate_id": "script_candidate_judy_u1_v1",
+          "phases": [
+            {
+              "source_asset_id": "source",
+              "picture": "完整原片直幅及原声；保留动作过程和面部。",
+              "mode": "original",
+              "source_range_seconds": [
+                0,
+                29
+              ]
+            },
+            {
+              "source_asset_id": "source",
+              "source_range_seconds": [
+                0.5,
+                3
+              ],
+              "evidence_ids": [
+                "VIS-1-1"
+              ],
+              "picture": "用同一原片对应动作复看；保留 她先把脸靠近镜头；鼻侧棕痕和鼻尖亮点直接区分修容与高光。 不裁去刷头、盘、鼻侧或手背等相关对象。",
+              "mode": "explanation",
+              "line_id": "JUDY-L1-1"
+            },
+            {
+              "source_asset_id": "source",
+              "source_range_seconds": [
+                14,
+                26
+              ],
+              "evidence_ids": [
+                "VIS-2-1"
+              ],
+              "picture": "用同一原片对应动作复看；保留 随后她把常用盘和刷子一起展示，再给出鼻侧和眼下落点，为比较新盘建立参照。 不裁去刷头、盘、鼻侧或手背等相关对象。",
+              "mode": "explanation",
+              "line_id": "JUDY-L1-2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unit_id": "U-02",
+      "point_ids": [
+        "P-03"
+      ],
+      "intent_zh": "怎样保留从取粉到鼻侧落刷、再到后续刷拭的过程，让人分辨初始显色？",
+      "line_guidance": "先看完整同组原声，再以 Ulasan 回看。保留直幅清晰主体；未配音，仅按语义锚点分配画面。原消费者购买语义仍待连续核验，勿以达人邀约替代。",
+      "internal_review": {
+        "current_script_candidate": "script_candidate_judy_u2_v1",
+        "current_picture_plan": "picture_plan_judy_u2_v1",
+        "script_candidate_judy_u2_v1": {
+          "lines": [
+            {
+              "id": "JUDY-L2-1",
+              "point_ids": [
+                "P-03"
+              ],
+              "narration_ms": "Dengan palet baharu, dia tunjuk tempat berus ambil warna, kemudian dekatkan kamera pada sisi hidung. Kesan coklat masih jelas sebelum dia sambung sapu, jadi kita boleh bezakan warna masa mula disapu dengan rupanya selepas diratakan.",
+              "caption_lines": [
+                "Dengan palet baharu, dia tunjuk tempat berus ambil warna, kemudian dekatkan kamera pada sisi hidung.",
+                "Kesan coklat masih jelas sebelum dia sambung sapu, jadi kita boleh bezakan warna masa mula disapu dengan rupanya selepas diratakan."
+              ],
+              "zh": "她先展示新盘取色，再近看鼻侧。继续刷拭前先看到清楚的棕痕，便于区分初上色和刷开后的样子。",
+              "source_seconds": [
+                29.7,
+                44.6
+              ]
+            }
+          ],
+          "source_candidate_id": null,
+          "status": "candidate"
+        },
+        "picture_plan_judy_u2_v1": {
+          "script_candidate_id": "script_candidate_judy_u2_v1",
+          "phases": [
+            {
+              "source_asset_id": "source",
+              "picture": "完整原片直幅及原声；保留动作过程和面部。",
+              "mode": "original",
+              "source_range_seconds": [
+                29,
+                45.28
+              ]
+            },
+            {
+              "source_asset_id": "source",
+              "source_range_seconds": [
+                29.7,
+                44.6
+              ],
+              "evidence_ids": [
+                "VIS-3-1"
+              ],
+              "picture": "用同一原片对应动作复看；保留 她先展示新盘取色，再近看鼻侧。继续刷拭前先看到清楚的棕痕，便于区分初上色和刷开后的样子。 不裁去刷头、盘、鼻侧或手背等相关对象。",
+              "mode": "explanation",
+              "line_id": "JUDY-L2-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unit_id": "U-03",
+      "point_ids": [
+        "P-04",
+        "P-05"
+      ],
+      "intent_zh": "怎样在画面里对照两盘颜色，再让人看清高光落在脸上哪里？怎样用同一手背的多条试色补充盘内颜色对照？",
+      "line_guidance": "先看完整同组原声，再以 Ulasan 回看。保留直幅清晰主体；未配音，仅按语义锚点分配画面。原消费者购买语义仍待连续核验，勿以达人邀约替代。",
+      "internal_review": {
+        "current_script_candidate": "script_candidate_judy_u3_v1",
+        "current_picture_plan": "picture_plan_judy_u3_v1",
+        "script_candidate_judy_u3_v1": {
+          "lines": [
+            {
+              "id": "JUDY-L3-1",
+              "point_ids": [
+                "P-04"
+              ],
+              "narration_ms": "Dia buka kedua-dua palet di kiri dan kanan muka supaya warna dalam bekas boleh dibandingkan dalam satu pandangan. Lepas itu dia sapu highlighter di bawah mata, dekat tulang pipi, supaya kita nampak tempat kilau itu jatuh.",
+              "caption_lines": [
+                "Dia buka kedua-dua palet di kiri dan kanan muka supaya warna dalam bekas boleh dibandingkan dalam satu pandangan.",
+                "Lepas itu dia sapu highlighter di bawah mata, dekat tulang pipi, supaya kita nampak tempat kilau itu jatuh."
+              ],
+              "zh": "她把两盘打开并放在脸两侧，让盘色能同框比较；接着在眼下靠近颧骨处刷高光，让人看到亮点落在哪里。",
+              "source_seconds": [
+                47,
+                56.5
+              ]
+            },
+            {
+              "id": "JUDY-L3-2",
+              "point_ids": [
+                "P-05"
+              ],
+              "narration_ms": "Di hujung video, dia tunjuk beberapa jalur warna pada belakang tangan yang sama. Di situ, beza cerah dan gelap boleh dilihat sebelah-menyebelah, bukan setakat dalam palet.",
+              "caption_lines": [
+                "Di hujung video, dia tunjuk beberapa jalur warna pada belakang tangan yang sama.",
+                "Di situ, beza cerah dan gelap boleh dilihat sebelah-menyebelah, bukan setakat dalam palet."
+              ],
+              "zh": "结尾她在同一手背展示多条试色，让深浅也能在皮肤上并排比较，不只看盘色。",
+              "source_seconds": [
+                63.5,
+                67.33333333333333
+              ]
+            }
+          ],
+          "source_candidate_id": null,
+          "status": "candidate"
+        },
+        "picture_plan_judy_u3_v1": {
+          "script_candidate_id": "script_candidate_judy_u3_v1",
+          "phases": [
+            {
+              "source_asset_id": "source",
+              "picture": "完整原片直幅及原声；保留动作过程和面部。",
+              "mode": "original",
+              "source_range_seconds": [
+                45.28,
+                67.33333333333333
+              ]
+            },
+            {
+              "source_asset_id": "source",
+              "source_range_seconds": [
+                47,
+                56.5
+              ],
+              "evidence_ids": [
+                "VIS-4-1"
+              ],
+              "picture": "用同一原片对应动作复看；保留 她把两盘打开并放在脸两侧，让盘色能同框比较；接着在眼下靠近颧骨处刷高光，让人看到亮点落在哪里。 不裁去刷头、盘、鼻侧或手背等相关对象。",
+              "mode": "explanation",
+              "line_id": "JUDY-L3-1"
+            },
+            {
+              "source_asset_id": "source",
+              "source_range_seconds": [
+                63.5,
+                67.33333333333333
+              ],
+              "evidence_ids": [
+                "VIS-5-2"
+              ],
+              "picture": "用同一原片对应动作复看；保留 结尾她在同一手背展示多条试色，让深浅也能在皮肤上并排比较，不只看盘色。 不裁去刷头、盘、鼻侧或手背等相关对象。",
+              "mode": "explanation",
+              "line_id": "JUDY-L3-2"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "transcripts": [
+    {
+      "source_id": "local-asr:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provider": "whisper.cpp",
+      "origin": "local_source_segments",
+      "status": "machine_transcript_not_independently_listened",
+      "words": [
+        {
+          "start_seconds": 0,
+          "end_seconds": 2.14,
+          "text": "Ui, wow. Paka gila ni."
+        },
+        {
+          "start_seconds": 2.14,
+          "end_seconds": 4.94,
+          "text": "Pikmetik gila dia punya menghalit. Oh my god."
+        },
+        {
+          "start_seconds": 4.94,
+          "end_seconds": 7.56,
+          "text": "\"Judah dah keluarkan kontra pallet yang sesuai dengan anda ternkulit Malaysia.\""
+        },
+        {
+          "start_seconds": 7.56,
+          "end_seconds": 9.64,
+          "text": "\"And of course Tokos 6 dia punya brow lagi pekat.\""
+        },
+        {
+          "start_seconds": 9.64,
+          "end_seconds": 12.72,
+          "text": "Pada video ni, anda buat comparison antara kokosan 2 dengan kokosan 6 yang baru ni."
+        },
+        {
+          "start_seconds": 12.72,
+          "end_seconds": 15.68,
+          "text": "Saya memang selalu pakai kokosan 2 ni, dan saya suka mixkan dua kali ni."
+        },
+        {
+          "start_seconds": 15.68,
+          "end_seconds": 24.04,
+          "text": "Saya obsess gila dia dengan menghalit jadidol kokosan 2 ni tau."
+        },
+        {
+          "start_seconds": 29,
+          "end_seconds": 31.4,
+          "text": "Sekarang saya cuba kokosan 6, maka dia nampak pekat sangat..."
+        },
+        {
+          "start_seconds": 31.4,
+          "end_seconds": 34.68,
+          "text": "Ui, wow. Paka gila ni."
+        },
+        {
+          "start_seconds": 34.68,
+          "end_seconds": 35.84,
+          "text": "Kenapa ni?"
+        },
+        {
+          "start_seconds": 35.84,
+          "end_seconds": 37.48,
+          "text": "Bagaimana banyak gila Malaysia ni?"
+        },
+        {
+          "start_seconds": 37.48,
+          "end_seconds": 38.08,
+          "text": "Kenapa ni?"
+        },
+        {
+          "start_seconds": 38.08,
+          "end_seconds": 40.12,
+          "text": "Saya tahu untuk 10 skin, ia akan blend well je dengan korang penyekulit."
+        },
+        {
+          "start_seconds": 40.12,
+          "end_seconds": 40.52,
+          "text": "Jangan risau."
+        },
+        {
+          "start_seconds": 40.52,
+          "end_seconds": 41.96,
+          "text": "Ini bukan untuk saya."
+        },
+        {
+          "start_seconds": 41.96,
+          "end_seconds": 45.28,
+          "text": "Ini bukan penyekulit saya, guys."
+        },
+        {
+          "start_seconds": 45.28,
+          "end_seconds": 47.76,
+          "text": "Untuk menghalitkan kokosan 6 ni, dia lagi yellow tau."
+        },
+        {
+          "start_seconds": 47.76,
+          "end_seconds": 49.48,
+          "text": "Ini untuk kokosan 2 dan ini untuk kokosan 6."
+        },
+        {
+          "start_seconds": 49.48,
+          "end_seconds": 50.52,
+          "text": "Nampak tak bensa dia?"
+        },
+        {
+          "start_seconds": 50.52,
+          "end_seconds": 51.32,
+          "text": "Dan saya nak cuba."
+        },
+        {
+          "start_seconds": 51.32,
+          "end_seconds": 52.88,
+          "text": "Seperti..."
+        },
+        {
+          "start_seconds": 52.88,
+          "end_seconds": 54.16,
+          "text": "Tentangnya yellow."
+        },
+        {
+          "start_seconds": 54.16,
+          "end_seconds": 56.16,
+          "text": "Sebenarnya sangat velvety, creamy."
+        },
+        {
+          "start_seconds": 56.16,
+          "end_seconds": 57.84,
+          "text": "Senang sangat nak blend kokosan 6."
+        },
+        {
+          "start_seconds": 57.84,
+          "end_seconds": 59.76,
+          "text": "Saya tak sikit je, but still."
+        },
+        {
+          "start_seconds": 59.76,
+          "end_seconds": 62.32,
+          "text": "Dan ini saya akan sesuai dengan apa yang undertone."
+        },
+        {
+          "start_seconds": 62.32,
+          "end_seconds": 65.4,
+          "text": "Siapa orang Malaysia yang berkulit 10 skin, dah boleh pakai dah kotor palette dari judidol ni."
+        },
+        {
+          "start_seconds": 65.4,
+          "end_seconds": 67.28,
+          "text": "Saya sedihkan beli kotor yang baru kokosan 6 ni."
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "observation_id": "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37",
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requested_times_seconds": [
+        0.5,
+        3,
+        6,
+        10.5,
+        14,
+        18,
+        22,
+        26
+      ],
+      "frame_evidence_ids": [
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f15",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f90",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f180",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f315",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f420",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f540",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f660",
+        "observation:0b5d1d8e-0ff0-4664-9d16-deb3a59dbd37:f780"
+      ],
+      "status": "images_returned",
+      "method": "source_frames_for_main_agent",
+      "image_layout": "individual_frames",
+      "sampling": "explicit_times",
+      "at": 1795148840925
+    },
+    {
+      "observation_id": "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c",
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requested_times_seconds": [
+        29.7,
+        32,
+        38.8,
+        43,
+        47,
+        50,
+        56.5,
+        66.5
+      ],
+      "frame_evidence_ids": [
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f891",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f960",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1164",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1290",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1410",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1500",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1695",
+        "observation:7f9c4d4c-b117-45cb-8c94-ffe0aae68a2c:f1995"
+      ],
+      "status": "images_returned",
+      "method": "source_frames_for_main_agent",
+      "image_layout": "individual_frames",
+      "sampling": "explicit_times",
+      "at": 1795148847346
+    },
+    {
+      "observation_id": "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20",
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requested_times_seconds": [
+        30.8,
+        33.7,
+        40.7,
+        44.6,
+        51.8,
+        54.5,
+        60,
+        63.5
+      ],
+      "frame_evidence_ids": [
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f924",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1011",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1221",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1338",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1554",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1635",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1800",
+        "observation:f1ebb838-1ca3-435f-97f4-e245d4c4ed20:f1905"
+      ],
+      "status": "images_returned",
+      "method": "source_frames_for_main_agent",
+      "image_layout": "individual_frames",
+      "sampling": "explicit_times",
+      "at": 1795148865824
+    }
+  ]
+}
