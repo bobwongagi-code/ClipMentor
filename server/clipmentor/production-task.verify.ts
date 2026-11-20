@@ -57,20 +57,37 @@ assert.equal(pending.status,'queued');assert.equal(pending.stage,'blueprint');as
 assert.equal(pending.error,undefined);assert.equal(pending.blueprintApproval,undefined);
 assert.deepEqual(pending.repairContext?.pending_review_repair,{status:'bound'});
 {
+ const unchecked=fresh();
+ unchecked.input.humanBlueprintReview=true;
+ unchecked.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};
+ await advanceProductionTask(unchecked,async task=>({
+  artifact:{revision:'unchecked-draft'},...(task.stage==='copy_review'?{awaitBlueprintFeedback:true as const}:{}),
+ }),store);
+ assert.equal(unchecked.status,'blocked','structure-ready draft with no teaching check cannot reach the review board');
+ assert.match(unchecked.error??'',/human_blueprint_draft_binding_missing/);
+}
+{
  const task=fresh();task.input.humanBlueprintReview=true;
  task.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};
  const visited:string[]=[];
  const worker:production.StageWorker=async t=>{
   visited.push(t.stage);
-  return {artifact:{revision:t.blueprintFeedback?'draft-2':'draft-1'},...(t.stage==='copy_review'?{awaitBlueprintFeedback:true as const}:{})};
+  const revision=t.blueprintFeedback?'draft-2':'draft-1';
+  return t.stage==='copy_review'
+   ?{artifact:{revision,authorSelfCheck:'passed',author_self_check_source_digest:'a'.repeat(64),teaching_baseline_digest:'d'.repeat(64),requirementsDigest:'b'.repeat(64)},awaitBlueprintFeedback:true}
+   :{artifact:{revision}};
  };
  await advanceProductionTask(task,worker,store);
  assert.deepEqual(visited,['analysis','blueprint','copy_review']);
  assert.equal(task.status,'awaiting_blueprint');
  assert.equal(task.completed.copy_review,undefined,'presenting a draft must not synthesize a review receipt');
+ assert.equal(production.panelAuthorCheckMatches(task,'draft-1','b'.repeat(64)),true);
+ assert.equal(production.panelAuthorCheckMatches(task,'draft-2','b'.repeat(64)),false);
+ assert.equal(production.panelAuthorCheckMatches(task,'draft-1','c'.repeat(64)),false);
  assert.equal(await production.queueDraftBlueprintFeedback(task,'draft-1','讲解先说看哪里',store),'queued');
  assert.equal(saved.blueprintFeedbackRevision,'draft-1');
  assert.equal(saved.blueprintFeedback,'讲解先说看哪里');
+ assert.equal(production.panelAuthorCheckMatches(saved,'draft-1','b'.repeat(64)),false,'content feedback invalidates the previous check');
  await advanceProductionTask(task,worker,store);
  assert.equal(task.status,'awaiting_blueprint');
  assert.equal(task.projectRevision,'draft-2');
@@ -82,6 +99,16 @@ assert.deepEqual(pending.repairContext?.pending_review_repair,{status:'bound'});
  await advanceProductionTask(output,worker,store);
  assert.equal(output.status,'blocked','a production child cannot use the draft-only handoff');
  assert.match(output.error??'',/human_blueprint_draft_binding_missing/);
+}
+{
+ const missingBaseline=fresh();
+ missingBaseline.input.humanBlueprintReview=true;
+ missingBaseline.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};
+ await advanceProductionTask(missingBaseline,async task=>({
+  artifact:{revision:'unchecked-baseline',authorSelfCheck:'passed',author_self_check_source_digest:'a'.repeat(64),requirementsDigest:'b'.repeat(64)},
+  ...(task.stage==='copy_review'?{awaitBlueprintFeedback:true as const}:{}),
+ }),store);
+ assert.equal(missingBaseline.status,'blocked','a passing script check cannot publish a draft with no pre-copy teaching qualification');
 }
 const spoken=fresh();spoken.blueprintFeedback='嗯，第一个片头要成绩和提问。第二个呢，两个片尾一个CTA一个Storyboard。还有人审版不要技术报告，补原话中文。'.repeat(3);
 const rawSpoken=spoken.blueprintFeedback;

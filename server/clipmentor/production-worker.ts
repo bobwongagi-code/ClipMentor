@@ -6,6 +6,8 @@ import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFe
 import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
+import {checkTeachingBaseline,newlyChangedTeaching,panelTeachingPurpose,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
+ teachingRebuild,unchangedRejectedTeaching,type TeachingRebuild} from './production-teaching-baseline';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {createRun,flushRunPersistence} from '../agent-runs/store';
@@ -74,7 +76,7 @@ export async function persistProductionGatewayDecision(record:ReturnType<typeof 
  const saved=await deps.load(record.projectId,record.artifactId)??await deps.archived?.(record);
  if(!matches(saved??null))throw Error('gateway_recovery_decision_not_saved');
 }
-import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,type StageWorker,type ProductionTask} from './production-task';
+import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,isPanelBlueprintDraft,panelBlueprintRequirementsDigest,type StageWorker,type ProductionTask} from './production-task';
 
 const hostNames=new Set(['load_skill','edit_item','edit_asset','read_clipmentor_analysis','revise_clipmentor_analysis','observe_clipmentor_source',
  'observe_clipmentor_source_video','read_clipmentor_source_video','view_asset_frames','view_timeline_frames','save_clipmentor_source_frame','submit_voice']);
@@ -386,10 +388,21 @@ export function productionBoardPhaseIssues(doc:ProjectDoc){
 /** The same service worker is used by the HTTP task and by zero-provider regression fixtures. */
 export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
+ const panelDraft=isPanelBlueprintDraft(task);
+ const teachingAnalysis=panelDraft&&task.stage==='analysis';
+ const analysisAuthority=(policy:Awaited<ReturnType<typeof productionReviewRequirements>>)=>digestValue({brief:task.input.brief,
+  feedback:task.blueprintFeedback,feedbackRevision:task.blueprintFeedbackRevision,policy:panelBlueprintRequirementsDigest(policy)});
+ let analysisCopyDigest:string|undefined;
+ let assertQualifiedWrite:((doc:ProjectDoc)=>void)|undefined;
  const editor=await openHeadlessEditor({creatorStoryboardDraft:task.stage==='blueprint'&&!!task.input.panelDelivery,projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
-  ...(task.input.panelDelivery?{assertCanvas:(next:ProjectDoc)=>{assertProductionCanvas(next);if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);}}:{}),
-  stageEditWrites:task.stage==='edit',assertCurrent:stage.assertCurrent,effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
+  ...(task.input.panelDelivery?{assertCanvas:(next:ProjectDoc)=>{
+   assertProductionCanvas(next);if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);
+   if(analysisCopyDigest&&teachingDraftPointersDigest(next)!==analysisCopyDigest)throw Error('teaching_baseline_analysis_cannot_write_copy');
+   assertQualifiedWrite?.(next);
+  }}:{}),
+  stageEditWrites:task.stage==='edit'||teachingAnalysis,assertCurrent:stage.assertCurrent,effect:(kind,key,work,recover)=>stage.effect(kind,key,work,recover)});
  const openedRevision=editor.revision;
+ if(panelDraft&&task.stage==='analysis')analysisCopyDigest=teachingDraftPointersDigest(editor.getDoc());
  editor.context.getAgentRunSignal=()=>stage.signal;
  const executeWithRecovery=(name:string,args:Record<string,unknown>,id:string)=>{
   const execute=(next:Record<string,unknown>)=>editor.execute(name,next,id);
@@ -410,6 +423,29 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  };
  const operation=(scope:string)=>{const h=createHash('sha256').update(`${task.taskId}:${task.stage}:${task.repairs}:${task.feedbackUsed}:${scope}`).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`;};
  try{
+  const teachingPublication=teachingAnalysis?task.teachingAnalysisPublication:undefined;
+  if(teachingPublication){
+   if(teachingPublication.repairEpoch!==task.repairs
+    ||task.projectRevision!==undefined&&teachingPublication.baseRevision!==task.projectRevision
+    ||teachingPublication.artifact.revision!==teachingPublication.revision
+    ||!isClipMentorAnalysis(teachingPublication.analysis)||teachingPublication.analysis.source.asset_id!==task.input.sourceAssetId)
+    throw Error('production_teaching_analysis_publication_unconfirmed');
+   const stored=editor.getDoc();
+   const restored=editor.revision===teachingPublication.baseRevision?{...stored,clipMentorAnalysis:teachingPublication.analysis}:stored;
+   if(revisionOf(restored)!==teachingPublication.revision||digestValue(restored)!==teachingPublication.outputDigest)
+    throw Error('production_teaching_analysis_publication_unconfirmed');
+   if(teachingPublication.inputDigest!==analysisAuthority(await productionReviewRequirements(task.projectId)))
+    return {artifact:{revision:editor.revision,reason:'review_requirements_changed'},repair:'analysis'};
+   await stage.assertCurrent?.();
+   if(editor.revision===teachingPublication.baseRevision&&editor.revision!==teachingPublication.revision){
+    analysisCopyDigest=teachingDraftPointersDigest(restored);
+    editor.context.commands.applyDoc(restored);
+    await editor.commit();
+    if((await loadOfflineStoredProject(task.projectId))?.revision!==teachingPublication.revision)
+     throw Error('production_saved_readback_mismatch');
+   }
+   return {artifact:teachingPublication.artifact};
+  }
   const publication=task.stage==='edit'?task.editPublication:undefined;
   if(publication){
    const saved=await loadOfflineStoredProject(task.projectId);
@@ -438,7 +474,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      ...(task.input.panelDelivery.salesEvidenceId?[panelSalesEvidence(source.id,task.input.panelDelivery.salesAssetId)]:[]),
      panelEndingEvidence('new_contact',[task.input.panelDelivery.ctaAssetId]),
     ]:[],points:[],blueprint:[],transcripts:[],reviews:[],audit:[]}});
-   await editor.commit();
+   if(!teachingAnalysis)await editor.commit();
   }
   // Import saved neutral source evidence before author/self-check/review, not only
   // after exhausting a repair limit. Never import observer verdicts or approvals.
@@ -482,11 +518,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }else if(prepared.asset)editor.context.commands.applyDoc(withStoryboard);
    return prepared;
   };
-  if(task.stage==='blueprint'&&panelScope&&editor.getDoc().clipMentorAnalysis?.source_breakdown?.units.length){
+  if(task.stage==='blueprint'&&panelScope&&!panelDraft&&editor.getDoc().clipMentorAnalysis?.source_breakdown?.units.length){
    const prepared=await preparePanelAssets();
    if(prepared.issue)task.repairContext={...task.repairContext,creator_storyboard_issue:prepared.issue};
   }
-  const panelDraft=!!(panelScope&&!panelScope.audience&&!task.blueprintApproval&&task.input.humanBlueprintReview);
   const localSpeech=panelDraft&&['analysis','blueprint'].includes(task.stage)
    ?await productionLocalSpeech(editor.getDoc(),task.taskId,stage.signal):undefined;
   if(localSpeech){
@@ -495,7 +530,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     await invalidateChangedReviews(withSpeech);
     if(!isClipMentorAnalysis(withSpeech))throw Error('local_source_speech_invalid');
     editor.context.commands.applyDoc({...previous,clipMentorAnalysis:withSpeech});
-    await editor.commit();
+    if(!teachingAnalysis)await editor.commit();
    }
   }
   const doc=editor.getDoc(),a=doc.clipMentorAnalysis!;
@@ -526,6 +561,42 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   };
   const policy=await productionReviewRequirements(task.projectId),criteria=boundVisualCriteria(policy);
   const openingComparison=(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??task.input.openingComparison;
+  const rebuild=panelDraft?task.repairContext?.teaching_rebuild as TeachingRebuild|undefined:undefined;
+  const baselineRequirements=productionAuthorCriteria(task,policy);
+  const baselinePolicyDigest=panelBlueprintRequirementsDigest(policy);
+  const baselineSource=(next:ProjectDoc)=>teachingBaselineSource(next,task,baselineRequirements,policy?.brief.objective);
+  let teachingDigest:string|undefined;
+  let teachingDefinition:string|undefined;
+  if(panelDraft&&['blueprint','copy_review'].includes(task.stage)){
+   const repairBaseline=(issue:string,nextRebuild=rebuild)=>({artifact:{revision:editor.revision,
+    teaching_baseline_issue:issue,...(nextRebuild?{teaching_rebuild:nextRebuild}:{})},repair:'analysis' as const});
+   if(!copyPreparationReady(doc)||a.source_breakdown?.review_scope?.kind!=='full_source')
+    return repairBaseline('原片教学基线的范围、重点或来源引用不完整。');
+   const source=baselineSource(doc);
+   teachingDefinition=teachingDefinitionDigest(doc);
+   const unchanged=rebuild?unchangedRejectedTeaching(source,rebuild):[];
+   if(unchanged.length)throw Error('teaching_baseline_repair_no_progress: '+unchanged.map(unit=>unit.unitId+' '+unit.reason).join('；'));
+   const checked=await checkTeachingBaseline(task,stage,source);
+   if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
+    return {artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:task.stage as 'blueprint'|'copy_review'};
+   if(!checked.review.units.every(unit=>unit.status==='ok'))
+    return repairBaseline(checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason).join('；'),teachingRebuild(source,doc,checked.review,rebuild));
+   teachingDigest=checked.digest;
+   if(task.stage==='blueprint'&&panelScope){
+    let qualifiedCopy=teachingDraftPointersDigest(doc);
+    assertQualifiedWrite=next=>{
+     const copy=teachingDraftPointersDigest(next);
+     if(teachingDefinitionDigest(next)===teachingDefinition)qualifiedCopy=copy;
+     else if(copy!==qualifiedCopy)throw Error('teaching_baseline_changed_before_copy');
+    };
+    const prepared=await preparePanelAssets();
+    if(prepared.issue)task.repairContext={...task.repairContext,creator_storyboard_issue:prepared.issue};
+   }
+   if(task.stage==='copy_review'&&rebuild){
+    const stale=staleRebuiltTeaching(source,doc,rebuild);
+    if(stale.length)return {artifact:{revision:editor.revision,teaching_baseline_issue:'教学点已纠偏，仍需成组重写口播、字幕、短标和画面：'+stale.join(', ')},repair:'blueprint'};
+   }
+  }
   if(task.stage==='copy_review'){
    const authorCriteria=productionAuthorCriteria(task,policy),authorCriteriaDigest=digestValue(authorCriteria);
    const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
@@ -546,8 +617,6 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
     if(!issues.length&&!await verifyPanelPartnerCard(doc,task.input.panelDelivery,content,undefined,stage.signal))issues.push('existing_partner_composition_invalid');
     if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues.map(code=>({code,id:'delivery'})))}`},repair:'blueprint'};
-    if(panelDraft)
-     return {artifact:{revision:editor.revision},awaitBlueprintFeedback:true};
    }
    const digest=prepared.reviewed.subject.digest;
    if(task.input.humanBlueprintReview){
@@ -563,13 +632,21 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     if(hostDeliveryEvidence&&partnerStoryboardRequired(panelScope)){
      const pdf=await creatorStoryboard(doc,stage.signal);
      hostDeliveryEvidence.storyboardAttachment={mediaType:'application/pdf',pages:pdf.pages,
-      sha256:createHash('sha256').update(pdf.bytes).digest('hex'),status:'complete_pdf_bytes_verified_for_this_source',
+      inputDigest:pdf.inputDigest,status:'complete_pdf_bytes_verified_for_this_source',
       note:'交付布局的 attachment 素材字段标识绑定的原片 Storyboard。独立 PDF 已由宿主读取，成片确认时经随片附件入口交付。'};
     }
-    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence);
+    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence,panelDraft);
     if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
     const issues=check.checks.filter(entry=>entry.status!=='ok');
     if(issues.length)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
+    if(panelDraft){
+     const currentPolicy=await productionReviewRequirements(task.projectId);
+     if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest)return repairRequirements();
+     const current=await loadOfflineStoredProject(task.projectId);
+     if(current?.revision!==editor.revision)throw Error('blueprint_author_self_check_stale');
+     return {artifact:{revision:editor.revision,blueprint_digest:digest,authorSelfCheck:'passed',teaching_baseline_digest:teachingDigest,
+      author_self_check_source_digest:check.sourceDigest,requirementsDigest:panelBlueprintRequirementsDigest(currentPolicy)},awaitBlueprintFeedback:true};
+    }
    }
    if(digestValue(productionAuthorCriteria(task,await productionReviewRequirements(task.projectId)))!==authorCriteriaDigest)return repairRequirements();
    if((stage.remaining?.('review')??1)<=0&&!stage.hasEffect?.('review',operation('independent-review')))
@@ -674,8 +751,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }
   // Only these author stages may call the API model; review/export have separate host paths.
   const prefix=`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
-  if(Object.entries(task.effects).some(([id,e])=>id.startsWith(prefix)&&e.kind==='model'))throw new Error('author_stage_already_attempted; inspect saved run before explicit reconciliation, no repeat submission');
-  const operatorRevision=task.stage==='blueprint'&&!!task.blueprintFeedback&&(task.blueprintFeedbackRepair??(task.blueprintFeedbackRevision===openedRevision?task.repairs:-1))===task.repairs;
+  if(Object.entries(task.effects).some(([id,e])=>id.startsWith(prefix+'author-')&&e.kind==='model'))throw new Error('author_stage_already_attempted; inspect saved run before explicit reconciliation, no repeat submission');
+  const operatorRevision=task.stage==='blueprint'&&!!task.blueprintFeedback&&(!!rebuild||(task.blueprintFeedbackRepair??(task.blueprintFeedbackRevision===openedRevision?task.repairs:-1))===task.repairs);
   const authorDecision=productionAuthorDecision(task,!!reflowBaseline,operatorRevision);
   const {pictureOnly:pictureOnlyRepair,independent:repairingIndependent,selfCheck:fixingSelfCheck}=authorDecision;
   await recordProductionDecision(task,{scope:'author',action:'select',reason:authorDecision.mode});
@@ -683,6 +760,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    ? '只修独立审核回执列出的未通过项；逐项同步口播、字幕、教学重点、画面计划和证据边界。仅换候选版本、改说明或收窄口播却保留旧教学断言不算完成；补证则登记实际来源与支持关系，不把观察等同审核批准。保留原判、已通过单元、片头片尾及实际素材。旁白若在原片和明确登记的短标或关系卡之外没有独立教学损失，撤掉重复旁白和其同文字幕，保留画面承载及教学重点，回读对应计划。当前稿件和画面安排保存后交重新自检及审核。'
    : fixingSelfCheck
    ? '修订已保存的蓝图，逐项回应任务附带的作者自检。根据已有原片证据核实混色、色号、晕染及促单，证据不足就收窄或标未知；保留未受影响的教学。只修实际缺项。凡同一对象、色号或动作无法从已登记证据确认，就收窄口播和短标，避免反复补证。口播指到的动作必须在当句选材范围实际可见。字幕分卡按意群拆分且保持同文。正文 phases 使用 {mode:"original",source_range_seconds:[起,止],picture:"画面"} 或 {mode:"explanation",line_id:"单句ID",source_range_seconds:[起,止],picture:"画面"}；不用 kind、line_ids 或 source_ranges。每条讲解跟对应原声，先逐个点名现行稿件里的所有 line_id，每句均覆盖，匹配 source_breakdown 已登记的播放窗和回看。viewer_stage_cues.original 用 text/enter/exit，revisit 为逐句关联的 {line_ids,text,enter,exit} 数组。片头片尾留在各自交付段，不塞进正文 phases。字幕分卡不改口播文字。保存后用 read_clipmentor_analysis 的 current_copy/单元 ID 回读。保留现有版本和失败回执，不配音、不剪辑。'
+   : task.stage==='analysis'&&rebuild?'按原始反馈及需重选的教学组，先修原片购买关注、手法、作用、证据及前后承接。用 set_source_breakdown 保存基线并逐点填写 change_reason。可重划教学组；合并时沿用已有片头或片尾绑定的组ID。现行稿件和旧回执留作历史，本阶段不得改字幕、口播或画面方案。对未影响教学的版式意见留到蓝图阶段。'
    : goals[task.stage];
   const beforeExecution=task.stage==='edit'?structuredClone(doc):undefined;
 
@@ -756,10 +834,15 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      ||registered?.explanation_segment_ids.includes(segment.segment_id)).map(({segment_id,source_range_seconds})=>({segment_id,source_range_seconds}))}];
   }):[];
   const taskData={...await productionAuthorTaskData(task,editor.getDoc()),goal,
+   ...(panelDraft?{objective:policy?.brief.objective??null,doneCriteria:baselineRequirements}:{}),
+   ...(panelDraft&&task.stage==='analysis'?{teachingPurpose:panelTeachingPurpose,teachingFeedback:task.blueprintFeedback??null,
+    ...(rebuild?{teachingFindings:rebuild.rejected.map(({unitId,reason})=>({unitId,reason})),beforeCopy:'分析只改基线；先证明每组的选题与证据能回答任务，再写稿。'}:{})}:{}),
+   ...(panelDraft&&task.stage==='blueprint'&&rebuild?{teachingRebuild:rebuild.affected.map(({unitId,pointIds})=>({unitId,pointIds})),
+    beforeCopy:'新教学基线已核。按受影响组原子保存新口播、同文字幕、短标和画面；只换标题、说明或候选ID无法交审。保持其余组已核内容。'}:{}),
    ...(localSpeech?{localSpeech:{...localSpeech,...(localSpeech.status==='machine_transcript_candidate'?{
     source_id:`local-asr:${localSpeech.source_hash}`,instruction:'宿主已登记这条听写来源。仅将看得清、听写与上下文都支持的原话列为候选，source_ids 填此 source_id；不要把机器听写标为人工听审或用户确认。',
    }:{})}}:{}),
-   ...((task.stage==='analysis'||task.stage==='blueprint')&&panelDraft?{sourceObservationPlan:'宿主将在蓝图结构校验完成后，负责提交一次原片连续观察。当前先用本地抽帧和本机听写候选成稿。每个教学组必须有本组可教的主要点（coverage.role=primary）。只作辅助开场或转折的片段，归入同一教学关系的组，勿单列成只有 auxiliary 的组。写 phases 时同时登记 viewer_stage_cues，其 original 和 revisit 都要写 text、enter、exit，revisit 每项用 line_ids 覆盖本组对应的解释句。'}:{}),
+   ...((task.stage==='analysis'||task.stage==='blueprint')&&panelDraft?{sourceObservationPlan:'宿主将在蓝图结构校验完成后，负责提交一次原片连续观察。当前先用本地抽帧和本机听写候选还原全片表达，再选组。每组的主要点是该段实际承担、达人可复用的表达作用（coverage.role=primary）。原作者的开场或转折若承担关键教学作用，可以成为主要点。只作过渡的片段并入同一教学关系。写 phases 时同时登记 viewer_stage_cues，其 original 和 revisit 都要写 text、enter、exit，revisit 每项用 line_ids 覆盖本组对应的解释句。'}:{}),
    ...(task.stage==='blueprint'&&task.sourceObservationUnavailableOperation?{savedObservation:{operationId:task.sourceObservationUnavailableOperation,
     instruction:'用 read_clipmentor_source_video 回读这次观察。无法取得连续视听时，依靠实际上传素材与本地画面证据完成整份蓝图。无法核实的原声、色号或动作留未知或缩窄稿件，不补写原话。优先用 set_picture_plan 逐组补齐现行稿的 phases，再分别登记片头和两种片尾。沿用已准备好的 Storyboard 及正式图片绑定。'}}:{}),
    ...(pictureOnlyRepair?{measuredExecution:await currentExecutionPreparation(doc,task.input.voice)}:{}),
@@ -784,7 +867,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    host:{signal:stage.signal,maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     beforeRequest:()=>stage.effect('model',`author-${task.attempts.model}`,async()=>null).then(()=>undefined),
     execute:async(name,args,id)=>{
-     if(task.input.panelDelivery&&!task.input.panelDelivery.audience&&['analysis','blueprint'].includes(task.stage)
+     if(panelDraft&&task.stage==='analysis'&&name==='revise_clipmentor_analysis'
+      &&['set_copy_candidate','select_copy_lines','set_picture_plan'].includes(String(args.action)))
+      return {error:'teaching_baseline_analysis_cannot_write_copy',next_step:'先登记教学选点，不写稿。'};
+     if(panelDraft&&['analysis','blueprint'].includes(task.stage)
       &&name==='revise_clipmentor_analysis'&&args.action==='set_source_breakdown'
       &&args.record&&typeof args.record==='object'&&!Array.isArray(args.record)){
       // This panel task is frozen to the complete original. Selected teaching
@@ -793,13 +879,14 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
       const scope=record.review_scope as {kind?:string}|undefined;
       if(scope!==undefined&&scope?.kind!=='full_source')
        return {error:'source_review_scope_must_cover_complete_panel_source'};
-      if(scope===undefined){
-       const previous=editor.getDoc().clipMentorAnalysis?.source_breakdown?.review_scope;
-       args={...args,record:{...record,review_scope:previous?.kind==='full_source'?previous:{kind:'full_source',instruction:task.input.brief}}};
-      }
+      const previous=editor.getDoc().clipMentorAnalysis?.source_breakdown?.review_scope;
+      const frozenScope=previous?.kind==='full_source'?previous:{kind:'full_source',instruction:task.input.brief};
+      args={...args,record:{...record,review_scope:frozenScope}};
      }
      if(task.input.panelDelivery&&task.stage==='blueprint'&&name==='revise_clipmentor_analysis'
-      &&['set_copy_candidate','set_picture_plan'].includes(String(args.action))){
+      &&['set_copy_candidate','select_copy_lines','set_picture_plan'].includes(String(args.action))){
+      if(panelDraft&&teachingDefinitionDigest(editor.getDoc())!==teachingDefinition)
+       return {error:'teaching_baseline_changed_before_copy',next_step:'先结束此轮并保留基线；宿主会重新核验后接续写稿。'};
       const plan=(args.record as {plan?:Record<string,unknown>}|undefined)?.plan;
       if(plan&&typeof plan==='object'&&currentPicturePhases(plan,undefined,args.id,a.source.fps,a.source.duration_seconds).issues.length)
        return {error:'picture_plan_phase_board_unreadable',unit_id:args.id,
@@ -840,11 +927,25 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      }
      return name==='load_skill'?editor.loadSkillTool(args):name==='observe_clipmentor_source_video'?requestObservation(args,id):executeWithRecovery(name,args,id);
     }}});
+  if(panelDraft&&task.stage==='blueprint'&&teachingDefinitionDigest(editor.getDoc())!==teachingDefinition){
+   const changed=newlyChangedTeaching(baselineSource(doc),baselineSource(editor.getDoc()),doc,rebuild);
+   await editor.commit();
+   return {artifact:{revision:editor.revision,teaching_baseline_issue:'教学选点在写稿途中改变，需重新核对后再写。',
+    ...(changed?{teaching_rebuild:changed}:{})},repair:'blueprint'};
+  }
   if(run.status!=='completed')throw new Error(run.error??'Author stage failed');
   captureBlueprintFeedbackSummary(task,feedbackSource,run.events.filter(event=>event.type==='text-delta').map(event=>(event.data as {text?:string}).text??'').join(''));
   let next=editor.getDoc();const analysis=next.clipMentorAnalysis;
   if(!isClipMentorAnalysis(analysis)||!analysis.points.length||!analysis.blueprint.length||!analysis.evidence.length)throw new Error('analysis_stage_incomplete');
   if(task.stage==='blueprint'){
+   if(panelDraft){
+    const source=baselineSource(next);
+    const stale=rebuild?staleRebuiltTeaching(source,next,rebuild):[];
+    if(stale.length){
+     await editor.commit();
+     return {artifact:{revision:editor.revision,teaching_baseline_issue:'仍需成组更新讲解和画面：'+stale.join(', ')},repair:'blueprint'};
+    }
+   }
    if(task.input.panelDelivery){
     const document=await preparePanelAssets();
     if(document.issue){await editor.commit();return {artifact:{revision:editor.revision,blueprint_structure_issue:document.issue},repair:'blueprint'};}
@@ -874,6 +975,22 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }
   }
   if(task.stage==='audio')await verifyProductionNarrationFiles(next,task.input.voice);
+  if(teachingAnalysis){
+   if(teachingDraftPointersDigest(next)!==analysisCopyDigest)throw Error('teaching_baseline_analysis_cannot_write_copy');
+   next=retireTeachingDrafts(next);
+   editor.context.commands.applyDoc(next);
+   analysisCopyDigest=teachingDraftPointersDigest(next);
+   const revision=revisionOf(next);
+   const artifact={revision,analysisRevision:analysis.revision,runId:run.id,semantic_quality:'not_certified_by_structure'};
+   if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
+    return {artifact:{revision:editor.revision,reason:'review_requirements_changed'},repair:'analysis'};
+   await stage.checkpointTeachingAnalysis?.({baseRevision:editor.revision,revision,repairEpoch:task.repairs,inputDigest:analysisAuthority(policy),outputDigest:digestValue(next),artifact,analysis:next.clipMentorAnalysis!});
+   if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
+    return {artifact:{revision:editor.revision,reason:'review_requirements_changed'},repair:'analysis'};
+   await editor.commit();
+   if((await loadOfflineStoredProject(task.projectId))?.revision!==revision)throw Error('production_saved_readback_mismatch');
+   return {artifact};
+  }
   let editArtifact:Record<string,unknown>|undefined;
   if(task.stage==='edit'){
    const normalized=migrateProjectDoc(next);if(!normalized)throw Error('Invalid saved project');next=normalized;
@@ -903,6 +1020,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }
   const blueprintReadiness=await productionBlueprintReadiness(saved.doc,task.input.voice);
   return {artifact:{revision:editor.revision,analysisRevision:analysis.revision,runId:run.id,blueprintReadiness,
+   ...(teachingDigest?{teaching_baseline_digest:teachingDigest}:{}),
    semantic_quality:'not_certified_by_structure'}};
  }catch(error){
   // Tool commits are durable even when the subsequent audio verifier fails.

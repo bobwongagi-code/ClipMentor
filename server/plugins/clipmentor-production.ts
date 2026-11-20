@@ -7,7 +7,7 @@ import {productionFeedbackAnchor} from '../clipmentor/production-feedback';
 import type {Plugin} from 'vite';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {editorCredentialAuthorized} from '../editor-auth';
-import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
+import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,requeuePanelAuthorCheck,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
 import {productionStageWorker,reconcileBlockedBlueprint} from '../clipmentor/production-worker';
 import {productionBlueprintReadiness} from '../clipmentor/production-readiness';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
@@ -114,7 +114,8 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
        }
        continue;
       }
-      if(!task||!['queued','running'].includes(task.status)||active.has(task.taskId)||productionExecutionActive(task.projectId,task.taskId))continue;
+      if(!task||active.has(task.taskId)||productionExecutionActive(task.projectId,task.taskId))continue;
+      if(!['queued','running'].includes(task.status)&&!await requeuePanelAuthorCheck(task))continue;
       // Rebind only the local service address. The saved provider, budget,
       // stage and effect IDs remain authoritative after a port change.
       task.input.author.origin=origin;
@@ -170,7 +171,14 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(body.action==='cancel'){send(202,await cancelProductionTask(task));return;}
     if(isActive(task.taskId,task.projectId))throw new Error('Production task already running');
     if(['resume','feedback','accept'].includes(String(body.action)))await publishedProductionParent(task);
-    if(body.action==='resume'){await reconcileBlockedBlueprint(task);launch(task);send(202,{taskId:task.taskId,status:'queued'});return;}
+    if(body.action==='resume'){
+     if(!await requeuePanelAuthorCheck(task)){
+      if(task.status==='awaiting_blueprint')throw Error('蓝图没有可恢复的自检任务');
+      await reconcileBlockedBlueprint(task);
+     }
+     task.input.author.origin=origin;task.input.reviewer.origin=origin;
+     launch(task);send(202,{taskId:task.taskId,status:'queued'});return;
+    }
     if(body.action==='feedback'){const snapshot=await loadOfflineStoredProject(task.projectId);if(!snapshot)throw new Error('feedback_project_missing');await productionFeedback(task,body.feedback,productionTaskStore,snapshot.doc);launch(task);send(202,{taskId:task.taskId,status:'queued'});return;}
     if(body.action==='accept'){send(200,await acceptProductionTask(task,body.malayDeliveryConfirmed,undefined,
       {digest:body.visualCriteriaDigest,confirmed:body.confirmedVisualCriteria,renderId:body.renderId}));return;}

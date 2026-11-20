@@ -35,6 +35,8 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 通过现有 `revise_clipmentor_analysis` 保存：`action:"set_source_breakdown"`、当前 `expectedRevision`、既有actor/reason以及 `record`。首次登记不默认要求用户逐项确认。历史重点和段落ID不能从后续记录消失；修订后复读，用返回的具体问题ID继续处理。未登记就保存新的文案候选会被拒绝；历史旧稿仍可读取。缺覆盖可保存为待修候选，但不是制作通过。
 
+网页共用蓝图在写稿前先读原任务和原片证据，再核已存基线选了什么。逐组说明该段的表达功能、观众要判断什么、原作者怎样让它可见或可听、达人能借鉴什么。教学方向或选点需改时，先修 `source_breakdown`，保留历史点与原话，等宿主回读通过后成组更新受影响的讲解和画面。只改标题或备注不能解决教学缺口。组数、开场方式与保留哪些卖点由本片证据决定。
+
 下面是字段示例，证据和单元ID需来自本项目真实记录；不是Teashell素材事实或可以直接导入的成品：
 
 ```json

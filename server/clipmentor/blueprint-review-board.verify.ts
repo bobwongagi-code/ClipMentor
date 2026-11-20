@@ -240,6 +240,76 @@ try{
   (clipMentorProductionPlugin(async()=>{throw Error('No worker permitted');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
   try{const draft=makeDraft(doc),ctx={...draft,templates:[],audio:[],getProjectId:()=> 'review-board-test',getCreativeMode:()=> 'clipmentor',hostFetch:async(path:string,init:RequestInit)=>realFetch(new URL(path,origin),{...init,headers:{Origin:origin}})} as never;const result=await executeTool('render_clipmentor_review_board',{},ctx) as any;assert(!result.error,JSON.stringify(result));assert(result.artifacts.length);const beforeDraft=JSON.stringify(draft.getDoc());const blocked=await executeTool('set_aspect_ratio',{ratio:'1:1'},ctx) as any;assert(blocked.production_gate?.code,'read preparation must not permit editing without current approval');assert.equal(JSON.stringify(draft.getDoc()),beforeDraft);assert.equal(result.review_approved,false);const human=await executeTool('render_clipmentor_review_board',{view:'human'},ctx) as any;assert(!human.error,JSON.stringify(human));assert.equal(human.artifacts.length,1);const humanPage=await realFetch(new URL(human.artifacts[0].url,origin),{headers:{Origin:origin}});const humanBytes=await humanPage.text();assert.match(humanBytes,/人审版/);const changed=clone(doc);(changed.clipMentorAnalysis!.product as any).name='QA later board only';await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',changed));try{const next=await executeTool('render_clipmentor_review_board',{view:'human'},{...ctx,getDoc:()=>changed}) as any;assert(!next.error,JSON.stringify(next));assert.notEqual(next.artifacts[0].url,human.artifacts[0].url,'human links must bind inspected HTML bytes, not mutable project filenames');const retained=await realFetch(new URL(human.artifacts[0].url,origin),{headers:{Origin:origin}});assert.equal(await retained.text(),humanBytes,'a later board cannot replace an already inspected link');}finally{await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',doc));}const wrongView=await executeTool('render_clipmentor_review_board',{view:'typo'},ctx) as any;assert.match(wrongView.error,/INPUT/);const stale=await realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'review_board',projectId:'review-board-test',expectedRevision:'stale'}),{headers:{Origin:origin}});assert.equal(stale.status,409);const page=await realFetch(new URL(result.artifacts[0].url,origin),{headers:{Origin:origin}});assert.equal(page.status,200);assert.match(await page.text(),/策划自查板/);assert.deepEqual(await loadOfflineStoredProject('review-board-test'),before);assert.equal((await realFetch(origin+'/api/clipmentor/production-task?view=review_board&projectId=review-board-test')).status,403);}finally{await new Promise<void>(r=>server.close(()=>r()));}
  });
+ await test('Shared panel admits only the checked current blueprint across all browser actions',async()=>{
+  const {withSerializedProjectStore}=await import('../plugins/project-store');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {clipMentorProductionPlugin}=await import('../plugins/clipmentor-production');
+  const {createProductionTask,productionTaskStore,requeuePanelAuthorCheck}=await import('./production-task');
+  const {digestValue}=await import('../agent-runs/store-values');
+  const projectId='checked-panel-board',doc=clone(bindings[0]);
+  await withSerializedProjectStore(s=>s.writeEntry('project:'+projectId,doc));
+  const snapshot=(await loadOfflineStoredProject(projectId))!;
+  const app=createMiniConnect(e=>{throw e;}),server=createServer((req,res)=>app.handle(req,res));
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const origin='http://127.0.0.1:'+(server.address() as {port:number}).port;
+  let launched=0;
+  (clipMentorProductionPlugin(async()=>{launched++;throw Error('No worker expected');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
+  const api={provider:'openai' as const,model:'fixture',apiMode:'responses' as const,origin};
+  try{
+   const task=await createProductionTask({projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:{name:'Fixture',category:'test'},
+    author:api,reviewer:api,brief:'Fixture',humanBlueprintReview:true,
+    budget:{model:10,observation:0,review:0,tts:0,render:0,preview_review:0,maxElapsedMs:120_000,maxRepairs:2}});
+   task.input.panelDelivery={productAssetId:'product',productAssetHash:'a'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'b'.repeat(64)};
+   task.status='awaiting_blueprint';task.stage='copy_review';task.projectRevision=snapshot.revision;
+   task.completed.blueprint={at:Date.now(),artifact:{revision:snapshot.revision}};
+   const panel=origin+'/api/clipmentor/production-task?view=panel&projectId='+projectId;
+   const headers={Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'};
+   const status=async()=>(await (await realFetch(panel,{headers})).json()).task;
+   const board=(identity?:string)=>realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({
+    view:'panel_board',projectId,revision:snapshot.revision,...(identity?{boardIdentity:identity}:{})}),{headers});
+   const action=(action:string,boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
+    action,revision:snapshot.revision,boardIdentity,text:'核对本组卖点'})});
+   await productionTaskStore.save(task);
+   assert.equal((await status()).blueprintRevision,undefined,'legacy structure-only checkpoint is not presented for review');
+   assert.equal((await board()).status,409,'direct HTML access cannot bypass the check');
+   assert.equal((await action('produce_versions','stale')).status,409);
+   assert.equal((await action('revise_blueprint','stale')).status,409);
+   const originalAttempts=structuredClone(task.attempts);
+   const staleCheckpoint=clone(task);
+   assert.equal(await requeuePanelAuthorCheck(task),true);
+   await assert.rejects(requeuePanelAuthorCheck(staleCheckpoint),/production_control_subject_changed/);
+   assert.equal((await status()).blueprintRevision,undefined);
+   assert.deepEqual(task.attempts,originalAttempts);
+   task.status='awaiting_blueprint'; // Simulate the worker's publication.
+   Object.assign(task.completed.blueprint.artifact,{authorSelfCheck:'passed',author_self_check_source_digest:'c'.repeat(64),teaching_baseline_digest:'d'.repeat(64),requirementsDigest:digestValue({objective:null,doneCriteria:[]})});
+   await productionTaskStore.save(task);
+   const checked=await status();
+   assert.equal(checked.blueprintRevision,snapshot.revision);
+   assert.equal(checked.canConfirmBlueprint,true);
+   assert.equal(checked.canApproveBlueprint,false,'an author check cannot count as independent approval');
+   const opened=await board(checked.boardIdentity);
+   assert.equal(opened.status,200,await (opened.ok?Promise.resolve(''):opened.text()));
+   assert.match(await opened.text(),/data-card="group-1"/);
+   // A saved but unprocessed edit invalidates confirmation even at the same revision.
+   task.repairContext={pending_blueprint_feedback:{text:'核对本组卖点',revision:snapshot.revision}};
+   await productionTaskStore.save(task);
+   assert.equal((await status()).canConfirmBlueprint,false);
+   assert.equal((await action('produce_versions',checked.boardIdentity)).status,409);
+   task.completed.blueprint.artifact.requirementsDigest='d'.repeat(64);
+   await productionTaskStore.save(task);
+   assert.equal((await status()).blueprintRevision,undefined);
+   assert.equal((await board(checked.boardIdentity)).status,409,'a warm HTML cache cannot resurrect a stale receipt');
+   assert.equal(await requeuePanelAuthorCheck(task),true,'a missing current policy receipt can be rechecked under the original authority');
+   assert.equal(task.status,'queued');assert.equal(task.stage,'blueprint');
+   assert.equal(task.blueprintFeedback,'核对本组卖点','a pending business correction goes to the author before rechecking');
+   assert.deepEqual(task.attempts,originalAttempts);
+   task.status='awaiting_blueprint';task.stage='copy_review';task.createdAt=Date.now()-task.input.budget.maxElapsedMs-1;
+   task.completed.blueprint={at:Date.now(),artifact:{revision:snapshot.revision}};
+   await productionTaskStore.save(task);
+   assert.equal(await requeuePanelAuthorCheck(task),false,'expired authority is never silently extended');
+   assert.equal(launched,0);
+  }finally{await new Promise<void>(r=>server.close(()=>r()));}
+ });
  await test('Blocked panel blueprint feedback starts the saved revision without a resume request',async()=>{
   const {withSerializedProjectStore}=await import('../plugins/project-store');
   const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');

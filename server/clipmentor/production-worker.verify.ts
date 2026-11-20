@@ -83,6 +83,18 @@ assert.deepEqual(checkSource.originalRequirements,requirements);
 requirements[0]='external mutation';
 assert.equal(checkSource.originalRequirements[0],'这么多人拍这款商品，为什么这支视频取得这个成绩？');
 assert.equal(JSON.stringify(checkDoc),beforeCheck,'self-check projection cannot rewrite source or review');
+const failedSourceDoc=structuredClone(checkDoc);
+const originalRange=(await createProductionPreparation(checkDoc)).rawPacket.units[0].picture_plan!.original_source_ranges[0];
+const failedEvidenceId='unselected-failed-speech';
+failedSourceDoc.clipMentorAnalysis!.evidence.push({evidence_id:failedEvidenceId,kind:'original_claim',
+ status:'candidate_unverified_speech',text:'Failed observation cannot be proof',call_status:'failed',
+ source_range_seconds:[originalRange[0],originalRange[0]+.05],source_ids:[]});
+const failedSourcePacket=await createProductionPreparation(failedSourceDoc);
+assert(failedSourcePacket.rawPacket.source_evidence.some(e=>e.evidence_id===failedEvidenceId),'unselected original is present in the upstream context');
+const filtered=productionAuthorSelfCheckSource(failedSourceDoc,failedSourcePacket,[],true);
+assert(!filtered.blueprint.source_evidence.some(e=>e.evidence_id===failedEvidenceId));
+assert(filtered.blueprint.units.every(u=>!u.source_context?.evidence_ids.includes(failedEvidenceId)));
+assert(!filtered.sourceEvidence?.some(e=>e.evidence_id===failedEvidenceId));
 const {buildCopyTeachingReviewRequest}=await import('../../src/clipmentor/production-gate');
 const reviewInput=JSON.stringify(buildCopyTeachingReviewRequest([{case_id:'isolation',packet:checkSource.blueprint}]));
 assert(!reviewInput.includes('originalRequirements'),'author-check material cannot leak through the independent review projection');
@@ -90,6 +102,16 @@ const effectNames:string[]=[];
 const selfCheckStage={effect:async(_kind:string,name:string)=>{effectNames.push(name);return {digest:'fixture',runId:'fixture',checks:[]};}} as unknown as import('./production-task').StageContext;
 const preparedCheck=await createProductionPreparation(checkDoc);
 await verifyAuthorSelfCheckRecovery(checkDoc, preparedCheck);
+{
+ const guide='S1 no-op recovery fixture';
+ const panelSource={...productionAuthorSelfCheckSource(checkDoc,preparedCheck,[task.input.brief],true),
+  panelTeachingReview:true,repairReview:[],unchangedReviewedDelivery:[]};
+ const newRevision={...task,projectRevision:'changed-unrelated-project-metadata',repairContext:{
+  blueprint_digest:preparedCheck.reviewed.subject.digest,author_self_check_source_digest:digestValue({source:panelSource,guide})}};
+ const before=effectNames.length;
+ await assert.rejects(checkProductionAuthorBlueprint(newRevision,selfCheckStage,checkDoc,preparedCheck,guide,[],undefined,true),/蓝图返修未改变送审内容/);
+ assert.equal(effectNames.length,before,'a different project revision alone cannot spend another author call');
+}
 for(const [currentRequirements,guide] of [[['原始要求'],'guide'],[['原始要求'],'guide'],[['更新要求'],'guide'],[['更新要求'],'updated-guide']] as const){
  await checkProductionAuthorBlueprint(task,selfCheckStage,checkDoc,preparedCheck,guide,[...currentRequirements]);
 }
@@ -141,6 +163,59 @@ const checks=Array.from({length:7},(_,index)=>({id:`S${index+1}`,status:'ok',ref
 assert.equal(validateAuthorSelfCheck(JSON.stringify(checks),source).length,7);
 const multipleReferences=[{...checks[0],status:'fix',reference:['Perhatikan warna','warna di tangan']},...checks.slice(1)];
 assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(multipleReferences),source)[0],multipleReferences[0]);
+// Reduced replay of JUDYDOLL v3-8fed2080. The first group names
+// visible actions correctly but never teaches the hook-to-product handoff.
+{
+ const ranges:[[number,number],[number,number],[number,number]]=[[0,29],[29,45.28],[45.28,67.33]];
+ const ids=['U-01','U-02','U-03'];
+ const evidence=['先看上脸和人物反应，再举盘，两盘同框','盘和刷头同框，随后鼻侧出现棕色','双盘同框，接着用侧脸给人看高光'];
+ const copy=['Dia rapatkan wajah ke kamera.','Penonton boleh nampak sepekat mana warna pada sisi hidung.','Kedua-dua palet ditunjukkan bersama supaya beza warna mudah dilihat.'];
+ const blueprint={
+  source_evidence:[...ids.map((_,i)=>({evidence_id:'raw-'+i,observation:'[visible_action; candidate] '+evidence[i],time_seconds:[ranges[i][0]+1]})),
+   {evidence_id:'why',observation:'[expression_analysis_not_verified_causal_effect; candidate] 显示了卖点',time_seconds:[2]},
+   {evidence_id:'bare-frame',observation:'[source_frame; frame_extracted_not_interpreted] Source frame extracted and returned; interpretation pending',time_seconds:[2]}],
+  units:ids.map((unit_id,i)=>({unit_id,source_context:{evidence_ids:['raw-0','raw-1','raw-2','why','bare-frame']},
+   lines:[{line_id:'L'+i,narration_ms:copy[i],caption_lines:[copy[i]],labels:[]}],points:[],
+   picture_plan:{original_source_ranges:[ranges[i]],line_source_ranges:[]}})),
+ };
+ const panelSource={panelTeachingReview:true,blueprint};
+ const rows=ids.map((unit_id,i)=>({unit_id,status:'ok',source_role:evidence[i],source_evidence_ids:['raw-'+i],
+  takeaway:['用上脸效果和反应抓注意，亮出两盘引出比较','近拍显色让买家自己判断颜色深浅','同框让买家比较两盘色差'][i],reason:'对照本组现行口播',
+  delivered:{line_id:'L'+i,quote:copy[i]}}));
+ const result=(teaching_units:unknown)=>validateAuthorSelfCheck(JSON.stringify([
+  {...checks[0],reference:copy[0],teaching_units},
+  ...checks.slice(1).map(check=>({...check,reference:copy[0]})),
+ ]),panelSource)[0];
+ const bad=structuredClone(rows);bad[0].status='fix';bad[0].reason='讲解只有靠近镜头，漏掉用效果抓注意再引出双盘比较';
+ assert.equal(result(bad).status,'fix','an aggregate ok cannot overrule a rejected JUDYDOLL group');
+ assert.throws(()=>result(undefined),/invalid:S1/,'seven valid generic answers still leave every group unchecked');
+ assert.throws(()=>result([rows[1],rows[1],rows[2]]),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>result([{...rows[0],source_evidence_ids:['why']},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>result([{...rows[0],source_evidence_ids:['bare-frame']},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>result([{...rows[0],source_evidence_ids:['raw-1']},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>result([{...rows[0],delivered:rows[1].delivered},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>result([{...rows[0],delivered:{line_id:'L0',quote:rows[0].takeaway}},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
+ const unknown={...rows[0],status:'unresolved',delivered:undefined,source_evidence_ids:[]};
+ assert.equal(result([unknown,...rows.slice(1)]).status,'unresolved');
+ const corrected='Dia tunjuk hasil pada wajah dulu, kemudian tunjuk dua palet untuk buka perbandingan.';
+ blueprint.units[0].lines[0].narration_ms=corrected;
+ blueprint.units[0].lines[0].caption_lines=[corrected];
+ copy[0]=corrected;
+ assert.equal(result([{...rows[0],delivered:{line_id:'L0',quote:corrected}},...rows.slice(1)]).status,'ok');
+ const visual=structuredClone(panelSource) as {panelTeachingReview:boolean;blueprint:TeachingPacket};
+ visual.blueprint.units[0].points=[{point_id:'P0',role:'primary',question:rows[0].takeaway,evidence_ids:['raw-0','bare-frame'],
+  treatment:'visual_only',visual_evidence:[{segment_id:'S0',phase:'explanation',source_range_seconds:[0,4],evidence_ids:['raw-0','bare-frame']}]}];
+ visual.blueprint.units[0].picture_plan!.line_source_ranges=[{line_id:'L0',source_range_seconds:[0,4],
+  context_source_ranges:[{segment_id:'S0',source_range_seconds:[1,1],purpose:'当前明确选中的静帧'}]}];
+ const visualResult=(evidence_id:string,source_seconds:number)=>validateAuthorSelfCheck(JSON.stringify([
+  {...checks[0],reference:corrected,teaching_units:[{...rows[0],delivered:{evidence_id,source_seconds}},...rows.slice(1)]},
+  ...checks.slice(1).map(check=>({...check,reference:corrected})),
+ ]),visual)[0];
+ assert.equal(visualResult('raw-0',1).status,'ok','deliberately selected exact still remains usable');
+ assert.throws(()=>visualResult('raw-0',1+1/30),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>visualResult('bare-frame',2),/invalid:S1:teaching_unit=U-01/);
+ console.log('JUDYDOLL replay: checked source role and same-unit delivery, caught fake aggregate, omission, wrong group and author-note citations');
+}
 const translatedLabels={...source,labels:['较浅','较深','06'],note:'请比较颜色深浅'};
 const labelReferences=[...checks.slice(0,2),{...checks[2],reference:['较浅','较深','06']},...checks.slice(3)];
 assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(labelReferences),translatedLabels)[2],labelReferences[2]);
