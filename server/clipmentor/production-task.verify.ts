@@ -56,6 +56,33 @@ assert.equal(await production.queueDraftBlueprintFeedback(pending,'current-draft
 assert.equal(pending.status,'queued');assert.equal(pending.stage,'blueprint');assert.equal(pending.projectRevision,'current-draft');
 assert.equal(pending.error,undefined);assert.equal(pending.blueprintApproval,undefined);
 assert.deepEqual(pending.repairContext?.pending_review_repair,{status:'bound'});
+{
+ const task=fresh();task.input.humanBlueprintReview=true;
+ task.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};
+ const visited:string[]=[];
+ const worker:production.StageWorker=async t=>{
+  visited.push(t.stage);
+  return {artifact:{revision:t.blueprintFeedback?'draft-2':'draft-1'},...(t.stage==='copy_review'?{awaitBlueprintFeedback:true as const}:{})};
+ };
+ await advanceProductionTask(task,worker,store);
+ assert.deepEqual(visited,['analysis','blueprint','copy_review']);
+ assert.equal(task.status,'awaiting_blueprint');
+ assert.equal(task.completed.copy_review,undefined,'presenting a draft must not synthesize a review receipt');
+ assert.equal(await production.queueDraftBlueprintFeedback(task,'draft-1','讲解先说看哪里',store),'queued');
+ assert.equal(saved.blueprintFeedbackRevision,'draft-1');
+ assert.equal(saved.blueprintFeedback,'讲解先说看哪里');
+ await advanceProductionTask(task,worker,store);
+ assert.equal(task.status,'awaiting_blueprint');
+ assert.equal(task.projectRevision,'draft-2');
+ assert.equal(task.attempts.review,0);
+ assert.equal(task.attempts.tts,0);
+ assert.equal(task.attempts.render,0);
+ const output=fresh();output.input.humanBlueprintReview=true;
+ output.input.panelDelivery={...task.input.panelDelivery,audience:'existing_partner'};
+ await advanceProductionTask(output,worker,store);
+ assert.equal(output.status,'blocked','a production child cannot use the draft-only handoff');
+ assert.match(output.error??'',/human_blueprint_draft_binding_missing/);
+}
 const spoken=fresh();spoken.blueprintFeedback='嗯，第一个片头要成绩和提问。第二个呢，两个片尾一个CTA一个Storyboard。还有人审版不要技术报告，补原话中文。'.repeat(3);
 const rawSpoken=spoken.blueprintFeedback;
 assert.deepEqual(blueprintFeedbackPoints(spoken),[],'long speech is never shown verbatim or mechanically truncated');

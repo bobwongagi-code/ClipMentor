@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {SourceVideoReceipt} from '../../shared/clipmentor-source-video';
 import type {AnalysisEvidence,ClipMentorAnalysis} from '../../src/clipmentor/analysis';
+import {digestValue} from '../agent-runs/store-values';
 
 export function importProductionSourceEvidence(
  analysis:ClipMentorAnalysis, receipt:SourceVideoReceipt, projectId:string,
@@ -124,10 +125,21 @@ function validInspectionRange(value:unknown,duration:number):value is [number,nu
 }
 
 /** A repair is not a new authorization; the original effect ledger still charges every request. */
-export function productionSourceObservationAllowed(task:Pick<import('./production-task').ProductionTask,'stage'|'attempts'|'input'>,recoveredOperation?:string){
- return (task.stage==='analysis'||task.stage==='blueprint')&&!recoveredOperation
+export function productionSourceObservationAllowed(task:Pick<import('./production-task').ProductionTask,'stage'|'attempts'|'input'|'sourceObservationUnavailableOperation'>,recoveredOperation?:string){
+ return (task.stage==='analysis'||task.stage==='blueprint')&&!recoveredOperation&&!task.sourceObservationUnavailableOperation
   &&Number.isInteger(task.input.budget.observation)&&Number.isInteger(task.attempts.observation)
   &&task.attempts.observation>=0&&task.attempts.observation<task.input.budget.observation;
+}
+
+/** Treat a submitted, unanswered gateway request as unavailable only after durable readback. */
+export function verifiedUnansweredSourceObservation(observed:SourceVideoReceipt,stored:SourceVideoReceipt|null,
+ subject:{projectId:string;sourceHash:string|null|undefined;revision:number}){
+ const unanswered=(receipt:SourceVideoReceipt)=>receipt.projectId===subject.projectId
+  &&receipt.source_hash===subject.sourceHash&&!!subject.sourceHash&&receipt.subject?.revision<=subject.revision
+  &&receipt.status==='failed'&&receipt.receipt_persisted===true&&receipt.phase==='gateway_request'
+  &&receipt.requestsAttempted===1&&receipt.upstream_http_status==null&&!receipt.raw_response_available&&receipt.result===undefined;
+ return !!stored&&unanswered(observed)&&unanswered(stored)&&observed.operationId===stored.operationId
+  &&digestValue(observed.subject)===digestValue(stored.subject);
 }
 
 function inspectionEvidenceReads(targets:Array<{ranges?:Array<{evidence_ids:string[]}>}>){

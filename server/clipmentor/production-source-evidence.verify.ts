@@ -2,13 +2,46 @@ import assert from 'node:assert/strict';
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProductionTask} from './production-task';
-import {importProductionSourceEvidence,productionEvidenceInspection,productionReviewObservation} from './production-source-evidence';
+import {importProductionSourceEvidence,productionEvidenceInspection,productionReviewObservation,verifiedUnansweredSourceObservation} from './production-source-evidence';
 import {checkSourceBreakdown,copyPreparationReady} from '../../src/clipmentor/source-breakdown';
+import {registerProductionLocalSpeech} from './production-local-speech';
 const base=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
 const a=base.clipMentorAnalysis!;
 a.source.sourceContentHash='a'.repeat(64);
 base.assets.find(asset=>asset.id===a.source.asset_id)!.sourceContentHash='a'.repeat(64);
 const task={stage:'blueprint',input:{sourceAssetId:a.source.asset_id,brief:'Inspect saved original'},repairContext:{author_self_check:[]}} as unknown as ProductionTask;
+{
+ const speech={status:'machine_transcript_candidate',source_hash:a.source.sourceContentHash!,
+  segments:[{start_seconds:0.1,end_seconds:0.6,text:'contoh'}],note:'Fixture machine transcript'} as const;
+ const candidate={...speech,segments:[...speech.segments]};
+ const registered=registerProductionLocalSpeech(a,candidate);
+ assert(registered);
+ assert.equal(registered.revision,a.revision+1);
+ const source=registered.transcripts.at(-1)!;
+ assert.equal(source.status,'machine_transcript_not_independently_listened');
+ assert.equal(registerProductionLocalSpeech(registered,candidate),null);
+ assert.equal(registerProductionLocalSpeech(a,{...candidate,source_hash:'b'.repeat(64)}),null);
+ const {appendAnalysisFindings}=await import('../../src/clipmentor/append-findings');
+ const records={evidence:[{evidence_id:'source-claim-test',kind:'original_claim',text:'contoh',status:'candidate_unverified_speech',
+  source_range_seconds:[0.1,0.6],source_ids:[source.source_id],supporting_evidence_ids:[]}]};
+ const actor={operator:'author',executor:'agent',instruction:'fixture',identity:'local_declared_not_authenticated'} as const;
+ assert((await appendAnalysisFindings(registered,records,actor,'use actual registered transcript')).evidence.some(e=>e.evidence_id==='source-claim-test'));
+ await assert.rejects(appendAnalysisFindings(a,records,actor,'missing transcript'),/Invalid evidence reference/);
+}
+{
+ const observed={operationId:'original',projectId:'same-project',source_hash:a.source.sourceContentHash!,
+  status:'failed',phase:'gateway_request',requestsAttempted:1,receipt_persisted:true,
+  raw_response_available:false,subject:{revision:4,digest:'same-digest',units:[]}} as import('../../shared/clipmentor-source-video').SourceVideoReceipt;
+ const subject={projectId:'same-project',sourceHash:a.source.sourceContentHash,revision:5};
+ assert(verifiedUnansweredSourceObservation(observed,structuredClone(observed),subject));
+ for(const wrong of [{operationId:'other'},{projectId:'other'},{source_hash:'other'},{requestsAttempted:0},
+  {receipt_persisted:false},{upstream_http_status:503},{raw_response_available:true},{status:'reserved'},
+  {phase:'prepare'},{subject:{...observed.subject,digest:'other'}},{subject:{...observed.subject,revision:6}}]){
+  assert(!verifiedUnansweredSourceObservation(observed,{...observed,...wrong} as typeof observed,subject),JSON.stringify(wrong));
+ }
+ assert(!verifiedUnansweredSourceObservation(observed,null,subject));
+ assert(!verifiedUnansweredSourceObservation(observed,observed,{...subject,revision:3}));
+}
 {
  const doc=structuredClone(base),analysis=doc.clipMentorAnalysis!,unit=analysis.blueprint[0],review=unit.internal_review as Record<string,any>;
  const candidate=review[review.current_script_candidate],plan=review[review.current_picture_plan];

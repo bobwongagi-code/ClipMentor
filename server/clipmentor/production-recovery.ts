@@ -93,7 +93,7 @@ export function confirmedUnsubmittedGateway(kind:string,result:unknown,operation
   if(kind==='review'){
     const diagnostic=body?.diagnostic;
     return body?.projectId===projectId&&isCopyReviewFailure(diagnostic)&&diagnostic.operationId===operationId
-      &&(diagnostic.code==='opening_comparison_section_missing'||diagnostic.code==='review_requirements_changed')&&diagnostic.requestsAttempted===0;
+      &&(['opening_comparison_section_missing','review_requirements_changed','source_review_scope_missing'].includes(diagnostic.code))&&diagnostic.requestsAttempted===0;
   }
   if(kind!=='observation'&&kind!=='preview_review')return false;
   const preparation=kind==='observation'?record(body?.receipt):body;

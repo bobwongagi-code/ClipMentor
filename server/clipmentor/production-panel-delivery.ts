@@ -21,6 +21,15 @@ export function panelSalesEvidence(sourceId:string,salesId:string):AnalysisEvide
   provenance:'操作者在原片成绩图上传槽提供，按用户确认的业务口径登记'};
 }
 
+/** Records the operator's uploaded asset roles, without certifying any sales or offer claim. */
+export function panelEndingEvidence(role:'new_contact'|'existing_partner',assetIds:string[]):AnalysisEvidence{
+ const evidence_id=`panel-ending-${role}-${digestValue(assetIds).slice(0,20)}`;
+ return {evidence_id,kind:'operator_supplied',status:'operator_provided_not_independently_verified',source_ids:assetIds,
+  supporting_evidence_ids:[],provenance:'用户上传与任务的冻结片尾要求',
+  text:role==='new_contact'?'用户上传的本商品 CTA 行动号召海报。仅登记素材来源与用途，合作条件须按海报实际可见信息核对。'
+   :'已合作版固定展示本商品图和本片原片 Storyboard，另附同源 PDF。仅登记来源与用途。'};
+}
+
 export function panelStoryboardTimes(doc:ProjectDoc,content=creatorDocumentFromSourceAsset(doc)){
  return content?content.rows.flatMap(r=>r.source_frames.map(f=>f/doc.clipMentorAnalysis!.source.fps)):[];
 }

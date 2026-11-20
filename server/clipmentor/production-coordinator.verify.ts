@@ -1,6 +1,6 @@
 // Real coordinator/worker entries; isolated store and a refusing local author host only.
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,realpath} from 'node:fs/promises';
+import {mkdtemp,rm,realpath,mkdir,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
@@ -36,7 +36,7 @@ try{
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
  const {createAgentRun,appendAgentRunEvents,loadAgentRuntimeSidecar}=await import('../../src/persist/agentRuntimeStore');
  const {productionBlueprintReadiness}=await import('./production-readiness');
- const {reconcileBlockedBlueprint,productionStageWorker}=await import('./production-worker');
+ const {reconcileBlockedBlueprint,productionStageWorker,productionBoardPhaseIssues}=await import('./production-worker');
  const fixture=structuredClone(saved.cases[0]!.doc) as unknown as ProjectDoc;
  // Legal draft registration: keep the retained unit and its source plan, but no
  // current copy yet. Same draft boundary as source-breakdown.verify narrowedScope.
@@ -94,6 +94,57 @@ try{
   assert.deepEqual((await getStoredEntry(`versions:${id}`)).value,[]);
   console.log(`PASS real reconcile ${mode}: epoch=${task.repairs}; counters/effects/project unchanged`);
  }
+ // A saved gateway timeout can coexist with a real draft write and a later
+ // storyboard asset edit. Resume authoring, never reissue the observation.
+ for(const mode of ['gateway-timeout','wrong-source','missing-receipt','wrong-write'] as const){
+  const id='coordinator-'+mode,source=fixture.clipMentorAnalysis!.source;
+  await setStoredEntry('project:'+id,fixture);
+  const snapshot=(await loadOfflineStoredProject(id))!;
+  const task=taskFor(id,snapshot.revision),operationId=randomUUID();
+  task.error='Error: tool failed (observe_clipmentor_source_video: source_observation_failed_or_unknown; revise_clipmentor_analysis: delivery_sections_invalid).';
+  task.attempts.observation=1;task.input.budget.observation=2;
+  const subject={revision:fixture.clipMentorAnalysis!.revision,digest:'a'.repeat(64),units:[]};
+  task.effects['blueprint:initial:0:'+operationId]={kind:'observation',status:'completed',operationId,result:{body:{receipt:{
+   operationId,projectId:id,status:'failed',phase:'gateway_request',receipt_persisted:true,requestsAttempted:1,
+   source_hash:source.sourceContentHash,subject
+  }}}};
+  const receipts=join(root,'clipmentor-source-video');
+  await mkdir(receipts,{recursive:true});
+  if(mode!=='missing-receipt')await writeFile(join(receipts,operationId+'.json'),JSON.stringify({projectId:id,status:'failed',phase:'gateway_request',
+   requests_attempted:1,model_retry_policy:'no_automatic_retry',source_hash:mode==='wrong-source'?'b'.repeat(64):source.sourceContentHash,subject}));
+  const run:AgentRunRecord={version:1,runId:randomUUID(),projectId:id,status:'failed',askOnly:false,backend:'api',
+   modelId:task.input.author.model,userInputDigest:'b'.repeat(64),userInputPreview:'fixture',createdAt:task.createdAt+2500,
+   updatedAt:task.createdAt+4000,artifactIds:[],checkpointIds:[],proposalIds:[],events:[]};
+  await createAgentRun(run);
+  await appendAgentRunEvents(id,run.runId,[
+   {type:'tool_outcome',summary:JSON.stringify({serverEvent:{type:'server-tool-result',data:{name:'revise_clipmentor_analysis',success:true,result:{saved:true,projectId:id,projectRevision:'before-storyboard',revision:subject.revision}}}})},
+   {type:'tool_outcome',summary:JSON.stringify({serverEvent:{type:'server-tool-result',data:{name:'observe_clipmentor_source_video',success:false,result:{receipt:{operationId}}}}})},
+   {type:'tool_outcome',summary:JSON.stringify({serverEvent:{type:'server-tool-result',data:{name:'edit_asset',success:true,result:{saved:true,projectId:id,projectRevision:mode==='wrong-write'?'stale':snapshot.revision}}}})},
+   {type:'final',summary:JSON.stringify({serverEvent:{type:'done',data:{status:'failed'}}})},
+  ]);
+  const before=authority(task);
+  if(mode==='gateway-timeout'){
+   await reconcileBlockedBlueprint(task);
+   assert.equal(task.sourceObservationUnavailableOperation,operationId);
+   assert.equal(task.repairs,1);assert.equal(task.stage,'blueprint');assert.equal(task.projectRevision,snapshot.revision);
+   const {productionSourceObservationAllowed}=await import('./production-source-evidence');
+   assert.equal(productionSourceObservationAllowed(task),false,'repair cannot reserve another observation');
+   assert.equal(productionSourceObservationAllowed({...task,sourceObservationUnavailableOperation:undefined}),true);
+  }else{
+   await assert.rejects(reconcileBlockedBlueprint(task),/blueprint_recovery_(observation_receipt|author_receipt)_unverified/);
+   assert.equal(task.repairs,0);
+  }
+  assert.deepEqual(authority(task),before,'the attempt and its original effect are immutable');
+  assert.equal(requests,0);
+ }
+ const readyFixture=structuredClone(saved.cases[0]!.doc) as unknown as ProjectDoc;
+ const unit=readyFixture.clipMentorAnalysis!.blueprint[0]!;
+ const internal=(unit as unknown as {internal_review:Record<string,any>}).internal_review;
+ const plan=internal[internal.current_picture_plan];
+ plan.phases=[{mode:'original',source_range_seconds:[0,1],picture:'原片'}];
+ assert(!productionBoardPhaseIssues(readyFixture).some(issue=>issue.id===unit.unit_id),'valid registered phase is readable');
+ plan.phases=[];
+ assert(productionBoardPhaseIssues(readyFixture).some(issue=>issue.id===unit.unit_id),'empty current phases fail the actual board reader');
  // Worker control uses the original saved complete project. No media file is
  // opened by blueprint authoring before the first local request.
  const workerId='coordinator-worker';

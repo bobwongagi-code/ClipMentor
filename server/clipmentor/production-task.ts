@@ -64,7 +64,7 @@ export interface ProductionTask {
  blueprintFeedbackRepair?:number;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
  visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
- createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
+ createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;sourceObservationUnavailableOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
@@ -345,7 +345,7 @@ export interface StageContext {
  hasEffect?(kind:EffectKind,key:string):boolean;
  checkpointEditPublication?(publication:EditPublication):Promise<void>;
 }
-export interface StageResult {artifact:Record<string,unknown>;repair?:'blueprint'|'edit'|'copy_review'}
+export interface StageResult {artifact:Record<string,unknown>;repair?:'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
 /** Observational context in the existing bounded run log, never a checkpoint or authority.
  * It intentionally has no serverEvent envelope: terminal transport replay stays closed. */
@@ -478,6 +478,13 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
     await publishStage();continue;
    }
    if(!result.artifact||Object.keys(result.artifact).length===0)throw new Error('Stage has no verified artifact');
+   if(result.awaitBlueprintFeedback){
+    if(task.stage!=='copy_review'||!task.input.humanBlueprintReview||!task.input.panelDelivery
+     ||task.input.panelDelivery.audience||task.blueprintApproval||!task.completed.blueprint
+     ||!task.projectRevision||result.artifact.revision!==task.projectRevision)
+     throw Error('human_blueprint_draft_binding_missing');
+    task.status='awaiting_blueprint';await publishStage();break;
+   }
    task.completed[task.stage]={at:now(),artifact:result.artifact};
    if(task.stage==='edit')delete task.editPublication;
    if(task.stage==='copy_review'&&(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed===true&&task.repairContext){
@@ -586,9 +593,14 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
  Object.assign(task,next);return task;
 }
 /** Publish the revision request before dispatch. A cold worker can claim the same queue. */
+export function acceptsDraftBlueprintFeedback(task:ProductionTask,revision:string){
+ return task.input.humanBlueprintReview&&['blueprint','copy_review'].includes(task.stage)
+  &&(task.status==='blocked'||task.status==='awaiting_blueprint'
+    &&(revision!==task.projectRevision||!task.completed.copy_review));
+}
+
 export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
- if(!task.input.humanBlueprintReview||!(task.status==='blocked'
-  ||task.status==='awaiting_blueprint'&&revision!==task.projectRevision)||!['blueprint','copy_review'].includes(task.stage)
+ if(!acceptsDraftBlueprintFeedback(task,revision)
   ||typeof revision!=='string'||!revision.trim()
   ||typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw Error('蓝图当前不能接收修改意见');
  const text=feedback.trim(),pending=task.repairContext?.pending_blueprint_feedback;
