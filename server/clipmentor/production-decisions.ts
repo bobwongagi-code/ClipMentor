@@ -22,7 +22,7 @@ export function repairableBlueprintIssue(issue:string){
   ||['copy_scope_incomplete','copy_candidate_missing','copy_candidate_incomplete'].includes(issue);
 }
 export interface AuthorCheckpointFailure {
- failedObservation:boolean;failedSourceRead:boolean;failedDeliveryWrite:boolean;failedPlanWrite:boolean;savedShapeIssue?:string;
+ failedObservation:boolean;gatewayObservationUnavailable:boolean;failedStoryboardDraftRead:boolean;failedSourceRead:boolean;failedDeliveryWrite:boolean;failedPlanWrite:boolean;savedShapeIssue?:string;
 }
 export function blockedProductionDecision(task:ProductionTask,contentRepairsRemaining:number):{routes:RecoveryRoute[];authorCheckpoint?:AuthorCheckpointFailure}{
  const routes:RecoveryRoute[]=[];
@@ -46,16 +46,19 @@ export function blockedProductionDecision(task:ProductionTask,contentRepairsRema
  if(error.startsWith('Error: 已用完自动返修额度')&&task.repairContext?.revision===task.projectRevision){routes.push('focused_structure');return {routes};}
  // Historical message decoding lives here; it selects inspection, not authority.
  const failedObservation=error.includes('observe_clipmentor_source_video: Source observation failed; read the saved receipt, do not retry');
+ const gatewayObservationUnavailable=!task.sourceObservationUnavailableOperation&&error.includes('observe_clipmentor_source_video: source_observation_failed_or_unknown');
+ const failedStoryboardDraftRead=!!task.input.panelDelivery&&!!task.sourceObservationUnavailableOperation
+  &&error.includes('(read_clipmentor_analysis: storyboard_current_plan_unavailable).');
  const failedSourceRead=(task.deliveryDraftRecoveryUsed===true&&error.includes('(read_clipmentor_source_video: Cannot read/bind saved source receipt; no model request sent).'))
   ||(task.authorCheckContractRevision===2&&error.includes('(read_clipmentor_analysis: storyboard_current_plan_unavailable).'));
  const failedDeliveryWrite=error.includes('revise_clipmentor_analysis: delivery_sections_invalid');
  const failedPlanWrite=error.includes('revise_clipmentor_analysis: Resolve source breakdown before saving a picture plan')||failedDeliveryWrite;
  const savedShapeIssue=error.match(/^Error: (picture_plan_[^\n]+)$/)?.[1];
  if(failedDeliveryWrite&&task.deliveryDraftRecoveryUsed)return {routes};
- if(error!=='Error: copy_scope_incomplete'&&!failedObservation&&!savedShapeIssue&&!failedPlanWrite&&!failedSourceRead)return {routes};
+ if(error!=='Error: copy_scope_incomplete'&&!failedObservation&&!gatewayObservationUnavailable&&!failedStoryboardDraftRead&&!savedShapeIssue&&!failedPlanWrite&&!failedSourceRead)return {routes};
  if((savedShapeIssue||failedPlanWrite)&&!failedDeliveryWrite&&contentRepairsRemaining===0)return {routes};
  if(savedShapeIssue&&!repairableBlueprintIssue(savedShapeIssue))return {routes};
- routes.push('author_checkpoint');return {routes,authorCheckpoint:{failedObservation,failedSourceRead,failedDeliveryWrite,failedPlanWrite,savedShapeIssue}};
+ routes.push('author_checkpoint');return {routes,authorCheckpoint:{failedObservation,gatewayObservationUnavailable,failedStoryboardDraftRead,failedSourceRead,failedDeliveryWrite,failedPlanWrite,savedShapeIssue}};
 }
 
 type Effect=ProductionTask['effects'][string];

@@ -40,7 +40,7 @@ export function assertNoReferenceMedia(doc:ProjectDoc,previous?:ProjectDoc):void
  if(doc.timelines.some(t=>t.items.some(i=>used([i,doc.assets.find(a=>a.id===i.sourceAssetId||a.src===i.src)]))))
   throw Error('reference_only_asset_cannot_enter_timeline');
 }
-const openingMaxLineCharacters=42;
+export const openingMaxLineCharacters=42;
 export function deliveryOpeningTextIssue(sections:unknown){
  if(!Array.isArray(sections))return;
  for(const section of sections){
@@ -93,26 +93,62 @@ export interface DeliverySection {
  voice:{provider:string;voiceId:string;speed:1;existing_audio?:{assetId:string;src:string;sha256:string;durationSeconds:number;text:string}};
 }
 const normalize=(s:string)=>s.replace(/\s+/g,' ').trim();
+function deliverySectionInvalidFields(section:unknown):string[]{
+ if(!row(section))return ['section'];
+ const s=section,line=s.line,picture=s.picture,voice=s.voice;
+ const fields:string[]=[];
+ if(Object.keys(s).some(k=>!['section_id','kind','line','evidence_ids','evidence','picture','voice'].includes(k)))fields.push('section_fields');
+ if(!text(s.section_id)||!['performance_opening','creator_invitation'].includes(String(s.kind)))fields.push('section_id/kind');
+ if(!strings(s.evidence_ids))fields.push('evidence_ids');
+ if(!row(line))fields.push('line');
+ else {
+  if(!text(line.line_id))fields.push('line.line_id');
+  if(!text(line.meaning_zh))fields.push('line.meaning_zh');
+  if(!text(line.narration_ms)||!Array.isArray(line.caption_lines)||!line.caption_lines.length||!line.caption_lines.every(text)
+   ||normalize(line.narration_ms)!==normalize(line.caption_lines.join(' ')))fields.push('line.narration_ms/caption_lines');
+  if(!Array.isArray(line.labels)||!line.labels.every(text)||!labelTranslationsShape(line.labels_zh,line.labels))fields.push('line.labels/labels_zh');
+ }
+ if(!row(picture))fields.push('picture');
+ else {
+  if(!text(picture.asset_id)||typeof picture.src!=='string'||!/^\/media\/uploads\/[^/?#]+$/.test(picture.src)||!hash(picture.sha256))
+   fields.push('picture.asset_id/src/sha256');
+  if(typeof picture.description!=='string')fields.push('picture.description');
+  if(picture.crop!==undefined&&!deliveryCropShape(picture.crop))fields.push('picture.crop');
+  if(picture.layout!==undefined&&(picture.crop!==undefined||!deliveryLayoutShape(picture.layout)
+   ||(picture.layout.kind==='original_underlay'?s.kind!=='performance_opening':s.kind!=='creator_invitation'
+    ||s.section_id!==(picture.layout.kind==='product_storyboard'?'existing_partner':'new_contact'))))fields.push('picture.layout');
+  if(picture.display!==undefined&&!displayShape(picture.display))fields.push('picture.display');
+ }
+ if(!row(voice))fields.push('voice');
+ else {
+  if(!text(voice.provider)||!text(voice.voiceId)||voice.speed!==1)fields.push('voice.provider/voiceId/speed');
+  const audio=voice.existing_audio;
+  if(audio!==undefined&&(!row(audio)||!text(audio.assetId)||typeof audio.src!=='string'||!/^\/media\/uploads\/[^/?#]+$/.test(audio.src)
+   ||!hash(audio.sha256)||!row(line)||audio.text!==line.narration_ms||typeof audio.durationSeconds!=='number'
+   ||!Number.isFinite(audio.durationSeconds)||audio.durationSeconds<=0))fields.push('voice.existing_audio');
+ }
+ if(s.evidence!==undefined&&(!strings(s.evidence_ids)||!Array.isArray(s.evidence)||s.evidence.length!==s.evidence_ids.length
+  ||new Set(s.evidence.map(e=>row(e)?e.evidence_id:null)).size!==s.evidence.length
+  ||!s.evidence.every(e=>row(e)&&text(e.evidence_id)&&(s.evidence_ids as string[]).includes(e.evidence_id)&&text(e.text))))fields.push('evidence');
+ return fields;
+}
+
+export function deliverySectionFieldIssues(sections:unknown){
+ if(!Array.isArray(sections))return [];
+ return sections.flatMap((section,index)=>{
+  const fields=deliverySectionInvalidFields(section);
+  return fields.length?[{index,fields}]:[];
+ });
+}
+
 export function deliverySectionsShape(v:unknown):v is DeliverySection[]{
- if(!Array.isArray(v)||v.length<1||v.length>3)return false;
- return v.every(s=>row(s)&&Object.keys(s).every(k=>['section_id','kind','line','evidence_ids','evidence','picture','voice'].includes(k))&&text(s.section_id)
-  &&['performance_opening','creator_invitation'].includes(String(s.kind))&&strings(s.evidence_ids)
-  &&row(s.line)&&text(s.line.line_id)&&text(s.line.narration_ms)&&text(s.line.meaning_zh)&&Array.isArray(s.line.caption_lines)&&s.line.caption_lines.length>0&&s.line.caption_lines.every(text)
-  &&normalize(s.line.narration_ms)===normalize(s.line.caption_lines.join(' '))&&Array.isArray(s.line.labels)&&s.line.labels.every(text)&&labelTranslationsShape(s.line.labels_zh,s.line.labels)
-  &&row(s.picture)&&text(s.picture.asset_id)&&typeof s.picture.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.picture.src)&&hash(s.picture.sha256)&&typeof s.picture.description==='string'
-  &&(s.picture.crop===undefined||deliveryCropShape(s.picture.crop))
-  &&(s.picture.layout===undefined||(s.picture.crop===undefined&&deliveryLayoutShape(s.picture.layout)
-    &&(s.picture.layout.kind==='original_underlay'?s.kind==='performance_opening':s.kind==='creator_invitation'
-      &&s.section_id===(s.picture.layout.kind==='product_storyboard'?'existing_partner':'new_contact'))))
-  &&(s.picture.display===undefined||displayShape(s.picture.display))
-  &&row(s.voice)&&text(s.voice.provider)&&text(s.voice.voiceId)&&s.voice.speed===1
-  &&(s.voice.existing_audio===undefined||(row(s.voice.existing_audio)&&text(s.voice.existing_audio.assetId)&&typeof s.voice.existing_audio.src==='string'&&/^\/media\/uploads\/[^/?#]+$/.test(s.voice.existing_audio.src)&&hash(s.voice.existing_audio.sha256)&&s.voice.existing_audio.text===s.line.narration_ms&&typeof s.voice.existing_audio.durationSeconds==='number'&&Number.isFinite(s.voice.existing_audio.durationSeconds)&&s.voice.existing_audio.durationSeconds>0))
-  &&(s.evidence===undefined||(Array.isArray(s.evidence)&&s.evidence.length===s.evidence_ids.length&&new Set(s.evidence.map(e=>row(e)?e.evidence_id:null)).size===s.evidence.length&&s.evidence.every(e=>row(e)&&text(e.evidence_id)&&(s.evidence_ids as string[]).includes(e.evidence_id)&&text(e.text)))))
-  &&new Set(v.map(s=>s.section_id)).size===v.length&&new Set(v.map(s=>s.line.line_id)).size===v.length
-  &&v.filter(s=>s.kind==='performance_opening').length<=1
-  &&(v.filter(s=>s.kind==='creator_invitation').length<=1||v.filter(s=>s.kind==='creator_invitation').length===2
-    &&v.some(s=>s.kind==='creator_invitation'&&s.section_id==='new_contact')
-    &&v.some(s=>s.kind==='creator_invitation'&&s.section_id==='existing_partner'));
+ if(!Array.isArray(v)||v.length<1||v.length>3||deliverySectionFieldIssues(v).length)return false;
+ const sections=v as DeliverySection[];
+ return new Set(sections.map(s=>s.section_id)).size===sections.length&&new Set(sections.map(s=>s.line.line_id)).size===sections.length
+  &&sections.filter(s=>s.kind==='performance_opening').length<=1
+  &&(sections.filter(s=>s.kind==='creator_invitation').length<=1||sections.filter(s=>s.kind==='creator_invitation').length===2
+    &&sections.some(s=>s.kind==='creator_invitation'&&s.section_id==='new_contact')
+    &&sections.some(s=>s.kind==='creator_invitation'&&s.section_id==='existing_partner'));
 }
 /** A small extension of the current picture plan, not source evidence or a parallel blueprint. */
 export function deliverySectionsFromDoc(doc:ProjectDoc):DeliverySection[]{

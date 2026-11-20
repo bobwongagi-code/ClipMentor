@@ -58,6 +58,32 @@ try{
  const silent=structuredClone(doc);(silent.assets[0].props!.clipmentorCreatorStoryboard as CreatorStoryboardDocument).rows[0].claim_evidence_ids=[];
  (silent.assets[0].props!.clipmentorCreatorStoryboard as CreatorStoryboardDocument).rows[0].information_ms='Paparan warna pada palet.';
  silent.clipMentorAnalysis!.evidence=silent.clipMentorAnalysis!.evidence.filter(e=>e.kind!=='original_claim');assert.equal((await creatorStoryboard(silent)).pages,1,'no speech is required for a visible-only source segment');
+ {
+ const local=structuredClone(silent),analysis=local.clipMentorAnalysis!;
+ const localRow=(local.assets[0].props!.clipmentorCreatorStoryboard as CreatorStoryboardDocument).rows[0];
+ localRow.source_frames=[1];
+ const frame=localRow.source_frames[0],seconds=frame/analysis.source.fps,observationId='observation:test-frame';
+ const fid=observationId+':f'+frame,visible=analysis.evidence.find(e=>e.kind==='visible_action')!;
+ analysis.observations=[{observation_id:observationId,source_hash:sha,requested_times_seconds:[seconds],frame_evidence_ids:[fid],
+  status:'images_returned',method:'source_frames_for_main_agent',at:1}];
+ analysis.evidence.push({evidence_id:fid,kind:'source_frame',text:'Local frame',status:'frame_extracted_not_interpreted',time_seconds:seconds,source_frame:frame,
+  source_ids:[],supporting_evidence_ids:[],observation_id:observationId,observation_method:'local_frame_extraction_only',call_status:'succeeded'});
+ Object.assign(visible,{source_ids:[],supporting_evidence_ids:[fid],observation_id:observationId,source_range_seconds:[seconds,seconds],
+  observation_method:'main_agent_direct_image_read_not_independently_verified',status:'agent_observed_candidate',call_status:'unknown'});
+ const {verifyCreatorStoryboardEvidence}=await import('./creator-storyboard');
+ await verifyCreatorStoryboardEvidence(local);
+ for(const mutate of [
+  (record:ProjectDoc)=>{record.clipMentorAnalysis!.observations![0].source_hash='b'.repeat(64);},
+  (record:ProjectDoc)=>{record.clipMentorAnalysis!.evidence.at(-1)!.source_frame=999;},
+  (record:ProjectDoc)=>{record.clipMentorAnalysis!.observations![0].frame_evidence_ids=[];},
+  (record:ProjectDoc)=>{const a=record.clipMentorAnalysis!;const e={...a.evidence.find(x=>x.evidence_id===visible.evidence_id)!,kind:'original_claim' as const,evidence_id:'fake-local-speech'};a.evidence.push(e);
+   const row=(record.assets[0].props!.clipmentorCreatorStoryboard as CreatorStoryboardDocument).rows[0];
+   row.claim_evidence_ids=[e.evidence_id];},
+ ]){
+  const invalid=structuredClone(local);mutate(invalid);
+  await assert.rejects(verifyCreatorStoryboardEvidence(invalid),/storyboard_original_excerpt_changed/);
+ }
+ }
  const mixed=structuredClone(doc);mixed.clipMentorAnalysis!.evidence[0].source_ids.unshift('source','missing-reference');assert.equal((await creatorStoryboard(mixed)).pages,1);
  const duplicate=structuredClone(doc),quote=structuredClone(duplicate.clipMentorAnalysis!.evidence[0]);duplicate.clipMentorAnalysis!.evidence[0].source_ids=['source'];quote.evidence_id='duplicate';duplicate.clipMentorAnalysis!.evidence.push(quote);assert.equal((await creatorStoryboard(duplicate)).pages,1,'equivalent evidence unions valid receipt origins');
  const direct=structuredClone(doc);direct.clipMentorAnalysis!.evidence[0].source_ids=['source'];await assert.rejects(creatorStoryboard(direct),/excerpt_changed:claim/);

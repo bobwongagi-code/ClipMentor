@@ -16,17 +16,22 @@ import {loadAgentRuntimeSidecar,loadAgentArtifact,storeAgentArtifact} from '../.
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {checkCopyProduction,copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
 import {openingComparisonCriterion} from '../../shared/clipmentor-handoff';
+import {deliveryPictureBindings} from '../../src/clipmentor/delivery-sections';
+import {openingMaxLineCharacters} from '../../src/clipmentor/delivery-bindings';
+import {currentPicturePhases} from '../../src/clipmentor/blueprint-picture-notices';
 import {copyPreparationReady,checkSourceBreakdown,originalPlaybackRanges} from '../../src/clipmentor/source-breakdown';
-import {completedSourceEvidenceOperations,importProductionSourceEvidence,productionEvidenceInspection,productionSourceObservationAllowed,productionReviewObservation} from './production-source-evidence';
+import {completedSourceEvidenceOperations,importProductionSourceEvidence,productionEvidenceInspection,productionSourceObservationAllowed,productionReviewObservation,verifiedUnansweredSourceObservation} from './production-source-evidence';
 import {invalidateChangedReviews,isClipMentorAnalysis} from '../../src/clipmentor/analysis';
 import {isExternalReadTool,isExternalServerDirectTool} from '../../src/agent/external-tool-policy';
 import {resolveUploadFile} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {readSourceVideoReceipt,recoverSourceVideoReceipt,sourceVideoDependencies} from './source-video';
+import {productionLocalSpeech,registerProductionLocalSpeech} from './production-local-speech';
 import {recoverProductionGateway,type GatewayRecoveryDecision} from './production-recovery';
 import {checkProductionAuthorBlueprint} from './production-author-self-check';
-import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence,preparePanelPartnerCard,panelPartnerPicture,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
+import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence,panelEndingEvidence,preparePanelPartnerCard,panelPartnerPicture,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
+import {creatorStoryboard,verifyCreatorStoryboardEvidence} from './creator-storyboard';
 import {assertCreatorDocumentEdit,currentCreatorDocument} from './creator-storyboard-document';
 import {createProductionPreparation,verifyProductionNarrationFiles,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
 import {openHeadlessEditor} from './headless-editor';
@@ -224,7 +229,8 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   return;
  }
  if(!selected('author_checkpoint')||!decision.authorCheckpoint)return;
- const {failedObservation,failedSourceRead,failedDeliveryWrite,failedPlanWrite}=decision.authorCheckpoint;
+ const {failedObservation,gatewayObservationUnavailable,failedStoryboardDraftRead,failedSourceRead,failedDeliveryWrite,failedPlanWrite}=decision.authorCheckpoint;
+ const recoveringDeliveryWrite=failedDeliveryWrite&&!gatewayObservationUnavailable&&!failedObservation&&!failedStoryboardDraftRead&&!failedSourceRead;
  let {savedShapeIssue}=decision.authorCheckpoint;
  const analysis=task.completed.analysis;
  const prefix=`blueprint:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
@@ -232,7 +238,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
  if(!analysis||task.completed.blueprint
    ||task.attempts.model>=task.input.budget.model
    ||!effects.length||effects.some(effect=>effect.status!=='completed'
-    ||(effect.kind!=='model'&&!(failedObservation&&effect.kind==='observation'))))
+    ||(effect.kind!=='model'&&!((failedObservation||gatewayObservationUnavailable)&&effect.kind==='observation'))))
   throw new Error('blueprint_recovery_budget_or_effect_unverified');
  const [saved,sidecar]=await Promise.all([loadOfflineStoredProject(task.projectId),loadAgentRuntimeSidecar(task.projectId)]);
  const savedAnalysis=saved?.doc.clipMentorAnalysis;
@@ -240,7 +246,24 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   throw new Error('blueprint_recovery_saved_scope_changed');
  let recoveredObservation:SourceVideoTask|undefined;
  let previousObservation:SourceVideoReceipt|undefined;
- if(failedObservation){
+ if(gatewayObservationUnavailable){
+  const observations=effects.filter(effect=>effect.kind==='observation');
+  const effect=observations[0];
+  const observed=(effect?.result as {body?:{receipt?:SourceVideoReceipt}}|undefined)?.body?.receipt;
+  const receipt=observations.length===1&&effect
+   ?await readSourceVideoReceipt(effect.operationId,task.projectId,sourceVideoDependencies()).catch(()=>null):null;
+  const match=receipt&&observed&&observed.operationId===receipt.operationId
+   &&observed.projectId===task.projectId&&observed.status==='failed'&&observed.phase==='gateway_request'
+   &&observed.receipt_persisted===true&&observed.requestsAttempted===1&&observed.upstream_http_status==null
+   &&observed.source_hash===receipt.source_hash&&receipt.source_hash===savedAnalysis.source.sourceContentHash
+   &&saved.doc.assets.some(asset=>asset.id===task.input.sourceAssetId&&asset.sourceContentHash===receipt.source_hash)
+   &&digestValue(observed.subject)===digestValue(receipt.subject)&&receipt.subject.revision<=savedAnalysis.revision;
+  if(!match||!receipt||receipt.receipt_persisted!==true||receipt.requestsAttempted!==1
+   ||!(receipt.status==='failed'&&receipt.phase==='gateway_request'&&receipt.upstream_http_status==null&&!receipt.raw_response_available
+    ||receipt.status==='completed'&&receipt.result?.validation.status==='valid'))
+   throw new Error('blueprint_recovery_observation_receipt_unverified');
+  previousObservation=receipt;
+ }else if(failedObservation){
   const observations=effects.filter(effect=>effect.kind==='observation');
   const effect=observations[0];
   const receipt=(effect?.result as {body?:{receipt?:SourceVideoReceipt}}|undefined)?.body?.receipt;
@@ -266,16 +289,26 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   recoveredObservation=observationTaskWithBoundaryContext(requested,savedAnalysis.source.duration_seconds);
   if(JSON.stringify(requested)===JSON.stringify(recoveredObservation))
    throw new Error('blueprint_recovery_observation_context_already_corrected');
+ }else if(failedStoryboardDraftRead){
+  if(productionBoardPhaseIssues(saved.doc).length)throw new Error('blueprint_recovery_saved_scope_changed');
+  await verifyCreatorStoryboardEvidence(saved.doc);
  }else{
   const code=(await productionBlueprintReadiness(saved.doc,task.input.voice)).code;
   if(failedSourceRead){
    if(code!=='copy_review_missing')throw new Error('blueprint_recovery_saved_scope_changed');
   }else if(failedPlanWrite){
    const check=checkSourceBreakdown(saved.doc);
-   if(!check.issues.length||check.issues.some(issue=>!repairableBlueprintIssue(issue.code)&&!(failedDeliveryWrite&&issue.code==='delivery_sections_invalid'))
-    ||(failedDeliveryWrite&&!check.issues.some(issue=>issue.code==='delivery_sections_invalid'))
-    ||!code.startsWith('blueprint_stage_incomplete:'))throw new Error('blueprint_recovery_saved_scope_changed');
-   savedShapeIssue=code;
+   if(failedDeliveryWrite&&task.input.panelDelivery&&savedAnalysis.source_breakdown
+    &&check.issues.every(issue=>repairableBlueprintIssue(issue.code)||issue.code==='delivery_sections_invalid')){
+    // The rejected delivery write was atomic. The saved subject can be sound
+    // even when the proposed section was invalid; retry only the local draft.
+    savedShapeIssue='blueprint_stage_incomplete:[{"code":"delivery_sections_invalid","id":"delivery"}]';
+   }else{
+    if(!check.issues.length||check.issues.some(issue=>!repairableBlueprintIssue(issue.code)&&!(failedDeliveryWrite&&issue.code==='delivery_sections_invalid'))
+     ||(failedDeliveryWrite&&!check.issues.some(issue=>issue.code==='delivery_sections_invalid'))
+     ||!code.startsWith('blueprint_stage_incomplete:'))throw new Error('blueprint_recovery_saved_scope_changed');
+    savedShapeIssue=code;
+   }
   }else if(code!==(savedShapeIssue??'copy_scope_incomplete'))throw new Error('blueprint_recovery_saved_scope_changed');
  }
  const runs=sidecar.runs.filter(run=>run.projectId===task.projectId&&run.backend===(task.input.authorBackend??'api')
@@ -287,8 +320,15 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   const terminal=events.findLast(event=>event.type==='done');
   const write=events.findLast(event=>event.type==='server-tool-result'&&event.data?.name==='revise_clipmentor_analysis'
    &&event.data?.success===true&&event.data.result?.saved===true);
-  if(terminal?.data?.status!==((failedObservation||failedPlanWrite||failedSourceRead)?'failed':'completed')||write?.data.result.projectId!==task.projectId
-   ||write.data.result.projectRevision!==saved.revision)return false;
+  if(recoveringDeliveryWrite&&!events.some(event=>event.type==='server-tool-result'&&event.data?.name==='revise_clipmentor_analysis'
+   &&event.data?.success===false&&event.data.result?.error==='delivery_sections_invalid'))return false;
+  const lastWrite=gatewayObservationUnavailable||recoveringDeliveryWrite?events.findLast(event=>event.type==='server-tool-result'
+   &&['revise_clipmentor_analysis','edit_asset','save_clipmentor_source_frame'].includes(event.data?.name)
+   &&event.data?.success===true&&event.data.result?.saved===true):write;
+  if(terminal?.data?.status!==((failedObservation||gatewayObservationUnavailable||failedStoryboardDraftRead||failedPlanWrite||failedSourceRead)?'failed':'completed')
+   ||write?.data.result.projectId!==task.projectId||lastWrite?.data.result.projectId!==task.projectId
+   ||lastWrite.data.result.projectRevision!==saved.revision
+   ||gatewayObservationUnavailable&&write.data.result.revision!==savedAnalysis.revision)return false;
   if(!previousObservation)return true;
   const receiptIndex=events.findIndex(event=>event.type==='server-tool-result'&&event.data?.name==='observe_clipmentor_source_video'
    &&event.data.result?.receipt?.operationId===previousObservation?.operationId);
@@ -298,6 +338,19 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
 
  });
  if(bound.length!==1)throw new Error('blueprint_recovery_author_receipt_unverified');
+ if(failedStoryboardDraftRead){
+  task.projectRevision=saved.revision;
+  task.repairContext={...task.repairContext,revision:saved.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"creator_storyboard_delivery_binding_missing","id":"delivery"}]'};
+  recordTechnicalRecovery(task);
+  return;
+ }
+ if(gatewayObservationUnavailable&&previousObservation){
+  task.projectRevision=saved.revision;
+  task.sourceObservationUnavailableOperation=previousObservation.operationId;
+  task.repairContext={...task.repairContext,revision:saved.revision,blueprint_structure_issue:'picture_plan_phase_board_unreadable'};
+  recordTechnicalRecovery(task);
+  return;
+ }
  if(failedSourceRead){
   const dependencies=sourceVideoDependencies();
   const observations=await Promise.all(Object.values(task.effects).filter(effect=>effect.kind==='observation'&&effect.status==='completed')
@@ -317,6 +370,19 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
  if(savedShapeIssue)task.repairs++;else recordTechnicalRecovery(task);
 }
 
+/** Use the same phase reader as the human board before reserving a review. */
+export function productionBoardPhaseIssues(doc:ProjectDoc){
+ const analysis=doc.clipMentorAnalysis;
+ return analysis?.blueprint.flatMap(unit=>{
+  const internal=(unit as unknown as {internal_review?:Record<string,unknown>}).internal_review;
+  const plan=internal?.[String(internal.current_picture_plan)];
+  const valid=plan&&typeof plan==='object'&&!Array.isArray(plan)
+   &&currentPicturePhases(plan as Record<string,unknown>,(doc as unknown as Record<string,unknown>).estimated_picture_timeline,
+    unit.unit_id,analysis.source.fps,analysis.source.duration_seconds).issues.length===0;
+  return valid?[]:[{code:'picture_plan_phase_board_unreadable',id:unit.unit_id}];
+ })??[];
+}
+
 /** The same service worker is used by the HTTP task and by zero-provider regression fixtures. */
 export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
@@ -332,7 +398,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   return recoverProductionGateway(name,args,task.projectId,next=>!stage.signal.aborted&&((stage.remaining?.(kind)??0)>0||stage.hasEffect?.(kind,next)===true),
    execute,ms=>sleep(ms,undefined,{signal:stage.signal}),task.input.budget.routine?(task.input.budget[kind]??0):2,{
     // Old explicitly bounded/no-retry batches are not migrated into automatic recovery.
-    allowRetry:task.input.gatewayRecovery==='bounded',
+    allowRetry:kind!=='observation'&&task.input.gatewayRecovery==='bounded',
     ...(name==='request_clipmentor_copy_review'?{}:{readOriginal:(operationId:string)=>
      name==='observe_clipmentor_source_video'
       ?editor.execute('read_clipmentor_source_video',{operationId},'gateway-read:'+operationId)
@@ -368,8 +434,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(source.sourceContentHash&&source.sourceContentHash!==hash)throw new Error('Original source changed');
    editor.context.commands.applyDoc({...doc,assets:doc.assets.map(a=>a.id===source.id?{...a,sourceContentHash:hash}:a),clipMentorAnalysis:{
     schema_version:1,analysis_id:`production:${task.taskId}`,revision:1,source:{asset_id:source.id,sourceContentHash:hash,duration_seconds:source.durationInFrames/editor.context.getState().fps,fps:editor.context.getState().fps},
-    product:task.input.product,import_origin:'production_source_facts_only',evidence:task.input.panelDelivery?.salesEvidenceId
-     ?[panelSalesEvidence(source.id,task.input.panelDelivery.salesAssetId)]:[],points:[],blueprint:[],transcripts:[],reviews:[],audit:[]}});
+    product:task.input.product,import_origin:'production_source_facts_only',evidence:task.input.panelDelivery?[
+     ...(task.input.panelDelivery.salesEvidenceId?[panelSalesEvidence(source.id,task.input.panelDelivery.salesAssetId)]:[]),
+     panelEndingEvidence('new_contact',[task.input.panelDelivery.ctaAssetId]),
+    ]:[],points:[],blueprint:[],transcripts:[],reviews:[],audit:[]}});
    await editor.commit();
   }
   // Import saved neutral source evidence before author/self-check/review, not only
@@ -405,21 +473,69 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    };
    const withStoryboard=prepared.asset?withAsset(initial,prepared.asset,'clipmentor-storyboard-'):initial;
    const card=panelScope?await preparePanelPartnerCard(withStoryboard,panelScope,stage.signal):undefined;
-   if(prepared.asset||card)editor.context.commands.applyDoc(card?withAsset(withStoryboard,card,'clipmentor-partner-'):withStoryboard);
+   if(card&&prepared.asset&&panelScope){
+    const next=withAsset(withStoryboard,card,'clipmentor-partner-');
+    const analysis=next.clipMentorAnalysis!;
+    const binding=panelEndingEvidence('existing_partner',[card.id,panelScope.productAssetId,prepared.asset.id]);
+    if(!analysis.evidence.some(entry=>entry.evidence_id===binding.evidence_id))next.clipMentorAnalysis={...analysis,evidence:[...analysis.evidence,binding]};
+    editor.context.commands.applyDoc(next);
+   }else if(prepared.asset)editor.context.commands.applyDoc(withStoryboard);
    return prepared;
   };
   if(task.stage==='blueprint'&&panelScope&&editor.getDoc().clipMentorAnalysis?.source_breakdown?.units.length){
    const prepared=await preparePanelAssets();
    if(prepared.issue)task.repairContext={...task.repairContext,creator_storyboard_issue:prepared.issue};
   }
+  const panelDraft=!!(panelScope&&!panelScope.audience&&!task.blueprintApproval&&task.input.humanBlueprintReview);
+  const localSpeech=panelDraft&&['analysis','blueprint'].includes(task.stage)
+   ?await productionLocalSpeech(editor.getDoc(),task.taskId,stage.signal):undefined;
+  if(localSpeech){
+   const previous=editor.getDoc(),withSpeech=registerProductionLocalSpeech(previous.clipMentorAnalysis!,localSpeech);
+   if(withSpeech){
+    await invalidateChangedReviews(withSpeech);
+    if(!isClipMentorAnalysis(withSpeech))throw Error('local_source_speech_invalid');
+    editor.context.commands.applyDoc({...previous,clipMentorAnalysis:withSpeech});
+    await editor.commit();
+   }
+  }
   const doc=editor.getDoc(),a=doc.clipMentorAnalysis!;
   if(a.source.asset_id!==task.input.sourceAssetId)throw new Error('Task/source binding changed');
+  // A cold worker can see the settled effect before the next stage checkpoint.
+  // Restore the no-dispatch fence from the original durable receipt.
+  async function recoverUnavailableObservation(value:unknown,expectedOperation:unknown):Promise<string|undefined>{
+   const receipt=(value as {receipt?:SourceVideoReceipt}|undefined)?.receipt;
+   if(!panelDraft||!receipt||receipt.operationId!==expectedOperation||receipt.status!=='failed')return;
+   const saved=await readSourceVideoReceipt(receipt.operationId,task.projectId,sourceVideoDependencies()).catch(()=>null);
+   if(!verifiedUnansweredSourceObservation(receipt,saved,{projectId:task.projectId,sourceHash:a.source.sourceContentHash,revision:editor.getDoc().clipMentorAnalysis!.revision}))return;
+   task.sourceObservationUnavailableOperation=receipt.operationId;
+   return receipt.operationId;
+  }
+  if(panelDraft&&!task.sourceObservationUnavailableOperation){
+   for(const effect of Object.values(task.effects)){
+    if(effect.kind==='observation'&&effect.status==='completed'&&await recoverUnavailableObservation((effect.result as {body?:unknown}|undefined)?.body,effect.operationId))break;
+   }
+  }
+  const requestObservation=async(args:Record<string,unknown>,id:string)=>{
+   if(task.sourceObservationUnavailableOperation)return {status:'source_observation_unavailable',
+    operationId:task.sourceObservationUnavailableOperation,observation_submitted:false,local_speech:localSpeech};
+   const result=await executeWithRecovery('observe_clipmentor_source_video',args,id);
+   const unavailable=await recoverUnavailableObservation(result,args.operationId);
+   if(!unavailable)return result;
+   return {status:'source_observation_unavailable',operationId:unavailable,local_speech:localSpeech,
+    instruction:'保留原观察失败回执。继续用本地抽帧和机器听写候选完成蓝图。未知内容留空或收窄；不要再次提交连续观察。',production_approved:false};
+  };
   const policy=await productionReviewRequirements(task.projectId),criteria=boundVisualCriteria(policy);
   const openingComparison=(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??task.input.openingComparison;
   if(task.stage==='copy_review'){
    const authorCriteria=productionAuthorCriteria(task,policy),authorCriteriaDigest=digestValue(authorCriteria);
    const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
+   if(task.input.panelDelivery){
+    const issues=productionBoardPhaseIssues(doc);
+    if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues)}`},repair:'blueprint'};
+   }
    const prepared=await createProductionPreparation(doc);
+   if(task.input.panelDelivery&&prepared.rawPacket.units.some(unit=>unit.source_context?.scope!=='frozen_task_scope'))
+    return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"source_review_scope_missing","id":"analysis"}]'},repair:'blueprint'};
    if(openingComparison&&prepared.rawPacket.delivery_sections?.filter(section=>section.kind==='performance_opening').length!==1)
     return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
    try{assertVisualCriteriaPlan(criteria,prepared.rawPacket.delivery_sections,prepared.rawPacket.units.map(u=>u.unit_id),doc.activeTimelineId);}catch(e){
@@ -430,10 +546,27 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
     if(!issues.length&&!await verifyPanelPartnerCard(doc,task.input.panelDelivery,content,undefined,stage.signal))issues.push('existing_partner_composition_invalid');
     if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues.map(code=>({code,id:'delivery'})))}`},repair:'blueprint'};
+    if(panelDraft)
+     return {artifact:{revision:editor.revision},awaitBlueprintFeedback:true};
    }
    const digest=prepared.reviewed.subject.digest;
    if(task.input.humanBlueprintReview){
-    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria);
+    const pictures=panelScope?deliveryPictureBindings(doc,prepared.rawPacket.delivery_sections):undefined;
+    const hostDeliveryEvidence:Record<string,unknown>|undefined=pictures?{
+     pictureBindings:pictures,
+     referenceText:pictures.flatMap(binding=>{
+      if(binding.status!=='ready'||!('roles' in binding)||!binding.roles)return [];
+      return Object.entries(binding.roles).map(([role,{source_rect:r}])=>
+       `${binding.section_id} ${role} 原图实际裁切 ${r.x}, ${r.y}, ${r.width} × ${r.height} 像素`);
+     }),
+    }:undefined;
+    if(hostDeliveryEvidence&&partnerStoryboardRequired(panelScope)){
+     const pdf=await creatorStoryboard(doc,stage.signal);
+     hostDeliveryEvidence.storyboardAttachment={mediaType:'application/pdf',pages:pdf.pages,
+      sha256:createHash('sha256').update(pdf.bytes).digest('hex'),status:'complete_pdf_bytes_verified_for_this_source',
+      note:'交付布局的 attachment 素材字段标识绑定的原片 Storyboard。独立 PDF 已由宿主读取，成片确认时经随片附件入口交付。'};
+    }
+    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence);
     if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
     const issues=check.checks.filter(entry=>entry.status!=='ok');
     if(issues.length)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
@@ -578,11 +711,11 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     }
    }
   }
-  const recoveryTask=task.stage==='blueprint'&&!pictureOnlyRepair?(task.repairContext?.source_observation_recovery
+  const recoveryTask=task.stage==='blueprint'&&!pictureOnlyRepair&&!task.sourceObservationUnavailableOperation?(task.repairContext?.source_observation_recovery
    ??(!currentSourceOperation&&productionSourceObservationAllowed(task)?evidenceTask:undefined)):undefined;
   let recoveredSourceOperation:string|undefined=currentSourceOperation;
   if(recoveryTask){
-   const observed=await executeWithRecovery('observe_clipmentor_source_video',{
+   const observed=await requestObservation({
     operationId:operation('source-boundary-context-recovery'),maxRequests:1,expectedRevision:a.revision,
     observationTask:recoveryTask,
    },'source-boundary-context-recovery') as {ok?:boolean;operationId?:string;current_binding?:string;error?:string;receipt?:SourceVideoReceipt};
@@ -601,14 +734,15 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     const revalidated=await recoverSourceVideoReceipt(request,undefined,sourceVideoDependencies());
     if(revalidated.validation?.status!=='valid'||!revalidated.result)throw new Error('source_recovery_validation_failed');
     recoveredSourceOperation=revalidated.operationId;
-   }else throw new Error(`原片观察仍未取得有效回执（${observed.receipt?.error??observed.error??'unknown'}）`);
+   }else if(!task.sourceObservationUnavailableOperation)throw new Error(`原片观察仍未取得有效回执（${observed.receipt?.error??observed.error??'unknown'}）`);
   }
   if(recoveredSourceOperation){
    const savedObservation=await readSourceVideoReceipt(recoveredSourceOperation,task.projectId,sourceVideoDependencies());
    if(savedObservation?.result?.validation.status!=='valid'||savedObservation.source_hash!==a.source.sourceContentHash
     ||savedObservation.subject.revision!==a.revision)throw new Error('source_observation_saved_binding_mismatch');
   }
-  const outstanding=fixingSelfCheck?checkSourceBreakdown(doc).issues:[];
+  const outstanding=fixingSelfCheck?[...checkSourceBreakdown(doc).issues,
+   ...(task.input.panelDelivery?productionBoardPhaseIssues(doc):[])]:[];
   const affected=new Set(outstanding.map(issue=>issue.id));
   const repairTargets=fixingSelfCheck&&a.source_breakdown?a.blueprint.flatMap(unit=>{
    if(!affected.has(unit.unit_id))return [];
@@ -622,6 +756,12 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      ||registered?.explanation_segment_ids.includes(segment.segment_id)).map(({segment_id,source_range_seconds})=>({segment_id,source_range_seconds}))}];
   }):[];
   const taskData={...await productionAuthorTaskData(task,editor.getDoc()),goal,
+   ...(localSpeech?{localSpeech:{...localSpeech,...(localSpeech.status==='machine_transcript_candidate'?{
+    source_id:`local-asr:${localSpeech.source_hash}`,instruction:'宿主已登记这条听写来源。仅将看得清、听写与上下文都支持的原话列为候选，source_ids 填此 source_id；不要把机器听写标为人工听审或用户确认。',
+   }:{})}}:{}),
+   ...((task.stage==='analysis'||task.stage==='blueprint')&&panelDraft?{sourceObservationPlan:'宿主将在蓝图结构校验完成后，负责提交一次原片连续观察。当前先用本地抽帧和本机听写候选成稿。每个教学组必须有本组可教的主要点（coverage.role=primary）。只作辅助开场或转折的片段，归入同一教学关系的组，勿单列成只有 auxiliary 的组。写 phases 时同时登记 viewer_stage_cues，其 original 和 revisit 都要写 text、enter、exit，revisit 每项用 line_ids 覆盖本组对应的解释句。'}:{}),
+   ...(task.stage==='blueprint'&&task.sourceObservationUnavailableOperation?{savedObservation:{operationId:task.sourceObservationUnavailableOperation,
+    instruction:'用 read_clipmentor_source_video 回读这次观察。无法取得连续视听时，依靠实际上传素材与本地画面证据完成整份蓝图。无法核实的原声、色号或动作留未知或缩窄稿件，不补写原话。优先用 set_picture_plan 逐组补齐现行稿的 phases，再分别登记片头和两种片尾。沿用已准备好的 Storyboard 及正式图片绑定。'}}:{}),
    ...(pictureOnlyRepair?{measuredExecution:await currentExecutionPreparation(doc,task.input.voice)}:{}),
    ...(fixingSelfCheck?{deliveryContract:'先修复无效旧 delivery_sections：用 set_picture_plan 保存该组的新计划，去掉未成功登记的旧无效段，并保留其口播及历史。之后可用 save_clipmentor_source_frame 保存当前原片中已经核实的商品帧供片头或片尾使用，不能把视频 ID 和秒数塞入图片字段。最终用 set_copy_candidate 同时移出正文的交付句、保留其原文并绑定 plan.delivery_sections。每项是 {section_id,kind:performance_opening 或 creator_invitation,line:{line_id,narration_ms,caption_lines,meaning_zh,labels},evidence_ids:[实际业务事实ID],picture:{asset_id,src,sha256,description},voice:{provider,voiceId,speed:1}}。业务事实必须真实且 source_ids 含实际图片 ID，可登记用户已确认的限制与用途，不能把画面推断写成用户事实。没有销量归属就只做学习过渡。'}:{}),
    ...(fixingSelfCheck?{phaseSelectionContract:'原声组的 source_range_seconds 与正式回看登记保留；逐句更窄或不相邻的实际选材请在对应解释 phase 写 context_source_ranges:[{segment_id,source_range_seconds:[开始,结束],purpose}]，只能引用登记的同组真实段落。逐句 source_seconds 覆盖所选子窗但不意味着播间隙。不要只把子窗写在 picture 散文里。若两句任务不同，分别写自己的选材和短标。caption_lines 拆成同文的短意群，每项一张卡，并明确分页约定。若计划用关系卡，登记要上屏的确切短标文案；没有依据的绝对说法收窄。'}:{}),
@@ -633,7 +773,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const feedbackSource=task.stage==='blueprint'?task.blueprintFeedback:undefined;
   const run=createRun({projectId:task.projectId,sessionGeneration:await currentAgentSessionGeneration(task.projectId),backend:task.input.authorBackend??'api',provider:task.input.author.provider,model:task.input.author.model,context:{productionTaskId:task.taskId,stage:task.stage}});
   await flushRunPersistence(run);
-  const sourceObservationAllowed=productionSourceObservationAllowed(task,recoveredSourceOperation);
+  const sourceObservationAllowed=!panelDraft&&productionSourceObservationAllowed(task,recoveredSourceOperation);
   const tools=canonicalServerRunToolCatalog(false,true).filter(s=>(hostNames.has(s.name)||isExternalServerDirectTool(s.name))&&productionStageToolAllowed(task.stage,s.name)
    &&(sourceObservationAllowed||s.name!=='observe_clipmentor_source_video'));
   await executeRun(run,{backend:task.input.authorBackend??'api',provider:task.input.author.provider,model:task.input.author.model,openAiApiMode:task.input.author.apiMode,cacheMode:'short',maxOutputTokens:8192,
@@ -644,6 +784,27 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    host:{signal:stage.signal,maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     beforeRequest:()=>stage.effect('model',`author-${task.attempts.model}`,async()=>null).then(()=>undefined),
     execute:async(name,args,id)=>{
+     if(task.input.panelDelivery&&!task.input.panelDelivery.audience&&['analysis','blueprint'].includes(task.stage)
+      &&name==='revise_clipmentor_analysis'&&args.action==='set_source_breakdown'
+      &&args.record&&typeof args.record==='object'&&!Array.isArray(args.record)){
+      // This panel task is frozen to the complete original. Selected teaching
+      // playback still belongs to the author and may use narrow source windows.
+      const record=args.record as Record<string,unknown>;
+      const scope=record.review_scope as {kind?:string}|undefined;
+      if(scope!==undefined&&scope?.kind!=='full_source')
+       return {error:'source_review_scope_must_cover_complete_panel_source'};
+      if(scope===undefined){
+       const previous=editor.getDoc().clipMentorAnalysis?.source_breakdown?.review_scope;
+       args={...args,record:{...record,review_scope:previous?.kind==='full_source'?previous:{kind:'full_source',instruction:task.input.brief}}};
+      }
+     }
+     if(task.input.panelDelivery&&task.stage==='blueprint'&&name==='revise_clipmentor_analysis'
+      &&['set_copy_candidate','set_picture_plan'].includes(String(args.action))){
+      const plan=(args.record as {plan?:Record<string,unknown>}|undefined)?.plan;
+      if(plan&&typeof plan==='object'&&currentPicturePhases(plan,undefined,args.id,a.source.fps,a.source.duration_seconds).issues.length)
+       return {error:'picture_plan_phase_board_unreadable',unit_id:args.id,
+        next_step:'在 record.plan.phases 给出非空的原声与逐句讲解阶段。使用 mode、source_range_seconds、picture；讲解另加 line_id。保留同组现行稿件和已登记的原片回看。'};
+     }
      if(pictureOnlyRepair&&name==='revise_clipmentor_analysis'){
       const groups=(task.repairContext!.audio_picture_repair as {groups:Array<{unit_id:string}>}).groups;
       const error=pictureRepairWriteError(editor.getDoc(),args,groups);
@@ -661,11 +822,23 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
       const result=await executeWithRecovery(name,args,id);
       if(result&&typeof result==='object'&&'error' in result)return result;
       const prepared=await preparePanelAssets(),current=editor.getDoc();
+      const partner=panelScope&&panelPartnerPicture(current,panelScope,await currentCreatorDocument(current));
       return {...(typeof result==='object'&&result?result:{result}),...(prepared.issue?{creatorStoryboard:{status:'needs_revision',reason:prepared.issue}}
        :{creatorStoryboardAssetId:panelStoryboardAsset(current)?.id,
-        ...(panelScope?{partnerEndingPicture:panelPartnerPicture(current,panelScope,await currentCreatorDocument(current))}:{})})};
+        ...(partner?{partnerEndingPicture:partner,partnerEndingEvidenceId:panelEndingEvidence('existing_partner',[partner.asset_id,partner.layout.product.asset_id,partner.layout.storyboard.asset_id]).evidence_id}:{})})};
      }
-     return name==='load_skill'?editor.loadSkillTool(args):executeWithRecovery(name,args,id);
+     if(task.stage==='blueprint'&&task.input.panelDelivery&&name==='read_clipmentor_analysis'&&args.view==='storyboard'){
+      const result=await executeWithRecovery(name,args,id);
+      if((result as {error?:string}|undefined)?.error==='storyboard_current_plan_unavailable'){
+       const current=editor.getDoc();
+       return {status:'pending',next_read:{view:'current_copy'},production_approved:false,
+        missing_picture_phases:productionBoardPhaseIssues(current),
+        partnerEndingPicture:panelPartnerPicture(current,task.input.panelDelivery,await currentCreatorDocument(current))??null,
+        instruction:'此查看入口读的是完整教学审片板，尚有缺项时先保存各组画面与交付段。原片 Storyboard PDF 使用现有 edit_asset 登记并由宿主生成，不能用这个查看入口代替。'};
+      }
+      return result;
+     }
+     return name==='load_skill'?editor.loadSkillTool(args):name==='observe_clipmentor_source_video'?requestObservation(args,id):executeWithRecovery(name,args,id);
     }}});
   if(run.status!=='completed')throw new Error(run.error??'Author stage failed');
   captureBlueprintFeedbackSummary(task,feedbackSource,run.events.filter(event=>event.type==='text-delta').map(event=>(event.data as {text?:string}).text??'').join(''));
@@ -678,12 +851,26 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     next=editor.getDoc();
    }
    try{await prepareProductionBlueprint(next);}catch(error){
-    const issue=error instanceof Error?error.message:'';
+    let issue=error instanceof Error?error.message:'';
+    if(panelDraft&&issue==='Invalid teaching review packet'){
+     const packet=await copyTeachingPacketFromDoc(next);
+     const missing=packet.units.filter(unit=>!unit.points.some(point=>point.role==='primary'));
+     issue=`blueprint_stage_incomplete:${JSON.stringify(missing.length
+      ?missing.map(unit=>({code:'teaching_unit_primary_point_missing',id:unit.unit_id}))
+      :[{code:'teaching_review_packet_invalid',id:'analysis'}])}`;
+    }
     if(!task.input.humanBlueprintReview||!repairableBlueprintIssue(issue))throw error;
     await editor.commit();
     const saved=await loadOfflineStoredProject(task.projectId);
     if(saved?.revision!==editor.revision)throw new Error('production_saved_readback_mismatch');
     return {artifact:{revision:saved.revision,blueprint_structure_issue:issue},repair:'blueprint'};
+   }
+   // Submit the full initial source once after the structural packet is usable,
+   // even when the author already completed the draft using local evidence.
+   if(panelDraft&&!task.attempts.observation&&!task.sourceObservationUnavailableOperation&&productionSourceObservationAllowed(task)){
+    const result=await requestObservation({operationId:operation('initial-source'),maxRequests:1,expectedRevision:analysis.revision},'initial-source') as {ok?:boolean;error?:string};
+    if(result.ok!==true&&!task.sourceObservationUnavailableOperation&&task.attempts.observation>0)
+     throw Error(result.error??'未取得可恢复的原片观察回执');
    }
   }
   if(task.stage==='audio')await verifyProductionNarrationFiles(next,task.input.voice);
@@ -776,14 +963,16 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
   ...(policy||task.input.openingComparison?{doneCriteria:productionAuthorCriteria(task,policy)}:{}),
   ...(task.stage==='blueprint'&&task.input.panelDelivery?{deliveryRequirements:{
    ...task.input.panelDelivery,
+   newContactEvidenceId:panelEndingEvidence('new_contact',[task.input.panelDelivery.ctaAssetId]).evidence_id,
    ...(partnerStoryboardRequired(task.input.panelDelivery)?{partnerEndingPicture:panelPartnerPicture(doc,task.input.panelDelivery,await currentCreatorDocument(doc))??null}:{}),
    ...(task.input.panelDelivery.audience==='new_contact'?{}:{storyboardAssetId:panelStoryboardAsset(doc,await currentCreatorDocument(doc))?.id??null,
    storyboardDocument:{source_sha256:doc.clipMentorAnalysis?.source.sourceContentHash,
-    instruction:'原片 Storyboard 是另一个交付文档，不是教学蓝图。用原片证据整理逐段的镜头动作说明与原片信息，按三列 PDF 组织，不交零散听写或空白动作栏。若 storyboardAssetId 缺失，先用现有 edit_asset 更新 sourceAssetId，props 仅写 clipmentorCreatorStoryboard:{source_sha256,rows:[{source_range_seconds:[起,止],source_frames:[已核原帧],shot_ms:马来语客观动作说明,information_ms:马来语原片信息整理,visible_evidence_ids:[可见证据],claim_evidence_ids:[原话证据]}]}。覆盖完整原片，不把说明写成拍摄指令或因果点评。工具会返回本片文档封面资产ID，再将它绑定到已合作片尾；不新增配音或模型调用步骤。'}}),
+    instruction:'原片 Storyboard 是另一个交付文档，不是教学蓝图。用原片证据整理逐段的镜头动作说明与原片信息，按三列 PDF 组织，不交零散听写或空白动作栏。若 storyboardAssetId 缺失，先用现有 edit_asset 更新 sourceAssetId，props 仅写 clipmentorCreatorStoryboard:{source_sha256,rows:[{source_range_seconds:[起,止],source_frames:[已核原帧],shot_ms:马来语客观动作说明,information_ms:马来语原片信息整理,visible_evidence_ids:[可见证据],claim_evidence_ids:[原话证据]}]}。各行连续覆盖完整原片，每行用半开区间内的 1–2 个原帧，至少一帧须能回读为本行所用的每条本地可见证据的支撑帧。没有可回读的连续视听原话回执时，claim_evidence_ids 保持空数组，信息栏只写实际所见；本机听写候选仍可用于蓝图的原话证据。工具会返回本片文档封面资产ID，再将它绑定到已合作片尾；不新增配音或模型调用步骤。'}}),
    instructions:(task.input.panelDelivery.audience?`本次只制作 ${task.input.panelDelivery.audience}，保留一个 performance_opening 和该达人阶段的一个 creator_invitation。`:'在现行 picture_plan.delivery_sections 登记一个 performance_opening 和两个 creator_invitation，分别使用 section_id new_contact、existing_partner。')+'每段各有独立 line_id、马来语口播、同文字幕、中文、图片绑定和对应证据。'+
-   '片头参照 NIUMO V7 和 Green Makes 定稿。picture.layout={kind:original_underlay,source:{asset_id,src,sha256},range:[原片起止秒],shade:0.63,show_sales:布尔,headline:[成绩标题各行],transition:[同款提问和邀请看拍法各行]}。用本片原片压暗铺底、同款提问、接清晰原片。只有冻结 salesEvidenceId 时，绑定 salesAssetId 作成绩前景并引用该证据；否则 picture 用 productAssetId 作商品身份证据，show_sales=false，headline=[]，不上商品静图或未确认数字。新建联 picture 用 ctaAssetId，默认 layout={kind:recruitment_card,poster:{asset_id:ctaAssetId,src,sha256:ctaAssetHash}}，原海报整图等比适配，不自制替代卡。只有本项目原话明确要求分裁时才用 product_commission，保留商品与佣金同屏及素材身份。参照只比较构图，不作为上屏素材或本项目业绩事实。口播不替海报中的未核条件追加承诺，保留联系合作动作。'+
+   '交付段与正文句字段不同。交付段用嵌套 line:{line_id,narration_ms,caption_lines,meaning_zh,labels:[]}。picture.description 必填，voice:{provider,voiceId,speed:1}。分两次保存：先逐组补正文 phases，再用现行计划增补交付段。'+
+   '片头参照 NIUMO V7 和 Green Makes 定稿。picture.layout={kind:original_underlay,source:{asset_id,src,sha256},range:[原片起止秒],shade:0.63,show_sales:布尔,headline:[成绩标题各行],transition:[同款提问和邀请看拍法各行]}。用本片原片压暗铺底、同款提问、接清晰原片。浮层每行不超过 '+openingMaxLineCharacters+' 字符；口播和字幕保持完整。只有冻结 salesEvidenceId 时，绑定 salesAssetId 作成绩前景并引用该证据；否则 picture 用 productAssetId 作商品身份证据，show_sales=false，headline=[]，不上商品静图或未确认数字。新建联 picture 用 ctaAssetId，evidence_ids 引用 newContactEvidenceId，默认 layout={kind:recruitment_card,poster:{asset_id:ctaAssetId,src,sha256:ctaAssetHash}}，原海报整图等比适配，不自制替代卡。只有本项目原话明确要求分裁时才用 product_commission，保留商品与佣金同屏及素材身份。参照只比较构图，不作为上屏素材或本项目业绩事实。口播不替海报中的未核条件追加承诺，保留联系合作动作。'+
    (partnerStoryboardRequired(task.input.panelDelivery)
-    ?'已合作版用 partnerEndingPicture 的 asset_id、src、sha256 和 layout 登记现成同屏图并保留独立 PDF 槽。首次未准备时，先保存本片的原片 Storyboard；根据工具返回的 partnerEndingPicture 登记。证据要绑定这张合成图和实际来源，不补写未经确认的事实。'
+    ?'已合作版用 partnerEndingPicture 的 asset_id、src、sha256 和 layout 登记现成同屏图并保留独立 PDF 槽。首次未准备时，先保存本片的原片 Storyboard；根据工具返回的 partnerEndingPicture 和 partnerEndingEvidenceId 登记。证据要绑定这张合成图和实际来源，不补写未经确认的事实。'
     :task.input.panelDelivery.audience==='new_contact'?'':'制作已合作版本时，用 storyboardAssetId 展示并交本片原片拍摄参考。')+
    '邀请到货后按自己的风格开拍。将原话中文和阶段标识中文分别登记。证据只引用核实的素材及其实际用途。'
   }}:{}),

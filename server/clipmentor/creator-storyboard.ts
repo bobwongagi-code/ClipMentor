@@ -3,6 +3,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import sharp from 'sharp';
+import type {AnalysisEvidence,ClipMentorAnalysis} from '../../src/clipmentor/analysis';
 import type {ProjectDoc} from '../../src/editor/types';
 import {sha256File} from '../../shared/node-content-hash';
 import {sourceFrameSeekMs} from '../../shared/source-frame-seek';
@@ -11,7 +12,7 @@ import {resolveProductAsset} from '../product-assets';
 import {extractOneFrame} from '../plugins/extract-frames';
 import {runtimeProfile} from '../runtime-profile';
 import {readSourceVideoReceipt} from './source-video';
-import {loadCreatorStoryboardDocument} from './creator-storyboard-document';
+import {loadCreatorStoryboardDocument,type CreatorStoryboardDocument} from './creator-storyboard-document';
 import {creatorDocumentHtml,renderCreatorDocument} from './creator-storyboard-pdf';
 
 const hash=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex');
@@ -22,6 +23,30 @@ export function creatorStoryboardSource(doc:ProjectDoc){
  if(!a||!s?.sourceContentHash||!/^[a-f0-9]{64}$/.test(s.sourceContentHash)||!Number.isFinite(s.duration_seconds)||s.duration_seconds<=0||!Number.isFinite(s.fps)||s.fps<=0)
   throw Error('storyboard_original_plan_missing');
  return {title:a.product.name,source:s};
+}
+
+/** A local frame proves provenance and timing only. Spoken claims still use
+ * the saved continuous-audio evidence path below. */
+function visibleStoryboardFrameBound(analysis:ClipMentorAnalysis,evidence:AnalysisEvidence,document:CreatorStoryboardDocument){
+ if(evidence.kind!=='visible_action'||evidence.status!=='agent_observed_candidate'||evidence.call_status!=='unknown'
+  ||evidence.observation_method!=='main_agent_direct_image_read_not_independently_verified'
+  ||!evidence.supporting_evidence_ids.length||!evidence.source_range_seconds)return false;
+ const observation=analysis.observations?.find(record=>record.observation_id===evidence.observation_id);
+ if(observation?.status!=='images_returned'||observation.source_hash!==analysis.source.sourceContentHash)return false;
+ const [start,end]=evidence.source_range_seconds;
+ const frames=evidence.supporting_evidence_ids.map(id=>{
+  const frame=analysis.evidence.find(entry=>entry.evidence_id===id);
+  const n=frame?.source_frame;
+  if(!frame||n===undefined||!Number.isSafeInteger(n)||n<0||frame.kind!=='source_frame'||frame.call_status!=='succeeded'
+   ||frame.observation_method!=='local_frame_extraction_only'||frame.observation_id!==observation.observation_id
+   ||!observation.frame_evidence_ids.includes(id)||id!==observation.observation_id+':f'+n)return;
+  const seconds=n/analysis.source.fps;
+  if(seconds<start||seconds>end||seconds>=analysis.source.duration_seconds||frame.time_seconds!==seconds
+   ||!observation.requested_times_seconds.includes(seconds))return;
+  return n;
+ });
+ return frames.every(n=>n!==undefined)&&document.rows.filter(row=>row.visible_evidence_ids.includes(evidence.evidence_id))
+  .every(row=>row.source_frames.some(n=>frames.includes(n)));
 }
 
 export async function verifyCreatorStoryboardEvidence(doc:ProjectDoc,signal?:AbortSignal){
@@ -49,7 +74,7 @@ export async function verifyCreatorStoryboardEvidence(doc:ProjectDoc,signal?:Abo
    if(receipt.result.raw_observation.windows.flatMap(w=>w.evidence).some(e=>Math.abs(e.start_seconds-claim.range[0])<.01
     &&Math.abs(e.end_seconds-claim.range[1])<.01&&normal(evidence.kind==='visible_action'?e.visible:e.audible).includes(normal(claim.text)))){verified=true;break;}
   }
-  if(!verified)throw Error(`storyboard_original_excerpt_changed:${evidence.evidence_id}`);
+  if(!verified&&!visibleStoryboardFrameBound(doc.clipMentorAnalysis!,evidence,document))throw Error(`storyboard_original_excerpt_changed:${evidence.evidence_id}`);
  }
  const name=asset?.src.startsWith('/media/uploads/')?asset.src.slice('/media/uploads/'.length):'';
  const file=asset?.kind==='video'&&isSafeUploadName(name)?resolveUploadFile(name):null;

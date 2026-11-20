@@ -917,7 +917,11 @@ try{
  const bound=await registerHandoff({projectId:panelTask.projectId,expectedProjectRevision:currentDraft.revision,previousDigest:null,brief});
  const oldRevision=panelTask.projectRevision;
  panelTask.projectRevision=currentDraft.revision;
- panelTask.completed.copy_review={at:Date.now(),artifact:{requirementsDigest:digestValue(brief.doneCriteria)}};
+ await productionTaskStore.save(panelTask);
+ const unreviewed=(await panelGet()).task;
+ assert.equal(unreviewed.blueprintRevision,currentDraft.revision,'a current draft can be shown before independent review');
+ assert.equal(unreviewed.canApproveBlueprint,false,'awaiting the human is not an independent approval receipt');
+ panelTask.completed.copy_review={at:Date.now(),artifact:{revision:currentDraft.revision,authorSelfCheck:'passed',gate:{allowed:true},requirementsDigest:digestValue(brief.doneCriteria)}};
  await productionTaskStore.save(panelTask);
  const previouslyViewed=(await panelGet()).task;
  assert.match(previouslyViewed.boardIdentity,/^[a-f0-9]{64}$/,'the HTTP board has an opaque binding');

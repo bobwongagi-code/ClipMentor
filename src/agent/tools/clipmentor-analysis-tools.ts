@@ -18,7 +18,7 @@ import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmento
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview, validatePicturePlanProjection } from '../../clipmentor/production-gate';
 import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
-import {deliveryOpeningTextIssue,deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
+import {deliveryOpeningTextIssue,deliverySectionFieldIssues,deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
 import {readClipMentorStoryboard} from '../../clipmentor/read-storyboard';
 import {renderClipMentorReviewBoard} from '../../clipmentor/render-review-board';
 
@@ -420,7 +420,8 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       const submittedPlan=(args.record as {plan?:{delivery_sections?:unknown}}|undefined)?.plan;
       const issue=error.message==='delivery_sections_invalid'&&deliveryOpeningTextIssue(submittedPlan?.delivery_sections);
       if(issue)return {error:error.message,issue,next_step:'Split the indicated display line at a word boundary. Keep at most four lines and preserve narration, subtitles and media bindings.'};
-      return {error:error.message,next_step:'Fix the current delivery declaration before saving. Use section_id, kind, line, evidence_ids, picture and voice. picture must be a bound image, not a video source range. Move delivery lines out of the body candidate atomically with the new plan.'};
+      const fields=error.message==='delivery_sections_invalid'?deliverySectionFieldIssues(submittedPlan?.delivery_sections):[];
+      return {error:error.message,...(fields.length?{invalid_delivery_fields:fields}:{}),next_step:'Fix the current delivery declaration before saving. Use section_id, kind, line, evidence_ids, picture and voice. picture must be a bound image, not a video source range. Move delivery lines out of the body candidate atomically with the new plan.'};
     }
     const handoff = await checkAnalysisHandoff(next);
     const breakdown = checkSourceBreakdown(next);

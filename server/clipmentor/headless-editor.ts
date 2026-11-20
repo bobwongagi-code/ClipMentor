@@ -254,7 +254,13 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     const assetId=item?.sourceAssetId??args.assetId;
     if(item&&args.assetId&&args.assetId!==assetId)return {error:'Asset ID does not match the timeline item'};
     const asset=before.assets.find(a=>a.id===assetId);
-    if(!asset||!['video','image'].includes(asset.kind))return {error:'Exact video/image asset or item ID required'};
+    if(!asset||!['video','image'].includes(asset.kind)){
+     const candidates=typeof assetId==='string'&&assetId.length>=8?before.assets.filter(a=>
+      ['video','image'].includes(a.kind)&&a.id.startsWith(assetId)).slice(0,4):[];
+     return {error:'Exact video/image asset or item ID required',
+      ...(candidates.length?{candidates:candidates.map(({id,name})=>({assetId:id,name}))}:{}),
+      next_step:'Call read_project or use the full assetId from the matching candidate; IDs in shortened summaries are not accepted.'};
+    }
     const sampling=item?constrainSourceFrameArgs(args,sourceWindowForTimelineRange(item,0,item.durationInFrames),timeline.fps):args;
     const times=asset.kind==='image'?[0]:pickFrames(sampling,asset.durationInFrames,timeline.fps,6).map(f=>f/timeline.fps*1000);
     const res=await local('/api/extract-frames',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({src:asset.src,output:'frames',sourceTimesMs:times})});

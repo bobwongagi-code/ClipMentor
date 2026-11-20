@@ -31,7 +31,7 @@ import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,
-  queueDraftBlueprintFeedback,
+  acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
   latestPanelProductionTask,productionReviewRequirements,
   type ProductionTask,
 } from './production-task';
@@ -338,14 +338,18 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ?await loadOfflineStoredProject(projectId):null;
       const draftRevision=draft?.doc.clipMentorAnalysis?.blueprint.length?draft.revision:undefined;
       const blueprintRevision=draftRevision;
+      const checked=task?.completed.copy_review?.artifact;
       const approvalUnavailable=blueprintRevision
         ? task?.status!=='awaiting_blueprint'||blueprintRevision!==task.projectRevision
-          ||policy&&task.completed.copy_review?.artifact.requirementsDigest!==requirementsDigest
+          ||checked?.revision!==blueprintRevision||checked.authorSelfCheck!=='passed'
+          ||(checked.gate as {allowed?:boolean}|undefined)?.allowed!==true
+          ||policy&&checked.requirementsDigest!==requirementsDigest
           ||criteria&&!visualCriteriaPlanApproved(criteria,draft?.doc.clipMentorAnalysis?.production_copy_review)
           ?'当前蓝图待独立审核，暂不能进入制作。'
           :undefined
         :undefined;
-      const canConfirmBlueprint=!!blueprintRevision&&!!task?.input.panelDelivery&&!task.input.panelDelivery.audience
+      const canConfirmBlueprint=!!blueprintRevision&&task?.status==='awaiting_blueprint'
+        &&blueprintRevision===task.projectRevision&&!!task.input.panelDelivery&&!task.input.panelDelivery.audience
         &&!task.blueprintApproval&&!running&&task.attempts.model<task.input.budget.model;
       const stopReason = stopped
         ? /^(?:Error: )?(?:Original video asset missing|Original upload unavailable|Original source changed)$/.test(task.error ?? '') ? 'materials'
@@ -446,11 +450,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           launch(existing);
         } else if (body.action === 'approve_blueprint' || body.action === 'revise_blueprint' || body.action==='produce_versions') {
           if (body.action === 'revise_blueprint' && typeof body.text !== 'string') throw new Error('请填写修改意见');
-          const draftFeedback=body.action==='revise_blueprint'&&(existing.status==='blocked'
-            ||existing.status==='awaiting_blueprint'&&saved.revision!==existing.projectRevision)
-            &&['blueprint','copy_review'].includes(existing.stage)&&!!saved.doc.clipMentorAnalysis?.blueprint.length;
+          const draftFeedback=body.action==='revise_blueprint'&&acceptsDraftBlueprintFeedback(existing,saved.revision)
+            &&!!saved.doc.clipMentorAnalysis?.blueprint.length;
           const productionConfirmation=body.action==='produce_versions'&&!!existing.input.panelDelivery&&!existing.input.panelDelivery.audience
-            &&!existing.blueprintApproval&&['blocked','awaiting_blueprint'].includes(existing.status)&&['blueprint','copy_review'].includes(existing.stage);
+            &&!existing.blueprintApproval&&existing.status==='awaiting_blueprint'&&existing.stage==='copy_review'
+            &&saved.revision===existing.projectRevision;
           if(body.action==='produce_versions'&&!productionConfirmation)throw Error('当前版本尚不能开始制作');
           if ((!draftFeedback&&!productionConfirmation&&(existing.status !== 'awaiting_blueprint'||body.revision !== existing.projectRevision)) || body.revision !== saved.revision) throw new Error('蓝图版本已变化，请重新打开审片板');
           const subject=await boardSubject(saved.revision,existing,await readRequirements());

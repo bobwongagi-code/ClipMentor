@@ -185,11 +185,12 @@ export function unchangedReviewedDelivery(task:Pick<ProductionTask,'repairContex
 /** Fresh context, read-only and bound to the exact candidate. Its record stays outside reviewer input. */
 export async function checkProductionAuthorBlueprint(
  task:ProductionTask,stage:StageContext,doc:ProjectDoc,prepared:Awaited<ReturnType<typeof createProductionPreparation>>,guide:string,
- originalRequirements:HandoffBrief['doneCriteria'],
+ originalRequirements:HandoffBrief['doneCriteria'],hostDeliveryEvidence?:Record<string,unknown>,
 ){
  const {reviewed}=prepared;
  const requirements=[task.input.brief,...originalRequirements,...(task.blueprintFeedback?[task.blueprintFeedback]:[])];
  const source={...productionAuthorSelfCheckSource(doc,prepared,requirements),
+  ...(hostDeliveryEvidence?{hostDeliveryEvidence}:{}),
   repairReview:productionRepairTargets(task,prepared.rawPacket),
   unchangedReviewedDelivery:unchangedReviewedDelivery(task,prepared.rawPacket)};
  const sourceDigest=digestValue({source,guide});
@@ -222,7 +223,7 @@ export async function checkProductionAuthorBlueprint(
   await executeRun(run,{backend,provider:author.provider,model:author.model,origin:author.origin,openAiApiMode:author.apiMode,cacheMode:'short',
    maxOutputTokens:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
    ...(backend==='codex'?{localProductionCodex:true as const}:{}),
-   instructions:`${guide}\n本次只执行只读作者自检。输出 JSON 数组，按 S1–S7 各一条 {id,status,reference,reason}。status 只能是 ok、fix、unresolved。reference 可填一个逐字引文字符串，或由多个逐字引文组成的数组（最多24条）；每条必须能单独在收到的当前材料中找回。reason 写具体判断或最小修法。S6 的版本绑定由服务端核验：用 reportBinding 核本次单元覆盖和报告未读项，不要求你复算摘要，不要求配音、成片或人审板。后续阶段才能检查的事项，标清归属即可，不作为本阶段未通过。S2 只检查现行稿实际说出的断言能否回源，候选引语可以作为有明确边界的原作者转述证据；整句听审、精确同步和已明示未确认的边界属于后续检查，不能单独判未通过。S5 逐句对照已声明的实际子窗和字幕分卡，组级回看外窗可比子窗宽。S6 非阻断拼写或标点提示引用报告原文即可；未显示的历史字段不能据此判现行报告漏读。S7 审现行计划要上屏的文字，不要求已经制卡、渲染或完成终审。正常且说明了未知边界的缺失可以保留。如有unchangedReviewedDelivery，它仅指与原审核逐字段相同的片头片尾计划：复用其原判，不因本次输入未重复图片文字转录而要求重审；不代表成片批准，现行可见文字与事实有实际冲突仍须列出。如输入有repairReview，S2必须增加repair_resolutions数组，逐条按finding_id给出{finding_id,status:"resolved"或"unresolved",reference:[现行材料逐字引文],reason}。对照原问题，核当前口播、教学重点、实际画面计划和证据边界是否一起修正；只改备注、换版本或收窄正文但重点仍保留旧断言，不算解决。reference只能引用当前该单元或当前sourceEvidence，不能引用original_quote/original_reason当已修证据。补证解决时引用新证据并说明支持关系，不能靠作者自评。仍不确定就unresolved，不能为进入审核而填resolved。禁止改稿、调用工具或给出生产批准。`,
+   instructions:`${guide}\n本次只执行只读作者自检。输出 JSON 数组，按 S1–S7 各一条 {id,status,reference,reason}。status 只能是 ok、fix、unresolved。reference 可填一个逐字引文字符串，或由多个逐字引文组成的数组（最多24条）；每条必须能单独在收到的当前材料中找回。reason 写具体判断或最小修法。S6 的版本绑定由服务端核验：用 reportBinding 核本次单元覆盖和报告未读项，不要求你复算摘要，不要求配音、成片或人审板。后续阶段才能检查的事项，标清归属即可，不作为本阶段未通过。S2 只检查现行稿实际说出的断言能否回源，候选引语可以作为有明确边界的原作者转述证据；整句听审、精确同步和已明示未确认的边界属于后续检查，不能单独判未通过。S5 逐句对照已声明的实际子窗和字幕分卡，组级回看外窗可比子窗宽。若输入有 hostDeliveryEvidence，用其像素矩形核裁窗。引用裁切证据时，只逐字引用 referenceText 的文字，不引用 JSON 结构；left/top/right/bottom 是各边去掉的比例，不是坐标端点。已合作版的 attachment 可能是绑定原片文档的索引，不能只按索引后缀判断独立附件格式。若宿主已读到独立 PDF 字节，下载入口放行和最终接收仍属交付阶段。S6 非阻断拼写或标点提示引用报告原文即可；未显示的历史字段不能据此判现行报告漏读。S7 审现行计划要上屏的文字，不要求已经制卡、渲染或完成终审。正常且说明了未知边界的缺失可以保留。如有unchangedReviewedDelivery，它仅指与原审核逐字段相同的片头片尾计划：复用其原判，不因本次输入未重复图片文字转录而要求重审；不代表成片批准，现行可见文字与事实有实际冲突仍须列出。如输入有repairReview，S2必须增加repair_resolutions数组，逐条按finding_id给出{finding_id,status:"resolved"或"unresolved",reference:[现行材料逐字引文],reason}。对照原问题，核当前口播、教学重点、实际画面计划和证据边界是否一起修正；只改备注、换版本或收窄正文但重点仍保留旧断言，不算解决。reference只能引用当前该单元或当前sourceEvidence，不能引用original_quote/original_reason当已修证据。补证解决时引用新证据并说明支持关系，不能靠作者自评。仍不确定就unresolved，不能为进入审核而填resolved。禁止改稿、调用工具或给出生产批准。`,
    messages:[{role:'user',content:JSON.stringify(source)},...(formatError?[{role:'user' as const,content:`上次返回未满足自检回执格式（${formatError}）。请基于同一材料重新完成七项，逐字引用材料，按实际判断填写状态。`}]:[])],
    host:{signal:stage.signal,maxTurns:1,deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     async beforeRequest(){if(requests++!==0)throw new Error('作者自检单轮额度已用完');},
