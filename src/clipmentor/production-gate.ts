@@ -12,7 +12,7 @@ import type { AgentContext } from '../agent/context';
 import type { ProjectDoc } from '../editor/types';
 import regression from './fixtures/copy-review-blind-20261019.json';
 import teachingRegression from './fixtures/copy-teaching-blind-v2-20261019.json';
-import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations, registeredRevisitRanges } from './source-breakdown';
+import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations, registeredRevisitRanges, type SourceBreakdown } from './source-breakdown';
 
 export const COPY_REVIEW_PROTOCOL = 'creator-copy-v2';
 // Included in the subject digest: old approvals cannot silently certify changed review criteria.
@@ -86,6 +86,8 @@ export interface CopyProductionReview {
   delivery_checks?: unknown[];
   l1_evidence_contract?: 'v1';
   opening_comparison_digest?: string;
+  ending_picture_contract?: 'v1';
+  teaching_brief_digest?: string;
   visual_criteria_digest?: string;
   visual_criteria_checks?: Array<{id:string;answer:'yes'|'no'|'unknown';observation:string;picture_stage:string}>;
 }
@@ -239,6 +241,8 @@ export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
   return row(v) && v.scope === 'copy_and_planned_picture_only' && text(v.protocol)
     && (v.l1_evidence_contract === undefined || v.l1_evidence_contract === 'v1')
     && (v.opening_comparison_digest === undefined || typeof v.opening_comparison_digest === 'string' && /^[a-f0-9]{64}$/.test(v.opening_comparison_digest))
+    && (v.ending_picture_contract === undefined || v.ending_picture_contract === 'v1')
+    && (v.teaching_brief_digest === undefined || typeof v.teaching_brief_digest === 'string' && /^[a-f0-9]{64}$/.test(v.teaching_brief_digest))
     && Number.isSafeInteger(v.analysis_revision) && Number(v.analysis_revision) > 0
     && typeof v.content_digest === 'string' && /^[a-f0-9]{64}$/.test(v.content_digest)
     && text(v.author_run_id) && text(v.reviewer_run_id) && v.author_run_id !== v.reviewer_run_id
@@ -335,6 +339,7 @@ export async function copyReviewSubject(doc: ProjectDoc) {
   const bytes = new TextEncoder().encode(canonical({ ...(delivery.length?{delivery_review_criteria:deliveryReviewCriteria(delivery)}:{}),
     ...(changedDeliveryInput?{reviewable_delivery_sections:projectedDelivery}:{}),
     ...(hasBoundComposition?{planned_composition_projection:'caption-and-comparison-v1'}:{}),
+    ...(a.source_breakdown?.points.some(point=>point.teaching_basis)?{teaching_basis_projection:'source-and-copy-v1'}:{}),
     protocol: COPY_REVIEW_PROTOCOL, input_policy: COPY_REVIEW_INPUT_POLICY, calibration: teachingRegression, narration_review_criteria: NARRATION_REVIEW_CRITERIA, visual_review_criteria: VISUAL_REVIEW_CRITERIA, group_review_criteria: GROUP_REVIEW_CRITERIA, analysis: content,
     actual_source_hash: doc.assets.find((v) => v.id === a.source.asset_id)?.sourceContentHash ?? null }));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -367,6 +372,8 @@ export async function checkCopyProduction(
   // Pure-policy test seam; runtime tool callers always use the measured calibration.
   calibration = copyReviewCalibration(),
   openingComparison?: OpeningComparisonCriterion,
+  endingPictureRequired=false,
+  teachingBriefDigest?: string,
 ) {
   const result = (code: string, allowed = false) => ({ allowed, code, scope: 'copy_and_planned_picture_only' as const,
     complete_film_accepted: false as const });
@@ -383,8 +390,11 @@ export async function checkCopyProduction(
   let subject: Awaited<ReturnType<typeof copyReviewSubject>>;
   try { subject = await copyReviewSubject(doc); } catch { return result('copy_candidate_missing_or_incomplete'); }
   if (subject.digest !== r.content_digest) return result('copy_review_stale');
+  if(teachingBriefDigest&&r.teaching_brief_digest!==teachingBriefDigest)return result('copy_teaching_brief_review_stale');
   if(openingComparison&&r.opening_comparison_digest!==await handoffDigest(openingComparison))
     return {...result('copy_delivery_review_not_passed'),delivery_issues:['opening_comparison_review_missing_or_stale']};
+  if(endingPictureRequired&&r.ending_picture_contract!=='v1')
+    return {...result('copy_delivery_review_not_passed'),delivery_issues:['ending_picture_review_missing_or_stale']};
   if (r.units.length !== subject.units.length || !subject.units.every((u) => r.units.some((v) => v.unit_id === u.unit_id && v.candidate_id === u.candidate_id))) return result('copy_review_scope_incomplete');
   const breakdown = checkSourceBreakdown(doc);
   if (breakdown.status !== 'structurally_ready') return { ...result('source_breakdown_not_ready'), breakdown_issues: breakdown.issues };
@@ -415,7 +425,8 @@ export async function checkCopyProduction(
   }
   if (r.verdict !== 'pass' || r.units.some((u) => u.verdict !== 'pass' || u.findings.some((f) => f.severity !== 'suggestion'))) return result('copy_review_not_passed');
   if (calibration.protocol !== COPY_REVIEW_PROTOCOL || !calibration.qualified) return result('copy_review_method_unqualified');
-  const delivery=deliveryReview(registered.delivery_sections??[],r.delivery_checks,!!(openingComparison||r.opening_comparison_digest));
+  const delivery=deliveryReview(registered.delivery_sections??[],r.delivery_checks,openingComparison??!!r.opening_comparison_digest,
+    r.ending_picture_contract==='v1');
   if(delivery.verdict!=='pass')return {...result('copy_delivery_review_not_passed'),delivery_issues:delivery.issues};
   return result('copy_and_plan_ready', true);
 }
@@ -490,6 +501,7 @@ export interface TeachingPoint {
   supports_point_id?: string;
   buying_concern?: string;
   filming_conditions?: string[];
+  teaching_basis?: Pick<NonNullable<SourceBreakdown['points'][number]['teaching_basis']>, 'selling_point' | 'method' | 'connection' | 'evidence_ids'>;
   /** Registered treatment and author reason are provenance, not reviewer approval. */
   treatment?: 'explain' | 'merged' | 'visual_only' | 'omit';
   treatment_reason?: string;
@@ -620,6 +632,7 @@ export interface TeachingJudgment {
   meaning_alignment: 'aligned' | 'uncertain' | 'misaligned';
   quotes: Array<{ line_id: string; channel: 'narration' | 'caption' | 'label'; text: string }>;
   reason: string;
+  source_quote?: { evidence_id: string; quote: string };
   visual_check?: {
     evidence_refs: Array<{ segment_id: string; phase: 'original' | 'explanation'; evidence_id: string; source_range_seconds: [number, number] }>;
     observed_relation: string;
@@ -630,6 +643,10 @@ export interface TeachingJudgment {
 export interface TeachingEnvelope {
   packet: TeachingPacket;
   review: { units: Array<{ unit_id: string; points: TeachingJudgment[] }> };
+}
+
+function reviewableTeachingBasis({ selling_point, method, connection, evidence_ids }: NonNullable<TeachingPoint['teaching_basis']>) {
+  return { selling_point, method, connection, evidence_ids: [...evidence_ids] };
 }
 
 /** Build from the registered pre-copy ledger, never from the author's self-review or a shorter draft. */
@@ -681,6 +698,8 @@ export async function copyTeachingPacketFromDoc(doc: ProjectDoc): Promise<Teachi
           ...(text(planId) && row(execution) ? { execution_plan: { plan_id: planId, script_candidate_id: String(internal.current_script_candidate), content: reviewablePlan(execution, 'root', true) as Row } } : {}) },
         points: unit.coverage.map((c) => {
         const p = b.points.find((v) => v.point_id === c.point_id)!;
+        if (p.teaching_basis?.evidence_ids.some(id=>!a.evidence.some(e=>e.evidence_id===id&&e.call_status!=='failed'
+          &&['visible_action','original_claim'].includes(e.kind)))) throw new Error(`teaching_basis_source_invalid:${p.point_id}`);
         const visual: VisualEvidenceBinding[] = [];
         if (c.treatment === 'visual_only') {
           for (const phase of ['original', 'explanation'] as const) {
@@ -698,7 +717,9 @@ export async function copyTeachingPacketFromDoc(doc: ProjectDoc): Promise<Teachi
           }
         }
         return { point_id: p.point_id, role: p.role, question: p.teaching_question, evidence_ids: breakdownPointEvidence(b, p.point_id),
-          buying_concern: p.buying_concern, filming_conditions: [...p.filming_conditions],
+          buying_concern: p.buying_concern, filming_conditions: p.teaching_basis
+            ? [p.teaching_basis.must_capture,p.teaching_basis.claim_limit] : [...p.filming_conditions],
+          ...(p.teaching_basis ? { teaching_basis: reviewableTeachingBasis(p.teaching_basis) } : {}),
           treatment: c.treatment, ...(c.reason ? { treatment_reason: c.reason } : {}),
           ...(c.treatment === 'visual_only' ? { visual_evidence: visual } : {}),
           ...(p.supports_point_id ? { supports_point_id: p.supports_point_id } : {}) };
@@ -749,6 +770,10 @@ function teachingPacket(v: unknown): v is TeachingPacket {
     return points.every((p) => row(p) && text(p.point_id) && (typeof p.role === 'string' && ['primary', 'supporting', 'auxiliary'].includes(p.role))
       && text(p.question) && stringList(p.evidence_ids) && p.evidence_ids.length > 0 && p.evidence_ids.every((id) => evidence.has(id)))
       && points.every((p) => (p.buying_concern === undefined || text(p.buying_concern)) && (p.filming_conditions === undefined || stringList(p.filming_conditions)))
+      && points.every((p) => p.teaching_basis === undefined || (row(p.teaching_basis)
+        && text(p.teaching_basis.selling_point) && text(p.teaching_basis.method) && text(p.teaching_basis.connection)
+        && stringList(p.teaching_basis.evidence_ids) && p.teaching_basis.evidence_ids.length > 0 && distinct(p.teaching_basis.evidence_ids)
+        && p.teaching_basis.evidence_ids.every((id:string) => (p.evidence_ids as string[]).includes(id))))
       && points.every((p) => (p.treatment === undefined || (typeof p.treatment === 'string' && ['explain', 'merged', 'visual_only', 'omit'].includes(p.treatment)))
         && (p.treatment_reason === undefined || text(p.treatment_reason))
         && (p.visual_evidence === undefined || (Array.isArray(p.visual_evidence) && p.visual_evidence.every(visualBindingShape)))
@@ -798,6 +823,7 @@ function teachingJudgment(v: unknown): v is TeachingJudgment {
     && (typeof v.meaning_alignment === 'string' && ['aligned', 'uncertain', 'misaligned'].includes(v.meaning_alignment))
     && Array.isArray(v.quotes) && v.quotes.every((q) => row(q) && text(q.line_id)
       && (typeof q.channel === 'string' && ['narration', 'caption', 'label'].includes(q.channel)) && text(q.text))
+    && (v.source_quote === undefined || (row(v.source_quote) && text(v.source_quote.evidence_id) && text(v.source_quote.quote)))
     && (v.visual_check === undefined || (row(v.visual_check) && Array.isArray(v.visual_check.evidence_refs)
       && v.visual_check.evidence_refs.every((r) => row(r) && text(r.segment_id) && text(r.evidence_id)
         && (r.phase === 'original' || r.phase === 'explanation') && sourceRangeShape(r.source_range_seconds))
@@ -845,9 +871,18 @@ export function assessTeachingReview(packet: unknown, review: unknown) {
     };
     for (const point of unit.points) {
       const p = assessed.points.find((p) => p.point_id === point.point_id)!;
+      if (point.teaching_basis) {
+        const cited = p.source_quote;
+        const observation = cited && point.teaching_basis.evidence_ids.includes(cited.evidence_id)
+          ? packet.source_evidence.find(e => e.evidence_id === cited.evidence_id)?.observation : undefined;
+        const original = observation?.match(/^\[(?:visible_action|original_claim); [^\]\r\n]+\] ([\s\S]+)$/u)?.[1];
+        if (!cited || !original || (cited.quote.match(/[\p{L}\p{N}]/gu)?.length ?? 0) < 4 || !matchesCopyQuote(cited.quote, [original])) {
+          fail(point.point_id, 'missing_or_unmatched_teaching_source_quote', true);
+        }
+      }
       const quotesMatch = p.quotes.every((q) => {
         const line = unit.lines.find((l) => l.line_id === q.line_id);
-        if (!line) return false;
+        if (!line || (point.teaching_basis && !line.point_ids.includes(point.point_id))) return false;
         const candidates = q.channel === 'narration' ? [line.narration_ms] : q.channel === 'caption' ? [line.caption_lines.join(' ')] : line.labels;
         return matchesCopyQuote(q.text, candidates);
       });
@@ -904,7 +939,9 @@ function reviewableDeliverySections(sections: DeliverySection[]): DeliverySectio
 export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>) {
   if (!cases.length || !distinct(cases.map((c) => c.case_id)) || cases.some((c) => !text(c.case_id) || !teachingPacket(c.packet))) throw new Error('Invalid teaching review packet');
   for (const { packet } of cases) for (const unit of packet.units) checkGroupedReviewHandoff(unit);
-  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${teachingRegression.instructions}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${VISUAL_REVIEW_CRITERIA}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
+  const hasTeachingBasis = cases.some(({ packet }) => packet.units.some(unit => unit.points.some(point => point.teaching_basis)));
+  const teachingBasisCriteria = hasTeachingBasis ? '\n\n核每个带 teaching_basis 的重点。先独立从原片及本组现行稿或可见安排答：买家在意哪项产品价值，原作者用了什么手法，该手法多给了买家什么判断依据？只靠基线、中文译文或作者备注明白的关系不能通过。用已有 connection、learner_takeaway、quotes 或 visual_check 判定。只列镜头填 action_only，只报功能填 function_only。另填 source_quote:{evidence_id,quote}，从本点 teaching_basis.evidence_ids 的一条原片动作或原话正文逐字摘录，不引用元数据。只有原声候选时按原作者的说法注明未人工听审，不能据此担保功效；只有画面时只核可见关系。无可引证据时保留不确定。' : '';
+  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${teachingRegression.instructions}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${VISUAL_REVIEW_CRITERIA}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${teachingBasisCriteria}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
     ...(packet.delivery_sections?.length?{delivery_sections:reviewableDeliverySections(packet.delivery_sections)}:{}),
     audience: packet.audience,
     product: { name: packet.product.name, purchase_concerns: [...packet.product.purchase_concerns], unknowns: [...packet.product.unknowns] },
@@ -914,6 +951,7 @@ export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; p
       ...(u.source_context ? { source_context: { scope: u.source_context.scope, source_ranges: u.source_context.source_ranges.map(r => [...r]), evidence_ids: [...u.source_context.evidence_ids], speech: u.source_context.speech } } : {}),
       points: u.points.map((p) => ({ point_id: p.point_id, role: p.role, question: p.question, evidence_ids: [...p.evidence_ids],
         ...(p.buying_concern ? { buying_concern: p.buying_concern } : {}), ...(p.filming_conditions ? { filming_conditions: [...p.filming_conditions] } : {}),
+        ...(p.teaching_basis ? { teaching_basis: reviewableTeachingBasis(p.teaching_basis) } : {}),
         ...(p.treatment ? { treatment: p.treatment } : {}),
         ...(p.visual_evidence ? { visual_evidence: p.visual_evidence.map((v) => ({ ...v, source_range_seconds: [...v.source_range_seconds] as [number, number], evidence_ids: [...v.evidence_ids] })) } : {}),
         ...(p.supports_point_id ? { supports_point_id: p.supports_point_id } : {}) })),

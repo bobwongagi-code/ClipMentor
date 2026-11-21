@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
-import { mkdtemp,rm } from 'node:fs/promises';
+import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import fixture from './fixtures/judydoll-teaching-baseline-r9.json';
+import exemplars from './fixtures/exemplar-teaching-comparison-20261121.json';
 import accepted from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import { projectDoc } from '../external-agent/offline-runtime.verify-fixtures';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { ClipMentorAnalysis } from '../../src/clipmentor/analysis';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
-import type { ProductionInput } from './production-task';
+import type { ProductionInput,ProductionTask } from './production-task';
+import { confirmedOpeningResultsMatch,deliveryReview,type DeliverySection } from '../../src/clipmentor/delivery-sections';
 
 const path=await mkdtemp(join(tmpdir(),'teaching-baseline-'));
 const prior=process.env.OPENCHATCUT_DATA_DIR,realFetch=globalThis.fetch;
@@ -54,6 +57,13 @@ const host=createServer(async(req,res)=>{
    takeaway:fail?'需要回到原片确认怎样呈现购买理由':'达人可学走把观察对象和比较结果放在一起的拍法',
    evidence_ids:[data.evidence.find((e:any)=>unit.source_ranges.some(([a,b]:number[])=>e.range[0]>=a&&e.range[0]<b))?.id].filter(Boolean),
    reason:fail?'教学基线遗漏了原片承接和观众要判断的问题。':'人工标注的符合样本',
+   ...(data.pointReview?{point_checks:unit.points.map((point:any)=>{
+    assert(!('exemplar' in point.teaching_basis||'difference' in point.teaching_basis),'reviewer cannot receive author exemplar labels');
+    const evidence=data.evidence.find((item:any)=>point.teaching_basis.evidence_ids.includes(item.id))!;
+    return {point_id:point.point_id,status:'ok',learner_takeaway:point.teaching_basis.connection,
+     connection:point.teaching_basis.connection,question_quote:point.teaching_question,source_evidence_id:evidence.id,source_quote:evidence.text,
+     visual_check:'Read the planned visible action',omission_loss:'Visual comparison remains observable'};
+   })}:{}),
   })),
  };
  const send=stream();
@@ -69,15 +79,18 @@ try{
   assert.equal(url.href,origin+'/llm/chat/completions','no real provider or other service permitted');
   return realFetch(input,options);
  };
+ const {runtimeProfile}=await import('../runtime-profile');
+ assert.equal(runtimeProfile().rootDir,path,'test must never initialize the project store against the operator profile');
+ const {panelOpeningComparison}=await import('./production-panel-delivery');
  const {setStoredEntry}=await import('../plugins/project-store');
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
- const {productionStageWorker}=await import('./production-worker');
+ const {productionStageWorker,productionAuthorTaskData}=await import('./production-worker');
  const {advanceProductionTask,createProductionTask,queueDraftBlueprintFeedback,productionTaskStore,panelBlueprintRequirementsDigest}=await import('./production-task');
  const {revisionOf}=await import('../../src/agent/external-edit-session');
  const {digestValue}=await import('../agent-runs/store-values');
  const {teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
-  unchangedRejectedTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching}=await import('./production-teaching-baseline');
- const {copyPreparationReady,checkSourceBreakdown}=await import('../../src/clipmentor/source-breakdown');
+  unchangedRejectedTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,confirmedTeachingDigest}=await import('./production-teaching-baseline');
+ const {copyPreparationReady,checkSourceBreakdown,breakdownPointEvidence}=await import('../../src/clipmentor/source-breakdown');
  const old=projectDoc(1080,1920);
  old.assets=[{id:'source',kind:'video',src:'/media/uploads/judy-fixture.mp4',name:'fixture',durationInFrames:2020,width:1080,height:1920,sourceContentHash:'a'.repeat(64)}];
  old.clipMentorAnalysis={schema_version:1,analysis_id:'revision-9-fixture',revision:9,import_origin:'isolated_fixture',
@@ -105,13 +118,13 @@ try{
  assert.throws(()=>validateAuthorSelfCheck(answerWith(firstGroupQuote),repairSource),/repair_reference/,
   'a G1 observation supplied as full context cannot resolve G2');
  console.log('PASS JUDYDOLL G2 can cite its original observation, but shared full-source context cannot close a finding with G1 evidence');
- const taskFor=async(projectId:string,doc:ProjectDoc,maxRepairs=0)=>{
+ const taskFor=async(projectId:string,doc:ProjectDoc,maxRepairs=0,editorialPolicy?:'exemplar-v1')=>{
   await setStoredEntry('project:'+projectId,doc);
   const saved=(await loadOfflineStoredProject(projectId))!;
   const input:ProductionInput={projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:doc.clipMentorAnalysis!.product,
    brief:doc.clipMentorAnalysis!.source_breakdown!.review_scope!.instruction!,author:{provider:'openai',model:'baseline-fixture',origin,apiMode:'chat'},
    reviewer:{provider:'openai',model:'independent-must-not-run',origin,apiMode:'chat'},humanBlueprintReview:true,
-   panelDelivery:{productAssetId:'product',productAssetHash:'b'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'c'.repeat(64)},
+   panelDelivery:{productAssetId:'product',productAssetHash:'b'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'c'.repeat(64),editorialPolicy},
    budget:{model:6,review:0,observation:0,tts:0,render:0,preview_review:0,maxRepairs,maxElapsedMs:120_000}};
   const task=await createProductionTask(input);
   task.projectRevision=saved.revision;task.stage='blueprint';
@@ -314,6 +327,214 @@ try{
  assert.equal(knownTask.attempts.model,2);
  assert.equal(knownTask.attempts.review,0);
  console.log('PASS qualified other-product baseline reaches the separate author slot without starting independent review, voice or render');
+
+ const strictTask=await taskFor('teaching-exemplar-old',draft,0,'exemplar-v1');
+ const strictSource=teachingBaselineSource(draft,strictTask,[]);
+ const withoutTranslation=structuredClone(draft);
+ delete withoutTranslation.clipMentorAnalysis!.evidence.find(e=>e.evidence_id==='CL-3')!.meaning_zh;
+ const originalEvidence=teachingBaselineSource(withoutTranslation,strictTask,[]).evidence;
+ assert.equal(originalEvidence.find(e=>e.id==='CL-3')?.status,'candidate_unverified_speech');
+ assert.equal(originalEvidence.find(e=>e.id==='VIS-4-1')?.kind,'visible_action');
+ assert.deepEqual(teachingPointGaps(strictSource,draft).map(gap=>gap.split(' ')[0]),['P-01','P-02','P-03','P-04','P-05']);
+ calls=[];await advanceProductionTask(strictTask,productionStageWorker);
+ assert.deepEqual(calls,[],'the actual revision-9 missing baseline is refused before spending on review or writing copy');
+ assert.match(strictTask.error??'',/P-01.*P-05/);
+
+ const samples=[...exemplars.green_makes.map(sample=>({...sample,selling_point:sample.buying_concern})),...exemplars.reference_controls];
+ const strictPositive:typeof strictSource={...strictSource,feedback:null,rebuilding:false,
+  evidence:samples.map(p=>({...p.evidence,range:p.evidence.range as [number,number],kind:'visible_action',status:'agent_observed_candidate'}))};
+ strictPositive.units=samples.map((sample,index)=>({
+  ...strictSource.units[0],unit_id:'green-'+index,source_ranges:[sample.evidence.range as [number,number]],
+  coverage:[{point_id:sample.point_id,treatment:'explain'}],
+  points:[{...strictSource.units[0].points[0],point_id:sample.point_id,teaching_question:sample.question,role:'primary',supports_point_id:undefined,
+   teaching_basis:{selling_point:sample.selling_point,evidence_ids:[sample.evidence.id],method:sample.evidence.text,
+    connection:sample.connection_excerpt,must_capture:sample.evidence.text,claim_limit:'仅以可见演示说明表达方式',exemplar:sample.principle as 'buyer-first',difference:'以这条原片证据说明本次用途'}}],
+ }));
+ const positiveReceipt={feedback_scope:'none',units:samples.map((p,i)=>({unit_id:'green-'+i,status:'ok',source_role:p.buying_concern,
+  takeaway:p.connection_excerpt,evidence_ids:[p.evidence.id],reason:'fixture replay',
+  point_checks:[{point_id:p.point_id,status:'ok',learner_takeaway:p.connection_excerpt,connection:p.connection_excerpt,
+   question_quote:p.question,source_evidence_id:p.evidence.id,source_quote:p.evidence.text}]}))};
+ assert(validateTeachingBaselineReview(positiveReceipt,strictPositive).units.every(u=>u.status==='ok'));
+ const wrongQuote=structuredClone(positiveReceipt);
+ wrongQuote.units[0].point_checks[0].source_quote=samples[1].evidence.text;
+ assert.throws(()=>validateTeachingBaselineReview(wrongQuote,strictPositive),/point_source_quote_invalid/);
+ const missingPoint=structuredClone(positiveReceipt);
+ missingPoint.units[0].point_checks=[];
+ assert.throws(()=>validateTeachingBaselineReview(missingPoint,strictPositive),/point_review_incomplete/);
+ const overallPass=structuredClone(positiveReceipt);
+ overallPass.units[0].point_checks[0].status='fix';
+ assert.equal(validateTeachingBaselineReview(overallPass,strictPositive).units[0].status,'fix');
+ const forcedRebuild=validateTeachingBaselineReview({...positiveReceipt,feedback_scope:'copy'},
+  {...strictPositive,feedback:{text:'我觉得方向错了。',revision:'reviewed-board'}});
+ assert.equal(forcedRebuild.feedback_scope,'baseline');
+ assert(forcedRebuild.units.every(u=>u.status==='fix'));
+ const rebuildWithExemplar=teachingRebuild(strictPositive,old,forcedRebuild);
+ const relabeled=structuredClone(strictPositive);
+ relabeled.units[0].points[0].teaching_basis!.difference='仅重写范例笔记，没改变本组教学';
+ assert.equal(unchangedRejectedTeaching(relabeled,rebuildWithExemplar).length,samples.length);
+ assert.equal(exemplars.judydoll_copy.length,6);
+ // Actual saved draft excerpts cannot be cited as original-video support for a new baseline.
+ for(const [i,unit] of exemplars.judydoll_copy.entries()){
+  const stale=structuredClone(positiveReceipt);
+  stale.units[i].point_checks[0].source_quote=unit.lines[0].narration_ms;
+  assert.throws(()=>validateTeachingBaselineReview(stale,strictPositive),/point_source_quote_invalid/,unit.unit_id);
+ }
+ console.log('PASS Green Makes six archived excerpts, TeaShell and NIUMO controls, JUDYDOLL revision 9 and six draft excerpts, and explicit direction rejection');
+
+ const fixed=panelOpeningComparison('567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49','4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24');
+ assert.equal(panelOpeningComparison('other','4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24').results,undefined);
+ assert.deepEqual(fixed.results,{views:'339.32k',units:'135',revenue:'RM5.31k'});
+ const hook=(copy:string)=>({section_id:'opening',kind:'performance_opening',line:{line_id:'open',narration_ms:copy,caption_lines:[copy]},evidence_ids:['sale']}) as DeliverySection;
+ const premise='Produk yang sama';
+ const question='Kenapa video ini capai 339.32k tontonan, 135 unit terjual dan Revenue RM5.31k?';
+ const opening=hook(`${premise}. ${question} Jom tengok caranya.`);
+ const reviewRow={section_id:'opening',verdict:'pass',claims_supported:'supported',purpose_clear:true,reason:'receipt fixture',evidence_ids:['sale'],
+  narration_checks:[{line_id:'open',necessity:'necessary',naturalness:'natural',omission_loss:'the question',reason:'present'}],
+  opening_comparison:{status:'preserved',same_product_quote:premise,outcome_question_quote:question,invitation_quote:'Jom tengok caranya.',reason:'present'}};
+ assert.equal(deliveryReview([opening],[reviewRow],fixed).verdict,'pass');
+ const missingUnits=hook(opening.line.narration_ms.replace('135 unit terjual dan ',''));
+ assert.equal(deliveryReview([missingUnits],[reviewRow],fixed).verdict,'needs_revision');
+ const wrongMetric=hook(opening.line.narration_ms.replace('135 unit','135 komen'));
+ assert.equal(confirmedOpeningResultsMatch(wrongMetric,fixed.results!),false,'A count of comments is not units sold');
+ const reversedHook=hook(`${question} ${premise}. Jom tengok caranya.`);
+ assert.notEqual(deliveryReview([reversedHook],[reviewRow],fixed).verdict,'pass','The comparison premise comes before the result question');
+ const paddedHook=hook(`Ramai kreator sudah membuat video produk ini. ${opening.line.narration_ms}`);
+ assert.equal(deliveryReview([paddedHook],[reviewRow],fixed).verdict,'insufficient_evidence','A separately added creator count premise cannot hide outside the cited opening');
+ assert.equal(deliveryReview([paddedHook],[{...reviewRow,opening_comparison:{...reviewRow.opening_comparison,
+  same_product_quote:`Ramai kreator sudah membuat video produk ini. ${premise}`}}],fixed).verdict,'insufficient_evidence','A citation cannot absorb a separate factual assertion');
+ const splitHook=hook(`${premise}. ${question.replace(' dan Revenue RM5.31k','')} Revenue RM5.31k. Jom tengok caranya.`);
+ assert.equal(deliveryReview([splitHook],[{...reviewRow,opening_comparison:{...reviewRow.opening_comparison,
+  outcome_question_quote:question.replace(' dan Revenue RM5.31k','')}}],fixed).verdict,'insufficient_evidence','All three metrics belong to the result question itself');
+ const insertedHook=hook(`${premise}. Semua kreator lain ketinggalan. ${question} Jom tengok caranya.`);
+ assert.equal(deliveryReview([insertedHook],[reviewRow],fixed).verdict,'insufficient_evidence','the cited opening cannot skip an unsupported assertion between its premise and question');
+ const appendedHook=hook(`${opening.line.narration_ms} Cara ini menggerakkan jualan.`);
+ assert.equal(deliveryReview([appendedHook],[reviewRow],fixed).verdict,'insufficient_evidence','the cited opening must cover the spoken ending as well');
+ assert.equal(deliveryReview([opening],[{...reviewRow,opening_comparison:{...reviewRow.opening_comparison,invitation_quote:undefined}}],fixed).verdict,'insufficient_evidence');
+ for(const copy of [question.replace('135','1350'),question.replace('135','135.1'),question.replace('Revenue','GMV')])
+  assert.equal(confirmedOpeningResultsMatch(hook(copy),fixed.results!),false);
+ const cta={...opening,section_id:'new_contact',kind:'creator_invitation',picture:{asset_id:'cta',
+  layout:{kind:'recruitment_card',poster:{asset_id:'cta',src:'/media/uploads/cta.png',sha256:'a'.repeat(64)}}}} as DeliverySection;
+ const ctaResult={...reviewRow,section_id:'new_contact',ending_picture:{asset_id:'cta',view:'planned_composition',both_visible:'yes',observation:'The original poster shows both the palette and commission.'}};
+ const genericOpening=panelOpeningComparison('unrelated-source','unrelated-sales');
+ assert.equal(deliveryReview([opening,cta],[reviewRow,{...ctaResult,ending_picture:undefined}],genericOpening,true).verdict,'insufficient_evidence',
+  'A new web task without fixed performance numbers still needs an ending-picture judgment');
+ assert.equal(deliveryReview([opening,cta],[reviewRow,ctaResult],genericOpening,true).verdict,'pass');
+ assert.equal(deliveryReview([opening,cta],[reviewRow,{...ctaResult,ending_picture:{...ctaResult.ending_picture,view:'supplied_full'}}],genericOpening,true).verdict,'insufficient_evidence',
+  'the uploaded image alone cannot certify the planned layout');
+ assert.equal(deliveryReview([opening,cta],[reviewRow,ctaResult],fixed).verdict,'pass');
+ assert.equal(deliveryReview([opening,cta],[reviewRow,{...ctaResult,ending_picture:{...ctaResult.ending_picture,asset_id:'other'}}],fixed).verdict,'insufficient_evidence');
+ console.log('PASS frozen opening metrics and Revenue, unrelated product isolation, and ending-picture binding');
+
+ // Replay another saved product through the new path, with a loopback review.
+ // The adapter only adds the newly required fields and does not claim a new creative verdict.
+ const other=structuredClone(known);
+ const otherSource=teachingBaselineSource(other,knownTask,[]);
+ const otherBreakdown=other.clipMentorAnalysis!.source_breakdown!;
+ for(const point of otherBreakdown.points){
+  const registered=breakdownPointEvidence(otherBreakdown,point.point_id);
+  const visualOnly=otherBreakdown.units.some(unit=>unit.coverage.some(coverage=>coverage.point_id===point.point_id&&coverage.treatment==='visual_only'));
+  const evidence=otherSource.evidence.find(item=>registered.includes(item.id)&&(!visualOnly||item.kind==='visible_action'))!;
+  assert(evidence,point.point_id);
+  point.teaching_basis={selling_point:point.buying_concern,evidence_ids:[evidence.id],method:evidence.text,
+   connection:point.teaching_question,must_capture:evidence.text,claim_limit:'保留实际拍法和片中表达边界',
+   exemplar:'buyer-first',difference:'原片证据来自本商品'};
+ }
+ const otherStrict=await taskFor('teaching-exemplar-barely-there',other,0,'exemplar-v1');
+ const actionOnly=structuredClone(other);
+ const firstPoint=actionOnly.clipMentorAnalysis!.source_breakdown!.points[0];
+ firstPoint.teaching_basis!.connection=firstPoint.teaching_basis!.method+'。';
+ assert(teachingPointGaps(teachingBaselineSource(actionOnly,otherStrict,[]),actionOnly).some(gap=>gap.startsWith(firstPoint.point_id+' ')),
+  'Repeating the shot in the effect field must fail before authoring');
+ const referenceDoc=structuredClone(other);
+ const referenceBytes='frozen comparison fixture';
+ const reference={id:'approved-example',name:'approved-example.mp4',kind:'video' as const,src:'/media/uploads/approved-example.mp4',
+  sourceContentHash:createHash('sha256').update(referenceBytes).digest('hex'),durationInFrames:300,width:720,height:1280,
+  props:{clipmentorReferenceOnly:true}};
+ referenceDoc.assets.push(reference);
+ const referencesTask=await taskFor('teaching-exemplar-bound-reference',referenceDoc,0,'exemplar-v1');
+ const {registerHandoff,readHandoffPolicy}=await import('./handoff');
+ const {uploadDir}=await import('../media-dir');
+ const referenceFile=join(uploadDir(),reference.name);
+ await mkdir(uploadDir(),{recursive:true});
+ await writeFile(referenceFile,referenceBytes);
+ const criteria={id:'look-at-the-gesture',sectionId:otherBreakdown.units[0].unit_id,layout:'native_composition',pictureStage:'explanation',
+  quote:'先展示买家能直接观察的结果',question:'讲解是否让人看清动作和结果的关系？',reference:{assetId:reference.id,seconds:2,fileName:reference.name}};
+ await registerHandoff({projectId:referencesTask.projectId,expectedProjectRevision:referencesTask.projectRevision,previousDigest:null,
+  brief:{version:1,briefId:'teaching-reference',revision:1,mode:'autonomous',phase:'planning',planner:'builtin_agent',executor:'builtin_agent',
+   projectId:referencesTask.projectId,timelineId:referenceDoc.activeTimelineId,objective:'Exercise current teaching references',
+   doneCriteria:[criteria],blueprint:null,budget:{maxModelTurns:6,maxToolCalls:20,maxElapsedMs:120_000,paidToolCalls:{}}}});
+ const priorReferencePolicy=(await readHandoffPolicy(referencesTask.projectId))!;
+ const reboundReferencePolicy=structuredClone(priorReferencePolicy);
+ reboundReferencePolicy.assetBindings.find(asset=>asset.id===reference.id)!.sourceContentHash='e'.repeat(64);
+ assert.notEqual(panelBlueprintRequirementsDigest(priorReferencePolicy),panelBlueprintRequirementsDigest(reboundReferencePolicy),
+  'rebinding the same reference ID must invalidate the old board requirement digest');
+ const author=await productionAuthorTaskData(referencesTask,referenceDoc);
+ assert.deepEqual(author.teachingReferences?.references,[{id:criteria.id,sectionId:criteria.sectionId,pictureStage:criteria.pictureStage,
+  quote:criteria.quote,question:criteria.question,reference:{...criteria.reference,sha256:reference.sourceContentHash}}]);
+ const frozenAuthor=await productionAuthorTaskData({...referencesTask,input:{...referencesTask.input,openingComparison:fixed}},referenceDoc);
+ assert(frozenAuthor.doneCriteria?.includes('把原话、画面证据、达人能学什么和讲解怎么承载都做实'));
+ assert(!author.doneCriteria?.includes('把原话、画面证据、达人能学什么和讲解怎么承载都做实'),'product-specific user quote must not drift to another project');
+ const changedReference=structuredClone(referenceDoc);
+ changedReference.assets.at(-1)!.props={};
+ await assert.rejects(()=>productionAuthorTaskData(referencesTask,changedReference),/handoff_teaching_reference_unbound/);
+ await writeFile(referenceFile,'different reference bytes');
+ calls=[];await advanceProductionTask(referencesTask,productionStageWorker);
+ assert.match(referencesTask.error??'',/handoff_visual_reference_changed/);
+ assert.deepEqual(calls,[],'a stale teaching reference is rejected before a baseline or author request');
+ assert.equal(referencesTask.attempts.model,0);
+ calls=[];await advanceProductionTask(otherStrict,productionStageWorker);
+ assert.deepEqual(calls,['baseline','author'],'another product passes the new review contract before reaching the drafting call');
+ assert.equal(otherStrict.attempts.review,0);
+ console.log('PASS Barely There cold project runs the strict baseline and reaches draft with a local provider');
+
+ const resumed=await taskFor('teaching-exemplar-approved-output',other,0,'exemplar-v1');
+ resumed.input.panelDelivery!.audience='existing_partner';
+ // Opening a downstream repair must inherit the exact common teaching basis
+ // saved by the parent's approval, not trust its own current draft.
+ const basisDigest=confirmedTeachingDigest(other);
+ const approval:NonNullable<ProductionTask['blueprintApproval']>={sourceProjectId:otherStrict.projectId,sourceTaskId:otherStrict.taskId,sourceRevision:otherStrict.projectRevision!,
+  digest:(await copyReviewSubject(other)).digest,requirementsDigest:'a'.repeat(64),confirmedAt:Date.now(),confirmedTeachingDigest:basisDigest};
+ resumed.blueprintApproval=approval;
+ const mutated=structuredClone(other);
+ mutated.clipMentorAnalysis!.source_breakdown!.points[0].teaching_question='某次返修把共同教学问题改成了另外一件事？';
+ await setStoredEntry('project:'+resumed.projectId,mutated);
+ resumed.projectRevision=revisionOf(mutated);
+ calls=[];
+ await assert.rejects(productionStageWorker(resumed,{signal:new AbortController().signal,async effect(){throw Error('provider called');}}),
+  /production_confirmed_teaching_baseline_changed/);
+ const changedEvidence=structuredClone(other);
+ const evidenceId=changedEvidence.clipMentorAnalysis!.source_breakdown!.points[0].teaching_basis!.evidence_ids[0];
+ const sourceEvidence=changedEvidence.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===evidenceId)!;
+ changedEvidence.clipMentorAnalysis!.evidence.push({...sourceEvidence,evidence_id:'unrelated-supplement'});
+ assert.equal(confirmedTeachingDigest(changedEvidence),basisDigest);
+ sourceEvidence.text+=' The same evidence ID now has different facts.';
+ assert.notEqual(confirmedTeachingDigest(changedEvidence),basisDigest);
+ const withSupport=structuredClone(other);
+ const supported=withSupport.clipMentorAnalysis!.evidence.find(e=>e.evidence_id===evidenceId)!;
+ const frameEvidence=withSupport.clipMentorAnalysis!.evidence.find(e=>e.kind==='source_frame')!;
+ const support={...frameEvidence,evidence_id:'supporting-source-position',supporting_evidence_ids:[]};
+ withSupport.clipMentorAnalysis!.evidence.push(support);
+ supported.supporting_evidence_ids.push(support.evidence_id);
+ const supportedApproval=confirmedTeachingDigest(withSupport);
+ support.text+=' changed behind the same ID';
+ assert.notEqual(confirmedTeachingDigest(withSupport),supportedApproval,'a selected observation cannot approve different supporting evidence behind the same ID');
+ approval.confirmedTeachingDigest=supportedApproval;
+ await setStoredEntry('project:'+resumed.projectId,withSupport);
+ resumed.projectRevision=(await loadOfflineStoredProject(resumed.projectId))!.revision;
+ await assert.rejects(productionStageWorker(resumed,{signal:new AbortController().signal,async effect(){throw Error('provider called');}}),
+  /production_confirmed_teaching_baseline_changed/);
+ // An existing policy-v1 continuation may predate the persisted digest. Its
+ // original approved project revision is enough to recover, without a provider request.
+ delete approval.confirmedTeachingDigest;
+ await setStoredEntry('project:'+resumed.projectId,other);
+ resumed.projectRevision=revisionOf(other);
+ await assert.rejects(productionStageWorker(resumed,{signal:new AbortController().signal,async effect(){throw Error('fixture author boundary');}}),
+  /fixture author boundary/);
+ approval.sourceRevision='stale-parent-revision';
+ await assert.rejects(productionStageWorker(resumed,{signal:new AbortController().signal,async effect(){throw Error('provider called');}}),
+  /production_confirmed_teaching_baseline_changed/);
+ assert.deepEqual(calls,[]);
+ console.log('PASS downstream output repairs preserve the shared approved teaching baseline');
 }finally{
  globalThis.fetch=realFetch;
  host.closeAllConnections();await new Promise<void>(resolve=>host.close(()=>resolve()));

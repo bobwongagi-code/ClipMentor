@@ -5,11 +5,26 @@ import { renderedVisualFrameRect } from '../editor/visualFrameGeometry';
 import { flexCropRect, PREVIEW_CROP_MIN_SPAN } from '../editor/flexCrop';
 import { isBackgroundFillActive } from '../editor/backgroundFill';
 import { timelineTrackIds } from '../editor/timelineTypes';
+import type { OpeningComparisonCriterion } from '../../shared/clipmentor-handoff';
 type Row=Record<string,unknown>;
 const row=(v:unknown):v is Row=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown):v is string=>typeof v==='string'&&!!v.trim();
 const strings=(v:unknown):v is string[]=>Array.isArray(v)&&v.length>0&&v.every(text)&&new Set(v).size===v.length;
-export function deliveryReview(sections:DeliverySection[],raw:unknown,openingComparisonRequired=false):{verdict:'pass'|'needs_revision'|'insufficient_evidence';issues:string[]}{
+function openingMetricsMatch(line:string,results:NonNullable<OpeningComparisonCriterion['results']>){
+ const includes=(line:string,value:string)=>{
+  const literal=value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+');
+  return new RegExp('(?:^|[^\\p{L}\\p{N}.,])'+literal+'(?![\\p{L}\\p{N}]|[.,]\\p{N})','iu').test(line);
+ };
+ const views=[`${results.views} tontonan`,`tontonan ${results.views}`,`ditonton ${results.views} kali`];
+ const units=[`${results.units} unit terjual`,`${results.units} unit dijual`,`terjual ${results.units} unit`,`jualan ${results.units} unit`];
+ return views.some(metric=>includes(line,metric))&&units.some(metric=>includes(line,metric))&&includes(line,'Revenue '+results.revenue);
+}
+export function confirmedOpeningResultsMatch(section:DeliverySection,results:NonNullable<OpeningComparisonCriterion['results']>){
+ return [section.line.narration_ms,section.line.caption_lines.join(' ')].every(line=>openingMetricsMatch(line,results));
+}
+
+export function deliveryReview(sections:DeliverySection[],raw:unknown,openingComparisonRequired:boolean|OpeningComparisonCriterion=false,
+  endingPictureRequired=false):{verdict:'pass'|'needs_revision'|'insufficient_evidence';issues:string[]}{
  if(openingComparisonRequired&&sections.filter(section=>section.kind==='performance_opening').length!==1)
   return {verdict:'insufficient_evidence',issues:['opening_comparison_section_missing_or_duplicate']};
  if(!sections.length)return {verdict:raw===undefined?'pass':'insufficient_evidence',issues:raw===undefined?[]:['unexpected_delivery_review']};
@@ -22,13 +37,29 @@ export function deliveryReview(sections:DeliverySection[],raw:unknown,openingCom
   const n=r.narration_checks[0];
   if(!row(n)||n.line_id!==s.line.line_id||!['necessary','redundant','uncertain'].includes(String(n.necessity))||!['natural','awkward','uncertain'].includes(String(n.naturalness))||!text(n.omission_loss)||!text(n.reason)){issues.push(s.section_id+':narration_incomplete');if(verdict!=='needs_revision')verdict='insufficient_evidence';continue;}
   if(openingComparisonRequired&&s.kind==='performance_opening'){
+   const results=typeof openingComparisonRequired==='object'?openingComparisonRequired.results:undefined;
+   if(results&&!confirmedOpeningResultsMatch(s,results)){
+    issues.push(s.section_id+':opening_results_missing_or_changed');verdict='needs_revision';
+   }
    const comparison=r.opening_comparison;
    if(!row(comparison)||!['preserved','changed','uncertain'].includes(String(comparison.status))||!text(comparison.reason)){
     issues.push(s.section_id+':opening_comparison_missing');if(verdict!=='needs_revision')verdict='insufficient_evidence';
    }else if(comparison.status==='changed'){
     issues.push(s.section_id+':opening_comparison_changed');verdict='needs_revision';
-   }else if(comparison.status!=='preserved'||!openingQuotesMatch(s,comparison)){
+   }else if(comparison.status!=='preserved'||!openingQuotesMatch(s,comparison,results)){
     issues.push(s.section_id+':opening_comparison_evidence_invalid');if(verdict!=='needs_revision')verdict='insufficient_evidence';
+   }
+  }
+  if((endingPictureRequired||typeof openingComparisonRequired==='object'&&openingComparisonRequired.results)&&s.kind==='creator_invitation'){
+   const observation=r.ending_picture;
+   if(!row(observation)||observation.asset_id!==s.picture.asset_id||!text(observation.observation)
+    ||endingPictureRequired&&(!s.picture.layout||observation.view!=='planned_composition')
+    ||!['yes','no','unknown'].includes(String(observation.both_visible))){
+    issues.push(s.section_id+':ending_picture_evidence_invalid');if(verdict!=='needs_revision')verdict='insufficient_evidence';
+   }else if(observation.both_visible!=='yes'){
+    issues.push(s.section_id+':ending_picture_not_confirmed');
+    if(observation.both_visible==='no')verdict='needs_revision';
+    else if(verdict!=='needs_revision')verdict='insufficient_evidence';
    }
   }
   if(r.verdict==='needs_revision'||r.claims_supported==='contradicted'||!r.purpose_clear||n.necessity==='redundant'||n.naturalness==='awkward'){issues.push(s.section_id+':needs_revision');verdict='needs_revision';}
@@ -36,7 +67,7 @@ export function deliveryReview(sections:DeliverySection[],raw:unknown,openingCom
  }
  return{verdict,issues};
 }
-function openingQuotesMatch(section:DeliverySection,comparison:Row){
+function openingQuotesMatch(section:DeliverySection,comparison:Row,results?:OpeningComparisonCriterion['results']){
  const wrap=(value:string)=>value.trim().replace(/\s+/gu,' ');
  const words=[section.line.narration_ms,section.line.caption_lines.join(' ')].map(wrap);
  const premise=comparison.same_product_quote,question=comparison.outcome_question_quote;
@@ -47,8 +78,21 @@ function openingQuotesMatch(section:DeliverySection,comparison:Row){
   const index=copy.indexOf(first);
   return index>=0&&copy.includes(second,index+first.length);
  };
- return sameProduct!==outcome&&phrase(sameProduct)&&phrase(outcome)
-  &&words.every(copy=>separate(copy,sameProduct,outcome)||separate(copy,outcome,sameProduct));
+ if(sameProduct===outcome||!phrase(sameProduct)||!phrase(outcome))return false;
+ if(!results)return words.every(copy=>separate(copy,sameProduct,outcome)||separate(copy,outcome,sameProduct));
+ const invitation=comparison.invitation_quote;
+ const singleClause=(value:string)=>!/[.!?。！？]/u.test(value.replace(/(?<=\d)\.(?=\d)/gu,'').replace(/[.!?。！？]+$/u,''));
+ if(!text(invitation)||!singleClause(sameProduct)||!singleClause(outcome)||!/[?？]$/u.test(outcome)
+  ||!openingMetricsMatch(outcome,results))return false;
+ const ending=wrap(invitation);
+ if(!phrase(ending)||!singleClause(ending))return false;
+ // Only punctuation can sit outside the three quoted parts. Put any connector in its quote.
+ const after=(copy:string,quote:string)=>copy.startsWith(quote)?copy.slice(quote.length).replace(/^[\s,.!?;:，。！？；：–—-]+/u,''):undefined;
+ return words.every(copy=>{
+  const afterPremise=after(copy,sameProduct);
+  const afterQuestion=afterPremise===undefined?undefined:after(afterPremise,outcome);
+  return afterQuestion!==undefined&&after(afterQuestion,ending)==='';
+ });
 }
 /** The plan uses original-image margins; edit_item uses composition pixels.
  * Resolve through the same fitted source rectangle as preview and export.

@@ -1,6 +1,6 @@
 import type { ProjectDoc } from '../../src/editor/types';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
-import { originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
+import { breakdownPointEvidence,originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-sections';
 import { currentAgentSessionGeneration } from '../../src/persist/agentSessionGeneration';
 import { loadAgentRuntimeSidecar } from '../../src/persist/agentRuntimeStore';
@@ -15,7 +15,13 @@ export const panelTeachingPurpose = '给达人拆解原作者怎样用可观察�
 type Row = Record<string, unknown>;
 const row = (value: unknown): value is Row => !!value && typeof value === 'object' && !Array.isArray(value);
 const normalized = (value: unknown) => typeof value === 'string' ? value.normalize('NFKC').trim().replace(/\s+/gu, ' ') : '';
+const sameWords=(left:string,right:string)=>{
+ const words=(value:string)=>normalized(value).toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+ return words(left)===words(right);
+};
 const shortText = (value: unknown): value is string => typeof value === 'string' && !!normalized(value) && value.length <= 500;
+const exactExcerpt=(quote:unknown,source:string)=>shortText(quote)&&
+ (normalized(quote).match(/[\p{L}\p{N}]/gu)?.length??0)>=4&&normalized(source).includes(normalized(quote));
 
 function unitDefinition(breakdown: SourceBreakdown, unit: SourceBreakdown['units'][number]) {
  const pointIds = new Set(unit.coverage.map(point => point.point_id));
@@ -90,7 +96,27 @@ export function teachingDefinitionDigest(doc:ProjectDoc) {
  return digestValue(baseline&&{scope:baseline.review_scope,units:baseline.units.map(unit=>unitDefinition(baseline,unit))});
 }
 
-export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, requirements:readonly unknown[], objective?:string) {
+/** Bind the evidence chosen for the confirmed teaching, while allowing later unrelated evidence. */
+export function confirmedTeachingDigest(doc:ProjectDoc){
+ const analysis=doc.clipMentorAnalysis;
+ const pending=[...new Set(analysis?.source_breakdown?.points.flatMap(point=>point.teaching_basis?.evidence_ids??[]))];
+ const linked=new Set(pending),byId=new Map(analysis?.evidence.map(item=>[item.evidence_id,item]));
+ for(const id of pending)for(const support of byId.get(id)?.supporting_evidence_ids??[]){
+  if(!linked.has(support)){linked.add(support);pending.push(support);}
+ }
+ const evidence=analysis?.evidence.filter(item=>linked.has(item.evidence_id))
+  .sort((a,b)=>a.evidence_id.localeCompare(b.evidence_id));
+ const sources=new Set(evidence?.flatMap(item=>item.source_ids)),observationIds=new Set(evidence?.map(item=>item.observation_id));
+ const observations=analysis?.observations?.filter(item=>observationIds.has(item.observation_id))
+  .sort((a,b)=>a.observation_id.localeCompare(b.observation_id));
+ const transcripts=analysis?.transcripts.filter(item=>sources.has(item.source_id)).sort((a,b)=>a.source_id.localeCompare(b.source_id));
+ const transcription=analysis?.source_transcription;
+ return digestValue({definition:teachingDefinitionDigest(doc),source:analysis?.source,evidence,
+  ...(observations?.length?{observations}:{}),...(transcripts?.length?{transcripts}:{}),
+  ...(transcription&&sources.has(transcription.operation_id)?{transcription}:{})});
+}
+
+export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, requirements:readonly unknown[], objective?:string,referenceBinding?:string) {
  const analysis = doc.clipMentorAnalysis, baseline = analysis?.source_breakdown;
  if (!analysis?.source.sourceContentHash || !baseline?.units.length || baseline.review_scope?.kind !== 'full_source')
   throw Error('teaching_baseline_not_ready');
@@ -120,14 +146,71 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   source:analysis.source, evidence, transcripts, product:analysis.product,
   purpose:panelTeachingPurpose, task:task.input.brief, objective, requirements,
   scope:baseline.review_scope, units:baseline.units.map(unit => unitDefinition(baseline,unit)),
+  ...(referenceBinding?{referenceBinding}:{}),
   feedback:task.blueprintFeedback ? {text:task.blueprintFeedback,revision:task.blueprintFeedbackRevision} : null,
   rebuilding:!!task.repairContext?.teaching_rebuild,
+  ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
  };
 }
 
 type BaselineSource = ReturnType<typeof teachingBaselineSource>;
-type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string};
+type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takeaway:string;connection:string;question_quote:string;
+ source_evidence_id:string;source_quote:string;visual_check?:string;omission_loss?:string};
+type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string;point_checks?:PointDecision[]};
 type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[]};
+
+export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
+ if(!source.pointReview)return [];
+ const breakdown=doc.clipMentorAnalysis!.source_breakdown!;
+ return breakdown.points.flatMap(point=>{
+  const basis=point.teaching_basis,linked=breakdownPointEvidence(breakdown,point.point_id);
+  const ranges=breakdown.segments.filter(segment=>point.segment_ids.includes(segment.segment_id)).map(segment=>segment.source_range_seconds);
+  const covered=breakdown.units.flatMap(unit=>unit.coverage.filter(entry=>entry.point_id===point.point_id));
+  if(!covered.length)return [point.point_id+' 缺少教学覆盖'];
+  if(!basis||!basis.evidence_ids.every(id=>linked.includes(id)&&source.evidence.some(e=>e.id===id
+   &&ranges.some(([from,to])=>e.range[0]===e.range[1]?from<=e.range[0]&&e.range[0]<to:e.range[0]<to&&from<e.range[1]))))
+   return [point.point_id+' 缺教学依据或本点原片证据'];
+  if([basis.method,basis.selling_point,point.buying_concern].some(part=>sameWords(part,basis.connection)))
+   return [point.point_id+' 作用栏重复镜头、卖点或顾虑，缺买家怎么判断'];
+  if(covered.some(entry=>entry.treatment==='visual_only'&&!normalized(entry.reason)))
+   return [point.point_id+' 缺纯画面承载理由'];
+  return [];
+ });
+}
+
+export const rejectsTeachingDirection=(feedback:string|undefined)=>
+ /(?<!不是)(?<!并非)方向\s*错了/u.test(feedback??'');
+
+function reviewedPoints(value:unknown,unit:BaselineSource['units'][number],source:BaselineSource):PointDecision[]{
+ if(!Array.isArray(value)||value.length!==unit.points.length)throw Error('teaching_baseline_point_review_incomplete');
+ return unit.points.map(point=>{
+  const entries=value.filter(entry=>row(entry)&&entry.point_id===point.point_id);
+  const entry=entries[0];
+  if(entries.length!==1||!['ok','fix','unresolved'].includes(entry.status)
+   ||![entry.learner_takeaway,entry.connection].every(shortText)
+   ||!exactExcerpt(entry.question_quote,point.teaching_question))throw Error('teaching_baseline_point_quote_invalid');
+  const evidence=source.evidence.find(item=>item.id===entry.source_evidence_id&&point.teaching_basis?.evidence_ids.includes(item.id));
+  if(entry.status==='ok'||entry.source_evidence_id||entry.source_quote){
+   if(!evidence||!exactExcerpt(entry.source_quote,evidence.text))
+    throw Error('teaching_baseline_point_source_quote_invalid');
+  }
+  if(entry.status==='ok'&&unit.coverage.some(coverage=>coverage.point_id===point.point_id&&coverage.treatment==='visual_only')
+   &&(evidence?.kind!=='visible_action'||!shortText(entry.visual_check)||!shortText(entry.omission_loss)))
+    throw Error('teaching_baseline_visual_only_incomplete');
+  return entry as PointDecision;
+ });
+}
+
+function pointForIndependentReview(point:BaselineSource['units'][number]['points'][number]){
+ if(!point.teaching_basis)return point;
+ const {exemplar:_exemplar,difference:_difference,...basis}=point.teaching_basis;
+ return {...point,teaching_basis:basis};
+}
+
+function baselineReviewInput(source:BaselineSource){
+ const {referenceBinding:_reference,evidenceBinding:_evidence,...input}=source;
+ return input.pointReview?{...input,units:input.units.map(unit=>({...unit,points:unit.points.map(pointForIndependentReview)}))}:input;
+}
 export function validateTeachingBaselineReview(value: unknown, source: BaselineSource): BaselineReview {
  const invalid = () => Error('teaching_baseline_review_invalid');
  if (!row(value) || !Array.isArray(value.units) || value.units.length !== source.units.length
@@ -144,8 +227,16 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
   if (entry.status === 'ok' && (!entry.evidence_ids.length || !unit.points.some(point => point.role === 'primary'
    && unit.coverage.some(coverage => coverage.point_id === point.point_id && ['explain','visual_only'].includes(coverage.treatment))))) throw invalid();
   const {unit_id,status,source_role,takeaway,evidence_ids,reason} = entry;
-  return {unit_id,status,source_role,takeaway,evidence_ids,reason} as Decision;
+  const points=source.pointReview?reviewedPoints(entry.point_checks,unit,source):undefined;
+  const issue=points?.find(point=>point.status==='fix')??points?.find(point=>point.status==='unresolved');
+  return {unit_id,status:issue?.status==='fix'?'fix':status==='ok'?issue?.status??'ok':status,source_role,takeaway,evidence_ids,
+   reason:issue?`${issue.point_id} ${issue.connection}`:reason,
+   ...(points?{point_checks:points}:{})} as Decision;
  });
+ if(source.pointReview&&!source.rebuilding&&rejectsTeachingDirection(source.feedback?.text)){
+  return {feedback_scope:'baseline',units:units.some(unit=>unit.status!=='ok')?units:
+   units.map(unit=>({...unit,status:'fix',reason:'用户已明确退回教学方向，须重做选题基线。'}))};
+ }
  if (value.feedback_scope==='baseline' && !source.rebuilding && units.every(unit=>unit.status==='ok')) throw invalid();
  return {feedback_scope:value.feedback_scope as BaselineReview['feedback_scope'],units};
 }
@@ -159,7 +250,13 @@ export type TeachingRebuild = {
 };
 
 function teachingMeaning(unit:BaselineSource['units'][number]) {
- return digestValue({points:unit.points,coverage:unit.coverage,handoffs:unit.handoffs,original:unit.source_ranges,explanation:unit.explanation_segments});
+ const points=unit.points.map(input=>{
+  const point=pointForIndependentReview(input);
+  if(!point.teaching_basis)return point;
+  const {evidence_ids:_ids,...basis}=point.teaching_basis;
+  return {...point,filming_conditions:[],teaching_basis:basis};
+ });
+ return digestValue({points,coverage:unit.coverage,handoffs:unit.handoffs,original:unit.source_ranges,explanation:unit.explanation_segments});
 }
 
 function evidenceDigest(source:BaselineSource,unit:BaselineSource['units'][number]) {
@@ -240,8 +337,11 @@ export function staleRebuiltTeaching(source:BaselineSource, doc:ProjectDoc, rebu
 const instructions = `只读核验教学选题，不审稿。先从任务要求、按原片时间排列的动作与原话候选判断原作者在做什么，再看 units 的作者基线。逐组判：是否保留了该段承担的原片功能、观众想判断的具体问题、原作者让这个信息可见或可听的手法、拿掉本组后达人会少学的做法。动作顺序、泛泛形容或作者备注不够。开场与衔接可承担核心任务，按本片证据判断，不套固定顺序或组数。机器听写与画面只支持各自能确认的关系；不据此证明成交、配方功效或人群适用，也不要求把资料所有卖点写进片。未知不影响当前有依据的选题时，保留该边界。引用必须是本组可回读的 source evidence ID，不能把听写当人工听审。若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。
 仅输出 JSON {feedback_scope:"none"|"copy"|"baseline",units:[{unit_id,status:"ok"|"fix"|"unresolved",source_role,takeaway,evidence_ids:[...],reason}]}。每组恰好一条，ok 必须引用证据。禁止改稿或调用工具。`;
 
+const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。从本点原片证据先核产品卖点、买家顾虑和她怎样表达，connection 说明这个手法具体多给了什么判断依据。复述动作或只列功能、混淆原片促单与达人CTA、照搬别片形式均判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
+const baselineInstructions=(source:BaselineSource)=>instructions+(source.pointReview?pointInstructions:'');
+
 export function teachingBaselineDigest(source:BaselineSource) {
- return digestValue({source,instructions});
+ return digestValue({source,instructions:baselineInstructions(source)});
 }
 
 export async function checkTeachingBaseline(task:ProductionTask, stage:StageContext, source:BaselineSource) {
@@ -265,8 +365,8 @@ export async function checkTeachingBaseline(task:ProductionTask, stage:StageCont
   let attempts=0;
   await executeRun(run,{backend,provider:author.provider,model:author.model,origin:author.origin,openAiApiMode:author.apiMode,
    cacheMode:'short',maxOutputTokens:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
-   ...(backend==='codex'?{localProductionCodex:true as const}:{}),instructions,
-   messages:[{role:'user',content:JSON.stringify(source)}],
+   ...(backend==='codex'?{localProductionCodex:true as const}:{}),instructions:baselineInstructions(source),
+   messages:[{role:'user',content:JSON.stringify(baselineReviewInput(source))}],
    host:{signal:stage.signal,maxTurns:1,deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     async beforeRequest(){if(attempts++!==0)throw Error('teaching_baseline_single_request');},
     async execute(){throw Error('teaching_baseline_read_only');}}});

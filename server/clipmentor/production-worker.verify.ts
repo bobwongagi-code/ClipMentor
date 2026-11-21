@@ -202,6 +202,18 @@ assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(multipleReferences),sour
  blueprint.units[0].lines[0].caption_lines=[corrected];
  copy[0]=corrected;
  assert.equal(result([{...rows[0],delivered:{line_id:'L0',quote:corrected}},...rows.slice(1)]).status,'ok');
+ const related=structuredClone(panelSource) as {panelTeachingReview:boolean;blueprint:TeachingPacket};
+ related.blueprint.units[0].points=[{point_id:'P0',role:'primary',question:rows[0].takeaway,evidence_ids:['raw-0'],
+  teaching_basis:{selling_point:'上脸效果',method:'先展示上脸结果',connection:'用上脸差异引出选盘的理由',evidence_ids:['raw-0']}}];
+ related.blueprint.units[0].lines[0].point_ids=['P0'];
+ related.blueprint.units[0].source_context!.evidence_ids.push('in-group-other');
+ related.blueprint.source_evidence.push({evidence_id:'in-group-other',observation:'[visible_action; candidate] 刷子放在桌上',time_seconds:[2]});
+ const relatedResult=(id:string)=>validateAuthorSelfCheck(JSON.stringify([
+  {...checks[0],reference:corrected,teaching_units:[{...rows[0],source_evidence_ids:[id],delivered:{line_id:'L0',quote:corrected}},...rows.slice(1)]},
+  ...checks.slice(1).map(check=>({...check,reference:corrected})),
+ ]),related)[0];
+ assert.equal(relatedResult('raw-0').status,'ok');
+ assert.throws(()=>relatedResult('in-group-other'),/invalid:S1:teaching_unit=U-01/,'a same-window action cannot stand in for the selected teaching evidence');
  const visual=structuredClone(panelSource) as {panelTeachingReview:boolean;blueprint:TeachingPacket};
  visual.blueprint.units[0].points=[{point_id:'P0',role:'primary',question:rows[0].takeaway,evidence_ids:['raw-0','bare-frame'],
   treatment:'visual_only',visual_evidence:[{segment_id:'S0',phase:'explanation',source_range_seconds:[0,4],evidence_ids:['raw-0','bare-frame']}]}];

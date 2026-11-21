@@ -3,6 +3,8 @@ import { isSourceReviewScope, type SourceReviewScope } from './source-alignment'
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
 
+export const teachingPrinciples=['buyer-first','complete-demo','same-frame','purchase-invitation'] as const;
+
 /** One source-bound ledger, shared by analysis, copy review and execution. Not a model verdict. */
 export interface SourceBreakdown {
   version: 1;
@@ -26,6 +28,11 @@ export interface SourceBreakdown {
     supports_point_id?: string;
     importance: 'must_explain' | 'should_explain' | 'optional';
     change_reason?: string;
+    teaching_basis?:{
+      selling_point:string; evidence_ids:string[]; method:string; connection:string;
+      must_capture:string; claim_limit:string;
+      exemplar:typeof teachingPrinciples[number]; difference:string;
+    };
   }>;
   units: Array<{
     unit_id: string;
@@ -64,6 +71,13 @@ const range = (v: unknown): v is [number, number] => Array.isArray(v) && v.lengt
   && v.every((n) => typeof n === 'number' && Number.isFinite(n)) && v[0] >= 0 && v[1] > v[0];
 const unique = (ids: string[]) => new Set(ids).size === ids.length;
 
+function teachingBasis(value:unknown):value is NonNullable<SourceBreakdown['points'][number]['teaching_basis']>{
+ return row(value)&&Object.keys(value).length===8
+  &&['selling_point','method','connection','must_capture','claim_limit','difference'].every(k=>text(value[k])&&(value[k] as string).length<=500)
+  &&strings(value.evidence_ids)&&value.evidence_ids.length>0&&value.evidence_ids.length<=8&&unique(value.evidence_ids)
+  &&teachingPrinciples.some(id=>id===value.exemplar);
+}
+
 export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
   if (!row(v) || v.version !== 1 || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
     || !rows(v.segments, (s) => text(s.segment_id) && range(s.source_range_seconds)
@@ -72,7 +86,8 @@ export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
       && text(p.buying_concern) && text(p.teaching_question) && strings(p.filming_conditions)
       && (typeof p.role === 'string' && ['primary', 'supporting', 'auxiliary'].includes(p.role))
       && (typeof p.importance === 'string' && ['must_explain', 'should_explain', 'optional'].includes(p.importance))
-      && (p.supports_point_id === undefined || text(p.supports_point_id)) && (p.change_reason === undefined || text(p.change_reason)))
+      && (p.supports_point_id === undefined || text(p.supports_point_id)) && (p.change_reason === undefined || text(p.change_reason))
+      && (p.teaching_basis === undefined || teachingBasis(p.teaching_basis)))
     || !rows(v.units, (u) => text(u.unit_id) && strings(u.original_segment_ids) && strings(u.explanation_segment_ids)
       && (u.original_source_ranges === undefined || (Array.isArray(u.original_source_ranges) && u.original_source_ranges.length > 0 && u.original_source_ranges.every(range)))
       && rows(u.coverage, (c) => text(c.point_id) && (typeof c.treatment === 'string' && ['explain', 'merged', 'visual_only', 'omit'].includes(c.treatment))
@@ -107,7 +122,7 @@ export function breakdownRevisionError(previous: SourceBreakdown | undefined, ne
 export function selectedPointChanges(previous: SourceBreakdown | undefined, next: SourceBreakdown) {
   if (!previous) return [];
   const state = (b: SourceBreakdown, id: string) => ({
-    definition: Object.fromEntries(['segment_ids', 'buying_concern', 'teaching_question', 'filming_conditions', 'role', 'supports_point_id', 'importance', 'change_reason']
+    definition: Object.fromEntries(['segment_ids', 'buying_concern', 'teaching_question', 'filming_conditions', 'role', 'supports_point_id', 'importance', 'change_reason', 'teaching_basis']
       .map(key => [key, (b.points.find(p => p.point_id === id) as unknown as Row)?.[key]])),
     coverage: b.units.flatMap(u => u.coverage.filter(c => c.point_id === id).map(c => ({ unit_id: u.unit_id,
       treatment: c.treatment, reason: c.reason, merged_into_point_id: c.merged_into_point_id }))).sort((a, b) => a.unit_id.localeCompare(b.unit_id)),

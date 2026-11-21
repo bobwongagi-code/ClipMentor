@@ -65,7 +65,7 @@ export async function currentReviewRepair(doc:ProjectDoc){
  const subject=await copyReviewSubject(doc);
  if(receipt.content_digest!==subject.digest||receipt.analysis_revision!==subject.revision)return {status:'receipt_stale' as const,original_receipt:receipt,review_approved:false};
  const packet=await copyTeachingPacketFromDoc(doc);
- const delivery=deliveryReview(packet.delivery_sections??[],receipt.delivery_checks,!!receipt.opening_comparison_digest);
+ const delivery=deliveryReview(packet.delivery_sections??[],receipt.delivery_checks,!!receipt.opening_comparison_digest,receipt.ending_picture_contract==='v1');
  return {status:'bound' as const,subject,original_receipt:{scope:receipt.scope,protocol:receipt.protocol,verdict:receipt.verdict,analysis_revision:receipt.analysis_revision,content_digest:receipt.content_digest,reviewer_run_id:receipt.reviewer_run_id,reviewed_at:receipt.reviewed_at},review_approved:false,
   units:receipt.units.filter(u=>u.verdict!=='pass'||u.findings.length>0).map(u=>({unit_id:u.unit_id,candidate_id:u.candidate_id,
    verdict:u.verdict,findings:u.findings.map((f,index)=>({...f,finding_id:`${receipt.content_digest}:${u.unit_id}:finding:${index}`})),narration_checks:u.narration_checks,group_checks:u.group_checks,

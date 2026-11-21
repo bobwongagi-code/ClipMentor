@@ -12,11 +12,31 @@ import {loadCreatorStoryboardDocument,currentCreatorDocument,creatorDocumentHash
 import type {ProductionTask} from './production-task';
 import type {BlueprintFinding} from '../../src/clipmentor/blueprint-lint';
 import type {AnalysisEvidence} from '../../src/clipmentor/analysis';
+import type {OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
+
+const judydollTeachingQuote='把原话、画面证据、达人能学什么和讲解怎么承载都做实';
+const judydollOpeningQuote='同样是拍这款商品，为什么这支视频拿到 339.32k 播放、135 件销量、RM5.31k Revenue？一起看看她怎么拍的。';
+
+export function panelTeachingRequirements(task:ProductionTask){
+ return task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&task.input.openingComparison?.quote===judydollOpeningQuote
+  ?[judydollTeachingQuote]:[];
+}
+
+// This approved count belongs to this source and this evidence upload.
+export function panelOpeningComparison(sourceHash:string|undefined,salesHash:string|undefined):OpeningComparisonCriterion{
+ const approved=sourceHash==='567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49'
+  &&salesHash==='4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24';
+ return {kind:'opening_comparison',quote:approved
+  ?judydollOpeningQuote
+  :'同样是拍这款商品，为什么这支视频能拿到这些成绩？一起看看她怎么拍的。',
+  ...(approved?{results:{views:'339.32k',units:'135',revenue:'RM5.31k'}}:{})};
+}
 
 /** The operator uploads this slot as the source video's performance evidence. */
-export function panelSalesEvidence(sourceId:string,salesId:string):AnalysisEvidence{
+export function panelSalesEvidence(sourceId:string,salesId:string,results?:OpeningComparisonCriterion['results']):AnalysisEvidence{
  return {evidence_id:'panel-sales-'+createHash('sha256').update(sourceId+':'+salesId).digest('hex').slice(0,20),
-  kind:'operator_supplied',text:'用户提供的原片成绩图，图中成绩属于本任务原片。统计窗口按图中信息；没有显示的日期留未知。',
+  kind:'operator_supplied',text:'用户提供的原片成绩图，图中成绩属于本任务原片。统计窗口按图中信息；没有显示的日期留未知。'
+   +(results?`已确认播放 ${results.views}、销量 ${results.units} 件、Revenue ${results.revenue}。`:''),
   status:'operator_provided_not_independently_verified',source_ids:[sourceId,salesId],supporting_evidence_ids:[],
   provenance:'操作者在原片成绩图上传槽提供，按用户确认的业务口径登记'};
 }
@@ -115,6 +135,8 @@ export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionT
   ...(scope.audience==='existing_partner'?[]:!poster||poster.asset_id!==scope.ctaAssetId||poster.sha256!==scope.ctaAssetHash
    ||fresh?.picture.asset_id!==scope.ctaAssetId||fresh.picture.sha256!==scope.ctaAssetHash?['new_contact_cta_image']:[]),
   ...(scope.audience!=='existing_partner'&&layered&&freshLayout?.kind!=='product_commission'&&freshLayout?.kind!=='recruitment_card'?['new_contact_product_commission_composition_missing']:[]),
+  ...(scope.audience!=='existing_partner'&&scope.editorialPolicy==='exemplar-v1'
+   &&(freshLayout?.kind!=='recruitment_card'||!!fresh?.picture.crop)?['new_contact_full_cta_required']:[]),
   ...(scope.audience==='new_contact'?[]:partnerLayout?.kind==='product_storyboard'
    ?partnerLayout.product.asset_id!==scope.productAssetId||partnerLayout.product.sha256!==scope.productAssetHash?['existing_partner_product_image']
     :panelStoryboardAsset(doc,content)?.id!==partnerLayout.storyboard.asset_id?['existing_partner_storyboard']:[]

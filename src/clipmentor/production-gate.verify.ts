@@ -98,6 +98,34 @@ assert(criteriaRequest.instructions.includes('固定3/5秒或40%/60%占比'));
 assert.equal(criteriaRequest.input.cases[0].packet.units[0].points[0].question,
   teaching.packet.units[0].points[0].question, 'registered teaching goal/question is carried unchanged, not supplied by the host');
 
+const linked = structuredClone(teaching);
+const teachingPoint = linked.packet.units[0].points[0];
+const originalObservation = 'She pauses with the lather close to her nose after rinsing.';
+linked.packet.source_evidence.push({ evidence_id: 'teashell-observation', time_seconds: [60.5, 61.1],
+  observation: '[visible_action; agent_observed_candidate] ' + originalObservation });
+teachingPoint.evidence_ids.push('teashell-observation');
+Object.assign(teachingPoint, { teaching_basis: {
+  selling_point: 'Experience of using the cleanser', method: 'Pauses to smell the lather on camera',
+  connection: 'A visible smell check introduces scent as a part of the experience without proving how it smells',
+  evidence_ids: ['teashell-observation'], exemplar: 'private author note',
+} });
+const mapped = buildCopyTeachingReviewRequest([{ case_id: 'linked-teaching', packet: linked.packet }]);
+assert.deepEqual((mapped.input.cases[0].packet.units[0].points[0] as any).teaching_basis, {
+  selling_point: 'Experience of using the cleanser', method: 'Pauses to smell the lather on camera',
+  connection: 'A visible smell check introduces scent as a part of the experience without proving how it smells',
+  evidence_ids: ['teashell-observation'],
+});
+assert.equal(assessTeachingReview(linked.packet, linked.review).verdict, 'insufficient_evidence', 'an in-copy quote alone cannot prove the source to value relation');
+const linkedDecision = linked.review.units[0].points[0];
+Object.assign(linkedDecision, { source_quote: { evidence_id: 'teashell-observation', quote: originalObservation } });
+assert.equal(assessTeachingReview(linked.packet, linked.review).verdict, 'pass');
+const brokenRelation = structuredClone(linked);
+brokenRelation.review.units[0].points[0].connection = 'action_only';
+assert.equal(assessTeachingReview(brokenRelation.packet, brokenRelation.review).verdict, 'needs_revision');
+const unrelatedQuote = structuredClone(linked);
+Object.assign(unrelatedQuote.review.units[0].points[0], { source_quote: { evidence_id: 'teashell-observation', quote: 'visible_action' } });
+assert.equal(assessTeachingReview(unrelatedQuote.packet, unrelatedQuote.review).verdict, 'insufficient_evidence', 'status metadata cannot serve as the original quote');
+
 // Handoff projection is tested before any paid review: synthetic four-group controls.
 const phasePacket = structuredClone(teaching.packet);
 const phaseUnit = phasePacket.units[0];

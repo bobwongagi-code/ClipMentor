@@ -79,6 +79,9 @@ try{
   const originalPoster=clone(composed),posterSection=endings(originalPoster)[1];
   posterSection.picture.layout={kind:'recruitment_card',poster:{asset_id:posterSection.picture.asset_id,src:posterSection.picture.src,sha256:posterSection.picture.sha256}};
   assert.deepEqual(panelDeliveryIssues(originalPoster,layered),[]);
+  const exemplarScope={...layered,editorialPolicy:'exemplar-v1' as const};
+  assert.deepEqual(panelDeliveryIssues(originalPoster,exemplarScope),[]);
+  assert(panelDeliveryIssues(composed,exemplarScope).includes('new_contact_full_cta_required'));
   const substituted=clone(originalPoster),substitutedSection=endings(substituted)[1];
   const substitute={...clone(substituted.assets.find(a=>a.id===substitutedSection.picture.asset_id)!),
    id:'self-made-card',src:'/media/uploads/self-made-card.png',sourceContentHash:'c'.repeat(64),width:720,height:1280};
