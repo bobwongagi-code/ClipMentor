@@ -598,6 +598,24 @@ async function main(): Promise<void> {
   assert.equal(reattached?.stage, 'output-ready');
   assert.equal(await readLocalRecord(remoteOnly.renderId), null);
 
+  const foreignDestination = record('render-foreign-registration', 'project-foreign-registration', {
+    type: 'browser-directory', label: 'Exports', handle: browserHandle,
+  });
+  const existing = {
+    ...foreignDestination,
+    submissionId: 'server-owned-submission',
+    destination: { type: 'browser-directory' as const, label: 'Exports', handle: null },
+  };
+  serverStore[`export-recovery:${existing.renderId}`] = existing;
+  const wrongHandle = { ...foreignDestination, submissionId: 'incoming-submission' };
+  await assert.rejects(persistServerExportJob(wrongHandle), /导出尝试/);
+  assert.equal(await readLocalRecord(wrongHandle.renderId), null);
+  indexedDbRows.set(wrongHandle.renderId, wrongHandle);
+  const [authoritative] = await listServerExportJobs(existing.projectId);
+  assert.equal(authoritative?.submissionId, existing.submissionId);
+  assert.equal(authoritative?.destination.type === 'browser-directory' && authoritative.destination.handle, null,
+    'an equal-looking path does not authorize a different registration to supply a directory handle');
+
   // ── a newer stale local timestamp cannot rewind server output-ready authority ──
   await persistServerExportJob(record('render-stale', 'project-stale', {
     type: 'browser-directory',

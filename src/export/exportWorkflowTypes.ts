@@ -39,6 +39,8 @@ export interface ExportQaUiState {
 }
 
 export interface ExportJobSnapshot {
+  id?: string;
+  params?: { exportAttemptId?: string; exportSubmissionId?: string };
   status: 'queued' | 'running' | 'succeeded' | 'failed';
   progress: number;
   phase?: string;

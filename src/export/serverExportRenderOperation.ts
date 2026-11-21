@@ -51,13 +51,14 @@ function recoveryRecord(
   renderId: string,
   format: ExportFormat,
   codec: ExportCodec,
-): PersistedServerExportJob {
+): PersistedServerExportJob & { submissionId: string } {
   const projectId = context.options.projectId;
   const ext = exportMediaExtension(format, codec);
   const now = Date.now();
   return {
     version: 1,
     renderId,
+    submissionId: globalThis.crypto.randomUUID(),
     projectId,
     label: `${context.options.base}.${ext}`,
     targetPath: context.targetPath ?? null,
@@ -108,10 +109,11 @@ function submissionBody(
   format: ExportFormat,
   codec: ExportCodec,
   operationId: string,
+  submissionId: string,
 ) {
   const { state, project, timelineId, base, resolution, fps, requestedVideoBitrate } = context.options;
   const body: Record<string, unknown> = {
-    state, format, codec, name: base, operationId,
+    state, format, codec, name: base, operationId, submissionId,
     ...(project && timelineId ? { project, timelineId } : {}),
   };
   if (format !== 'video') return body;
@@ -125,13 +127,13 @@ async function submitExport(
   context: ServerExportContext,
   format: ExportFormat,
   codec: ExportCodec,
-  operationId: string,
+  original: PersistedServerExportJob & { submissionId: string },
   signal?: AbortSignal,
 ) {
   const submission = await fetch('/export/job', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(submissionBody(context, format, codec, operationId)),
+    body: JSON.stringify(submissionBody(context, format, codec, original.renderId, original.submissionId)),
     signal,
   });
   const submitted: unknown = await submission.json().catch(() => null);
@@ -142,25 +144,37 @@ async function submitExport(
     && typeof submitted.renderId === 'string'
     ? submitted.renderId
     : null;
-  if (!submission.ok || !renderId || renderId !== operationId) {
+  if (!submission.ok || !renderId || renderId !== original.renderId) {
     const error = submitted && typeof submitted === 'object' && 'error' in submitted
       && typeof submitted.error === 'string'
       ? submitted.error
       : context.t('导出失败 ({status})', { status: submission.status });
     throw new Error(error);
   }
-  return submitted && typeof submitted === 'object' && 'attemptId' in submitted
+  const attemptId = submitted && typeof submitted === 'object' && 'attemptId' in submitted
     && typeof submitted.attemptId === 'string' ? submitted.attemptId : undefined;
+  if (!attemptId || (!submitted || typeof submitted !== 'object'
+    || !('submissionId' in submitted) || submitted.submissionId !== original.submissionId)) {
+    throw new Error(context.t('导出尝试已更换'));
+  }
+  return attemptId;
+}
+
+export function exportAttemptQuery(attemptId?: string): string {
+  return attemptId === undefined ? '' : `?attemptId=${encodeURIComponent(attemptId)}`;
 }
 
 async function readSnapshot(
   renderId: string,
   t: Translate,
   signal?: AbortSignal,
+  attemptId?: string,
 ): Promise<ExportJobSnapshot> {
   const readDeadline = AbortSignal.timeout(20_000);
   const readSignal = signal ? AbortSignal.any([signal, readDeadline]) : readDeadline;
-  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { signal: readSignal });
+  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}${exportAttemptQuery(attemptId)}`, {
+    signal: readSignal,
+  });
   const snapshot: unknown = await response.json().catch(() => null);
   readSignal.throwIfAborted();
   const validSnapshot = snapshot !== null && typeof snapshot === 'object'
@@ -178,7 +192,12 @@ async function readSnapshot(
       && typeof snapshot.error === 'string' ? snapshot.error : undefined;
     throw new Error(message ?? t('无法读取导出进度 ({status})', { status: response.status }));
   }
-  return snapshot as ExportJobSnapshot;
+  const job = snapshot as ExportJobSnapshot;
+  if ((job.id !== undefined && job.id !== renderId) || (attemptId
+    && (job.id !== renderId || job.params?.exportAttemptId !== attemptId))) {
+    throw new Error(t('导出尝试已更换'));
+  }
+  return job;
 }
 
 function activePhase(snapshot: ExportJobSnapshot): ExportPhase {
@@ -188,6 +207,11 @@ function activePhase(snapshot: ExportJobSnapshot): ExportPhase {
 }
 
 type ServerExportPollContext = Pick<ServerExportContext, 'setProgress' | 't'>;
+
+export interface ExportPollBinding {
+  attemptId?: string;
+  recovery?: PersistedServerExportJob;
+}
 
 function updateActiveProgress(context: ServerExportPollContext, snapshot: ExportJobSnapshot): void {
   context.setProgress((current) => current ? {
@@ -219,9 +243,21 @@ export async function pollExport(
   context: ServerExportPollContext,
   renderId: string,
   signal?: AbortSignal,
+  binding?: ExportPollBinding,
 ): Promise<ExportJobResult> {
   while (true) {
-    const snapshot = await readSnapshot(renderId, context.t, signal);
+    const snapshot = await readSnapshot(renderId, context.t, signal, binding?.attemptId);
+    const observedAttempt = snapshot.params?.exportAttemptId;
+    if (binding?.recovery && binding.attemptId === undefined
+      && (binding.recovery.submissionId !== undefined || observedAttempt !== undefined)) {
+      const original = binding.recovery;
+      if (snapshot.id !== renderId || !observedAttempt || !original.submissionId
+        || snapshot.params?.exportSubmissionId !== original.submissionId) {
+        throw new Error(context.t('导出尝试已更换'));
+      }
+      await bindServerExportAttempt(original, observedAttempt);
+      binding.attemptId = observedAttempt;
+    }
     if (snapshot.status === 'failed') {
       const cause = snapshot.failure
         ? new ExportFailureError(snapshot.failure)
@@ -237,19 +273,16 @@ export async function pollExport(
   }
 }
 
-export async function deleteExportJob(renderId: string): Promise<void> {
-  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { method: 'DELETE' });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`server export cleanup failed (${response.status})`);
-  }
-}
-
 export type ExportCancellationOutcome = 'cancelled' | 'pending' | 'retained' | 'unknown';
 
-export async function cancelExportJob(renderId: string, attemptId?: string): Promise<ExportCancellationOutcome> {
-  const attempt = attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : '';
+export async function cancelExportJob(
+  renderId: string,
+  attemptId?: string,
+  requireAttempt = false,
+): Promise<ExportCancellationOutcome> {
+  if (requireAttempt && !attemptId) return 'unknown';
   try {
-    const response = await fetch(`/export/job/${encodeURIComponent(renderId)}/cancel${attempt}`, {
+    const response = await fetch(`/export/job/${encodeURIComponent(renderId)}/cancel${exportAttemptQuery(attemptId)}`, {
       method: 'POST', signal: AbortSignal.timeout(5_000),
     });
     void response.body?.cancel().catch(() => undefined);
@@ -268,9 +301,15 @@ export function exportCancellationMessage(outcome: ExportCancellationOutcome, t:
   return t('尚未确认导出是否停止，请重新查看结果');
 }
 
-export async function retireAndDeleteExportJob(renderId: string): Promise<boolean> {
+export async function retireAndDeleteExportJob(renderId: string, attemptId?: string): Promise<boolean> {
   if (!await retireServerExportJob(renderId)) return false;
-  await deleteExportJob(renderId);
+  // An explicit empty attempt can retire a legacy job only.
+  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}${exportAttemptQuery(attemptId ?? '')}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`server export cleanup failed (${response.status})`);
+  }
   return true;
 }
 
@@ -279,13 +318,14 @@ export async function renderCompleted(
   format: ExportFormat,
   codec: ExportCodec,
   signal?: AbortSignal,
-): Promise<{ renderId: string; completed: ExportJobResult }> {
+): Promise<{ renderId: string; attemptId?: string; completed: ExportJobResult }> {
   const renderId = context.createOperationId?.() ?? globalThis.crypto.randomUUID();
   let submissionStarted = false;
   let outputObserved = false;
-  let attemptId: string | undefined;
+  const binding: ExportPollBinding = {};
   try {
     const original = recoveryRecord(context, renderId, format, codec);
+    binding.recovery = original;
     await persistServerExportJob(original);
     signal?.throwIfAborted();
     submissionStarted = true;
@@ -295,27 +335,27 @@ export async function renderCompleted(
     const allowAcknowledgement = () => { stopDeadline = setTimeout(() => submission.abort(), 20_000); };
     signal?.addEventListener('abort', allowAcknowledgement, { once: true });
     try {
-      attemptId = await submitExport(context, format, codec, renderId, submission.signal);
+      binding.attemptId = await submitExport(context, format, codec, original, submission.signal);
     } finally {
       signal?.removeEventListener('abort', allowAcknowledgement);
       clearTimeout(stopDeadline);
     }
-    if (attemptId) await bindServerExportAttempt(original, attemptId);
+    if (binding.attemptId) await bindServerExportAttempt(original, binding.attemptId);
     signal?.throwIfAborted();
-    const completed = await pollExport(context, renderId, signal);
+    const completed = await pollExport(context, renderId, signal, binding);
     outputObserved = true;
     await markServerExportOutputReady(renderId);
-    return { renderId, completed };
+    return { renderId, attemptId: binding.attemptId, completed };
   } catch (error) {
     if (submissionStarted && !outputObserved) {
       if (signal?.aborted) {
-        const outcome = await cancelExportJob(renderId, attemptId);
+        const outcome = await cancelExportJob(renderId, binding.attemptId, true);
         if (outcome !== 'cancelled') throw new Error(exportCancellationMessage(outcome, context.t));
         await retireServerExportJob(renderId).catch(() => false);
       } else if (exportFailureFrom(error)?.stage === 'cancel') {
         await retireServerExportJob(renderId).catch(() => false);
       } else if (isServerRenderError(error)) {
-        await retireAndDeleteExportJob(renderId).catch(() => false);
+        await retireAndDeleteExportJob(renderId, binding.attemptId).catch(() => false);
       }
     }
     throw error;

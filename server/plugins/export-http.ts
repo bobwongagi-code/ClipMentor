@@ -38,13 +38,14 @@ export function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-export function exportOperationId(body: ExportRequest | null): string | undefined {
-  if (body?.operationId === undefined) return undefined;
-  if (typeof body.operationId !== 'string'
-    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.operationId)) {
-    throw new Error('export operationId must be a UUID');
+export function exportOperationId(body: ExportRequest | null, field: 'operationId' | 'submissionId' = 'operationId'): string | undefined {
+  const id = body?.[field];
+  if (id === undefined) return undefined;
+  if (typeof id !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    throw new Error(`export ${field} must be a UUID`);
   }
-  return body.operationId;
+  return id;
 }
 
 export function bindRequestAbort(req: IncomingMessage, res: ServerResponse): {

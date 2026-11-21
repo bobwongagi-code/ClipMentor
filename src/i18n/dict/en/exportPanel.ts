@@ -154,6 +154,7 @@ export default {
   '{n} 个动态图层渲染失败，XML 已保留占位': '{n} motion layers failed to render; placeholders were kept in the XML',
   '导出失败 ({status})': 'Export failed ({status})',
   '无法读取导出进度 ({status})': 'Could not read export progress ({status})',
+  '导出尝试已更换': 'This export attempt has been replaced.',
   '导出完成，但没有可下载的文件': 'Export finished without a downloadable file',
   '下载导出文件失败 ({status})': 'Could not download the exported file ({status})',
   '正在检查导出质量…': 'Checking export quality…',

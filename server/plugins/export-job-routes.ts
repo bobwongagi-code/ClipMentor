@@ -65,11 +65,18 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     const segments = path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
     const id = segments[0] ?? '';
     const action = segments[1] ?? '';
+    const binding = new URLSearchParams(req.url?.split('?', 2)[1]);
+    const expectedAttempt = binding.get('attemptId');
     const withdrawCancelledOutput = (attemptId: unknown) => withdrawCancelledExportOutput(attemptId, runtimeProfile())
       .catch(() => server.config.logger.warn('[export] could not withdraw the cancelled attempt output'));
     const readJob = async (renderId: string) => {
       try {
         const snapshot = await readGenerationJobSnapshot(renderId);
+        if (snapshot?.params.kind === 'export' && expectedAttempt !== null
+          && snapshot.params.exportAttemptId !== (expectedAttempt || undefined)) {
+          sendError(res, 409, 'render no longer matches the requested attempt');
+          return null;
+        }
         if (snapshot?.params.kind === 'export' && snapshot.status === 'failed' && snapshot.code === 'export_cancelled') {
           await withdrawCancelledOutput(snapshot.params.exportAttemptId);
         }
@@ -80,8 +87,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
 
     if (req.method === 'POST' && action === 'cancel' && segments.length === 2) {
       try {
-        const expectedAttempt = new URL(req.url ?? '/', 'http://localhost').searchParams.get('attemptId') ?? undefined;
-        const outcome = await requestExportCancellation(id, expectedAttempt);
+        const outcome = await requestExportCancellation(id, expectedAttempt ?? undefined);
         if (outcome === 'missing') { sendError(res, 404, `render job ${id} not found`); return; }
         if (outcome === 'conflict' || outcome === 'settled') {
           sendError(res, 409, 'render already settled or no longer the same attempt; its result was retained');
@@ -102,15 +108,10 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     }
 
     if (req.method === 'POST' && action === 'promote' && segments.length === 2) {
-      const binding = new URL(req.url ?? '/', 'http://localhost').searchParams;
-      const expectedAttempt = binding.get('attemptId');
       const expectedAsset = binding.get('assetId');
       const snapshot = await readJob(id);
       if (snapshot === null) return;
       if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
-      if (expectedAttempt !== null && snapshot.params.exportAttemptId !== expectedAttempt) {
-        sendError(res, 409, 'render no longer matches the requested attempt'); return;
-      }
       if (snapshot.status !== 'succeeded' || !snapshot.result) {
         sendError(res, 409, `render job ${id} is not complete`); return;
       }
@@ -133,7 +134,8 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       try {
         if (snapshot.status === 'queued' || snapshot.status === 'running') {
           sendError(res, 409, 'render is active; use the cancellation endpoint'); return;
-        } else if (!await deleteGenerationJob(id)) {
+        } else if (!await deleteGenerationJob(id, (job) => job.params.kind === 'export'
+          && job.params.exportAttemptId === snapshot.params.exportAttemptId)) {
           sendError(res, 409, 'render result is still retained'); return;
         }
       } catch {
@@ -175,13 +177,17 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       const body = (await readJsonBody(req)) as ExportRequest | null;
       controller.signal.throwIfAborted();
       const operationId = exportOperationId(body);
+      // The browser saves this ID before POST. The server still owns the output
+      // attempt UUID, so reuse of an operation ID cannot alias its files.
+      const submissionId = exportOperationId(body, 'submissionId');
       const previous=operationId?await readJob(operationId):undefined;
       if(previous===null)return;
       controller.signal.throwIfAborted();
       if(previous){
         if(previous.params.kind!=='export')throw new Error('Operation belongs to a different job kind');
         requestAbort.dispose();
-        sendJson(res,200,{renderId:previous.id,attemptId:previous.params.exportAttemptId,projectRevision:previous.params.projectRevision,timelineId:previous.params.timelineId});
+        sendJson(res,200,{renderId:previous.id,attemptId:previous.params.exportAttemptId,
+          submissionId:previous.params.exportSubmissionId,projectRevision:previous.params.projectRevision,timelineId:previous.params.timelineId});
         return;
       }
       acceptedSubmission = await acceptExportSubmission(body, { signal: controller.signal });
@@ -200,6 +206,7 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       const jobParams: Record<string, unknown> = {
         kind: 'export',
         exportAttemptId: uuid,
+        ...(submissionId ? {exportSubmissionId:submissionId} : {}),
         ...(plan.projectRevision ? {projectRevision:plan.projectRevision,timelineId:plan.timelineId} : {}),
         format: plan.format,
         codec: plan.media.codec,
@@ -293,13 +300,14 @@ export function registerExportJobRoute(server: ViteDevServer): void {
       // the request that created the job may own its controller/media cleanup.
       if(snapshot?.params.exportAttemptId!==uuid){
         await cleanupRenderMedia();requestAbort.dispose();
-        sendJson(res,200,{renderId:jobId,attemptId:snapshot.params.exportAttemptId,projectRevision:snapshot.params.projectRevision,timelineId:snapshot.params.timelineId});
+        sendJson(res,200,{renderId:jobId,attemptId:snapshot.params.exportAttemptId,
+          submissionId:snapshot.params.exportSubmissionId,projectRevision:snapshot.params.projectRevision,timelineId:snapshot.params.timelineId});
         return;
       }
       queued = true;
       trackExportJobController(jobId, controller, uuid);
       requestAbort.dispose();
-      sendJson(res, 200, { renderId: jobId, attemptId: uuid, projectRevision:snapshot.params.projectRevision,timelineId:snapshot.params.timelineId });
+      sendJson(res, 200, { renderId: jobId, attemptId: uuid, submissionId, projectRevision:snapshot.params.projectRevision,timelineId:snapshot.params.timelineId });
     } catch (error) {
       if (acceptedSubmission && !queued) await acceptedSubmission.cleanup().catch(() => undefined);
       if (controller.signal.aborted) return;

@@ -61,12 +61,16 @@ try{
   assert.deepEqual(await readCodes(),[404,404,404,404],'a healthy ledger can establish that an ID is absent');
   jobIds.push(priorColdId);
   const id=randomUUID();jobIds.push(id);
-  const first=await post({operationId:id,state:draft.getState(),project:doc,timelineId:doc.activeTimelineId});
+  const submissionId=randomUUID();
+  const first=await post({operationId:id,submissionId,state:draft.getState(),project:doc,timelineId:doc.activeTimelineId});
   assert.equal(first.renderId,id);assert.equal(first.projectRevision,revisionOf(doc));assert.equal(first.timelineId,doc.activeTimelineId);
+  assert.equal(first.submissionId,submissionId);
   const snapshot=await (await fetch(`${url}/${id}`)).json();assert.equal(snapshot.params.projectRevision,first.projectRevision);assert.equal(snapshot.params.timelineId,doc.activeTimelineId);
+  assert.equal(snapshot.params.exportSubmissionId,submissionId,'recovery can identify the original admission even after losing its response');
   assert.notEqual(snapshot.status,'succeeded','render cannot run while permits are held');
   const changed=structuredClone(doc);changed.timelines[0]!.items[0]!.props!.text='DIFFERENT';
-  const duplicate=await post({operationId:id,state:changed.timelines[0],project:changed,timelineId:doc.activeTimelineId});
+  const duplicate=await post({operationId:id,submissionId:randomUUID(),state:changed.timelines[0],project:changed,timelineId:doc.activeTimelineId});
+  assert.equal(duplicate.submissionId,submissionId,'a duplicate POST returns the token of its actual owner');
   assert.equal(duplicate.projectRevision,revisionOf(doc),'a reused ID returns its actual original snapshot, never the latest request identity');
   assert.notEqual(duplicate.projectRevision,revisionOf(changed));
   const concurrentId=randomUUID();jobIds.push(concurrentId);
@@ -128,6 +132,17 @@ try{
   }
   await writeFile(file,output);
   assert.equal((await status()).status,'succeeded','same-ID readback works again once the original file is available');
+  const staleAttemptId=randomUUID();
+  const directStatus=await fetch(`${url}/${finishedId}?attemptId=${staleAttemptId}`);
+  assert.equal(directStatus.status,409,'a stale status read must not expose the replacement output');
+  const staleDelete=await fetch(`${url}/${finishedId}?attemptId=${staleAttemptId}`,{method:'DELETE'});
+  assert.equal(staleDelete.status,409,'a stale cleanup must leave the replacement output intact');
+  assert.equal((await fetch(`${url}/${finishedId}?attemptId=`,{method:'DELETE'})).status,409,
+    'legacy browser cleanup must leave a modern attempt intact');
+  assert.deepEqual(await readFile(file),output);
+  const matchingStatus=await fetch(`${url}/${finishedId}?attemptId=${assetId}`);
+  assert.equal(matchingStatus.status,200);
+  assert.equal((await matchingStatus.json()).result.assetId,assetId);
   const outdatedPromotion=await fetch(`${url}/${finishedId}/promote?attemptId=${randomUUID()}`,{method:'POST'});
   assert.equal(outdatedPromotion.status,409,'an older reader cannot promote a replacement render attempt');
   await outdatedPromotion.text();
@@ -183,7 +198,7 @@ try{
   }finally{
    await rm(generationJobStore,{recursive:true,force:true});await rename(blockedLedger,generationJobStore);
   }
-  const released=await fetch(`${url}/${finishedId}`,{method:'DELETE'});
+  const released=await fetch(`${url}/${finishedId}?attemptId=${assetId}`,{method:'DELETE'});
   assert.equal(released.status,204,'the original task can be cleared after the ledger is writable');
   await assert.rejects(readFile(file),{code:'ENOENT'});
   const promoted=join(uploadDir(),`openchatcut-derived-${assetId}.mp4`);
