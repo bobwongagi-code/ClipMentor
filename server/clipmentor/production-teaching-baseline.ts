@@ -36,19 +36,27 @@ function unitDefinition(breakdown: SourceBreakdown, unit: SourceBreakdown['units
  };
 }
 
+function teachingUnitReview(doc:ProjectDoc,unitId:string) {
+ return (doc.clipMentorAnalysis?.blueprint.find(unit=>unit.unit_id===unitId) as {internal_review?:Row}|undefined)?.internal_review;
+}
+
+function teachingCopy(candidate:unknown) {
+ const lines = row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row) : [];
+ const spoken=normalized(lines.map(line=>line.narration_ms).join(' '));
+ const labels=lines.flatMap(line=>Array.isArray(line.labels)?line.labels.map(normalized).filter(Boolean):[]);
+ return {spoken,voice:digestValue(spoken),text:digestValue({voice:spoken,labels})};
+}
+
 function currentTeachingMaterial(doc: ProjectDoc, unitId: string) {
- const internal = (doc.clipMentorAnalysis?.blueprint.find(unit => unit.unit_id === unitId) as {internal_review?:Row} | undefined)?.internal_review;
+ const internal=teachingUnitReview(doc,unitId);
  const candidateId = internal?.current_script_candidate, planId = internal?.current_picture_plan;
  const candidate = typeof candidateId === 'string' ? internal?.[candidateId] : undefined;
  const plan = typeof planId === 'string' ? internal?.[planId] : undefined;
- const lines = row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row) : [];
- const text={voice:normalized(lines.map(line=>line.narration_ms).join(' ')),
-  labels:lines.flatMap(line=>Array.isArray(line.labels)?line.labels.map(normalized).filter(Boolean):[])};
  const pictures = row(plan) && Array.isArray(plan.phases) ? plan.phases.filter(row).map(phase => ({
   mode:phase.mode, range:phase.source_range_seconds,
   context:Array.isArray(phase.context_source_ranges) ? phase.context_source_ranges.filter(row).map(context => context.source_range_seconds) : [],
  })) : [];
- return {candidateId, planId, text:digestValue(text), pictures:digestValue(pictures), hasCopy:row(candidate) && row(plan)};
+ return {candidateId,planId,...teachingCopy(candidate),pictures:digestValue(pictures),hasCopy:row(candidate)&&row(plan)};
 }
 
 export function retireTeachingDrafts(doc:ProjectDoc):ProjectDoc {
@@ -142,10 +150,11 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
  return {feedback_scope:value.feedback_scope as BaselineReview['feedback_scope'],units};
 }
 
+type PriorTeachingMaterial=Omit<ReturnType<typeof currentTeachingMaterial>,'spoken'|'voice'>&{voice?:string};
 export type TeachingRebuild = {
  rejected:Array<{unitId:string;pointIds:string[];definition:string;evidence:string;status:Decision['status'];reason:string}>;
  affected:Array<{unitId:string;pointIds:string[]}>;
- prior:Record<string,ReturnType<typeof currentTeachingMaterial>>;
+ prior:Record<string,PriorTeachingMaterial>;
  definitions:Record<string,string>;
 };
 
@@ -167,7 +176,10 @@ export function teachingRebuild(source: BaselineSource, doc: ProjectDoc, review:
   return {unitId:unit.unit_id,pointIds:unit.points.map(point=>point.point_id),definition:teachingMeaning(unit),evidence:evidenceDigest(source,unit),status:decision.status,reason:decision.reason};
  });
  return {
-  prior:previous?.prior ?? Object.fromEntries(source.units.map(unit => [unit.unit_id,currentTeachingMaterial(doc,unit.unit_id)])),
+  prior:previous?.prior ?? Object.fromEntries(source.units.map(unit => {
+   const {spoken:_spoken,...prior}=currentTeachingMaterial(doc,unit.unit_id);
+   return [unit.unit_id,prior];
+  })),
   definitions:previous?.definitions ?? Object.fromEntries(source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)])),
   rejected, affected:[...new Map([...(previous?.affected??[]),...rejected].map(unit=>[unit.unitId,{unitId:unit.unitId,pointIds:unit.pointIds}])).values()],
  };
@@ -182,30 +194,46 @@ export function newlyChangedTeaching(before:BaselineSource,after:BaselineSource,
  return {...next,rejected:previous?.rejected??[]};
 }
 
-function implicatedUnits(source:BaselineSource, rejected:TeachingRebuild['affected'][number]) {
- return source.units.filter(unit=>unit.unit_id===rejected.unitId || unit.points.some(point=>rejected.pointIds.includes(point.point_id)));
+function affectedTeachingUnit(unit:BaselineSource['units'][number],entry:TeachingRebuild['affected'][number]) {
+ return unit.unit_id===entry.unitId||unit.points.some(point=>entry.pointIds.includes(point.point_id));
 }
 
 export function unchangedRejectedTeaching(source:BaselineSource, rebuild:TeachingRebuild) {
  return rebuild.rejected.filter(rejected => {
-  const units=implicatedUnits(source,rejected);
+  const units=source.units.filter(unit=>affectedTeachingUnit(unit,rejected));
   return !units.length||units.some(unit=>teachingMeaning(unit)===rejected.definition
    &&(rejected.status==='fix'||evidenceDigest(source,unit)===rejected.evidence));
  });
 }
 
 export function staleRebuiltTeaching(source:BaselineSource, doc:ProjectDoc, rebuild:TeachingRebuild) {
- const affected=new Set(rebuild.affected.flatMap(entry=>implicatedUnits(source,entry).map(unit=>unit.unit_id)));
+ const current=new Map(source.units.map(unit=>[unit.unit_id,currentTeachingMaterial(doc,unit.unit_id)]));
+ const byPredecessor=new Map(rebuild.affected.map(entry=>[entry.unitId,
+  source.units.filter(unit=>affectedTeachingUnit(unit,entry)).map(unit=>current.get(unit.unit_id)!.spoken).filter(Boolean).join(' ')]));
+ const containsCopy=(spoken:string,prior:string)=>prior ? (' '+spoken+' ').includes(' '+prior+' ') : !spoken;
  return source.units.filter(unit => {
-  if (!affected.has(unit.unit_id)&&rebuild.definitions[unit.unit_id]===teachingMeaning(unit)) return false;
-  const before = rebuild.prior[unit.unit_id], now = currentTeachingMaterial(doc,unit.unit_id);
+  const affected=rebuild.affected.filter(entry=>affectedTeachingUnit(unit,entry));
+  if(!affected.length&&rebuild.definitions[unit.unit_id]===teachingMeaning(unit))return false;
+  const now=current.get(unit.unit_id)!;
   if (!now.hasCopy) return true;
-  if (!before?.hasCopy) return false;
-  const targets=new Set(rebuild.affected.filter(entry=>implicatedUnits(source,entry).includes(unit)).flatMap(entry=>entry.pointIds));
+  const targets=new Set(affected.flatMap(entry=>entry.pointIds));
   const covered=unit.coverage.filter(point=>!targets.size||targets.has(point.point_id));
   const visualOnly=covered.some(point=>point.treatment==='visual_only')&&covered.every(point=>point.treatment!=='explain');
-  return now.candidateId===before.candidateId || now.planId===before.planId
-   || now.text===before.text && (!visualOnly || now.pictures===before.pictures);
+  const predecessors=new Set([unit.unit_id,...affected.map(entry=>entry.unitId)]);
+  return [...predecessors].some(id=>{
+   const before=rebuild.prior[id];
+   if(!before?.hasCopy)return false;
+   if(id===unit.unit_id&&(now.candidateId===before.candidateId||now.planId===before.planId))return true;
+   if(visualOnly)return now.text===before.text&&now.pictures===before.pictures;
+   // Compare with the saved script so appended copy and a split can be
+   // distinguished from an actual rewrite. Older checkpoints have only text.
+   const archived=typeof before.candidateId==='string'?teachingUnitReview(doc,id)?.[before.candidateId]:undefined;
+   if(!row(archived))return true;
+   const prior=teachingCopy(archived);
+   if(prior.text!==before.text||before.voice!==undefined&&prior.voice!==before.voice)return true;
+   return containsCopy(now.spoken,prior.spoken)
+    ||!!prior.spoken&&containsCopy(byPredecessor.get(id)??'',prior.spoken);
+  });
  }).map(unit=>unit.unit_id);
 }
 

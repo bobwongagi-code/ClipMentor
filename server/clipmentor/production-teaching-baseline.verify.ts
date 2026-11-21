@@ -82,6 +82,29 @@ try{
  old.assets=[{id:'source',kind:'video',src:'/media/uploads/judy-fixture.mp4',name:'fixture',durationInFrames:2020,width:1080,height:1920,sourceContentHash:'a'.repeat(64)}];
  old.clipMentorAnalysis={schema_version:1,analysis_id:'revision-9-fixture',revision:9,import_origin:'isolated_fixture',
   audit:[],reviews:[],...structuredClone(fixture)} as unknown as ClipMentorAnalysis;
+ const {copyTeachingPacketFromDoc,copyReviewSubject}=await import('../../src/clipmentor/production-gate');
+ const {productionRepairTargets,productionAuthorSelfCheckSource,validateAuthorSelfCheck}=await import('./production-author-self-check');
+ const rawPacket=await copyTeachingPacketFromDoc(old);
+ const subject=await copyReviewSubject(old);
+ const repairReview=productionRepairTargets({repairContext:{repair:{status:'bound',units:[{unit_id:'U-02',findings:[
+  {finding_id:'original-U02',quote:'Old disputed copy',reason:'Explain what the picture supports'},
+ ]}]}}},rawPacket);
+ const repairSource={...productionAuthorSelfCheckSource(old,{rawPacket,reviewed:{subject}},[],true),repairReview};
+ const [group1,group2]=rawPacket.units;
+ assert.deepEqual(group1.source_context!.evidence_ids,group2.source_context!.evidence_ids,'real full-source packets share context');
+ const own=group2.lines[0].narration_ms;
+ const firstGroupQuote=repairSource.sourceEvidence!.find(e=>e.evidence_id==='VIS-1-1')!.text;
+ const secondGroupQuote=repairSource.sourceEvidence!.find(e=>e.evidence_id==='VIS-3-1')!.text;
+ assert(group2.source_context!.evidence_ids.includes('VIS-1-1'),'G1 observation is readable as G2 context');
+ const answers=Array.from({length:7},(_,i)=>({id:'S'+(i+1),status:'ok',reference:own,reason:'fixture'}));
+ const answerWith=(quote:string)=>JSON.stringify(answers.map(answer=>answer.id==='S2'?{...answer,repair_resolutions:[
+  {finding_id:'original-U02',status:'resolved',reference:[quote],reason:'fixture'},
+ ]}:answer));
+ assert.equal(validateAuthorSelfCheck(answerWith(own),repairSource)[1].status,'ok');
+ assert.equal(validateAuthorSelfCheck(answerWith(secondGroupQuote),repairSource)[1].status,'ok');
+ assert.throws(()=>validateAuthorSelfCheck(answerWith(firstGroupQuote),repairSource),/repair_reference/,
+  'a G1 observation supplied as full context cannot resolve G2');
+ console.log('PASS JUDYDOLL G2 can cite its original observation, but shared full-source context cannot close a finding with G1 evidence');
  const taskFor=async(projectId:string,doc:ProjectDoc,maxRepairs=0)=>{
   await setStoredEntry('project:'+projectId,doc);
   const saved=(await loadOfflineStoredProject(projectId))!;
@@ -179,8 +202,50 @@ try{
  internal.current_script_candidate='script_candidate_split';
  internal.current_picture_plan='picture_plan_split';internal.script_candidate_split=candidate;internal.picture_plan_split=plan;
  assert.deepEqual(staleRebuiltTeaching(checked,reworked,one),['U-01','U-02'],'fresh IDs and repagination cannot discharge a rebuild');
+ const beforeVoice=candidate.lines[0].narration_ms;
+ candidate.lines[0].labels=['Tona highlight'];
+ assert.deepEqual(staleRebuiltTeaching(checked,reworked,one),['U-01','U-02'],'a short label cannot discharge a narration rebuild');
+ assert.equal(candidate.lines[0].narration_ms,beforeVoice);
  candidate.lines[0].narration_ms='Dia tunjuk hasil dahulu dan kemudian memperkenalkan kedua-dua palet.';
  assert.deepEqual(staleRebuiltTeaching(checked,reworked,one),['U-02']);
+ const legacy=structuredClone(one);
+ for(const material of Object.values(legacy.prior))Reflect.deleteProperty(material,'voice');
+ assert.deepEqual(staleRebuiltTeaching(checked,reworked,legacy),['U-02'],'cold recovery can use the retained original script');
+ candidate.lines[0].narration_ms=beforeVoice;
+ assert.deepEqual(staleRebuiltTeaching(checked,reworked,legacy),['U-01','U-02'],'a legacy repair cannot be cleared just by relabeling');
+ const renamed=structuredClone(reworked);
+ renamed.clipMentorAnalysis!.source_breakdown!.units[0].unit_id='U-09';
+ const relabeledUnit=structuredClone(renamed.clipMentorAnalysis!.blueprint[0]);
+ relabeledUnit.unit_id='U-09';
+ renamed.clipMentorAnalysis!.blueprint.push(relabeledUnit);
+ const renamedSource=teachingBaselineSource(renamed,feedbackTask,[]);
+ assert.deepEqual(staleRebuiltTeaching(renamedSource,renamed,legacy),['U-09','U-02'],'a replacement unit still inherits the rejected teaching point');
+ (relabeledUnit as any).internal_review.script_candidate_split.lines[0].narration_ms='Dia tunjuk hasil dahulu dan kemudian memperkenalkan kedua-dua palet.';
+ assert.deepEqual(staleRebuiltTeaching(renamedSource,renamed,legacy),['U-02'],'an actually rewritten replacement unit can proceed');
+ const archived=(renamed.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+ archived[legacy.prior['U-01'].candidateId as string].lines[0].narration_ms='A different historical script';
+ assert.deepEqual(staleRebuiltTeaching(renamedSource,renamed,legacy),['U-09','U-02'],'a changed archive cannot establish the original narration');
+ const copied=structuredClone(reworked);
+ const copiedReview=(copied.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+ const copiedCandidate=copiedReview.script_candidate_split;
+ const originalLines=copiedReview[one.prior['U-01'].candidateId as string].lines;
+ const [originalLine]=originalLines;
+ copiedCandidate.lines=[...originalLines,{...originalLine,narration_ms:'Kemudian, perhatikan warna pada pipi.'}];
+ assert.deepEqual(staleRebuiltTeaching(checked,copied,one),['U-01','U-02'],
+  'appending another sentence leaves the rejected narration intact');
+ const [,splitSecond]=copied.clipMentorAnalysis!.blueprint;
+ const splitReview=(splitSecond as any).internal_review;
+ const splitScript=splitReview[splitReview.current_script_candidate];
+ const [firstWord,...remainingWords]=originalLines.map((line:{narration_ms:string})=>line.narration_ms).join(' ').split(/\s+/u);
+ copiedCandidate.lines=[{...originalLine,narration_ms:firstWord}];
+ splitReview.current_script_candidate='script_candidate_rebuilt';
+ splitReview.current_picture_plan='picture_plan_rebuilt';
+ splitReview.script_candidate_rebuilt={...splitScript,lines:[{...originalLine,narration_ms:remainingWords.join(' ')}]};
+ splitReview.picture_plan_rebuilt={};
+ const splitSource=structuredClone(checked);
+ splitSource.units[1].points.push(splitSource.units[0].points.shift()!);
+ assert.deepEqual(staleRebuiltTeaching(splitSource,copied,one),['U-01','U-02'],
+  'splitting the unchanged narration across units retaining its teaching point does not clear the rebuild');
  const merged=structuredClone(old);
  const mb=merged.clipMentorAnalysis!.source_breakdown!,[first,second]=mb.units;
  first.original_segment_ids.push(...second.original_segment_ids);
