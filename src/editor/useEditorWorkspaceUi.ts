@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -159,7 +160,7 @@ function useExportJobs(
       console.warn('[export] failed to restore interrupted server exports', error);
     });
   }, [exportJobs, projectId, t]);
-  useEffect(
+  useLayoutEffect(
     () => subscribeAgentExportJobs(projectId, exportJobs, t, {
       commands,
       getDoc: () => docRef.current,

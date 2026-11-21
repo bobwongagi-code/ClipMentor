@@ -456,17 +456,19 @@ for (const stop of ['deadline', 'cancel'] as const) {
   };
   let submissions = 0;
   let promotions = 0;
+  const finishPromotion = Promise.withResolvers<void>();
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     if (String(url) === '/export/job' && init?.method === 'POST') {
       submissions++;
       return Response.json({ renderId: id });
     }
-    if (String(url).endsWith('/promote')) {
-      if (++promotions === 1) return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true }));
+    if (String(url).endsWith('/promote?attemptId=&assetId=asset-render')) {
+      promotions++;
+      await finishPromotion.promise;
       return Response.json({ assetId: 'asset-render', path: '/media/uploads/managed-render.mp4' });
     }
     assert.equal(String(url), `/export/job/${id}`);
-    return Response.json({ id, status: 'succeeded', progress: 100, result: { path: '/media/uploads/completed.mp4' } });
+    return Response.json({ id, status: 'succeeded', progress: 100, result: { assetId: 'asset-render', path: '/media/uploads/completed.mp4' } });
   }) as typeof fetch;
   await execExportTool('submit_render_job', { saveToMediaPool: true }, trackingContext);
   const expired = await execExportTool('track_export', { action: 'wait', renderIds: id, timeoutSeconds: 0.03 }, trackingContext) as {
@@ -474,10 +476,14 @@ for (const stop of ['deadline', 'cancel'] as const) {
   };
   assert.deepEqual([expired.status, expired.waitExpired, expired.mediaPoolStatus, expired.background], ['completed', true, 'pending', false]);
   assert.equal(targetDraft.getDoc().assets.length, 0);
-  const readback = await execExportTool('track_export', { action: 'status', renderIds: id }, trackingContext) as { mediaPoolStatus: string };
+  const reattached = execExportTool('track_export', { action: 'status', renderIds: id }, trackingContext);
+  await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+  assert.equal(promotions, 1, 'a fresh status call joins the original promotion after the last waiter expires');
+  finishPromotion.resolve();
+  const readback = await reattached as { mediaPoolStatus: string };
   assert.equal(readback.mediaPoolStatus, 'saved');
   assert.equal(targetDraft.getDoc().assets[0]?.id, 'asset-render');
-  assert.deepEqual([submissions, promotions], [1, 2]);
+  assert.deepEqual([submissions, promotions], [1, 1]);
 }
 
 // ── latest with an empty session registry → helpful error, no fetch guessing ──
