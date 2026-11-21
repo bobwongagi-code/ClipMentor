@@ -5,6 +5,13 @@ const arr = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
 const text = (v: unknown) => typeof v === 'string' ? v : '';
 const window = (v: unknown): [number, number] | null => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === 'number' && Number.isFinite(n)) && v[0] >= 0 && v[1] >= v[0] ? [v[0], v[1]] : null;
 
+/** Display only recorded palette values from the active stage cue. */
+export function stageCueColors(style:unknown):string[]{
+ const colors=typeof style==='string'?[...style.matchAll(/#[a-fA-F0-9]{6}\b/g)].map(m=>m[0])
+  :[text(obj(style).color),text(obj(style).text_color)];
+ return colors.filter(color=>/^#[a-fA-F0-9]{6}$/.test(color));
+}
+
 /** Resolve the existing operational/legacy phase fields identically for both callers. */
 export function currentPicturePhases(plan: Row, timeline: unknown, unitId: unknown, fps: number, durationSeconds?: number) {
   const direct = Object.hasOwn(plan, 'phases');

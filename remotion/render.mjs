@@ -87,7 +87,7 @@ export async function withAbortableCompositionSelection({
 }) {
   signal?.throwIfAborted();
   const browser = await openBrowserImpl('chrome', {
-    browserExecutable: browserExecutable(),
+    browserExecutable: selectionOptions.browserExecutable ?? browserExecutable(),
     // The owned Chromium launcher uses Remotion's stdin pipe. Verbose
     // BrowserRunner uses ignored stdin, which would close the lifetime pipe.
     logLevel: 'info',
@@ -283,6 +283,7 @@ export { getServeUrl as prepareRenderServeUrl };
  * @param {number} [args.videoBitrate] video bitrate in bits per second
  * @param {{id:string,label:string,hardware:boolean,transport:'server'}} [args.h264Profile]
  * @param {string} [args.preparedServeUrl] cached bundle prepared by the export server
+ * @param {string} [args.browserExecutablePath] existing local browser for bounded preview rendering
  * @param {string} [args.vaapiDevice]
  * @param {(progress: number) => void} [args.onProgress]  0..1
  * @param {AbortSignal} [args.signal]
@@ -300,6 +301,7 @@ export async function renderTimeline({
   h264Profile,
   vaapiDevice,
   preparedServeUrl,
+  browserExecutablePath,
   signal,
 }) {
   if (!state || typeof state !== 'object' || !Array.isArray(state.items)) {
@@ -324,7 +326,7 @@ export async function renderTimeline({
       serveUrl,
       id: COMPOSITION_ID,
       inputProps,
-      browserExecutable: browserExecutable(),
+      browserExecutable: browserExecutablePath ?? browserExecutable(),
       timeoutInMilliseconds: renderTimeoutInMilliseconds(),
     },
     run: (composition, browser) => renderMediaOptimized({
@@ -344,7 +346,7 @@ export async function renderTimeline({
           : undefined,
       ...proresOptions,
       chromiumOptions: { gl: resolveRenderGlBackend() },
-      browserExecutable: browserExecutable(),
+      browserExecutable: browserExecutablePath ?? browserExecutable(),
       puppeteerInstance: browser,
       onProgress: onProgress ? ({ progress }) => onProgress(progress) : undefined,
       cancelSignal,

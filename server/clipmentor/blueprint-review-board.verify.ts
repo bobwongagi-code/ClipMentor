@@ -164,6 +164,7 @@ try{
   assert.equal((page.match(/data-card="group-/g)??[]).length,5);assert.equal((page.match(/class="explanation"/g)??[]).length,6);assert.equal((page.match(/class="ending"/g)??[]).length,2);assert(page.includes('<h2>片头</h2>'));assert(page.includes('版式示意，非渲染'));assert(page.includes('示意模板'));assert(!page.includes('text-shadow'));
   const visible=page.split('<footer>')[0].replace(/<style>[\s\S]*?<\/style>/g,'').replace(/<details[\s\S]*?<\/details>/g,'').replace(/<[^>]+>/g,'');assert(!/[a-f0-9]{64}|#[a-f0-9]{6}|\bf\d+\b|Reference only|tool_crop_px|asset_id|B05/iu.test(visible));assert(!/画面已匹配|审核通过|验收通过/.test(visible));assert(!/data-verdict=/.test(page));assert(!page.includes('<details id="technical"')&&!page.includes('候选业务登记'));
   for(const line of prepared.data.lines){const escaped=(t:string)=>t.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));assert(page.includes(escaped(line.text)));assert(page.includes(escaped(line.zh)));const found=page.indexOf('data-line-id="'+line.id+'"');assert(found>=0);const segment=page.slice(found,page.indexOf('</div>',found));assert(segment.indexOf('class="meaning"')<segment.indexOf('class="narration"'));}
+  assert(page.includes('核对现行稿件')&&page.includes('class="version-note"'));
   assert.equal(networks,0);
  });
  await test('Creator endings expose the same crop and actual uncropped evidence before freeze',async()=>{
@@ -239,6 +240,88 @@ try{
   const doc=bindings[0];await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',doc));const before=await loadOfflineStoredProject('review-board-test');assert(before,'test fixture must actually be a valid saved project');const app=createMiniConnect(e=>{throw e;}),server=createServer((req,res)=>app.handle(req,res));server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address() as {port:number},origin='http://127.0.0.1:'+address.port;
   (clipMentorProductionPlugin(async()=>{throw Error('No worker permitted');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
   try{const draft=makeDraft(doc),ctx={...draft,templates:[],audio:[],getProjectId:()=> 'review-board-test',getCreativeMode:()=> 'clipmentor',hostFetch:async(path:string,init:RequestInit)=>realFetch(new URL(path,origin),{...init,headers:{Origin:origin}})} as never;const result=await executeTool('render_clipmentor_review_board',{},ctx) as any;assert(!result.error,JSON.stringify(result));assert(result.artifacts.length);const beforeDraft=JSON.stringify(draft.getDoc());const blocked=await executeTool('set_aspect_ratio',{ratio:'1:1'},ctx) as any;assert(blocked.production_gate?.code,'read preparation must not permit editing without current approval');assert.equal(JSON.stringify(draft.getDoc()),beforeDraft);assert.equal(result.review_approved,false);const human=await executeTool('render_clipmentor_review_board',{view:'human'},ctx) as any;assert(!human.error,JSON.stringify(human));assert.equal(human.artifacts.length,1);const humanPage=await realFetch(new URL(human.artifacts[0].url,origin),{headers:{Origin:origin}});const humanBytes=await humanPage.text();assert.match(humanBytes,/人审版/);const changed=clone(doc);(changed.clipMentorAnalysis!.product as any).name='QA later board only';await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',changed));try{const next=await executeTool('render_clipmentor_review_board',{view:'human'},{...ctx,getDoc:()=>changed}) as any;assert(!next.error,JSON.stringify(next));assert.notEqual(next.artifacts[0].url,human.artifacts[0].url,'human links must bind inspected HTML bytes, not mutable project filenames');const retained=await realFetch(new URL(human.artifacts[0].url,origin),{headers:{Origin:origin}});assert.equal(await retained.text(),humanBytes,'a later board cannot replace an already inspected link');}finally{await withSerializedProjectStore(s=>s.writeEntry('project:review-board-test',doc));}const wrongView=await executeTool('render_clipmentor_review_board',{view:'typo'},ctx) as any;assert.match(wrongView.error,/INPUT/);const stale=await realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'review_board',projectId:'review-board-test',expectedRevision:'stale'}),{headers:{Origin:origin}});assert.equal(stale.status,409);const page=await realFetch(new URL(result.artifacts[0].url,origin),{headers:{Origin:origin}});assert.equal(page.status,200);assert.match(await page.text(),/策划自查板/);assert.deepEqual(await loadOfflineStoredProject('review-board-test'),before);assert.equal((await realFetch(origin+'/api/clipmentor/production-task?view=review_board&projectId=review-board-test')).status,403);}finally{await new Promise<void>(r=>server.close(()=>r()));}
+ });
+ await test('Representative video is local, lazy, coalesced and scoped to the checked blueprint',async()=>{
+  const {createProductionPanel}=await import('./production-panel');
+  const {representativeTeachingExcerpt}=await import('./blueprint-teaching-excerpt');
+  const {withSerializedProjectStore}=await import('../plugins/project-store');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {createProductionTask,productionTaskStore,panelBlueprintRequirementsDigest}=await import('./production-task');
+  const doc=clone(bindings[0]),projectId='excerpt-panel-fixture';
+  const first=doc.clipMentorAnalysis!.blueprint[0] as any;
+  const plan=first.internal_review[first.internal_review.current_picture_plan];
+  plan.phases[1].context_source_ranges=[{segment_id:'GM-S01',source_range_seconds:[0,1],purpose:'first object'},
+   {segment_id:'GM-S01',source_range_seconds:[9,10.5],purpose:'second object'}];
+  const before=JSON.stringify(doc);
+  const selected=representativeTeachingExcerpt(doc);
+  assert(selected);
+  assert.equal(JSON.stringify(doc),before);
+  assert.deepEqual(selected.state.items.filter(i=>i.kind==='video').map(i=>[i.startFrame,i.srcInFrame,i.durationInFrames,i.volume]),
+   [[0,270,45,1],[45,0,30,0],[75,270,45,0]],'preview does not play gaps or choose the arbitrary tail');
+  assert.equal(selected.state.items.find(i=>i.id==='stage-0')?.props?.backgroundColor,'#0D5EA6');
+  const mismatch=clone(doc);
+  const mismatchReview=(mismatch.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  mismatchReview[mismatchReview.current_picture_plan].phases[1].context_source_ranges[0].segment_id='GM-S00';
+  assert.equal(representativeTeachingExcerpt(mismatch),null,'same window in another segment is not sufficient');
+  assert.equal(representativeTeachingExcerpt(bindings[0]),null,'legacy unregistered motion keeps its stills');
+  await withSerializedProjectStore(s=>s.writeEntry('project:'+projectId,doc));
+  const saved=(await loadOfflineStoredProject(projectId))!;
+  let renders=0,launches=0,release:()=>void=()=>{};
+  let entered:()=>void=()=>{};
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const hold=new Promise<void>(resolve=>{release=resolve;});
+  const payload=Buffer.from('fixture-preview');
+  const panel=createProductionPanel(()=>{launches++;},()=>false,new Set(),async exact=>{
+   assert.equal(exact.unitId,selected.unitId);renders++;entered();await hold;return payload;
+  });
+  const origin='http://127.0.0.1';
+  const server=createServer((req,res)=>{void panel(projectId,origin,new URL(req.url!,origin).searchParams,req,res,async()=>({}))
+   .catch(()=>{res.statusCode=409;res.end();});});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const base='http://127.0.0.1:'+(server.address() as {port:number}).port;
+  try{
+   const api={provider:'openai' as const,model:'fixture',apiMode:'responses' as const,origin:base};
+   const task=await createProductionTask({projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:{name:'Fixture',category:'test'},
+    author:api,reviewer:api,brief:'Fixture',humanBlueprintReview:true,
+    budget:{model:10,observation:0,review:0,tts:0,render:0,preview_review:0,maxElapsedMs:120_000,maxRepairs:2}});
+   task.input.panelDelivery={productAssetId:'product',productAssetHash:'a'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'b'.repeat(64)};
+   task.status='awaiting_blueprint';task.stage='copy_review';task.projectRevision=saved.revision;
+   task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,authorSelfCheck:'passed',
+    author_self_check_source_digest:'c'.repeat(64),teaching_baseline_digest:'d'.repeat(64),requirementsDigest:panelBlueprintRequirementsDigest(null)}};
+   await productionTaskStore.save(task);
+   const checked=(await (await realFetch(base+'/?view=panel')).json()).task;
+   const url=base+'/?'+new URLSearchParams({view:'panel_board',revision:saved.revision,boardIdentity:checked.boardIdentity});
+   const html=await (await realFetch(url)).text();
+   assert.equal((html.match(/看回看示意/g)??[]).length,1);
+   assert(!html.includes('data:video')&&!html.includes('fixture-preview'));
+   assert.equal(renders,0);
+   assert.equal((await realFetch(url.replace(checked.boardIdentity,'wrong')+'&excerpt=1')).status,409);
+   assert.equal(renders,0);
+   const interrupted=realFetch(url+'&excerpt=1',{signal:AbortSignal.timeout(10_000)});
+   await Promise.race([started,interrupted.then(()=>{throw Error('The current preview did not start');})]);
+   const currentDigest=task.completed.blueprint.artifact.requirementsDigest;
+   task.completed.blueprint.artifact.requirementsDigest='f'.repeat(64);
+   await productionTaskStore.save(task);
+   release();
+   assert.equal((await interrupted).status,409,'late render bytes cannot cross a changed review receipt');
+   task.completed.blueprint.artifact.requirementsDigest=currentDigest;
+   await productionTaskStore.save(task);
+   const requests=Array.from({length:2},()=>realFetch(url+'&excerpt=1',{signal:AbortSignal.timeout(10_000)}));
+   for(const response of await Promise.all(requests)){
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get('X-ClipMentor-Board-Identity'),checked.boardIdentity);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()),payload);
+   }
+   assert.equal(renders,2);
+   const assetFile=join(media,selected.asset.src.split('/').at(-1)!);
+   const original=await readFile(assetFile);await writeFile(assetFile,'changed fixture bytes');
+   try{assert.equal((await realFetch(url+'&excerpt=1')).status,409,'warm cache cannot serve mismatched media');}
+   finally{await writeFile(assetFile,original);}
+   task.completed.blueprint.artifact.requirementsDigest='f'.repeat(64);
+   await productionTaskStore.save(task);
+   assert.equal((await realFetch(url+'&excerpt=1')).status,409,'warm cache cannot bypass the current check receipt');
+   assert.equal(launches,0);assert.equal(networks,0);
+  }finally{release();await new Promise<void>(r=>server.close(()=>r()));}
  });
  await test('Shared panel admits only the checked current blueprint across all browser actions',async()=>{
   const {withSerializedProjectStore}=await import('../plugins/project-store');
@@ -355,7 +438,9 @@ try{
    const boardUrl=origin+'/api/clipmentor/production-task?'+new URLSearchParams({view:'panel_board',projectId,revision:snapshot.revision,boardIdentity:visible.boardIdentity});
    const board=await realFetch(boardUrl,{headers});
    assert.equal(board.status,200,await (board.ok?Promise.resolve(''):board.text()));
-   await board.arrayBuffer();
+   const panelHtml=await board.text();
+   assert(!panelHtml.includes('id="candidate-file"')&&!panelHtml.includes('id="freshness"')&&!panelHtml.includes('class="version-note"'));
+   assert(panelHtml.includes('data-card="group-1"')&&panelHtml.includes("querySelectorAll('[data-zoom]')")&&!panelHtml.includes("getElementById('candidate-file')"));
    const text='片头保留本片成绩。已合作片尾同屏展示产品和本片 Storyboard。';
    const submit=(boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:snapshot.revision,boardIdentity,text})});
    const stale=await submit('wrong');assert.equal(stale.status,409);assert.equal(received.length,0);

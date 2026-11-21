@@ -13,6 +13,7 @@ import { loadOfflineStoredProject } from '../external-agent/offline-project-stor
 import { isSafeUploadName, resolveUploadFile, serveDiskFile } from '../media-dir';
 import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-board';
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
+import {representativeTeachingExcerpt,renderTeachingExcerpt,verifyTeachingExcerptAsset,TEACHING_EXCERPT_MAX_BYTES} from './blueprint-teaching-excerpt';
 import { productionFeedbackAnchor,blueprintFeedbackPoints,feedbackProjectDigest } from './production-feedback';
 import { panelDeliveryIssues,panelDeliveryFindings,panelSalesEvidence,verifyPanelPartnerCard } from './production-panel-delivery';
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
@@ -111,7 +112,7 @@ export function combinePanelBlueprintEndings(primary:import('../../src/editor/ty
 }
 
 /** Fixed-project local frontend adapter, using the existing task ledger and worker. */
-export function createProductionPanel(launch:(task:ProductionTask)=>void, active:(id:string,projectId:string)=>boolean, controls = new Set<string>()) {
+export function createProductionPanel(launch:(task:ProductionTask)=>void, active:(id:string,projectId:string)=>boolean, controls = new Set<string>(), renderExcerpt=renderTeachingExcerpt) {
   let preflight: { until:number; result:Promise<PanelSettings> } | undefined;
   const settings = (fresh=false) => {
     if (fresh || !preflight || Date.now() >= preflight.until) {
@@ -120,6 +121,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     return preflight.result;
   };
   const boards = new Map<string,{ identity:string; artifactIdentity:string; revision:string; criteriaDigest?:string; requirementsDigest?:string; siblingRevision?:string; assertUnchanged?:()=>Promise<void>; file:Promise<string> }>();
+  let pendingExcerpt:{identity:string;result:Promise<Buffer>}|undefined;
+  let cachedExcerpt:{identity:string;bytes:Buffer}|undefined;
   const verifiedPreviews = new Map<string,Promise<void>>();
   async function openVerifiedPreview(task:ProductionTask,file:string){
     const receipt=task.completed.self_check?.artifact.receipt as {videoSha256?:string}|undefined;
@@ -256,7 +259,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if (!task || active(task.taskId,projectId)||!['awaiting_blueprint','blocked'].includes(task.status)
           ||!['blueprint','copy_review'].includes(task.stage)) throw new Error('审片板尚未就绪');
         const revision = query.get('revision');
-        if (!revision || (await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
+        const saved=await snapshot();
+        if (!revision || saved.revision !== revision) throw new Error('蓝图版本已变化，请刷新');
         if(!draftChecked(task,revision,policy))throw Error('蓝图尚未完成教学自检');
         // A shared-body task owns the current teaching plan; its sibling owns only
         // the other ending. Join read-only presentation, never execution documents.
@@ -264,6 +268,47 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const {identity,artifactIdentity,siblingEntry,sibling,siblingRevision}=subject;
         if(siblingEntry&&!sibling)throw Error('新建联片尾工程缺失');
         if(query.has('boardIdentity')&&query.get('boardIdentity')!==identity)throw Error('审片板已变化，请刷新');
+        const assertBoardCurrent=async()=>{
+          const currentTask=manifestTask?await productionTaskStore.load(projectId,task.taskId):await currentPanelTask(projectId);
+          const currentPolicy=await readRequirements();
+          if((await snapshot()).revision!==revision||!currentTask||currentTask.taskId!==task.taskId||active(currentTask.taskId,projectId)
+            ||!['awaiting_blueprint','blocked'].includes(currentTask.status)||!['blueprint','copy_review'].includes(currentTask.stage)
+            ||!draftChecked(currentTask,revision,currentPolicy)
+            ||(await boardSubject(revision,currentTask,currentPolicy)).identity!==identity)throw Error('审片板已变化，请刷新');
+        };
+        if(query.has('excerpt')){
+          if(query.get('excerpt')!=='1'||query.get('boardIdentity')!==identity||!isPanelBlueprintDraft(task))
+            throw Error('当前蓝图不能播放代表预览');
+          const excerpt=representativeTeachingExcerpt(saved.doc);
+          if(!excerpt)throw Error('当前蓝图没有可播放的回看选段');
+          await assertBoardCurrent();
+          let bytes=cachedExcerpt?.identity===identity?cachedExcerpt.bytes:undefined;
+          if(!bytes){
+            if(!pendingExcerpt){
+              const result=(async()=>{
+                const result=await renderExcerpt(excerpt,AbortSignal.timeout(45_000));
+                if(!result.length||result.length>TEACHING_EXCERPT_MAX_BYTES)throw Error('代表预览文件无效');
+                await verifyTeachingExcerptAsset(excerpt.asset);
+                await assertBoardCurrent();
+                cachedExcerpt={identity,bytes:result};
+                return result;
+              })();
+              pendingExcerpt={identity,result};
+              const clear=()=>{if(pendingExcerpt?.result===result)pendingExcerpt=undefined;};
+              void result.then(clear,clear);
+            }
+            if(pendingExcerpt.identity!==identity)throw Error('另一个代表预览正在生成');
+            bytes=await pendingExcerpt.result;
+          }
+          await verifyTeachingExcerptAsset(excerpt.asset);
+          await assertBoardCurrent();
+          res.setHeader('Content-Type','video/mp4');
+          res.setHeader('Content-Length',bytes.length);
+          res.setHeader('X-Content-Type-Options','nosniff');
+          res.setHeader('X-ClipMentor-Board-Identity',identity);
+          res.setHeader('Cache-Control','no-store');
+          res.end(bytes);return;
+        }
         let board = boards.get(projectId);
         if (board?.identity !== identity) {
           const reusable=board?.artifactIdentity===artifactIdentity?board:undefined;
@@ -290,6 +335,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             // Raw requirements and cross-project reference frames remain internal.
             // Human product review shows this project's storyboard and actual preview.
             if ((await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
+            input.embedded=true;
+            if(isPanelBlueprintDraft(task))input.teachingExcerptUnit=representativeTeachingExcerpt(saved.doc)?.unitId;
             const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel', artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
             return result.artifacts[0].path;
@@ -301,13 +348,10 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }
         const bytes = await readFile(await board.file);
         await board.assertUnchanged?.();
-        const currentTask=isPanelBlueprintDraft(task)?await currentPanelTask(projectId):task;
-        const currentPolicy=await readRequirements();
-        if(!currentTask||currentTask.taskId!==task.taskId||active(currentTask.taskId,projectId)||!draftChecked(currentTask,revision,currentPolicy)
-          ||(await boardSubject(revision,currentTask,currentPolicy)).identity!==identity)throw Error('审片板已变化，请刷新');
+        await assertBoardCurrent();
         res.setHeader('X-ClipMentor-Board-Identity',identity);
         res.setHeader('Content-Type','text/html; charset=utf-8');
-        res.setHeader('Content-Security-Policy',"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'");
+        res.setHeader('Content-Security-Policy',"default-src 'none'; img-src data:; media-src blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'");
         res.setHeader('Cache-Control','no-store');
         res.end(bytes);return;
       }

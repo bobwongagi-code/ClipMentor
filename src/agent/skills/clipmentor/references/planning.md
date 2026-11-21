@@ -31,6 +31,8 @@ Before dispatch, check the actual outgoing text/attachments against that brief a
 
 蓝图交人审时随附现行候选的人审版（`render_clipmentor_review_board({view:"human"})` 或 `board:clipmentor-blueprint -- <输入> --view human --out <目录>`）；策划自查用 `view:"planner"`。工程入口只含该工程登记的结尾，完整双结尾候选用CLI显式绑定素材，不从其他工程或历史猜补。候选变化后重新生成。它是内部材料，不发给达人，不是达人原片 Storyboard，不新增审批，也不自动判定蓝图内容。
 
+网页人审板出现「看回看示意」时，可点开一组已经登记的原片对照片段和回看选段。用它看对象有没有入画、阶段切换是否清楚。回看未配音，未给出精确出入点的短标在旁边核稿，配音后的声画对位和连续成片仍按实际导出验收。
+
 片头与达人结尾先按制作任务保存的视觉用途核对，再看同版人审板上的整屏和阶段顺序。素材匹配后仍要检查蒙层、成绩、商品、佣金与对应行动实际可见。
 
 冻结片尾前，逐版用人审板对照已提供的原图、计划上屏裁切和随片附件。新建联版有已确认的佣金海报时，核对计划画面保留佣金区，其他金额仍按已确认口径展示。已合作版若承诺或要求给开拍参考，核对本商品的实际 Storyboard 画面或随片附件。约定材料缺失时先报缺项；两版共用裁切时，分别核对能否承担各自的行动。 已确认要用同一张 CTA 原图分取两区时，用 `picture.layout:{kind:"product_commission",product_crop:{left,top,right,bottom},commission_crop:{left,top,right,bottom}}`，四值为原图各边裁掉的比例，两区不得重叠。原图身份填在外层 `picture`。
