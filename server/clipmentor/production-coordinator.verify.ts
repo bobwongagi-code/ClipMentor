@@ -54,26 +54,32 @@ try{
   completed:{analysis:{at:Date.now()-9_000,artifact:{revision}}},
   attempts:{model:1,review:0,observation:0,tts:0,render:0,preview_review:0},
   effects:{'blueprint:initial:0:author-0':{kind:'model',status:'completed',operationId:randomUUID(),result:null}}});
- async function saveAuthor(task:ProductionTask,revision:string){
-  const run:AgentRunRecord={version:1,runId:randomUUID(),projectId:task.projectId,status:'completed',askOnly:false,
+ async function saveAuthor(task:ProductionTask,revision:string,observation?:{operationId:string;revision:number}){
+  const status=observation?'failed':'completed';
+  const run:AgentRunRecord={version:1,runId:randomUUID(),projectId:task.projectId,status,askOnly:false,
    backend:'api',modelId:task.input.author.model,userInputDigest:'a'.repeat(64),userInputPreview:'fixture',
    createdAt:task.createdAt+2_000,updatedAt:task.createdAt+3_000,artifactIds:[],checkpointIds:[],proposalIds:[],events:[]};
   await createAgentRun(run);
   await appendAgentRunEvents(task.projectId,run.runId,[
-   {type:'tool_outcome',summary:JSON.stringify({serverEvent:{type:'server-tool-result',data:{name:'revise_clipmentor_analysis',success:true,result:{saved:true,projectId:task.projectId,projectRevision:revision}}}})},
-   {type:'final',summary:JSON.stringify({serverEvent:{type:'done',data:{status:'completed'}}})},
+   {type:'tool_outcome',summary:JSON.stringify({serverEvent:{type:'server-tool-result',data:{name:'revise_clipmentor_analysis',success:true,
+    result:{saved:true,projectId:task.projectId,projectRevision:revision,revision:observation?.revision}}}})},
+   ...(observation?[{type:'tool_outcome' as const,summary:JSON.stringify({serverEvent:{type:'server-tool-result',
+    data:{name:'observe_clipmentor_source_video',success:false,result:{receipt:{operationId:observation.operationId}}}}})}]:[]),
+   {type:'final',summary:JSON.stringify({serverEvent:{type:'done',data:{status}}})},
   ]);
   const persisted=(await loadAgentRuntimeSidecar(task.projectId)).runs.find(row=>row.runId===run.runId)!;
-  assert.equal(persisted.events.length,2);assert.equal(persisted.status,'completed');
+  assert.equal(persisted.events.length,observation?3:2);assert.equal(persisted.status,status);
   assert(persisted.createdAt>=task.completed.analysis!.at&&persisted.updatedAt<=task.updatedAt,'matching author time window');
  }
  const authority=(t:ProductionTask)=>structuredClone({attempts:t.attempts,budget:t.input.budget,effects:t.effects,completed:t.completed});
- for(const mode of ['matching','wrong-write-revision','multiple-authors'] as const){
+ for(const mode of ['matching','wrong-write-revision','multiple-authors','model-budget-exhausted'] as const){
   const id='coordinator-'+mode;
   await setStoredEntry(`project:${id}`,structuredClone(fixture));
   await setStoredEntry(`versions:${id}`,[]);
   const snapshot=(await loadOfflineStoredProject(id))!;
-  const task=taskFor(id,snapshot.revision),before=authority(task),projectBefore=JSON.stringify((await getStoredEntry(`project:${id}`)).value);
+  const task=taskFor(id,snapshot.revision),projectBefore=JSON.stringify((await getStoredEntry(`project:${id}`)).value);
+  if(mode==='model-budget-exhausted')task.attempts.model=task.input.budget.model;
+  const before=authority(task);
   await saveAuthor(task,mode==='wrong-write-revision'?'different-saved-revision':snapshot.revision);
   if(mode==='multiple-authors')await saveAuthor(task,snapshot.revision);
   if(mode==='matching'){
@@ -85,7 +91,8 @@ try{
    await assert.rejects(reconcileBlockedBlueprint(task),/blueprint_recovery_budget_or_effect_unverified/);
    assert.deepEqual(task,afterFirst,'old effect cannot grant a second epoch');
   }else{
-   await assert.rejects(reconcileBlockedBlueprint(task),/blueprint_recovery_author_receipt_unverified/);
+   const reason=mode==='model-budget-exhausted'?/blueprint_recovery_budget_or_effect_unverified/:/blueprint_recovery_author_receipt_unverified/;
+   await assert.rejects(reconcileBlockedBlueprint(task),reason);
    assert.equal(task.repairs,0);assert.equal(task.technicalRecoveryEpochs,undefined);
    assert.equal(task.repairContext,undefined);
   }
@@ -136,6 +143,133 @@ try{
   }
   assert.deepEqual(authority(task),before,'the attempt and its original effect are immutable');
   assert.equal(requests,0);
+ }
+ // A received-but-invalid observation has a distinct proof and still needs
+ // remaining observation allowance to schedule a corrected context.
+ const {copyReviewSubject}=await import('../../src/clipmentor/production-gate');
+ for(const allowance of [2,1]){
+  const id='coordinator-boundary-'+allowance,doc=structuredClone(saved.cases[0]!.doc) as unknown as ProjectDoc;
+  const analysis=doc.clipMentorAnalysis!,unit=analysis.source_breakdown!.units[0]!;
+  const end=unit.original_source_ranges![0][1];
+  analysis.source.duration_seconds=end+3;
+  await setStoredEntry('project:'+id,doc);
+  const snapshot=(await loadOfflineStoredProject(id))!;
+  const task=taskFor(id,snapshot.revision),operationId=randomUUID();
+  task.error='Error: observe_clipmentor_source_video: Source observation failed; read the saved receipt, do not retry';
+  task.attempts.observation=1;task.input.budget.observation=allowance;
+  const subject=await copyReviewSubject(snapshot.doc);
+  const context={context_id:'boundary-fixture',unit_id:unit.unit_id,source_range_seconds:[end-1,end],
+   boundary_seconds:[end],goals:['speech_boundaries']};
+  task.effects['blueprint:initial:0:'+operationId]={kind:'observation',status:'completed',operationId,result:{body:{receipt:{
+   operationId,projectId:id,status:'failed',phase:'validate_response',receipt_persisted:true,requestsAttempted:1,
+   upstream_http_status:200,source_hash:analysis.source.sourceContentHash,subject,
+   validation:{status:'invalid',issues:[{severity:'error',code:'invalid_task_boundary_evidence'}]},
+   observation_task:{version:'source-boundaries-v1',contexts:[context]},
+  }}}};
+  await saveAuthor(task,snapshot.revision,{operationId,revision:subject.revision});
+  const before=structuredClone(task);
+  if(allowance===2){
+   await reconcileBlockedBlueprint(task);
+   assert.equal(task.stage,'blueprint');
+   assert.equal(task.repairs,1);assert.deepEqual(task.technicalRecoveryEpochs,[1]);
+   assert.equal(task.sourceObservationUnavailableOperation,undefined);
+   assert.deepEqual(task.repairContext?.source_observation_recovery,{version:'source-boundaries-v1',
+    contexts:[{...context,source_range_seconds:[end-1,end+2]}]});
+  }else{
+   await assert.rejects(reconcileBlockedBlueprint(task),/blueprint_recovery_observation_receipt_unverified/);
+   assert.deepEqual(task,before);
+  }
+  assert.deepEqual(authority(task),authority(before));
+  assert.deepEqual(await loadOfflineStoredProject(id),snapshot);
+  assert.equal(requests,0);
+  console.log('PASS real reconcile boundary receipt with observation allowance '+allowance);
+ }
+ const {default:deliveryFixture}=await import('../../src/agent/tools/fixtures/barely-there-mg-replacement-20261030.json');
+ for(const mode of ['source-evidence','visual-fallback','review-budget-exhausted'] as const){
+  const id='coordinator-current-'+mode;
+  const doc=structuredClone(mode==='source-evidence'?saved.cases[0]!.doc:deliveryFixture.before) as unknown as ProjectDoc;
+  const receipt=doc.clipMentorAnalysis!.production_copy_review!,subject=await copyReviewSubject(doc);
+  receipt.analysis_revision=subject.revision;receipt.content_digest=subject.digest;
+  receipt.verdict='insufficient_evidence';
+  if(mode==='source-evidence')receipt.units[0]!.verdict='insufficient_evidence';
+  receipt.visual_criteria_digest='a'.repeat(64);
+  receipt.visual_criteria_checks=[{id:'missing-stage',answer:'unknown',observation:'缺少该段可定位的画面判断',picture_stage:''}];
+  await setStoredEntry('project:'+id,doc);
+  const snapshot=(await loadOfflineStoredProject(id))!;
+  const task=taskFor(id,snapshot.revision);
+  task.stage='copy_review';task.error='Error: 蓝图返修未改变送审内容';
+  task.input.budget.routine={model:1,review:1,observation:1,tts:0,render:0};task.input.budget.observation=1;
+  task.completed.blueprint={at:task.createdAt+1,artifact:{revision:snapshot.revision}};
+  task.repairContext={revision:snapshot.revision,blueprint_digest:subject.digest};
+  if(mode==='review-budget-exhausted')task.attempts.review=task.input.budget.review;
+  const before=structuredClone(task);
+  await reconcileBlockedBlueprint(task);
+  if(mode==='review-budget-exhausted')assert.deepEqual(task,before);
+  else{
+   assert.equal(task.repairs,1);
+   assert.equal(task.technicalRecoveryEpochs,undefined);
+   if(mode==='source-evidence'){
+    assert.equal(task.stage,'blueprint');
+    assert.equal(task.completed.blueprint,undefined);
+    assert.equal((task.repairContext?.repair as {status:string}).status,'bound');
+    assert.equal(task.repairContext?.review_contract_recheck,undefined);
+   }else{
+    assert.equal(task.stage,'copy_review');
+    assert.deepEqual(task.completed,before.completed);
+    assert.equal(task.repairContext?.review_contract_recheck,true);
+    assert.equal(task.repairContext?.repair,undefined);
+   }
+  }
+  assert.deepEqual(task.input.budget,before.input.budget);
+  assert.deepEqual(task.attempts,before.attempts);
+  assert.deepEqual(task.effects,before.effects);
+  assert.deepEqual(await loadOfflineStoredProject(id),snapshot);
+  assert.equal(requests,0);
+  console.log('PASS real reconcile current plan '+mode);
+ }
+ // Both focused routes are candidates. The bound author route may stop even
+ // when the same saved project qualifies for independent repair.
+ for(const mode of ['author-shrinks','author-refuses','independent-fallback','stale-snapshot'] as const){
+  const id='coordinator-focused-'+mode,doc=structuredClone(saved.cases[0]!.doc) as unknown as ProjectDoc;
+  const receipt=doc.clipMentorAnalysis!.production_copy_review!;
+  receipt.verdict='needs_revision';
+  receipt.units[0]!.verdict='needs_revision';
+  await setStoredEntry('project:'+id,doc);
+  const snapshot=(await loadOfflineStoredProject(id))!;
+  const task=taskFor(id,mode==='stale-snapshot'?'old-project-revision':snapshot.revision);
+  task.stage='copy_review';
+  task.error='Error: 已用完自动返修额度';
+  task.repairs=task.input.budget.maxRepairs;
+  task.completed.blueprint={at:task.createdAt+1,artifact:{revision:task.projectRevision}};
+  task.repairContext={revision:task.projectRevision,blueprint_digest:receipt.content_digest,repair:{status:'bound'},
+   author_self_check:[{id:mode==='independent-fallback'?'S2':'S1',status:'fix'}]};
+  if(mode!=='independent-fallback'){
+   task.sourceEvidenceRecoveryOperation='saved-source-evidence';
+   task.focusedAuthorChecks=mode==='author-refuses'?['S1']:['S1','S5'];
+  }
+  const before=structuredClone(task);
+  await reconcileBlockedBlueprint(task);
+  if(mode==='author-refuses'||mode==='stale-snapshot'){
+   assert.deepEqual(task,before,'refusal cannot change the repair state or fall through to independent repair');
+  }else{
+   assert.equal(task.stage,'blueprint');
+   assert.equal(task.repairs,before.repairs+1);
+   assert.equal(task.technicalRecoveryEpochs,undefined,'a focused repair is a content repair');
+   assert.deepEqual(task.completed,{analysis:before.completed.analysis},'rewind invalidates the old blueprint only at the existing boundary');
+   if(mode==='author-shrinks'){
+    assert.deepEqual(task.focusedAuthorChecks,['S1']);
+    assert.equal(task.focusedIndependentUnits,undefined);
+   }else{
+    assert.equal(task.sourceEvidenceRecoveryOperation,undefined);
+    assert.deepEqual(task.focusedIndependentUnits,[receipt.units[0]!.unit_id]);
+   }
+  }
+  assert.deepEqual(task.input.budget,before.input.budget);
+  assert.deepEqual(task.attempts,before.attempts);
+  assert.deepEqual(task.effects,before.effects);
+  assert.deepEqual(await loadOfflineStoredProject(id),snapshot);
+  assert.equal(requests,0);
+  console.log('PASS real reconcile focused '+mode);
  }
  const readyFixture=structuredClone(saved.cases[0]!.doc) as unknown as ProjectDoc;
  const unit=readyFixture.clipMentorAnalysis!.blueprint[0]!;

@@ -1,5 +1,5 @@
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
-import {blockedProductionDecision,productionAuthorDecision,productionRecoveryProgress,repairableBlueprintIssue,type RecoveryRoute} from './production-decisions';
+import {blockedProductionDecision,productionAuthorDecision,productionRecoveryProgress,repairableBlueprintIssue,type AuthorCheckpointFailure,type RecoveryRoute} from './production-decisions';
 import {productionCapacityFacts,pictureRepairWriteError} from './production-capacity-repair';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
@@ -121,11 +121,18 @@ export async function reconcileBlockedBlueprint(task:ProductionTask){
  }catch(error){await recordProductionDecision(task,{scope:'recovery',action:'stop',reason:'reconciliation_failed',fromStage:before.stage,fromEpoch:before.repairs});throw error;}
 }
 
-/** Reconcile pre-fix checkpoints only when the finished author run proves the exact saved revision. */
+/** Reconcile pre-fix checkpoints only when their saved evidence authorizes recovery. */
 async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:RecoveryRoute)=>void){
  await reconcileLegacyTechnicalRecoveries(task);
  const decision=blockedProductionDecision(task,remainingContentRepairs(task));
  const selected=(route:RecoveryRoute)=>{if(!decision.routes.includes(route))return false;choose(route);return true;};
+ if(await reconcileBlueprintWithCurrentPlan(task,selected))return;
+ if(await reconcileFocusedBlueprintRepair(task,selected))return;
+ if(selected('author_checkpoint')&&decision.authorCheckpoint)await reconcileBlueprintAuthorCheckpoint(task,decision.authorCheckpoint);
+}
+
+type SelectRecoveryRoute=(route:RecoveryRoute)=>boolean;
+async function reconcileBlueprintWithCurrentPlan(task:ProductionTask,selected:SelectRecoveryRoute){
  // A no-op edit with measured capacity conflicts returns to internal picture planning,
  // not to the operator and not to another identical edit request.
  if(selected('picture_capacity')){
@@ -137,7 +144,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
    if(affected.length){
     task.repairContext={...task.repairContext,revision:saved.revision,audio_picture_repair:{groups:affected,
      instruction:'实测音频已齐全；组级动态秒数不含参照图阅读容量，不能按单句不足直接判失败。按整组意群和原片证据核画面分工，必要时登记有教学作用的参照图/关系卡，不用空长定格、循环、慢放填时长。只修画面计划，不改口播、字幕、短标文字或交付片头片尾，不重新配音。'}};
-    task.stage='blueprint';task.repairs++;return;
+    task.stage='blueprint';task.repairs++;return true;
    }
   }
  }
@@ -151,7 +158,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
    const route=productionReviewObservation(saved.doc,{...task,stage:'blueprint',repairContext});
    if(route){
     task.repairContext=repairContext;task.stage='blueprint';task.repairs++;
-    return;
+    return true;
    }
   }
  }
@@ -162,7 +169,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   if(saved?.revision===task.projectRevision&&repair?.status==='bound'
    &&repair.subject?.digest===task.repairContext?.blueprint_digest&&needsVisualReviewCompletion(repair)){
    task.repairContext={...task.repairContext,review_contract_recheck:true};
-   task.repairs++;return;
+   task.repairs++;return true;
   }
  }
  if(selected('continuation_brief')){
@@ -171,10 +178,14 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
    const repair=await currentReviewRepair(saved.doc);
    if(repair.status==='bound'&&repair.subject?.digest===task.repairContext?.blueprint_digest){
     recordTechnicalRecovery(updated);updated.stage='blueprint';
-    Object.assign(task,updated);return;
+    Object.assign(task,updated);return true;
    }
   }
  }
+ return false;
+}
+
+async function reconcileFocusedBlueprintRepair(task:ProductionTask,selected:SelectRecoveryRoute){
  if(selected('source_evidence_import')){
   const checks=task.repairContext?.author_self_check;
   if(Array.isArray(checks)&&checks.some(check=>check?.id==='S2'&&check.status==='fix')){
@@ -190,7 +201,7 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
      task.repairContext={...task.repairContext,source_evidence_import:effect.operationId};
      task.repairs++;
      task.stage='blueprint';
-     return;
+     return true;
     }
    }
   }
@@ -207,11 +218,12 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
    if(contractUpgrade)delete task.focusedAuthorChecks;
    if(!grantFocusedAuthorRepair(task,issues)){
     task.focusedAuthorChecks=previous;
-    return;
+    // A verified author finding that cannot earn another repair ends this recovery.
+    return true;
    }
    if(contractUpgrade)task.authorCheckContractRevision=2;
    task.stage='blueprint';task.repairs++;
-   return;
+   return true;
   }
  }
  if(selected('focused_independent')){
@@ -220,23 +232,78 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   if(snapshot&&snapshot.revision===task.projectRevision&&snapshot.doc.clipMentorAnalysis?.source.asset_id===task.input.sourceAssetId
    &&checked?.status==='bound'&&checked.subject?.digest===task.repairContext?.blueprint_digest&&grantFocusedIndependentRepair(task,checked)){
    task.stage='blueprint';task.repairs++;
-   return;
+   return true;
   }
  }
  if(selected('focused_structure')){
   const issue=task.repairContext?.blueprint_structure_issue;
-  if(typeof issue!=='string')return;
+  if(typeof issue!=='string')return true;
   const saved=await loadOfflineStoredProject(task.projectId);
   if(saved&&saved.revision===task.projectRevision&&saved.doc.clipMentorAnalysis?.source.asset_id===task.input.sourceAssetId
    &&(await productionBlueprintReadiness(saved.doc,task.input.voice)).code===issue&&grantFocusedBlueprintRepair(task,issue)){
    task.repairs++;
   }
-  return;
+  return true;
  }
- if(!selected('author_checkpoint')||!decision.authorCheckpoint)return;
- const {failedObservation,gatewayObservationUnavailable,failedStoryboardDraftRead,failedSourceRead,failedDeliveryWrite,failedPlanWrite}=decision.authorCheckpoint;
+ return false;
+}
+
+async function verifyBlueprintRecoveryObservation(task:ProductionTask,gatewayObservationUnavailable:boolean,
+ effects:Array<ProductionTask['effects'][string]>,doc:ProjectDoc,
+ savedAnalysis:NonNullable<ProjectDoc['clipMentorAnalysis']>):Promise<{
+ previousObservation:SourceVideoReceipt;recoveredObservation?:SourceVideoTask;
+}>{
+ if(gatewayObservationUnavailable){
+  const observations=effects.filter(effect=>effect.kind==='observation');
+  const effect=observations[0];
+  const observed=(effect?.result as {body?:{receipt?:SourceVideoReceipt}}|undefined)?.body?.receipt;
+  const receipt=observations.length===1&&effect
+   ?await readSourceVideoReceipt(effect.operationId,task.projectId,sourceVideoDependencies()).catch(()=>null):null;
+  const match=receipt&&observed&&observed.operationId===receipt.operationId
+   &&observed.projectId===task.projectId&&observed.status==='failed'&&observed.phase==='gateway_request'
+   &&observed.receipt_persisted===true&&observed.requestsAttempted===1&&observed.upstream_http_status==null
+   &&observed.source_hash===receipt.source_hash&&receipt.source_hash===savedAnalysis.source.sourceContentHash
+   &&doc.assets.some(asset=>asset.id===task.input.sourceAssetId&&asset.sourceContentHash===receipt.source_hash)
+   &&digestValue(observed.subject)===digestValue(receipt.subject)&&receipt.subject.revision<=savedAnalysis.revision;
+  if(!match||!receipt||receipt.receipt_persisted!==true||receipt.requestsAttempted!==1
+   ||!(receipt.status==='failed'&&receipt.phase==='gateway_request'&&receipt.upstream_http_status==null&&!receipt.raw_response_available
+    ||receipt.status==='completed'&&receipt.result?.validation.status==='valid'))
+   throw new Error('blueprint_recovery_observation_receipt_unverified');
+  return {previousObservation:receipt};
+ }
+
+ const observations=effects.filter(effect=>effect.kind==='observation');
+ const effect=observations[0];
+ const receipt=(effect?.result as {body?:{receipt?:SourceVideoReceipt}}|undefined)?.body?.receipt;
+ const subject=await copyReviewSubject(doc);
+ if(observations.length!==1||!receipt||receipt.operationId!==effect.operationId||receipt.projectId!==task.projectId
+   ||receipt.status!=='failed'||receipt.receipt_persisted!==true||receipt.requestsAttempted!==1
+   ||receipt.phase!=='validate_response'||receipt.upstream_http_status!==200
+   ||receipt.subject.revision>subject.revision
+   ||receipt.source_hash!==savedAnalysis.source.sourceContentHash
+   ||receipt.validation?.status!=='invalid'||!receipt.validation.issues.some(issue=>issue.severity==='error')
+   ||receipt.validation.issues.some(issue=>issue.severity==='error'&&issue.code!=='invalid_task_boundary_evidence')
+   ||task.attempts.observation>=task.input.budget.observation)
+  throw new Error('blueprint_recovery_observation_receipt_unverified');
+ const requested=receipt.observation_task;
+ validateSourceVideoTask(requested,savedAnalysis.source.duration_seconds,subject.units.map(unit=>unit.unit_id));
+ const breakdown=savedAnalysis.source_breakdown;
+ if(!breakdown||requested.contexts.some(context=>{
+  const unit=breakdown.units.find(entry=>entry.unit_id===context.unit_id);
+  return !unit||context.boundary_seconds.some(time=>context.source_range_seconds.includes(time)
+   &&!originalPlaybackRanges(breakdown,unit).some(range=>range.includes(time)));
+ }))throw new Error('blueprint_recovery_observation_boundaries_changed');
+ const recoveredObservation=observationTaskWithBoundaryContext(requested,savedAnalysis.source.duration_seconds);
+ if(JSON.stringify(requested)===JSON.stringify(recoveredObservation))
+  throw new Error('blueprint_recovery_observation_context_already_corrected');
+ return {previousObservation:receipt,recoveredObservation};
+}
+
+/** The finished author run must prove the exact saved revision before publication. */
+async function reconcileBlueprintAuthorCheckpoint(task:ProductionTask,failure:AuthorCheckpointFailure){
+ const {failedObservation,gatewayObservationUnavailable,failedStoryboardDraftRead,failedSourceRead,failedDeliveryWrite,failedPlanWrite}=failure;
  const recoveringDeliveryWrite=failedDeliveryWrite&&!gatewayObservationUnavailable&&!failedObservation&&!failedStoryboardDraftRead&&!failedSourceRead;
- let {savedShapeIssue}=decision.authorCheckpoint;
+ let {savedShapeIssue}=failure;
  const analysis=task.completed.analysis;
  const prefix=`blueprint:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:`;
  const effects=Object.entries(task.effects).filter(([key])=>key.startsWith(prefix)).map(([,effect])=>effect);
@@ -251,49 +318,8 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
   throw new Error('blueprint_recovery_saved_scope_changed');
  let recoveredObservation:SourceVideoTask|undefined;
  let previousObservation:SourceVideoReceipt|undefined;
- if(gatewayObservationUnavailable){
-  const observations=effects.filter(effect=>effect.kind==='observation');
-  const effect=observations[0];
-  const observed=(effect?.result as {body?:{receipt?:SourceVideoReceipt}}|undefined)?.body?.receipt;
-  const receipt=observations.length===1&&effect
-   ?await readSourceVideoReceipt(effect.operationId,task.projectId,sourceVideoDependencies()).catch(()=>null):null;
-  const match=receipt&&observed&&observed.operationId===receipt.operationId
-   &&observed.projectId===task.projectId&&observed.status==='failed'&&observed.phase==='gateway_request'
-   &&observed.receipt_persisted===true&&observed.requestsAttempted===1&&observed.upstream_http_status==null
-   &&observed.source_hash===receipt.source_hash&&receipt.source_hash===savedAnalysis.source.sourceContentHash
-   &&saved.doc.assets.some(asset=>asset.id===task.input.sourceAssetId&&asset.sourceContentHash===receipt.source_hash)
-   &&digestValue(observed.subject)===digestValue(receipt.subject)&&receipt.subject.revision<=savedAnalysis.revision;
-  if(!match||!receipt||receipt.receipt_persisted!==true||receipt.requestsAttempted!==1
-   ||!(receipt.status==='failed'&&receipt.phase==='gateway_request'&&receipt.upstream_http_status==null&&!receipt.raw_response_available
-    ||receipt.status==='completed'&&receipt.result?.validation.status==='valid'))
-   throw new Error('blueprint_recovery_observation_receipt_unverified');
-  previousObservation=receipt;
- }else if(failedObservation){
-  const observations=effects.filter(effect=>effect.kind==='observation');
-  const effect=observations[0];
-  const receipt=(effect?.result as {body?:{receipt?:SourceVideoReceipt}}|undefined)?.body?.receipt;
-  const subject=await copyReviewSubject(saved.doc);
-  if(observations.length!==1||!receipt||receipt.operationId!==effect.operationId||receipt.projectId!==task.projectId
-    ||receipt.status!=='failed'||receipt.receipt_persisted!==true||receipt.requestsAttempted!==1
-    ||receipt.phase!=='validate_response'||receipt.upstream_http_status!==200
-    ||receipt.subject.revision>subject.revision
-    ||receipt.source_hash!==savedAnalysis.source.sourceContentHash
-    ||receipt.validation?.status!=='invalid'||!receipt.validation.issues.some(issue=>issue.severity==='error')
-    ||receipt.validation.issues.some(issue=>issue.severity==='error'&&issue.code!=='invalid_task_boundary_evidence')
-    ||task.attempts.observation>=task.input.budget.observation)
-   throw new Error('blueprint_recovery_observation_receipt_unverified');
-  const requested=receipt.observation_task;
-  validateSourceVideoTask(requested,savedAnalysis.source.duration_seconds,subject.units.map(unit=>unit.unit_id));
-  const breakdown=savedAnalysis.source_breakdown;
-  if(!breakdown||requested.contexts.some(context=>{
-   const unit=breakdown.units.find(entry=>entry.unit_id===context.unit_id);
-   return !unit||context.boundary_seconds.some(time=>context.source_range_seconds.includes(time)
-    &&!originalPlaybackRanges(breakdown,unit).some(range=>range.includes(time)));
-  }))throw new Error('blueprint_recovery_observation_boundaries_changed');
-  previousObservation=receipt;
-  recoveredObservation=observationTaskWithBoundaryContext(requested,savedAnalysis.source.duration_seconds);
-  if(JSON.stringify(requested)===JSON.stringify(recoveredObservation))
-   throw new Error('blueprint_recovery_observation_context_already_corrected');
+ if(gatewayObservationUnavailable||failedObservation){
+  ({previousObservation,recoveredObservation}=await verifyBlueprintRecoveryObservation(task,gatewayObservationUnavailable,effects,saved.doc,savedAnalysis));
  }else if(failedStoryboardDraftRead){
   if(productionBoardPhaseIssues(saved.doc).length)throw new Error('blueprint_recovery_saved_scope_changed');
   await verifyCreatorStoryboardEvidence(saved.doc);
