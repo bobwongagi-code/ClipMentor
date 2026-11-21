@@ -5,7 +5,7 @@ import {readFile,mkdir,mkdtemp,rm,writeFile,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {readBlueprint,lintBlueprint} from '../../src/clipmentor/blueprint-lint';
-import {currentPicturePhases,blueprintPictureNotices,pictureNoticeRows} from '../../src/clipmentor/blueprint-picture-notices';
+import {currentPicturePhases,blueprintPictureNotices,pictureNoticeRows,stageCueColors} from '../../src/clipmentor/blueprint-picture-notices';
 import {deliverySectionsFromDoc,deliveryPictureBindings,type DeliverySection} from '../../src/clipmentor/delivery-sections';
 import {labelTranslationsConflict} from '../../src/clipmentor/author-translations';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
@@ -51,6 +51,8 @@ export interface BoardInput {
  bindings?:ProjectDoc[];bindingSha256?:string;mediaDir?:string;
  visualReferences?:VisualReferenceFrame[];
  deliveryFindings?:ReturnType<typeof lintBlueprint>['findings'];
+ embedded?:boolean;
+ teachingExcerptUnit?:string;
 }
 export async function loadReviewBoardInput(input:string,options:{bindings?:string[];mediaDir?:string}={}):Promise<BoardInput>{
  let value:unknown,sha256:string,hashMode:'file'|'project',assertUnchanged:()=>Promise<void>;
@@ -142,7 +144,7 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
    const ids=[...new Set([txt(phase.line_id),...arr(phase.line_ids).map(txt)].filter(Boolean))];if(stage==='explanation'&&!ids.length)fail('讲解阶段没有现行句ID');
    const lines=ids.map(id=>{const l=lineById.get(id);if(!l)fail('阶段引用不存在的句子: '+id);return lineView(l);});
    const cue=obj(operational.viewer_stage_cues),cueRows=stage==='original'?[obj(cue.original)]:arr(cue.revisit).map(obj).filter(r=>arr(r.line_ids).some(id=>ids.includes(txt(id))));
-   const style=obj(cue.layout)[stage==='original'?'original':'revisit'],colors=typeof style==='string'?[...style.matchAll(/#[a-fA-F\d]{6}\b/g)].map(m=>m[0]):[txt(obj(style).color),txt(obj(style).text_color)].filter(Boolean);
+   const colors=stageCueColors(obj(cue.layout)[stage==='original'?'original':'revisit']);
    const picture=txt(phase.picture)||txt(obj(operational.composition).detail),notices:string[]=[];
    for(const finding of pictureNotices.filter(f=>f.row_keys.includes(`${txt(selected.unit.unit_id)}/${index}`)))notices.push(finding.message);
    if(!colors.length)notices.push('未声明可显示的阶段标识色值');
@@ -210,7 +212,7 @@ export async function renderReviewBoards(input:BoardInput,outDir:string,variant?
    const signature=hash(row.frames.map(f=>f.key).join(','));if(!sheets.has(signature)){const asset=assets.get(row.asset_id)!;const ratio=(asset.height??1024)*(1-(row.crop?.top??0)-(row.crop?.bottom??0))/((asset.width??576)*(1-(row.crop?.left??0)-(row.crop?.right??0)));sheets.set(signature,(await tileContactSheet(row.frames.map(f=>({jpeg:cache.get(f.key)!,label:f.label})),{cellWidth:320,cols:3,cellHeight:Math.round(320*ratio)})).toString('base64'));}row.sheet=sheets.get(signature);
   }plan.elapsed_ms=performance.now()-begun;}
   await input.assertUnchanged();for(const [file,expected]of checked)if(await sha256File(file)!==expected)fail('生成中素材已变化');
-  const artifacts=plans.map(plan=>{const began=performance.now(),html=view==='human'?humanReviewBoardPage(plan,data,lint,input.bindings??[prepared.doc],input.visualReferences):blueprintReviewBoardPage(plan);plan.elapsed_ms+=performance.now()-began;if(Buffer.byteLength(html)>32_000_000)fail('单文件HTML超限');const safe=(s:string)=>s.replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);return{plan,html,path:join(resolve(outDir),`审片板-${safe(plan.candidate_id)}-${safe(plan.variant)}.html`)};});
+  const artifacts=plans.map(plan=>{const began=performance.now(),html=view==='human'?humanReviewBoardPage(plan,data,lint,input.bindings??[prepared.doc],input.visualReferences,input.embedded,input.teachingExcerptUnit):blueprintReviewBoardPage(plan);plan.elapsed_ms+=performance.now()-began;if(Buffer.byteLength(html)>32_000_000)fail('单文件HTML超限');const safe=(s:string)=>s.replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);return{plan,html,path:join(resolve(outDir),`审片板-${safe(plan.candidate_id)}-${safe(plan.variant)}.html`)};});
   if(new Set(artifacts.map(a=>a.path)).size!==artifacts.length)fail('输出文件名冲突');
   await mkdir(outDir,{recursive:true});const staged:string[]=[];try{for(const a of artifacts){const began=performance.now();const path=a.path+'.'+hash(String(Math.random())).slice(0,12)+'.tmp';staged.push(path);await writeFile(path,a.html,{flag:'wx'});a.plan.elapsed_ms+=performance.now()-began;}await input.assertUnchanged();for(const [i,a]of artifacts.entries())await rename(staged[i],a.path);}finally{for(const path of staged)await rm(path,{force:true});}
   return{artifacts:artifacts.map(({plan,path})=>({path,candidate_id:plan.candidate_id,variant:plan.variant,candidate_sha256:plan.candidate_sha256,frame_count:plan.frame_count,unique_frame_count:plan.unique_frame_count,elapsed_ms:Math.round(plan.elapsed_ms)})),total_elapsed_ms:Math.round(performance.now()-start),provider_calls:0,network_calls:0,internal_review_only:true};

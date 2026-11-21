@@ -369,11 +369,23 @@ const originalRepair={status:'bound',units:[{unit_id:'U-04',findings:[{finding_i
 const firstContext=productionRepairContext(undefined,{repair:originalRepair});
 const secondContext=productionRepairContext(firstContext,{author_self_check:[{id:'S7',status:'fix'}]});
 assert.deepEqual(secondContext.pending_review_repair,originalRepair);
-const repairTargets=productionRepairTargets({repairContext:secondContext},{units:[{unit_id:'U-04',line:'current gesture observation'},{unit_id:'U-05',line:'current audience recommendation'}] as any});
-const repairSource={...source,repairReview:repairTargets,sourceEvidence:[{text:'new continuous source observation'}]};
+const repairUnit=(unit_id:string,narration_ms:string,range:[number,number]):TeachingPacket['units'][number]=>({
+ unit_id,points:[],lines:[{line_id:unit_id+'-1',narration_ms,caption_lines:[],labels:[],meaning_zh:''}],
+ picture_plan:{original_source_ranges:[range],explanation_source_ranges:[],line_source_ranges:[],registered_revisits:[]},
+});
+const repairTargets=productionRepairTargets({repairContext:secondContext},{units:[
+ repairUnit('U-04','current gesture observation',[41,51.5]),
+ repairUnit('U-05','current audience recommendation',[51.5,59]),
+]});
+const repairSource={...source,repairReview:repairTargets,sourceEvidence:[
+ {evidence_id:'observed-g4',kind:'visible_action',source_range_seconds:[45,46],text:'new continuous source observation'},
+ {evidence_id:'observed-g5',kind:'visible_action',time_seconds:51.5,text:'the separate color comparison is visible'},
+ {evidence_id:'translated-g4',kind:'original_claim',time_seconds:45,text:'existing source transcription',meaning_zh:'只有作者改写的译文'},
+ {evidence_id:'unlocated',kind:'original_claim',text:'new note with no source time'},
+ {evidence_id:'both-groups',kind:'original_claim',source_range_seconds:[42,55],text:'unresolved timing across both groups'}]};
 assert.throws(()=>validateAuthorSelfCheck(JSON.stringify(checks),repairSource),/repair_coverage/);
 const withRepair=structuredClone(checks) as any[];
-withRepair[1].repair_resolutions=repairTargets.map(t=>({finding_id:t.finding_id,status:'resolved',reference:[(t.current as any).line],reason:'current copy and point now agree'}));
+withRepair[1].repair_resolutions=repairTargets.map(t=>({finding_id:t.finding_id,status:'resolved',reference:[t.current.lines[0].narration_ms],reason:'current copy and point now agree'}));
 assert.equal(validateAuthorSelfCheck(JSON.stringify(withRepair),repairSource)[1].status,'ok');
 const unresolved=structuredClone(withRepair);unresolved[1].repair_resolutions[0].status='unresolved';
 assert.equal(validateAuthorSelfCheck(JSON.stringify(unresolved),repairSource)[1].status,'fix','unresolved cannot pass despite top-level ok');
@@ -386,9 +398,53 @@ assert.throws(()=>validateAuthorSelfCheck(JSON.stringify(duplicate),repairSource
 assert.throws(()=>productionRepairTargets({repairContext:secondContext},{units:[]}),/target_missing/);
 const evidenceFix=structuredClone(withRepair);evidenceFix[1].repair_resolutions[0].reference=['new continuous source observation'];
 assert.equal(validateAuthorSelfCheck(JSON.stringify(evidenceFix),repairSource)[1].status,'ok');
+for(const quote of ['the separate color comparison is visible','只有作者改写的译文','new note with no source time','unresolved timing across both groups','U-04']){
+ const badEvidence=structuredClone(evidenceFix);
+ badEvidence[1].repair_resolutions[0].reference=[quote];
+ assert.throws(()=>validateAuthorSelfCheck(JSON.stringify(badEvidence),repairSource),/repair_reference/,quote);
+}
 const replaced=productionRepairContext(secondContext,{repair:{...originalRepair,units:originalRepair.units.slice(1)}});
 assert.equal((replaced.pending_review_repair as any).units.length,1,'new independent receipt supersedes prior pending set');
 console.log('PASS repair coverage, preserved findings, current-only references, cross-unit refusal, unresolved blocking and evidence-based response');
+
+// Reopen a completed result through the actual author-check entry. It may be
+// read, but an inadmissible citation must not pass or reserve a format retry.
+{
+ const unit=preparedCheck.rawPacket.units[0];
+ const guide='Saved repair reference fixture';
+ const repairedTask={...task,stage:'copy_review',repairs:0,effects:{},repairContext:{repair:{status:'bound',units:[{
+  unit_id:unit.unit_id,findings:[{finding_id:'saved-finding',quote:'historical disputed copy',reason:'fixture'}],
+ }]}}} as import('./production-task').ProductionTask;
+ const cachedSource={...productionAuthorSelfCheckSource(checkDoc,preparedCheck,[task.input.brief]),
+  repairReview:productionRepairTargets(repairedTask,preparedCheck.rawPacket),unchangedReviewedDelivery:[]};
+ const sourceDigest=digestValue({source:cachedSource,guide});
+ const name='blueprint-author-self-check:'+sourceDigest;
+ const quote=unit.lines[0].narration_ms;
+ const answers=checks.map(row=>({...row,reference:quote}));
+ const read=(repairQuote:string)=>{
+  const result={digest:preparedCheck.reviewed.subject.digest,sourceDigest,runId:'old-complete-operation',checks:
+   answers.map(row=>row.id==='S2'?{...row,repair_resolutions:[{
+    finding_id:'saved-finding',status:'resolved',reference:[repairQuote],reason:'fixture',
+   }]}:row)};
+  const receipt={kind:'model',operationId:result.runId,status:'completed',result} as const;
+  repairedTask.effects['copy_review:initial:0:'+name]=receipt;
+  const before=JSON.stringify(receipt),names:string[]=[];
+  const stage={effect:async(_kind:string,effectName:string)=>{
+   names.push(effectName);
+   assert.equal(effectName,name,'recovery must not dispatch');
+   return structuredClone(receipt.result);
+  }} as unknown as import('./production-task').StageContext;
+  return {before,receipt,names,run:()=>checkProductionAuthorBlueprint(repairedTask,stage,checkDoc,preparedCheck,guide,[])};
+ };
+ const invalid=read(unit.unit_id);
+ await assert.rejects(invalid.run(),/blueprint_author_self_check_saved_result_invalid/);
+ assert.deepEqual(invalid.names,[name]);
+ assert.equal(JSON.stringify(invalid.receipt),invalid.before);
+ const valid=read(quote);
+ assert.equal((await valid.run()).checks[1].status,'ok');
+ assert.deepEqual(valid.names,[name]);
+}
+console.log('PASS completed repair recovery rechecks current quotes without rewriting the receipt or repeating a request');
 
 const {unchangedReviewedDelivery}=await import('./production-author-self-check');
 const passedSection={section_id:'existing_partner',line:{narration_ms:'Use the original storyboard'},picture:{asset_id:'own-storyboard',sha256:'fixed'}};
