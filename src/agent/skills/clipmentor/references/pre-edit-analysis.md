@@ -51,7 +51,7 @@ The request excludes historical observations and self-evaluation. Read its concr
   "points": [{
     "point_id": "P-01", "segment_ids": ["S-use"],
     "buying_concern": "本项目已知的具体购买关注",
-    "teaching_question": "这项拍法怎样把这个购买关注展示清楚？",
+    "teaching_question": "为什么这样拍有助于买家判断这个购买关注点？",
     "filming_conditions": ["本项目观察到且必须保留的对象和拍法条件"],
     "role": "primary", "importance": "must_explain"
   }],
