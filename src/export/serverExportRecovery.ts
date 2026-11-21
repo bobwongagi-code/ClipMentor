@@ -42,10 +42,19 @@ const deliveryOwnerId = globalThis.crypto?.randomUUID?.()
 
 
 class RetiredExportRecoveryError extends Error {}
+class ConflictingExportSubmissionError extends Error {}
+
+function sameExportRegistration(a: PersistedServerExportJob, b: PersistedServerExportJob): boolean {
+  return a.renderId === b.renderId && a.projectId === b.projectId && a.createdAt === b.createdAt
+    && a.submissionId === b.submissionId;
+}
 
 async function registerLocalRecord(record: PersistedServerExportJob): Promise<void> {
   await mutateLocalRecord(record.renderId, (current) => {
     if (current && current.projectId !== record.projectId) throw new Error('导出恢复记录不属于当前工程');
+    if (current && record.submissionId && current.submissionId !== record.submissionId) {
+      throw new ConflictingExportSubmissionError('导出尝试已更换');
+    }
     // Reopening an old registration is not a stage transition or destination rebind.
     return { result: undefined, ...(!current ? { next: record } : {}) };
   });
@@ -56,12 +65,12 @@ function joinRemoteRecord(
   local?: PersistedServerExportJob | null,
 ): PersistedServerExportJob {
   const destination = browserDestination(remote.destination)
-    && local && browserDestination(local.destination)
+    && local && sameExportRegistration(remote, local) && browserDestination(local.destination)
     && sameDestinationBinding(remote, local)
     && hasServerExportDestinationAuthority(local.destination)
     ? local.destination
     : remote.destination;
-  const attemptId = remote.attemptId ?? (local?.projectId === remote.projectId && local.createdAt === remote.createdAt
+  const attemptId = remote.attemptId ?? (local && sameExportRegistration(remote, local)
     ? local.attemptId : undefined);
   return { ...remote, destination, ...(attemptId === undefined ? {} : { attemptId }), remoteAuthorityEstablished: true };
 }
@@ -73,7 +82,7 @@ export async function bindServerExportAttempt(original: PersistedServerExportJob
   }
   await mutateLocalRecord(original.renderId, (record) => {
     if (!record || record.attemptId === attemptId) return { result: undefined };
-    if (record.createdAt !== original.createdAt || record.projectId !== original.projectId) throw new Error('导出尝试已更换');
+    if (!sameExportRegistration(record, original)) throw new Error('导出尝试已更换');
     if (record.attemptId !== undefined) throw new Error('导出尝试已更换');
     return { next: { ...record, attemptId }, result: undefined };
   });
@@ -92,7 +101,7 @@ async function cacheRemoteRecord(remote: PersistedServerExportJob): Promise<Pers
     const joined = joinRemoteRecord(remote, local);
     // A stale observation may be returned without a usable handle, but must not
     // erase authority that has since been rebound to another destination.
-    const compatible = local && sameDestinationBinding(remote, local);
+    const compatible = local && sameExportRegistration(remote, local) && sameDestinationBinding(remote, local);
     const terminal = local?.stage === 'target-committed' && remote.stage !== 'target-committed';
     return { result: joined, ...(compatible && !terminal ? { next: joined } : {}) };
   });
@@ -130,11 +139,16 @@ export async function persistServerExportJob(record: PersistedServerExportJob): 
     try {
       const canonical = await reconcileRemoteRecord(record);
       if (!canonical) throw new RetiredExportRecoveryError('导出恢复记录已退役');
+      if (record.submissionId && canonical.submissionId !== record.submissionId) {
+        throw new ConflictingExportSubmissionError('导出尝试已更换');
+      }
       remoteSaved = true;
       if (localSaved) await cacheRemoteRecord(canonical);
     } catch (error) {
-      if (error instanceof RetiredExportRecoveryError) {
-        if (localSaved) await removeLocalRecord(record.renderId);
+      if (error instanceof RetiredExportRecoveryError || error instanceof ConflictingExportSubmissionError) {
+        if (localSaved) await mutateLocalRecord(record.renderId, (local) => (
+          local && sameExportRegistration(local, record) ? { result: undefined, next: null } : { result: undefined }
+        ));
         throw error;
       }
     }

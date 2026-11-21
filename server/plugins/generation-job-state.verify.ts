@@ -216,6 +216,24 @@ try{
   try{assert.equal(await api.deleteGenerationJob(j.id),false);assert.equal(cleaned,0);assert.equal(api.getGenerationJobSnapshot(j.id)!.params.kind,'replacement');assert.equal((await disk(j.id)).params.kind,'replacement');}
   finally{store.registerGenerationRetentionGuard('server-export',async()=>false);}
  });
+ await test('a new attempt cannot inherit the prior attempt cleanup result',async()=>{
+  const entered=deferred(),release=deferred();
+  const old=await start(async id=>result(id),{cleanupResult:async()=>{entered.resolve();await release.promise;}});
+  await old.done;
+  const original=await disk(old.id);
+  const deleting=api.deleteGenerationJob(old.id);
+  await entered.promise;
+  try{
+   const ledger=JSON.parse(await readFile(storePath,'utf8'));
+   assert(!ledger.jobs.some((row:{id:string})=>row.id===old.id),'old cleanup only runs after durable removal');
+   const replacement={...original,params:{kind:'replacement'},reservationId:randomUUID()};
+   await writeFile(storePath,JSON.stringify({...ledger,jobs:[...ledger.jobs,replacement]}));
+   await store.refreshGenerationJobs();
+   assert.equal(await api.deleteGenerationJob(old.id,job=>job.params.kind==='replacement'),false);
+   assert.equal((await disk(old.id)).params.kind,'replacement');
+  }finally{release.resolve();await deleting;}
+  assert.equal(await api.deleteGenerationJob(old.id,job=>job.params.kind==='replacement'),true);
+ });
  await test('scheduled persistence failure preserves bytes and is handled',async()=>{
   const file=join(root,'scheduled.mp4');await writeFile(file,'scheduled saved result');let cleaned=0;
   const j=await start(async id=>result(id),{cleanupResult:async()=>{cleaned++;await rm(file);}});await j.done;

@@ -425,6 +425,9 @@ export function getGenerationJobSnapshot(jobId: string): GenerationJobSnapshot |
   return job ? snapshotOf(job) : undefined;
 }
 
-export function deleteGenerationJob(jobId: string): Promise<boolean> {
-  return evictTerminalJob(jobId);
+export function deleteGenerationJob(
+  jobId: string,
+  matches?: (job: GenerationJob) => boolean,
+): Promise<boolean> {
+  return evictTerminalJob(jobId, false, matches);
 }

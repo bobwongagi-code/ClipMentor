@@ -21,6 +21,7 @@ export type ExportRequest = {
   project?: unknown;
   timelineId?: unknown;
   operationId?: unknown;
+  submissionId?: unknown;
   format?: 'video' | 'audio';
   codec?: 'h264' | 'vp8' | 'prores' | 'mp3' | 'wav';
   name?: string;

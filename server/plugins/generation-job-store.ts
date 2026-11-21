@@ -423,7 +423,7 @@ async function retentionBlocked(job: GenerationJob): Promise<boolean> {
   }
 }
 
-const evictions=new Map<string,Promise<boolean>>();
+const evictions = new Map<string, { job: GenerationJob; result: Promise<boolean> }>();
 export function isGenerationJobEvicting(jobId:string):boolean{return evictions.has(jobId);}
 
 /** The claim covers guard, durable removal and cleanup. A failed commit must
@@ -460,15 +460,23 @@ async function evictClaimedJob(jobId:string,job:GenerationJob,retentionExpiry:bo
   return true;
 }
 
-export function evictTerminalJob(jobId:string,retentionExpiry=false):Promise<boolean>{
-  const pending=evictions.get(jobId);if(pending)return pending;
-  const job=jobs.get(jobId);if(!job||!TERMINAL.has(job.status))return Promise.resolve(false);
+export function evictTerminalJob(
+  jobId: string,
+  retentionExpiry = false,
+  matches?: (job: GenerationJob) => boolean,
+): Promise<boolean> {
+  const job = jobs.get(jobId);
+  if (matches && (!job || !matches(job))) return Promise.resolve(false);
+  const pending = evictions.get(jobId);
+  if (pending) return !job || pending.job === job ? pending.result : Promise.resolve(false);
+  if(!job||!TERMINAL.has(job.status))return Promise.resolve(false);
   // Publish ownership before calling a possibly reentrant async guard.
-  const attempt=Promise.resolve().then(()=>evictClaimedJob(jobId,job,retentionExpiry));
-  evictions.set(jobId,attempt);
-  const release=()=>{if(evictions.get(jobId)===attempt)evictions.delete(jobId);};
-  void attempt.then(release,release);
-  return attempt;
+  const result = Promise.resolve().then(() => evictClaimedJob(jobId, job, retentionExpiry));
+  const eviction = { job, result };
+  evictions.set(jobId, eviction);
+  const release = () => { if (evictions.get(jobId) === eviction) evictions.delete(jobId); };
+  void result.then(release, release);
+  return result;
 }
 
 export async function cleanOldJobs(): Promise<void> {

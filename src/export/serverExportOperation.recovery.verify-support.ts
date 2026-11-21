@@ -14,9 +14,11 @@ import {
 } from './serverExportRecovery';
 import { deferred, destination } from './serverExportOperation.verify-support';
 
-async function verifyRefreshReattachesAcceptedServerExport(): Promise<void> {
+async function verifyRefreshReattachesAcceptedServerExport(lostAcknowledgement = false): Promise<void> {
   resetServerExportRecoveryMemory();
   const deleted = deferred();
+  let replacementVisible = true;
+  const requests: string[] = [];
   let targetWrites = 0;
   const recoveredDestination: ExportDestination = {
     type: 'browser-directory',
@@ -37,6 +39,7 @@ async function verifyRefreshReattachesAcceptedServerExport(): Promise<void> {
   await persistServerExportJob({
     version: 1,
     renderId: 'render-before-refresh',
+    ...(lostAcknowledgement ? { submissionId: 'original-submission' } : { attemptId: 'accepted-attempt' }),
     projectId: 'project-refresh',
     label: 'refresh.mp4',
     targetPath: 'Exports/refresh.mp4',
@@ -51,14 +54,22 @@ async function verifyRefreshReattachesAcceptedServerExport(): Promise<void> {
     autoQaEnabled: false,
     stage: 'polling',
   });
+  const boundUrl = '/export/job/render-before-refresh?attemptId=accepted-attempt';
+  const readUrl = lostAcknowledgement ? '/export/job/render-before-refresh' : boundUrl;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url === '/export/job/render-before-refresh' && init?.method === 'DELETE') {
+    requests.push(`${init?.method ?? 'GET'} ${url}`);
+    if (url === boundUrl && init?.method === 'DELETE') {
       deleted.resolve();
       return new Response(null, { status: 204 });
     }
-    if (url === '/export/job/render-before-refresh') {
+    if (url === readUrl) {
       return Response.json({
+        id: 'render-before-refresh',
+        params: {
+          exportAttemptId: replacementVisible ? 'replacement-attempt' : 'accepted-attempt',
+          exportSubmissionId: replacementVisible ? 'replacement-submission' : 'original-submission',
+        },
         status: 'succeeded',
         progress: 100,
         result: { path: '/media/recovered.mp4', name: 'refresh.mp4', sizeBytes: 5 },
@@ -67,6 +78,15 @@ async function verifyRefreshReattachesAcceptedServerExport(): Promise<void> {
     if (url.endsWith('/media/recovered.mp4')) return new Response('video');
     throw new Error(`unexpected request: ${url}`);
   }) as typeof fetch;
+  const staleStore = createExportJobStore();
+  await resumePersistedServerExports({ exportJobs: staleStore, projectId: 'project-refresh', t: (key) => key });
+  await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+  assert.match(staleStore.getSnapshot().jobs[0]?.error ?? '', /导出尝试/);
+  assert.equal(targetWrites, 0);
+  assert.deepEqual(requests, [`GET ${readUrl}`]);
+  assert.equal((await listServerExportJobs('project-refresh'))[0]?.stage, 'polling');
+
+  replacementVisible = false;
   const recoveredStore = createExportJobStore();
   await resumePersistedServerExports({
     exportJobs: recoveredStore,
@@ -85,6 +105,7 @@ async function verifyRefreshReattachesAcceptedServerExport(): Promise<void> {
   await persistServerExportJob({
     version: 1,
     renderId: 'render-committed-before-refresh',
+    attemptId: 'committed-attempt',
     projectId: 'project-refresh',
     label: 'committed.mp4',
     targetPath: 'Exports/committed.mp4',
@@ -102,7 +123,7 @@ async function verifyRefreshReattachesAcceptedServerExport(): Promise<void> {
   });
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url === '/export/job/render-committed-before-refresh' && init?.method === 'DELETE') {
+    if (url === '/export/job/render-committed-before-refresh?attemptId=committed-attempt' && init?.method === 'DELETE') {
       committedDeleted.resolve();
       return new Response(null, { status: 204 });
     }
@@ -159,7 +180,7 @@ async function verifyRecoveredWriteFailureRetainsCompletedRender(): Promise<void
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push(`${init?.method ?? 'GET'} ${url}`);
-    if (url === `/export/job/${recovery.renderId}` && init?.method === 'DELETE') {
+    if (url === `/export/job/${recovery.renderId}?attemptId=` && init?.method === 'DELETE') {
       return new Response(null, { status: 204 });
     }
     if (url === `/export/job/${recovery.renderId}`) {
@@ -182,7 +203,7 @@ async function verifyRecoveredWriteFailureRetainsCompletedRender(): Promise<void
   const recovered = store.getSnapshot().jobs[0];
   assert.equal(recovered?.progress.phase, 'failed');
   assert.equal(recovered?.failure?.stage, 'destination');
-  assert.equal(requests.some((request) => request === `DELETE /export/job/${recovery.renderId}`), false,
+  assert.equal(requests.some((request) => request.startsWith('DELETE ')), false,
     'recovered write failure must retain the completed server output');
   const retained = await listServerExportJobs(recovery.projectId);
   assert.equal(retained.length, 1);
@@ -285,7 +306,7 @@ async function verifyRebindResumesCompletedOutputWithoutRender(): Promise<void> 
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url === '/export/job' && init?.method === 'POST') { renders += 1; return Response.json({}); }
-    if (url === '/export/job/render-rebound' && init?.method === 'DELETE') {
+    if (url === '/export/job/render-rebound?attemptId=' && init?.method === 'DELETE') {
       deleted.resolve(); return new Response(null, { status: 204 });
     }
     if (url === '/export/job/render-rebound') return Response.json({
@@ -331,7 +352,7 @@ async function verifyExplicitRerenderRetiresRecoveryFirst(): Promise<void> {
   };
   await persistServerExportJob(retained);
   globalThis.fetch = (async (input, init) => {
-    assert.equal(String(input), '/export/job/render-retired');
+    assert.equal(String(input), '/export/job/render-retired?attemptId=');
     assert.equal(init?.method, 'DELETE');
     return new Response(null, { status: 204 });
   }) as typeof fetch;
@@ -340,6 +361,18 @@ async function verifyExplicitRerenderRetiresRecoveryFirst(): Promise<void> {
   const store = createExportJobStore();
   await resumePersistedServerExports({ exportJobs: store, projectId: retained.projectId, t: (key) => key });
   assert.equal(store.getSnapshot().jobs.length, 0, 'retired recovery cannot auto-deliver later');
+  globalThis.fetch = (async () => {
+    assert.fail('a missing recovery record must confer no server cleanup authority');
+  }) as typeof fetch;
+  assert.equal(await retirePersistedServerExport(retained.renderId), true, 'a prior retirement must not block a fresh export');
+
+  const unknown = {
+    ...retained, renderId: 'unconfirmed-submission', stage: 'polling' as const, submissionId: 'new-browser-submission',
+  };
+  await persistServerExportJob(unknown);
+  await assert.rejects(retirePersistedServerExport(unknown.renderId), /尚未确认导出是否停止/);
+  assert.equal((await listServerExportJobs(unknown.projectId))[0]?.renderId, unknown.renderId);
+  resetServerExportRecoveryMemory();
 
   const stillRendering = { ...retained, renderId: 'pending-stop', attemptId: 'pending-attempt', stage: 'polling' as const };
   await persistServerExportJob(stillRendering);
@@ -354,6 +387,7 @@ async function verifyExplicitRerenderRetiresRecoveryFirst(): Promise<void> {
 
 export async function runServerExportRecoveryVerifications(): Promise<void> {
   await verifyRefreshReattachesAcceptedServerExport();
+  await verifyRefreshReattachesAcceptedServerExport(true);
   await verifyRecoveredWriteFailureRetainsCompletedRender();
   await verifyMissingBrowserAuthorityRetainsCompletedRender();
   await verifyRebindResumesCompletedOutputWithoutRender();

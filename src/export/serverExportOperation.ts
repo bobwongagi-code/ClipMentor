@@ -170,7 +170,7 @@ async function exportMedia(
   if (format === 'video') context.setRenderEngine('server');
   const codec = format === 'audio' ? 'mp3' : context.options.codec;
   const startedAt = performance.now();
-  const { renderId, completed } = await renderCompleted(context, format, codec, signal);
+  const { renderId, attemptId, completed } = await renderCompleted(context, format, codec, signal);
   let targetCommitted = false;
   let claim: ServerExportDeliveryClaim | null = null;
   try {
@@ -188,7 +188,7 @@ async function exportMedia(
   } finally {
     if (claim) await releaseServerExportDelivery(renderId, claim).catch(() => undefined);
     if (targetCommitted) {
-      await retireAndDeleteExportJob(renderId).catch(() => false);
+      await retireAndDeleteExportJob(renderId, attemptId).catch(() => false);
     }
   }
 }
@@ -253,6 +253,7 @@ async function runRecoveredServerExport(
   let claim = initialClaim;
   let targetCommitted = record.stage === 'target-committed';
   let polling = false;
+  const binding = { attemptId: record.attemptId, recovery: record };
   setters.setClock(Date.now());
   setters.setBusy(t('正在恢复导出…'));
   setters.setRenderEngine(record.format === 'video' ? 'server' : 'idle');
@@ -276,7 +277,7 @@ async function runRecoveredServerExport(
         }
         throw error;
       });
-      const completed = await pollExport(context, record.renderId, signal);
+      const completed = await pollExport(context, record.renderId, signal, binding);
       polling = false;
       if (record.stage === 'polling') await markServerExportOutputReady(record.renderId, claim ?? undefined);
       if (record.format === 'video') updateActualEngine(context, completed);
@@ -308,7 +309,9 @@ async function runRecoveredServerExport(
     } : current);
   } catch (reason) {
     const existing = exportFailureFrom(reason);
-    const stop = polling && isAbortError(reason) ? await cancelExportJob(record.renderId, record.attemptId) : null;
+    const stop = polling && isAbortError(reason)
+      ? await cancelExportJob(record.renderId, binding.attemptId, !!record.submissionId)
+      : null;
     const cancelled = existing?.stage === 'cancel' || (stop ? stop === 'cancelled' : isAbortError(reason));
     if (existing?.stage === 'cancel' || stop === 'cancelled') {
       await retireServerExportJob(record.renderId).catch(() => false);
@@ -331,8 +334,8 @@ async function runRecoveredServerExport(
     } : current);
   } finally {
     if (claim) await releaseServerExportDelivery(record.renderId, claim).catch(() => undefined);
-    if (targetCommitted) {
-      await retireAndDeleteExportJob(record.renderId).catch(() => false);
+    if (targetCommitted && (!record.submissionId || binding.attemptId)) {
+      await retireAndDeleteExportJob(record.renderId, binding.attemptId).catch(() => false);
     }
     setters.setBusy(null);
   }
@@ -389,9 +392,11 @@ export async function rebindAndResumePersistedServerExport({
 
 export async function retirePersistedServerExport(renderId: string): Promise<boolean> {
   const original = await recoveryRecordById(renderId);
-  if (original?.stage === 'polling') {
-    const outcome = await cancelExportJob(renderId, original.attemptId);
+  if (!original) return true;
+  if (original.stage === 'polling') {
+    const outcome = await cancelExportJob(renderId, original.attemptId, !!original.submissionId);
     if (outcome !== 'cancelled') throw new Error(exportCancellationMessage(outcome, (key) => key));
   }
-  return retireAndDeleteExportJob(renderId);
+  if (original.submissionId && !original.attemptId) return false;
+  return retireAndDeleteExportJob(renderId, original.attemptId);
 }

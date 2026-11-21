@@ -10,23 +10,33 @@ import { listServerExportJobs, resetServerExportRecoveryMemory } from './serverE
 import type { ExportJobResult, ExportProgress, UseExportWorkflowOptions, WorkflowOperations } from './exportWorkflowTypes';
 import { deferred, exporter, noop, type Deferred } from './serverExportOperation.verify-support';
 
+function acknowledge(renderId: string, request?: RequestInit) {
+  return Response.json({
+    renderId,
+    attemptId: 'fixture-attempt',
+    submissionId: JSON.parse(String(request?.body)).submissionId,
+  });
+}
+
 async function verifyRenderFailureIsTypedAndDeleted(): Promise<void> {
   const requests: string[] = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push(`${init?.method ?? 'GET'} ${url}`);
     if (url === '/export/job') {
-      const body = JSON.parse(String(init?.body)) as { operationId?: string };
+      const body = JSON.parse(String(init?.body)) as { operationId?: string; submissionId?: string };
       assert.equal(body.operationId, 'render-failed');
       assert.ok(
         (await listServerExportJobs('project-lifecycle'))
-          .some((record) => record.renderId === body.operationId),
+          .some((record) => record.renderId === body.operationId && record.submissionId === body.submissionId),
         'recovery must be durable before the server accepts the render job',
       );
-      return Response.json({ renderId: 'render-failed' });
+      return Response.json({ renderId: 'render-failed', attemptId: 'failed-attempt', submissionId: body.submissionId });
     }
     if (init?.method === 'DELETE') return new Response(null, { status: 204 });
     return Response.json({
+      id: 'render-failed',
+      params: { exportAttemptId: 'failed-attempt' },
       status: 'failed',
       progress: 100,
       error: 'renderer failed',
@@ -49,8 +59,8 @@ async function verifyRenderFailureIsTypedAndDeleted(): Promise<void> {
   );
   assert.deepEqual(requests, [
     'POST /export/job',
-    'GET /export/job/render-failed',
-    'DELETE /export/job/render-failed',
+    'GET /export/job/render-failed?attemptId=failed-attempt',
+    'DELETE /export/job/render-failed?attemptId=failed-attempt',
   ]);
 }
 
@@ -76,12 +86,14 @@ async function verifyDeliveryFailureDoesNotTriggerRenderFallback(): Promise<void
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push(`${init?.method ?? 'GET'} ${url}`);
-    if (url === '/export/job') return Response.json({ renderId: 'render-succeeded' });
-    if (url === '/export/job/render-succeeded' && init?.method === 'DELETE') {
+    if (url === '/export/job') return acknowledge('render-succeeded', init);
+    if (url === '/export/job/render-succeeded?attemptId=fixture-attempt' && init?.method === 'DELETE') {
       return new Response(null, { status: 204 });
     }
-    if (url === '/export/job/render-succeeded') {
+    if (url === '/export/job/render-succeeded?attemptId=fixture-attempt') {
       return Response.json({
+        id: 'render-succeeded',
+        params: { exportAttemptId: 'fixture-attempt' },
         status: 'succeeded',
         progress: 1,
         result: { path: '/media/output.mp4', name: 'output.mp4', sizeBytes: 5 },
@@ -97,7 +109,7 @@ async function verifyDeliveryFailureDoesNotTriggerRenderFallback(): Promise<void
       && error.failure.code === 'export_destination_write_failed'
       && error.failure.targetPath === 'Exports/output.mp4',
   );
-  assert.equal(requests.some((request) => request === 'DELETE /export/job/render-succeeded'), false,
+  assert.equal(requests.some((request) => request.startsWith('DELETE ')), false,
     'a write failure after completed polling must retain the server output');
   const retained = await listServerExportJobs('project-lifecycle');
   assert.equal(retained.length, 1);
@@ -113,9 +125,9 @@ async function verifyPollFailureDoesNotTriggerRenderFallback(): Promise<void> {
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push(`${init?.method ?? 'GET'} ${url}`);
-    if (url === '/export/job') return Response.json({ renderId: 'render-active' });
+    if (url === '/export/job') return acknowledge('render-active', init);
     if (init?.method === 'DELETE') return Response.json({ error: 'still running' }, { status: 409 });
-    if (readable) return Response.json({status:'succeeded',progress:100,result:{path:'/media/original.mp4'}});
+    if (readable) return Response.json({id:'render-active',params:{exportAttemptId:'fixture-attempt'},status:'succeeded',progress:100,result:{path:'/media/original.mp4'}});
     return Response.json({ error: 'temporary poll failure' }, { status: 503 });
   }) as typeof fetch;
   await assert.rejects(
@@ -127,9 +139,9 @@ async function verifyPollFailureDoesNotTriggerRenderFallback(): Promise<void> {
   const [saved] = await listServerExportJobs('project-lifecycle');
   assert.equal(saved?.renderId, 'render-active', 'unknown polling outcome must retain the original recovery record');
   readable = true;
-  const completed = await pollExport({t:(key)=>key,setProgress:noop},saved.renderId);
+  const completed = await pollExport({t:(key)=>key,setProgress:noop},saved.renderId,undefined,{attemptId:saved.attemptId});
   assert.equal(completed.path,'/media/original.mp4');
-  assert.deepEqual(requests,['POST /export/job','GET /export/job/render-active','GET /export/job/render-active']);
+  assert.deepEqual(requests,['POST /export/job','GET /export/job/render-active?attemptId=fixture-attempt','GET /export/job/render-active?attemptId=fixture-attempt']);
   resetServerExportRecoveryMemory();
 }
 
@@ -141,10 +153,10 @@ async function verifyCancellationRetainsUnconfirmedRecovery(): Promise<void> {
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
       requests.push(`${init?.method ?? 'GET'} ${url}`);
-      if (url === '/export/job') return Response.json({ renderId: 'render-cancelled', attemptId: 'attempt-original' });
+      if (url === '/export/job') return Response.json({ renderId: 'render-cancelled', attemptId: 'attempt-original', submissionId: JSON.parse(String(init?.body)).submissionId });
       if (url.includes('/cancel?')) return new Response(null, { status });
       polled.resolve();
-      return Response.json({ status: 'running', progress: 20, phase: 'rendering' });
+      return Response.json({ id: 'render-cancelled', params: { exportAttemptId: 'attempt-original' }, status: 'running', progress: 20, phase: 'rendering' });
     }) as typeof fetch;
     const controller = new AbortController();
     const operation = exporter(undefined, () => 'render-cancelled')('video', controller.signal);
@@ -172,7 +184,7 @@ async function verifyCancelDuringAdmissionUsesAcknowledgedAttempt(): Promise<voi
       started.resolve();
       await committed.promise;
       assert.equal(init?.signal?.aborted, false);
-      return Response.json({ renderId: 'during-admission', attemptId: 'admitted-attempt' });
+      return Response.json({ renderId: 'during-admission', attemptId: 'admitted-attempt', submissionId: JSON.parse(String(init?.body)).submissionId });
     }
     assert.equal(url, '/export/job/during-admission/cancel?attemptId=admitted-attempt');
     assert.equal(init?.method, 'POST');
@@ -333,12 +345,14 @@ async function verifyCancellationAfterRenderDoesNotSave(): Promise<void> {
   };
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url === '/export/job') return Response.json({ renderId: 'render-save-cancelled' });
-    if (url === '/export/job/render-save-cancelled' && init?.method === 'DELETE') {
+    if (url === '/export/job') return acknowledge('render-save-cancelled', init);
+    if (url === '/export/job/render-save-cancelled?attemptId=fixture-attempt' && init?.method === 'DELETE') {
       return new Response(null, { status: 204 });
     }
-    if (url === '/export/job/render-save-cancelled') {
+    if (url === '/export/job/render-save-cancelled?attemptId=fixture-attempt') {
       return Response.json({
+        id: 'render-save-cancelled',
+        params: { exportAttemptId: 'fixture-attempt' },
         status: 'succeeded',
         progress: 1,
         result: { path: '/media/output.mp4', name: 'output.mp4', sizeBytes: 5 },
@@ -395,12 +409,14 @@ async function verifyCancellationDuringServerQaDoesNotSave(): Promise<void> {
   };
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url === '/export/job') return Response.json({ renderId: 'render-qa-cancelled' });
-    if (url === '/export/job/render-qa-cancelled' && init?.method === 'DELETE') {
+    if (url === '/export/job') return acknowledge('render-qa-cancelled', init);
+    if (url === '/export/job/render-qa-cancelled?attemptId=fixture-attempt' && init?.method === 'DELETE') {
       return new Response(null, { status: 204 });
     }
-    if (url === '/export/job/render-qa-cancelled') {
+    if (url === '/export/job/render-qa-cancelled?attemptId=fixture-attempt') {
       return Response.json({
+        id: 'render-qa-cancelled',
+        params: { exportAttemptId: 'fixture-attempt' },
         status: 'succeeded',
         progress: 1,
         result: { path: '/media/output.mp4', name: 'output.mp4', sizeBytes: 5 },
@@ -469,14 +485,16 @@ async function verifyNormalServerSaveStillCompletes(): Promise<void> {
   };
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url === '/export/job') return Response.json({ renderId: 'render-save-completed' });
-    if (url === '/export/job/render-save-completed' && init?.method === 'DELETE') {
+    if (url === '/export/job') return acknowledge('render-save-completed', init);
+    if (url === '/export/job/render-save-completed?attemptId=fixture-attempt' && init?.method === 'DELETE') {
       deleteStarted.resolve();
       await deleteGate.promise;
       return new Response(null, { status: 204 });
     }
-    if (url === '/export/job/render-save-completed') {
+    if (url === '/export/job/render-save-completed?attemptId=fixture-attempt') {
       return Response.json({
+        id: 'render-save-completed',
+        params: { exportAttemptId: 'fixture-attempt' },
         status: 'succeeded',
         progress: 1,
         result: { path: '/media/output.mp4', name: 'output.mp4', sizeBytes: 5 },
@@ -511,7 +529,80 @@ async function verifyNormalServerSaveStillCompletes(): Promise<void> {
   assert.equal((await listExportHistory()).some((entry) => entry.name === 'output.mp4'), true);
 }
 
+async function verifyFreshExportRefusesReplacementSnapshot(): Promise<void> {
+  resetServerExportRecoveryMemory();
+  const requests: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    requests.push(`${init?.method ?? 'GET'} ${url}`);
+    if (url === '/export/job') {
+      return Response.json({ renderId: 'render-replaced', attemptId: 'original-attempt', submissionId: JSON.parse(String(init?.body)).submissionId });
+    }
+    return Response.json({
+      id: 'render-replaced',
+      params: { exportAttemptId: 'replacement-attempt' },
+      status: 'failed',
+      progress: 100,
+      error: 'replacement renderer failed',
+    });
+  }) as typeof fetch;
+  await assert.rejects(
+    exporter(undefined, () => 'render-replaced')('video'),
+    (error) => error instanceof Error && !isServerRenderError(error) && /导出尝试/.test(error.message),
+    'a replacement failure is a status conflict, not permission to clean up or rerender',
+  );
+  assert.deepEqual(requests, ['POST /export/job', 'GET /export/job/render-replaced?attemptId=original-attempt']);
+  assert.equal((await listServerExportJobs('project-lifecycle'))[0]?.attemptId, 'original-attempt');
+  resetServerExportRecoveryMemory();
+}
+
+async function verifyFreshExportRefusesUnrelatedAcknowledgement(): Promise<void> {
+  resetServerExportRecoveryMemory();
+  const requests: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    requests.push(`${init?.method ?? 'GET'} ${url}`);
+    return Response.json({
+      renderId: 'render-replaced-on-submit',
+      attemptId: 'other-attempt',
+      submissionId: 'other-submission',
+    });
+  }) as typeof fetch;
+  await assert.rejects(exporter(undefined, () => 'render-replaced-on-submit')('video'), /导出尝试/);
+  assert.deepEqual(requests, ['POST /export/job']);
+  const [held] = await listServerExportJobs('project-lifecycle');
+  assert.equal(held?.renderId, 'render-replaced-on-submit');
+  assert.equal(held?.attemptId, undefined);
+  resetServerExportRecoveryMemory();
+}
+
+async function verifyAbortCannotCancelUnidentifiedAdmission(): Promise<void> {
+  resetServerExportRecoveryMemory();
+  const postStarted = deferred();
+  const finishPost = deferred();
+  const requests: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push(`${init?.method} ${input}`);
+    postStarted.resolve();
+    await finishPost.promise;
+    // An older job reused the operation ID and has no attempt or submission token.
+    return Response.json({ renderId: 'unknown-after-abort' });
+  }) as typeof fetch;
+  const controller = new AbortController();
+  const running = exporter(undefined, () => 'unknown-after-abort')('video', controller.signal);
+  await postStarted.promise;
+  controller.abort();
+  finishPost.resolve();
+  await assert.rejects(running, /尚未确认导出是否停止/);
+  assert.deepEqual(requests, ['POST /export/job']);
+  assert.equal((await listServerExportJobs('project-lifecycle'))[0]?.renderId, 'unknown-after-abort');
+  resetServerExportRecoveryMemory();
+}
+
 export async function runServerExportLifecycleVerifications(): Promise<void> {
+  await verifyFreshExportRefusesReplacementSnapshot();
+  await verifyFreshExportRefusesUnrelatedAcknowledgement();
+  await verifyAbortCannotCancelUnidentifiedAdmission();
   await verifyRenderFailureIsTypedAndDeleted();
   await verifyDeliveryFailureDoesNotTriggerRenderFallback();
   await verifyPollFailureDoesNotTriggerRenderFallback();

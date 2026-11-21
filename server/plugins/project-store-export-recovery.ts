@@ -99,7 +99,7 @@ function reconcileMutation(
     if (!incoming || incoming.projectId !== current.projectId) return mutation(stored, false);
     if (incoming.attemptId === undefined) return mutation(stored, true);
     if (typeof incoming.attemptId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(incoming.attemptId)
-      || incoming.createdAt !== current.createdAt) return mutation(stored, false);
+      || incoming.createdAt !== current.createdAt || incoming.submissionId !== current.submissionId) return mutation(stored, false);
     if (current.attemptId !== undefined) return mutation(stored, current.attemptId === incoming.attemptId);
     // Attach the acknowledged attempt to the original registration without
     // changing its stage, destination or delivery owner.
