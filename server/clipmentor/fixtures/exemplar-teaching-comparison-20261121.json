@@ -1,0 +1,212 @@
+{
+  "provenance": {
+    "green_makes": "Selected points and source action excerpts from the finalized existing-partner r20 project. Positive labels are for author learning, not fresh independent verdicts.",
+    "green_project_sha256": "7e56a43fc1a668588722061c4e2a061693f7f831972f233a81d83c623d293411",
+    "judydoll": "Exact current narration from v3-0d0444d4, frozen as the negative calibration baseline in the approved design. This is not a new group-by-group viewing result.",
+    "judydoll_project_sha256": "fe26a452bad4ca8d39857f16ece2391d294cd9674ba250ec24d8a8eaf7a9766f"
+  },
+  "reference_controls": [
+    {
+      "point_id": "TS-U02-ELBOW",
+      "source": "TeaShell revision 78 v4, 原片 56–59.4 秒, 两段声画对齐预览-20261018/时间线与字幕对照.md。v0.3 整稿未获通过，此处只取后续两段预览已记录的画面关系。",
+      "question": "贴近镜头的肘部怎样把亮肤定位落到具体使用部位？",
+      "selling_point": "清洁产品的亮肤定位",
+      "buying_concern": "原作者讲的是哪个部位的使用？",
+      "principle": "complete-demo",
+      "connection_excerpt": "先见肘部近镜再接试用上下文，买家能把亮肤说法对应到具体部位；镜头没有验证变白。",
+      "evidence": {"id":"TS-ELBOW-SOURCE", "kind":"visible_action", "range":[56,59.4], "text":"她把肘部靠近镜头展示。"}
+    },
+    {
+      "point_id": "TS-U03-HANDS",
+      "source": "TeaShell revision 78 v4, 原片 78.3–83.4 秒, 两段声画对齐预览-20261018/时间线与字幕对照.md。",
+      "question": "两只手靠近后同框，怎样让买家判断画面展示的表面差异？",
+      "selling_point": "清洁演示里可见的皮肤外观对比",
+      "buying_concern": "两只手并排时实际能看到什么？",
+      "principle": "same-frame",
+      "connection_excerpt": "一只手先近镜、另一只手加入，在同一画面里提供位置和光线参照；分开看不易区分画面条件和皮肤外观差异。",
+      "evidence": {"id":"TS-HANDS-SOURCE", "kind":"visible_action", "range":[78.3,83.4], "text":"一只手背靠近镜头，另一只手背加入同框。"}
+    },
+    {
+      "point_id": "NIUMO-V7-TOUCH",
+      "source": "NIUMO V7 已合作四组蓝图-复核版.md，输出 9.4–31.3 秒的第一组，原片完整 0–10.533 秒。",
+      "question": "为什么夜充顾虑之后既介绍自动断电，又保留手触屏幕？",
+      "selling_point": "充电头以自动断电回应夜充顾虑，原作者另展示手机不烫的体感说法",
+      "buying_concern": "夜间充电时买家担心哪些问题？",
+      "principle": "buyer-first",
+      "connection_excerpt": "夜充担忧先交代产品为什么出场，再用接手机和触屏把体感说法变成能看见的动作；两者各有作用，触屏不能验证自动断电。",
+      "evidence": {"id":"NIUMO-TOUCH-SOURCE", "kind":"visible_action", "range":[0,10.533], "text":"原片在夜充情境中展示充电头、接手机和用手触碰屏幕。"}
+    }
+  ],
+  "green_makes": [
+    {
+      "point_id": "GM-P01",
+      "question": "为什么先在开头展示上嘴颜色和沾染测试，再介绍产品？",
+      "buying_concern": "开头优先回应上嘴颜色和沾染两个购买关注，再进入故事；不能从观察推断实测留存/销量效果。",
+      "principle": "buyer-first",
+      "connection_excerpt": "上嘴颜色和沾染测试放在开头，先回应买家关切，再介绍产品。",
+      "evidence": {
+        "id": "GM-E02-V",
+        "kind": "visible_action",
+        "range": [
+          2.5,
+          5.5
+        ],
+        "text": "镜头近景特写唇部，出镜者用食指先指向右半边薄涂，再指向左半边叠涂深色区域。"
+      }
+    },
+    {
+      "point_id": "GM-P02",
+      "question": "故事里的具体唇妆效果怎样给介绍对应产品一个理由？",
+      "buying_concern": "先知道为什么关注这支产品，再认识是哪支",
+      "principle": "buyer-first",
+      "connection_excerpt": "先讲喜欢的具体唇妆，再展示对应产品，让观众明白推荐的来由。",
+      "evidence": {
+        "id": "GM-E05-V",
+        "kind": "visible_action",
+        "range": [
+          11,
+          16.5
+        ],
+        "text": "彩条信号转场后，出镜者半身出镜，手抚嘴唇，随后展示一支Owen James唇釉外包装管身。"
+      }
+    },
+    {
+      "point_id": "GM-P03",
+      "question": "为什么先把一个色号的浓淡展示清楚，再展开其他颜色选择？",
+      "buying_concern": "买家能选择自己喜欢的唇色浓淡",
+      "principle": "buyer-first",
+      "connection_excerpt": "先在一个实际色号上指认薄涂与两层，帮助理解浓淡选择，再扩展其他可选色。",
+      "evidence": {
+        "id": "GM-E07-V",
+        "kind": "visible_action",
+        "range": [
+          23.5,
+          38.5
+        ],
+        "text": "镜头切至面部特写，出镜者使用刷头涂抹嘴唇，随后用手指轻拍晕染边缘，展示薄涂与双层厚涂的唇部光泽及颜色层次。"
+      }
+    },
+    {
+      "point_id": "GM-P04",
+      "question": "日常接触为什么适合演示沾色，透明杯为什么便于检查？",
+      "buying_concern": "买家关心日常接触/喝水是否沾色；实际接触和透明杯把这项关注变成可观察的演示。",
+      "principle": "complete-demo",
+      "connection_excerpt": "买家关心日常接触/喝水是否沾色；实际接触和透明杯把这项关注变成可观察的演示。",
+      "evidence": {
+        "id": "GM-E10-V",
+        "kind": "visible_action",
+        "range": [
+          48.5,
+          51.5
+        ],
+        "text": "出镜者拿起透明玻璃圆杯喝水，杯口贴合嘴唇后拿开展示杯壁清透无唇印挂壁。"
+      }
+    },
+    {
+      "point_id": "GM-P05",
+      "question": "同手同框能提供什么参照，又不能证明什么？",
+      "buying_concern": "同手同框提供共同肤色参照，便于看三色；不是只有色号这一变量变化的控制实验。",
+      "principle": "same-frame",
+      "connection_excerpt": "同手同框提供共同肤色参照，便于看三色；不是只有色号这一变量变化的控制实验。",
+      "evidence": {
+        "id": "GM-E11-V",
+        "kind": "visible_action",
+        "range": [
+          51.5,
+          55.5
+        ],
+        "text": "出镜者手背特写，已涂抹三道唇釉，食指依次指认05、02、04色号试色痕迹。"
+      }
+    },
+    {
+      "point_id": "GM-P06",
+      "question": "末段三支商品怎样呼应早段优惠，再把数量、片中价格和购买入口接清楚？",
+      "buying_concern": "颜色选择之后，把原片买一送二的到手数量、片中价格及购买入口讲具体。",
+      "principle": "purchase-invitation",
+      "connection_excerpt": "早段已经带出三支和优惠，末段再用三支呼应同一优惠，随后交代片中数量/价格及入口；不认定赠品配色。",
+      "evidence": {
+        "id": "GM-E12-V",
+        "kind": "visible_action",
+        "range": [
+          55.5,
+          69.2
+        ],
+        "text": "镜头拉回人物半身，出镜者双手持3支唇釉晃动展示，讲解价格不足13令吉可得3支，最后手指指向画面左下方引导加购。"
+      }
+    }
+  ],
+  "judydoll_copy": [
+    {
+      "unit_id": "U-01",
+      "lines": [
+        {
+          "id": "JD-L01",
+          "narration_ms": "Sebelum tunjuk palet, dia bagi kita tengok kesan warna di sisi hidung. Bila dia pandang kamera, bahagian yang cerah dan reaksi dia pun nampak. Muka dulu, palet kemudian. Kita nampak dulu beza bahagian gelap dan cerah pada muka.",
+          "point_ids": [
+            "P-01"
+          ]
+        }
+      ]
+    },
+    {
+      "unit_id": "U-02",
+      "lines": [
+        {
+          "id": "JD-L02",
+          "narration_ms": "Kedua-dua palet dibuka menghadap kamera: Code 02 di kiri, Code 06 di kanan. Bila kod tertera di sebelah palet masing-masing, senang nak bandingkan warna tanpa tertukar.",
+          "point_ids": [
+            "P-02"
+          ]
+        }
+      ]
+    },
+    {
+      "unit_id": "U-03",
+      "lines": [
+        {
+          "id": "JD-L03",
+          "narration_ms": "Kita nampak tempat berus menyentuh palet, kemudian tempat ia digunakan pada muka. Dia pusingkan muka supaya berus besar jelas di tepi pipi; bila berus kecil digunakan, kamera tunjuk sisi hidung dan bawah mata dari dekat.",
+          "point_ids": [
+            "P-03"
+          ]
+        }
+      ]
+    },
+    {
+      "unit_id": "U-04",
+      "lines": [
+        {
+          "id": "JD-L04",
+          "narration_ms": "Bila berus dialih, garis coklat gelap di sisi hidung jelas nampak. Bila berus kecil kembali ke kawasan itu, kita nampak langkah merapikannya. Dia tunjuk warna sebaik disapu dan cara dia merapikannya secara berasingan.",
+          "point_ids": [
+            "P-04"
+          ]
+        }
+      ]
+    },
+    {
+      "unit_id": "U-05",
+      "lines": [
+        {
+          "id": "JD-L05",
+          "narration_ms": "Dua palet diletak sebelah-menyebelah, jadi senang nak bandingkan tona petak highlight. Bila beralih ke muka, dia tunjuk tempat berus kecil menyentuh hidung. Sudut sisi dan depan pula tunjuk di mana cahaya nampak pada muka.",
+          "point_ids": [
+            "P-05"
+          ]
+        }
+      ]
+    },
+    {
+      "unit_id": "U-06",
+      "lines": [
+        {
+          "id": "JD-L06",
+          "narration_ms": "Di hujung video, beberapa jalur warna ditunjukkan pada belakang tangan yang sama. Bila jalurnya sebelah-menyebelah, lebih senang bandingkan tona cerah dan gelap pada kulit.",
+          "point_ids": [
+            "P-06"
+          ]
+        }
+      ]
+    }
+  ]
+}

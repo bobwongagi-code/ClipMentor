@@ -1,5 +1,5 @@
 import {outputProductionBudget} from './production-budget';
-import {panelDeliveryIssues,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
+import {panelDeliveryIssues,panelTeachingRequirements,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
 import {currentCreatorDocument} from './creator-storyboard-document';
 import {productionOutputsMatch} from './production-decisions';
 import {digestValue} from '../agent-runs/store-values';
@@ -13,6 +13,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
 import {productionFeedbackAnchor} from './production-feedback';
+import {confirmedTeachingDigest} from './production-teaching-baseline';
 import type {ProjectDoc} from '../../src/editor/types';
 import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
 import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,type ProductionTask} from './production-task';
@@ -83,11 +84,15 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  });
  const saved=await loadOfflineStoredProject(projectId);
  if(!saved)throw Error('制作副本未保存');
+ const teachingCriteria=[...new Set([...panelTeachingRequirements(parent),...(
+  selectedRequirements?.brief.doneCriteria.filter((criterion):criterion is string=>typeof criterion==='string')??[])])];
  const approval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
   digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),
   ...(selectedRequirements?{requirements:selectedRequirements}:{}),
+  ...(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{confirmedTeachingDigest:confirmedTeachingDigest(doc)}:{}),
   ...(parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
-   objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback}}:{})};
+   objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback,
+   ...(teachingCriteria.length?{doneCriteria:teachingCriteria}:{})}}:{})};
  const task=await createProductionTask({...parent.input,projectId,
   author:{...parent.input.author,origin},reviewer:{...parent.input.reviewer,origin},
   brief:continuationBrief(parent.input.product.name,audience),

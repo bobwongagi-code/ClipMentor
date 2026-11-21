@@ -15,13 +15,14 @@ import {LLM_PROVIDER_PRESETS} from '../../shared/llm-providers';
 import {confirmedUnsubmittedGateway} from './production-recovery';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ReviewApiConfig} from './copy-review-api';
-import {openingComparisonCriterion,openingComparisonShape,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
+import {openingComparisonCriterion,openingComparisonShape,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
 import {verifyProductionOutput} from './production-format';
 import {resolveUploadFile,isSafeUploadName} from '../media-dir';
+import {panelTeachingRequirements} from './production-panel-delivery';
 
 /** Keep independent findings through intermediate author/structure repairs, never overwrite them with a self-check. */
 export function productionRepairContext(previous:Record<string,unknown>|undefined,artifact:Record<string,unknown>){
@@ -42,7 +43,7 @@ export interface TeachingAnalysisPublication {
  baseRevision:string;revision:string;repairEpoch:number;inputDigest:string;outputDigest:string;artifact:Record<string,unknown>;
  analysis:NonNullable<ProjectDoc['clipMentorAnalysis']>;
 }
-export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string};
+export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[]};
 type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
@@ -53,7 +54,7 @@ export interface ProductionInput {
  humanBlueprintReview?:true;
  gatewayRecovery?:'bounded'|'none';
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
-  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
+  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
  reviewerBackend?:'codex';
  budget:EffectCounts&{maxElapsedMs:number;maxRepairs:number;routine?:EffectCounts};
@@ -62,7 +63,7 @@ export interface ProductionTask {
  productionChild?:{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'};
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
  sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
- blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedAt:number};
+ blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;confirmedAt:number};
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
@@ -84,7 +85,10 @@ export function isPanelBlueprintDraft(task:ProductionTask){
 }
 
 export function panelBlueprintRequirementsDigest(policy:HandoffPolicy|null|undefined){
- return digestValue({objective:policy?.brief.objective??null,doneCriteria:policy?.brief.doneCriteria??[]});
+ const doneCriteria=policy?.brief.doneCriteria??[];
+ const references=visualDoneCriteria(doneCriteria).map(criterion=>
+  policy?.assetBindings.find(asset=>asset.id===criterion.reference.assetId)??null);
+ return digestValue({objective:policy?.brief.objective??null,doneCriteria,...(references.length?{references}:{})});
 }
 
 export function panelAuthorCheckMatches(task:ProductionTask,revision:string,requirementsDigest:string,
@@ -212,8 +216,24 @@ export async function productionCopyRequirements(projectId:string){
  const {readHandoffPolicy}=await import('./handoff');
  const saved=await readHandoffPolicy(projectId),task=await latestPanelProductionTask(projectId);
  const policy=saved??task?.blueprintApproval?.requirements??null;
- const opening=(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??task?.input.openingComparison;
- return {policy,opening,teachingBrief:task?.blueprintApproval?.teachingBrief};
+ const opening=productionOpeningComparison(task,policy);
+ return {policy,opening,teachingBrief:productionTeachingBrief(task,policy),
+  endingPictures:task?.input.panelDelivery?.editorialPolicy==='exemplar-v1'};
+}
+
+export function productionTeachingBrief(task:ProductionTask|undefined,policy:HandoffPolicy|null):FrozenTeachingBrief|undefined{
+ const frozen=task?.blueprintApproval?.teachingBrief;
+ if(!task||!frozen)return;
+ const objective=policy?.brief.objective??frozen.objective;
+ const criteria=policy?policy.brief.doneCriteria.filter((item):item is string=>typeof item==='string'):frozen.doneCriteria??[];
+ const doneCriteria=[...new Set([...panelTeachingRequirements(task),...criteria])];
+ return {instruction:frozen.instruction,...(objective!==undefined?{objective}:{}),
+  ...(frozen.feedback!==undefined?{feedback:frozen.feedback}:{}),...(doneCriteria.length?{doneCriteria}:{})};
+}
+
+export function productionOpeningComparison(task:ProductionTask|null|undefined,policy:HandoffPolicy|null|undefined){
+ const opening=task?.input.openingComparison;
+ return opening?.results?opening:(policy?openingComparisonCriterion(policy.brief.doneCriteria):undefined)??opening;
 }
 function isInterruptedReviewCheckpoint(task:ProductionTask){
  return task.status==='blocked'&&task.stage==='copy_review'
@@ -353,6 +373,7 @@ export function validateProductionInput(v:ProductionInput){
   if(v.panelDelivery.audience!==undefined&&!['new_contact','existing_partner'].includes(v.panelDelivery.audience))throw Error('Invalid panel audience');
   if(!v.humanBlueprintReview||ids.some(id=>typeof id!=='string'||!id.trim())||new Set(ids).size!==ids.length
    ||(v.panelDelivery.bookends!==undefined&&v.panelDelivery.bookends!=='layered-v1')
+   ||(v.panelDelivery.editorialPolicy!==undefined&&v.panelDelivery.editorialPolicy!=='exemplar-v1')
    ||(v.panelDelivery.partnerEnding!==undefined&&v.panelDelivery.partnerEnding!=='product_storyboard_pdf')
    ||((v.panelDelivery.salesEvidenceId!==undefined||v.panelDelivery.salesEvidenceSha256!==undefined)
     &&(v.panelDelivery.bookends!=='layered-v1'||typeof v.panelDelivery.salesEvidenceId!=='string'||!v.panelDelivery.salesEvidenceId.trim()

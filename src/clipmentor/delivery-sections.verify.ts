@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readFileSync}from'node:fs';import{mkdtemp,rm}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import{randomUUID}from'node:crypto';
+import {readFileSync}from'node:fs';import{mkdtemp,readFile,rm,writeFile}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import{randomUUID}from'node:crypto';
 import type{ProjectDoc,TimelineItem}from'../editor/types';
 import{deliveryReview,deliveryAudio,type DeliverySection}from'./delivery-sections';
 import{checkSourceBreakdown}from'./source-breakdown';import{checkCopyProduction,copyReviewSubject,isReviewedNarrationText,copyTeachingPacketFromDoc}from'./production-gate';
@@ -149,6 +149,13 @@ try{const result=await reviewClipMentorCopy(req,deps);assert.equal(result.receip
   assert.equal(positive.receipt.verdict,'pass');
   copy.clipMentorAnalysis!.production_copy_review=positive.receipt;
   assert.equal((await checkCopyProduction(copy,'clipmentor',undefined,opening)).allowed,true);
+  const upgrade={...service,requirements:async()=>({policy:taskPolicy,opening,endingPictures:true})};
+  assert.equal((await checkCopyProduction(copy,'clipmentor',undefined,opening,true)).code,'copy_delivery_review_not_passed');
+  const spent=requests;
+  await assert.rejects(reviewClipMentorCopy(input,upgrade),/operation unavailable|operation_unavailable/);
+  const original=await reviewClipMentorCopy(input,upgrade,undefined,true);
+  assert.deepEqual(original.receipt,positive.receipt,'read-only recovery preserves the historical ruling');
+  assert.equal(requests,spent,'upgrading the ending contract cannot resubmit a consumed review');
   assert.equal((await checkCopyProduction(copy,'clipmentor',undefined,{...opening,quote:'Changed current requirement'})).code,'copy_delivery_review_not_passed');
   const forged=structuredClone(copy);
   const review=forged.clipMentorAnalysis!.production_copy_review!;
@@ -294,6 +301,30 @@ try{const result=await reviewClipMentorCopy(req,deps);assert.equal(result.receip
   await assert.rejects(reviewClipMentorCopy({...input,operationId:randomUUID(),packet:{...input.packet,delivery_sections:undefined}},service),
    error=>error instanceof CopyReviewError&&error.diagnostic.code==='opening_comparison_section_missing'&&error.diagnostic.requestsAttempted===0);
   assert.equal(requests,unsubmitted);
+  const fixed={...opening,results:{views:'339.32k',units:'135',revenue:'RM5.31k'}};
+  const fixedQuestion='kenapa video ini capai 339.32k tontonan, 135 unit terjual dan Revenue RM5.31k?';
+  const fixedInvitation='Jom tengok caranya.';
+  const fixedCurrent=await makeCurrent(`${premise}, tapi ${fixedQuestion} ${fixedInvitation}`);
+  const fixedReply=structuredClone(reply);
+  const openingCheck=fixedReply.delivery_checks[0];
+  assert('opening_comparison' in openingCheck);
+  Object.assign(openingCheck.opening_comparison,{
+   same_product_quote:premise+', tapi',outcome_question_quote:fixedQuestion,invitation_quote:fixedInvitation});
+  Object.assign(fixedReply.delivery_checks[1],{ending_picture:{asset_id:sections[1].picture.asset_id,view:'planned_composition',both_visible:'yes',observation:'Fixture reply'}});
+  const fixedService={...service,requirements:async()=>({policy:policy([fixed]),opening:fixed}),async run(prompt:string){
+   requests++;assert(prompt.includes('opening_comparison.invitation_quote'));return fixedReply;
+  }};
+  const fixedAccepted=await reviewClipMentorCopy(fixedCurrent.input,fixedService);
+  assert.equal(fixedAccepted.receipt.verdict,'pass','an ordinary Malay connector remains possible inside the anchored opening');
+  const savedPath=join(root,`${fixedCurrent.input.operationId}.json`);
+  const historical=JSON.parse(await readFile(savedPath,'utf8'));
+  delete historical.raw_review.delivery_checks[0].opening_comparison.invitation_quote;
+  delete historical.result.receipt.delivery_checks[0].opening_comparison.invitation_quote;
+  await writeFile(savedPath,JSON.stringify(historical));
+  const spentFixed=requests;
+  await assert.rejects(reviewClipMentorCopy(fixedCurrent.input,fixedService),/review_requirements_changed/);
+  assert.deepEqual((await reviewClipMentorCopy(fixedCurrent.input,fixedService,undefined,true)).receipt,historical.result.receipt);
+  assert.equal(requests,spentFixed);
   console.log('Content contract: current comparison, retained verdict, no extra requests, grouped L1 and visual/source controls; zero real providers.');
  }finally{await rm(root,{recursive:true,force:true});}
 }

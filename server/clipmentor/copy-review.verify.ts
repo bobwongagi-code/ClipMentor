@@ -33,6 +33,7 @@ import { ToolFailureTracker, isFailedToolResult, structuredToolFailure } from '.
 import { createAcceptanceLoop } from '../agent-runs/acceptance-loop';
 import sharp from 'sharp';
 import type {BoundVisualCriteria} from './visual-done-criteria';
+import {handoffDigest} from '../../shared/clipmentor-handoff';
 import { ServerRunToolExecutor } from '../../src/agent/serverRunToolExecutor';
 import { FakeLockManager, MemoryStorage } from '../../src/agent/serverRunToolExecutor.verify-helpers';
 import { saveStoredServerRun, readStoredServerRun } from '../../src/agent/serverRunSessionStorage';
@@ -143,17 +144,50 @@ const nativeFetch = globalThis.fetch;
 try {
   await verifyGroupedReviewReceipts({root,deps,base,request,goodRaw});
   const teachingBrief={instruction:'拆解原作者怎样展示产品购买理由。',objective:'读证据判断原片的表达关系。',feedback:'讲清效果如何引出两盘比较。'};
+  let currentTeachingBrief=teachingBrief;
   const teachingRequest=await request();
   let teachingRequests=0;
-  const teachingDeps={...deps,requirements:async()=>({policy:null,teachingBrief}),frame:async()=> 'aGVsbG8=',async run(prompt:string){
+  const teachingAnswer=()=>{
+    const raw=goodRaw();
+    Object.assign(raw.copy_units[0].group_checks.L1,{evidence:[{kind:'copy',channel:'narration',line_id:line.line_id,quote:line.narration_ms}]});
+    return raw;
+  };
+  const teachingDeps={...deps,requirements:async()=>({policy:null,teachingBrief:currentTeachingBrief}),frame:async()=> 'aGVsbG8=',async run(prompt:string){
     teachingRequests++;
     assert(prompt.includes(JSON.stringify(teachingBrief)));
     assert(!prompt.includes('AUTHOR_REVISIT_REASON_MUST_NOT_LEAK'));
-    return goodRaw();
+    return teachingAnswer();
   }};
   const rawTeaching=await reviewClipMentorCopy(teachingRequest,teachingDeps);
+  assert.equal(rawTeaching.receipt.verdict,'pass');
   assert.equal((await reviewClipMentorCopy(teachingRequest,teachingDeps)).receipt.verdict,rawTeaching.receipt.verdict);
   assert.equal(teachingRequests,1,'reopening the original review does not ask an independent reviewer again');
+  const newerTeachingBrief={...teachingBrief,feedback:'补写薄涂怎样回应怕显色太深。'};
+  const reviewed=structuredClone(base);
+  reviewed.clipMentorAnalysis!.production_copy_review=rawTeaching.receipt;
+  assert.equal((await checkCopyProduction(reviewed,'clipmentor',undefined,undefined,false,await handoffDigest(teachingBrief))).allowed,true);
+  assert.equal((await checkCopyProduction(reviewed,'clipmentor',undefined,undefined,false,await handoffDigest(newerTeachingBrief))).code,
+    'copy_teaching_brief_review_stale');
+  currentTeachingBrief=newerTeachingBrief;
+  const changedRequirements=(attempts:number)=>(e:unknown)=>e instanceof CopyReviewError
+    &&e.diagnostic.code==='review_requirements_changed'&&e.diagnostic.requestsAttempted===attempts;
+  await assert.rejects(reviewClipMentorCopy(teachingRequest,teachingDeps),changedRequirements(1),
+    'same pictures and bookends cannot revive a pass for a different teaching brief');
+  assert.deepEqual(await reviewClipMentorCopy(teachingRequest,teachingDeps,undefined,true),{...rawTeaching,cached:true});
+  assert.equal(teachingRequests,1);
+  const racingRequest=await request();
+  currentTeachingBrief=teachingBrief;
+  await assert.rejects(reviewClipMentorCopy(racingRequest,{...teachingDeps,async frame(){
+    currentTeachingBrief=newerTeachingBrief;
+    return 'aGVsbG8=';
+  }}),changedRequirements(0),'a change before sending must cost zero calls');
+  assert.equal(teachingRequests,1);
+  const submittedRequest=await request();
+  currentTeachingBrief=teachingBrief;
+  const submittedDeps={...teachingDeps,async run(){teachingRequests++;currentTeachingBrief=newerTeachingBrief;return teachingAnswer();}};
+  await assert.rejects(reviewClipMentorCopy(submittedRequest,submittedDeps),changedRequirements(1),'a late answer must remain history');
+  assert.equal((await reviewClipMentorCopy(submittedRequest,submittedDeps,undefined,true)).receipt.verdict,'pass');
+  assert.equal(teachingRequests,2);
   const diagnosticEnvelope = { error: 'Offline saved failure', operationId: contract171.request.operationId,
     diagnostic: contract171.diagnostic, requestsAttempted: 1, production_approved: false };
   assert.deepEqual(structuredToolFailure({ ...diagnosticEnvelope, raw_review: 'must-not-reach-author', private_path: '/private' }), diagnosticEnvelope,
@@ -292,6 +326,38 @@ try {
     layoutSeen = true; return goodRaw();
   } });
   assert(layoutSeen, 'the actual service prompt must retain object-form operational composition');
+  {
+    const linked = structuredClone(base), analysis = linked.clipMentorAnalysis!;
+    const original = 'She brings the product near her nose during the demonstration.';
+    Object.assign(analysis.evidence[0], {kind:'visible_action', text:original, call_status:'succeeded'});
+    analysis.source_breakdown!.points[0].teaching_basis = {
+      selling_point:'Scent as part of the usage experience', evidence_ids:['F1'], method:'Near-nose gesture',
+      connection:'Makes scent part of what a buyer can consider', must_capture:'Close gesture',
+      claim_limit:'Scent quality unknown', exemplar:'complete-demo', difference:'AUTHOR_COMPARISON_MUST_NOT_LEAK',
+    };
+    const subject = await copyReviewSubject(linked);
+    const input = {...await request(),subject:{revision:subject.revision,digest:subject.digest,units:subject.units.map(({unit_id,candidate_id})=>({unit_id,candidate_id}))},
+      packet:await copyTeachingPacketFromDoc(linked)};
+    for(const quote of [undefined,'unrelated shot',original]){
+      const req={...input,operationId:randomUUID()};
+      const raw=goodRaw();
+      if(quote)Object.assign(raw.cases[0].units[0].points[0],{source_quote:{evidence_id:'F1',quote}});
+      let submissions=0;
+      const local={...deps,async run(prompt:string){
+        submissions++;
+        assert(prompt.includes('Makes scent part of what a buyer can consider'));
+        assert(!prompt.includes('AUTHOR_COMPARISON_MUST_NOT_LEAK'));
+        return raw;
+      }};
+      const result=await reviewClipMentorCopy(req,local);
+      assert.equal(result.receipt.verdict,quote===original?'pass':'insufficient_evidence');
+      const current=structuredClone(linked);
+      current.clipMentorAnalysis!.production_copy_review=result.receipt;
+      assert.equal((await checkCopyProduction(current,'clipmentor')).allowed,quote===original);
+      assert.deepEqual(await reviewClipMentorCopy(req,local),{...result,cached:true});
+      assert.equal(submissions,1);
+    }
+  }
   for (const change of ['missing', 'L1_revision', 'L2_unknown'] as const) {
     const req = await request();
     const raw: any = goodRaw();

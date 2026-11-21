@@ -12,7 +12,10 @@ export interface VisualDoneCriterion {
  pictureSha256?:string;
  reference:{assetId:string;fileName:string;seconds:number};
 }
-export interface OpeningComparisonCriterion {kind:'opening_comparison';quote:string}
+export interface OpeningComparisonCriterion {
+ kind:'opening_comparison';quote:string;
+ results?:{views:string;units:string;revenue:string};
+}
 export const visualDoneCriteria=(criteria:HandoffBrief['doneCriteria'])=>criteria.filter((entry):entry is VisualDoneCriterion=>typeof entry!=='string'&&'layout' in entry);
 export const openingComparisonCriterion=(criteria:HandoffBrief['doneCriteria'])=>criteria.find((entry):entry is OpeningComparisonCriterion=>typeof entry!=='string'&&'kind' in entry&&entry.kind==='opening_comparison');
 export interface HandoffBrief {
@@ -47,7 +50,9 @@ function visualCriterion(v:unknown):v is VisualDoneCriterion{
   &&typeof v.reference.seconds==='number'&&Number.isFinite(v.reference.seconds)&&v.reference.seconds>=0;
 }
 export const openingComparisonShape=(value:unknown):value is OpeningComparisonCriterion=>handoffRecord(value)
- &&keys(value,['kind','quote'])&&value.kind==='opening_comparison'&&boundedText(value.quote,1000);
+ &&value.kind==='opening_comparison'&&boundedText(value.quote,1000)
+ &&(keys(value,['kind','quote'])||keys(value,['kind','quote','results'])&&handoffRecord(value.results)&&keys(value.results,['views','units','revenue'])
+  &&Object.values(value.results).length===3&&['views','units','revenue'].every(k=>boundedText((value.results as Record<string,unknown>)[k],40)));
 export function parseHandoffBrief(v:unknown):HandoffBrief {
  if(!handoffRecord(v)||!keys(v,['version','briefId','revision','mode','phase','planner','executor','projectId','timelineId','objective','doneCriteria','blueprint','budget'])
   ||v.version!==1||typeof v.briefId!=='string'||!ID.test(v.briefId)||!integer(v.revision,1,1_000_000)

@@ -6,6 +6,7 @@ import { digestValue } from '../agent-runs/store-values';
 import { isSafeUploadName } from '../media-dir';
 import { deliveryLayoutStages } from './delivery-layout-frames';
 import type { DeliverySection } from '../../src/clipmentor/delivery-bindings';
+import type { ProjectDoc } from '../../src/editor/types';
 
 type Section = Pick<DeliverySection,'section_id'|'picture'>;
 export function boundVisualCriteria(policy:HandoffPolicy|null) {
@@ -22,6 +23,29 @@ export function boundVisualCriteria(policy:HandoffPolicy|null) {
  return {entries,digest:digestValue(entries),...(policy?.brief.timelineId?{timelineId:policy.brief.timelineId}:{})};
 }
 export type BoundVisualCriteria=NonNullable<ReturnType<typeof boundVisualCriteria>>;
+
+/** Give the author the exact read-only asset and comparison question at the point of selection. */
+export async function teachingReferenceInputs(doc:ProjectDoc,bound:BoundVisualCriteria|undefined,io:Pick<FrameIO,'resolve'|'hash'>){
+ const checked=new Map<string,string>();
+ const references=[];
+ const fps=doc.timelines.find(timeline=>timeline.id===doc.activeTimelineId)?.fps;
+ for(const {criterion,src,sha} of bound?.entries??[]){
+  if(criterion.layout!=='native_composition')continue;
+  const asset=doc.assets.find(item=>item.id===criterion.reference.assetId);
+  if(!asset||asset.src!==src||asset.sourceContentHash!==sha||asset.props?.clipmentorReferenceOnly!==true)
+   throw Error('handoff_teaching_reference_unbound:'+criterion.id);
+  if(asset.kind==='video'&&(!fps||criterion.reference.seconds>=asset.durationInFrames/fps))
+   throw Error('handoff_teaching_reference_out_of_range:'+criterion.id);
+  const file=io.resolve(src.slice('/media/uploads/'.length));
+  if(!file)throw Error('handoff_visual_reference_changed:'+criterion.id);
+  const actual=checked.get(file)??await io.hash(file).catch(()=>null);
+  if(actual!==sha)throw Error('handoff_visual_reference_changed:'+criterion.id);
+  checked.set(file,actual);
+  references.push({id:criterion.id,sectionId:criterion.sectionId,pictureStage:criterion.pictureStage,quote:criterion.quote,
+   question:criterion.question,reference:{...criterion.reference,sha256:sha}});
+ }
+ return references;
+}
 
 /** A teaching screen is verified from the exported pixels, never from source samples or a plan verdict. */
 export function plannedVisualCriteria(bound:BoundVisualCriteria|undefined):BoundVisualCriteria|undefined {

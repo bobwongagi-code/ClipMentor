@@ -15,11 +15,11 @@ import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-boa
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
 import {representativeTeachingExcerpt,renderTeachingExcerpt,verifyTeachingExcerptAsset,TEACHING_EXCERPT_MAX_BYTES} from './blueprint-teaching-excerpt';
 import { productionFeedbackAnchor,blueprintFeedbackPoints,feedbackProjectDigest } from './production-feedback';
-import { panelDeliveryIssues,panelDeliveryFindings,panelSalesEvidence,verifyPanelPartnerCard } from './production-panel-delivery';
+import { panelDeliveryIssues,panelDeliveryFindings,panelOpeningComparison,panelSalesEvidence,verifyPanelPartnerCard } from './production-panel-delivery';
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
-import {openingComparisonCriterion,type HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {handoffDigest,type HandoffPolicy} from '../../shared/clipmentor-handoff';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {handoffKey,readHandoffPolicy} from './handoff';
@@ -31,10 +31,10 @@ import {deliveryFileName,attachmentDisposition} from './delivery-filename';
 import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
 import {
-  acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,
+  acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
   isPanelBlueprintDraft, panelAuthorCheckMatches,panelBlueprintRequirementsDigest,
-  latestPanelProductionTask,productionReviewRequirements,
+  latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,
   type ProductionTask,
 } from './production-task';
 
@@ -391,11 +391,14 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const uncheckedDraft=!!task&&!!draftRevision&&!draftChecked(task,draftRevision,policy);
       const blueprintRevision=uncheckedDraft?undefined:draftRevision;
       const checked=task?.completed.copy_review?.artifact;
+      const teachingBrief=blueprintRevision?productionTeachingBrief(task,policy):undefined;
+      const teachingDigest=teachingBrief?await handoffDigest(teachingBrief):undefined;
       const approvalUnavailable=blueprintRevision
         ? task?.status!=='awaiting_blueprint'||blueprintRevision!==task.projectRevision
           ||checked?.revision!==blueprintRevision||checked.authorSelfCheck!=='passed'
           ||(checked.gate as {allowed?:boolean}|undefined)?.allowed!==true
           ||policy&&checked.requirementsDigest!==requirementsDigest
+          ||teachingDigest&&draft?.doc.clipMentorAnalysis?.production_copy_review?.teaching_brief_digest!==teachingDigest
           ||criteria&&!visualCriteriaPlanApproved(criteria,draft?.doc.clipMentorAnalysis?.production_copy_review)
           ?'当前蓝图待独立审核，暂不能进入制作。'
           :undefined
@@ -472,13 +475,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const api = { provider:config.provider, model:config.model, apiMode:config.apiMode, origin };
         const index = (await getStoredEntry('projects')).value;
         const name = Array.isArray(index) ? index.find(row => row?.id === projectId)?.name : undefined;
-        const salesFact=panelSalesEvidence(source.id,sales.id);
-        const openingComparison={kind:'opening_comparison',quote:'这么多人拍这个品，为什么这支视频可以拿到多少播放量，多少多少这个GA的成绩，我们一起来看看他是怎怎么拍的'} as const;
+        const openingComparison=panelOpeningComparison(source.sourceContentHash,sales.sourceContentHash);
+        const salesFact=panelSalesEvidence(source.id,sales.id,openingComparison.results);
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
           openingComparison,
           brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。教学主体说明原作者怎样让购买理由可见，让达人能借鉴拍法。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
-          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',
+          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',editorialPolicy:'exemplar-v1',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
           voice:{provider:'minimax',voiceId:'Malay_female_1_v1'},
@@ -555,7 +558,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           }
           if(body.action==='approve_blueprint'){
             assertVisualCriteriaPlan(latestCriteria,deliverySectionsFromDoc(latest.doc),latest.doc.clipMentorAnalysis?.source_breakdown?.units.map(u=>u.unit_id),latest.doc.activeTimelineId);
-            const gate=await checkCopyProduction(latest.doc,'clipmentor',undefined,(latestPolicy?openingComparisonCriterion(latestPolicy.brief.doneCriteria):undefined)??existing.input.openingComparison);
+            const teachingBrief=productionTeachingBrief(existing,latestPolicy);
+            const gate=await checkCopyProduction(latest.doc,'clipmentor',undefined,productionOpeningComparison(existing,latestPolicy),
+              existing.input.panelDelivery?.editorialPolicy==='exemplar-v1',teachingBrief?await handoffDigest(teachingBrief):undefined);
             if(!gate.allowed||latestPolicy&&existing.completed.copy_review?.artifact.requirementsDigest!==latestRequirements
               ||latestCriteria&&!visualCriteriaPlanApproved(latestCriteria,latest.doc.clipMentorAnalysis?.production_copy_review))
               throw new Error('当前蓝图待独立审核，暂不能进入制作。');
