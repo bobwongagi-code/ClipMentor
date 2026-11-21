@@ -30,6 +30,7 @@ import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {deliveryFileName,attachmentDisposition} from './delivery-filename';
 import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
+import {bindTeachingFeedbackUnits} from './production-teaching-baseline';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
@@ -548,10 +549,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             for(const child of children)if(child.status==='queued')launch(child);
             send({accepted:true});return;
           }
+          const feedback=body.action==='revise_blueprint'&&typeof body.text==='string'?body.text:undefined;
+          const unitIds=feedback&&feedback.length<=8000&&existing.input.panelDelivery?.editorialPolicy==='exemplar-v1'
+            ?bindTeachingFeedbackUnits(latest.doc,feedback):undefined;
           if(draftFeedback){
             if(latest.doc.clipMentorAnalysis?.source.asset_id!==existing.input.sourceAssetId)
               throw Error('蓝图对应的原片已变化，请重新打开审片板');
-            const result=await queueDraftBlueprintFeedback(existing,latest.revision,body.text,productionTaskStore,guards);
+            const result=await queueDraftBlueprintFeedback(existing,latest.revision,feedback,productionTaskStore,guards,unitIds);
             if(result==='queued')launch(existing);
             send({accepted:true,saved:true,dispatched:result==='queued'||result==='already_dispatched',...(result==='limit'?{reason:'limit'}:{})});
             return;
@@ -571,7 +575,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
               ||!await verifyPanelPartnerCard(latest.doc,existing.input.panelDelivery,content))
               throw new Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
           }
-          await resolveHumanBlueprint(existing,body.revision,saved.revision,body.action === 'revise_blueprint' ? body.text : undefined,productionTaskStore,guards);
+          await resolveHumanBlueprint(existing,body.revision,saved.revision,feedback,productionTaskStore,guards,unitIds);
           launch(existing);
         } else if (body.action === 'revise_preview' || body.action === 'accept') {
           if (existing.status !== 'awaiting_review' || body.renderId !== existing.completed.export?.artifact.renderId) throw new Error('预览已变化，请重新核对');

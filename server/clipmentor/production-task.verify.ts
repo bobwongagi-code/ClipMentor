@@ -57,6 +57,29 @@ assert.equal(pending.status,'queued');assert.equal(pending.stage,'blueprint');as
 assert.equal(pending.error,undefined);assert.equal(pending.blueprintApproval,undefined);
 assert.deepEqual(pending.repairContext?.pending_review_repair,{status:'bound'});
 {
+ const reviewed=fresh();
+ reviewed.input.humanBlueprintReview=true;
+ reviewed.status='awaiting_blueprint';reviewed.stage='copy_review';reviewed.projectRevision='reviewed-draft';
+ reviewed.completed.copy_review={at:1,artifact:{revision:'reviewed-draft',authorSelfCheck:'passed',gate:{allowed:true}}};
+ reviewed.error='old blocked stage';
+ reviewed.focusedBlueprintIssues=['old finding'];reviewed.focusedAuthorChecks=['S1'];
+ reviewed.blueprintFeedbackSummary={sourceDigest:'old',points:['old summary']};
+ reviewed.repairContext={pending_blueprint_feedback:{text:'old request',revision:'reviewed-draft'},teaching_rebuild:{},pending_review_repair:{status:'bound'}};
+ const expiredReview=structuredClone(reviewed);
+ expiredReview.createdAt=Date.now()-expiredReview.input.budget.maxElapsedMs;
+ await assert.rejects(production.resolveHumanBlueprint(expiredReview,'reviewed-draft','reviewed-draft','只改字幕',store),/资源上限/);
+ assert.equal(expiredReview.status,'awaiting_blueprint');
+ await production.resolveHumanBlueprint(reviewed,'reviewed-draft','reviewed-draft','只改字幕',store);
+ assert.equal(reviewed.status,'queued');
+ assert.equal(reviewed.error,undefined,'the live task passed to dispatch must not keep a cleared error');
+ assert.equal(reviewed.focusedBlueprintIssues,undefined);
+ assert.equal(reviewed.focusedAuthorChecks,undefined);
+ assert.equal(reviewed.blueprintFeedbackSummary,undefined);
+ assert.deepEqual(saved.repairContext,{pending_review_repair:{status:'bound'}});
+ assert.deepEqual(saved.completed,{});
+ assert.equal(saved.repairs,1);
+}
+{
  const unchecked=fresh();
  unchecked.input.humanBlueprintReview=true;
  unchecked.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};

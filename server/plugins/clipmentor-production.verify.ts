@@ -1048,17 +1048,19 @@ try{
  prior.createdAt=panelTask.createdAt-1000;
  await productionTaskStore.save(panelTask);
  await productionTaskStore.save(prior);
- const {latestPanelProductionTask}=await import('../clipmentor/production-task');
+ const {latestPanelProductionTask,productionExecutionActive}=await import('../clipmentor/production-task');
  assert.equal((await latestPanelProductionTask(panelTask.projectId))?.taskId,panelTask.taskId,
   'a late checkpoint from an earlier task must not reclaim the current panel');
- for(const item of [resumed,unknown]){
+ await flushServerRunPersistence();resetServerRunStoreForTest();
+ const supersededRetry=await makeCheckpoint('superseded-retry-fixture','running');
+ for(const item of [resumed,unknown,supersededRetry]){
   item.stage='blueprint';
   item.completed.analysis={at:Date.now(),artifact:{verifiedFixture:true}};
   item.effects['blueprint:initial:0:fixture']={kind:'model',operationId:item.taskId,status:'reserved'};
   item.attempts.model=1;
  }
- for(const item of [resumed,unknown,cancelled,blockedTask])await productionTaskStore.save(item);
- const indexed=[...outputFixtures,panelTask,queued,resumed,unknown,cancelled,blockedTask,deleted];
+ for(const item of [resumed,unknown,supersededRetry,cancelled,blockedTask])await productionTaskStore.save(item);
+ const indexed=[...outputFixtures,panelTask,queued,resumed,unknown,supersededRetry,cancelled,blockedTask,deleted];
  for(const item of indexed)await setStoredEntry(`project:${item.projectId}`,projectDoc());
  await setStoredEntry('projects',indexed.map(item=>({
   id:item.projectId,name:'Cold recovery fixture',updatedAt:Date.now(),...([deleted,removedParent].includes(item)?{deletedAt:Date.now()}:{}),
@@ -1069,6 +1071,7 @@ try{
  await flushServerRunPersistence();resetServerRunStoreForTest();resetAgentRuntimeStoreMemory();
  const visited:string[]=[];
  let replayed:string|undefined,newSubmissions=0,leaseAttempts=0;
+ let winningCheckpoint:typeof panelTask|undefined,supersededAttempts=0;
  const coldApp=createMiniConnect(error=>{throw error;});
  const coldServer=createServer((req,res)=>coldApp.handle(req,res));
  const coldPlugin=clipMentorProductionPlugin(async(item,stage)=>{
@@ -1076,6 +1079,11 @@ try{
   assert.equal(item.input.author.origin,item.input.reviewer.origin);
   if(item.stage==='analysis')assert.equal(item.taskId,queued.taskId,'completed stages must not be repeated');
   if(item.stage==='blueprint'&&item.taskId===resumed.taskId&&++leaseAttempts===1)throw Error('project_busy');
+  if(item.taskId===supersededRetry.taskId&&++supersededAttempts===1){
+   winningCheckpoint={...await productionTaskStore.load(item.projectId,item.taskId),status:'blocked',error:'other worker settled the checkpoint'};
+   await productionTaskStore.save(winningCheckpoint);
+   throw Error('project_busy');
+  }
   if(item.stage==='blueprint'&&item.taskId!==queued.taskId)await stage.effect('model','fixture',async()=>{newSubmissions++;},item.taskId===resumed.taskId
    ?async id=>{replayed=id;return {saved:true};}:undefined);
   return {artifact:{verifiedFixture:true,revision:'recovered',authorSelfCheck:'passed',gate:{allowed:true},panelDeliveryVerified:true}};
@@ -1085,8 +1093,9 @@ try{
  try{
   // No browser or HTTP request is needed to resume a production task.
   for(let n=0;n<400;n++){
-   const results=await Promise.all([queued,resumed,unknown,legacyOutput,liveOutput].map(item=>productionTaskStore.load(item.projectId,item.taskId)));
-   if(results.every(item=>['awaiting_blueprint','blocked'].includes(item.status)))break;
+   const results=await Promise.all([queued,resumed,unknown,supersededRetry,legacyOutput,liveOutput].map(item=>productionTaskStore.load(item.projectId,item.taskId)));
+   if(results.every(item=>['awaiting_blueprint','blocked'].includes(item.status))
+    &&!productionExecutionActive(supersededRetry.projectId,supersededRetry.taskId))break;
    await new Promise(r=>setTimeout(r,5));
   }
   const restored=await productionTaskStore.load(resumed.projectId,resumed.taskId);
@@ -1097,6 +1106,8 @@ try{
   assert.equal(restored.status,'awaiting_blueprint');assert.equal(finished.status,'awaiting_blueprint');
   assert.equal(restored.attempts.model,1);assert.equal(replayed,resumed.taskId);
   assert.equal(leaseAttempts,2);
+  assert.equal(supersededAttempts,1,'another worker advancing the checkpoint during the lease wait cancels the stale retry');
+  assert.deepEqual(await productionTaskStore.load(supersededRetry.projectId,supersededRetry.taskId),winningCheckpoint);
   assert.equal(unresolved.status,'blocked');assert.match(unresolved.error!,/no automatic resubmission/);
   assert.equal(unresolved.attempts.model,1);assert.equal(newSubmissions,0);
   assert.equal((await productionTaskStore.load(legacyOutput.projectId,legacyOutput.taskId)).status,'awaiting_blueprint','a valid historical manifest can still resume');
@@ -1115,7 +1126,7 @@ try{
    'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
    body:JSON.stringify({action:'produce_versions',revision:liveOutput.blueprintApproval!.sourceRevision})});
   assert.equal(replay.status,200,'retrying the parent action also tolerates the confirmed deletion');
-  assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId,legacyOutput.taskId,liveOutput.taskId]));
+  assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId,supersededRetry.taskId,legacyOutput.taskId,liveOutput.taskId]));
  }finally{await new Promise<void>((r,e)=>coldServer.close(err=>err?e(err):r()));}
  // Normal page start must freeze the comparison in the task read by the
  // real copy service. Fake stage worker and keys stay inside this temp profile.

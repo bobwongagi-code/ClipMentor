@@ -2,6 +2,7 @@ import type { ProjectDoc } from '../../src/editor/types';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
 import { breakdownPointEvidence,originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-sections';
+import { readBlueprint } from '../../src/clipmentor/blueprint-lint';
 import { currentAgentSessionGeneration } from '../../src/persist/agentSessionGeneration';
 import { loadAgentRuntimeSidecar } from '../../src/persist/agentRuntimeStore';
 import { createRun, flushRunPersistence } from '../agent-runs/store';
@@ -147,7 +148,9 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   purpose:panelTeachingPurpose, task:task.input.brief, objective, requirements,
   scope:baseline.review_scope, units:baseline.units.map(unit => unitDefinition(baseline,unit)),
   ...(referenceBinding?{referenceBinding}:{}),
-  feedback:task.blueprintFeedback ? {text:task.blueprintFeedback,revision:task.blueprintFeedbackRevision} : null,
+  feedback:task.blueprintFeedback ? {text:task.blueprintFeedback,revision:task.blueprintFeedbackRevision,
+   ...(task.blueprintFeedbackUnitIds?{rejectedUnitIds:task.blueprintFeedbackUnitIds}:{}),
+  } : null,
   rebuilding:!!task.repairContext?.teaching_rebuild,
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
  };
@@ -159,27 +162,59 @@ type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takea
 type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string;point_checks?:PointDecision[]};
 type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[]};
 
+function repeatsTeachingAction(method:string|undefined,evidence:readonly string[],answer:string){
+ return [method,...evidence].some(input=>typeof input==='string'&&sameWords(input,answer));
+}
+
 export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
  if(!source.pointReview)return [];
  const breakdown=doc.clipMentorAnalysis!.source_breakdown!;
+ const evidenceById=new Map(source.evidence.map(entry=>[entry.id,entry]));
  return breakdown.points.flatMap(point=>{
   const basis=point.teaching_basis,linked=breakdownPointEvidence(breakdown,point.point_id);
   const ranges=breakdown.segments.filter(segment=>point.segment_ids.includes(segment.segment_id)).map(segment=>segment.source_range_seconds);
   const covered=breakdown.units.flatMap(unit=>unit.coverage.filter(entry=>entry.point_id===point.point_id));
   if(!covered.length)return [point.point_id+' 缺少教学覆盖'];
-  if(!basis||!basis.evidence_ids.every(id=>linked.includes(id)&&source.evidence.some(e=>e.id===id
-   &&ranges.some(([from,to])=>e.range[0]===e.range[1]?from<=e.range[0]&&e.range[0]<to:e.range[0]<to&&from<e.range[1]))))
+  const selected=(basis?.evidence_ids??[]).flatMap(id=>{
+   const evidence=evidenceById.get(id);
+   return evidence&&linked.includes(id)&&ranges.some(([from,to])=>
+    evidence.range[0]===evidence.range[1]?from<=evidence.range[0]&&evidence.range[0]<to:evidence.range[0]<to&&from<evidence.range[1])
+    ?[evidence]:[];
+  });
+  if(!basis||selected.length!==basis.evidence_ids.length)
    return [point.point_id+' 缺教学依据或本点原片证据'];
-  if([basis.method,basis.selling_point,point.buying_concern].some(part=>sameWords(part,basis.connection)))
-   return [point.point_id+' 作用栏重复镜头、卖点或顾虑，缺买家怎么判断'];
+  if(repeatsTeachingAction(basis.method,selected.filter(e=>e.kind==='visible_action').map(e=>e.text),basis.connection)
+   ||[basis.selling_point,point.buying_concern].some(input=>sameWords(input,basis.connection)))
+   return [point.point_id+' 作用栏只重复原片动作、卖点或顾虑，缺买家的具体判断'];
   if(covered.some(entry=>entry.treatment==='visual_only'&&!normalized(entry.reason)))
    return [point.point_id+' 缺纯画面承载理由'];
   return [];
  });
 }
 
-export const rejectsTeachingDirection=(feedback:string|undefined)=>
- /(?<!不是)(?<!并非)方向\s*错了/u.test(feedback??'');
+function teachingDirectionGroups(feedback:string|undefined){
+ // Only force a rewind on an affirmative rejection. The read-only verifier still reads the full feedback.
+ const instruction=(feedback??'').replace(/“[^”]*”|「[^」]*」|『[^』]*』|【[^】]*】|"[^"]*"/gu,' ')
+  .replace(/(不是说|没说|不认为)\s*[，,：:]\s*/gu,'$1').replaceAll('而是','；');
+ const rejection=/^(?:我(?:觉得|认为)\s*)?(?:(?:这[版个]|第\s*(\d+|[一二三四五六七八九十])\s*组)\s*的?\s*)?(?:(?:教学|讲解|选题)\s*)?(?:方向\s*(?:错了|是错的)|教错了)$/u;
+ return (instruction.match(/[^。！？；，,.!?;\n]+[？?]?/gu)??[]).flatMap(clause=>{
+  const match=rejection.exec(clause.trim());
+  if(!match)return [];
+  if(!match[1])return [0];
+  const number=/^\d+$/u.test(match[1])?Number(match[1]):'一二三四五六七八九十'.indexOf(match[1])+1;
+  return [number>0?number:-1];
+ });
+}
+export const rejectsTeachingDirection=(feedback:string|undefined)=>teachingDirectionGroups(feedback).length>0;
+
+/** Resolve group numbers against the actual board's ordered picture plans while its revision is checked. */
+export function bindTeachingFeedbackUnits(doc:ProjectDoc,feedback:string){
+ const groups=[...new Set(teachingDirectionGroups(feedback).filter(number=>number!==0))];
+ if(!groups.length)return;
+ const plans=readBlueprint(doc).selectedPlans;
+ const unitIds=groups.map(number=>plans[number-1]?.unit.unit_id);
+ return unitIds.every((id):id is string=>typeof id==='string')?unitIds:[];
+}
 
 function reviewedPoints(value:unknown,unit:BaselineSource['units'][number],source:BaselineSource):PointDecision[]{
  if(!Array.isArray(value)||value.length!==unit.points.length)throw Error('teaching_baseline_point_review_incomplete');
@@ -197,7 +232,11 @@ function reviewedPoints(value:unknown,unit:BaselineSource['units'][number],sourc
   if(entry.status==='ok'&&unit.coverage.some(coverage=>coverage.point_id===point.point_id&&coverage.treatment==='visual_only')
    &&(evidence?.kind!=='visible_action'||!shortText(entry.visual_check)||!shortText(entry.omission_loss)))
     throw Error('teaching_baseline_visual_only_incomplete');
-  return entry as PointDecision;
+  const answer=entry as PointDecision;
+  if(answer.status==='ok'&&evidence&&repeatsTeachingAction(point.teaching_basis?.method,
+   evidence.kind==='visible_action'?[answer.source_quote,evidence.text]:[],answer.connection))
+   return {...answer,status:'fix',connection:'审核回答只重复原片动作，缺买家的具体判断。'};
+  return answer;
  });
 }
 
@@ -233,9 +272,18 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
    reason:issue?`${issue.point_id} ${issue.connection}`:reason,
    ...(points?{point_checks:points}:{})} as Decision;
  });
- if(source.pointReview&&!source.rebuilding&&rejectsTeachingDirection(source.feedback?.text)){
-  return {feedback_scope:'baseline',units:units.some(unit=>unit.status!=='ok')?units:
-   units.map(unit=>({...unit,status:'fix',reason:'用户已明确退回教学方向，须重做选题基线。'}))};
+ if(source.pointReview&&!source.rebuilding){
+  const groups=teachingDirectionGroups(source.feedback?.text);
+  if(groups.length){
+   const targets=source.feedback?.rejectedUnitIds??[];
+   const forceAll=groups.includes(0)&&units.every(unit=>unit.status==='ok');
+   const rejected=units.map(unit=>unit.status==='ok'&&(forceAll||targets.includes(unit.unit_id))
+    ?{...unit,status:'fix' as const,reason:'用户已明确退回教学方向，须重做选题基线。'}:unit);
+   const invalidBinding=!groups.includes(0)&&source.feedback?.rejectedUnitIds!==undefined
+    &&(!targets.length||targets.some(id=>!units.some(unit=>unit.unit_id===id)));
+   if(invalidBinding||rejected.every(unit=>unit.status==='ok'))throw Error('teaching_baseline_feedback_scope_unresolved');
+   return {feedback_scope:'baseline',units:rejected};
+  }
  }
  if (value.feedback_scope==='baseline' && !source.rebuilding && units.every(unit=>unit.status==='ok')) throw invalid();
  return {feedback_scope:value.feedback_scope as BaselineReview['feedback_scope'],units};
@@ -337,7 +385,7 @@ export function staleRebuiltTeaching(source:BaselineSource, doc:ProjectDoc, rebu
 const instructions = `只读核验教学选题，不审稿。先从任务要求、按原片时间排列的动作与原话候选判断原作者在做什么，再看 units 的作者基线。逐组判：是否保留了该段承担的原片功能、观众想判断的具体问题、原作者让这个信息可见或可听的手法、拿掉本组后达人会少学的做法。动作顺序、泛泛形容或作者备注不够。开场与衔接可承担核心任务，按本片证据判断，不套固定顺序或组数。机器听写与画面只支持各自能确认的关系；不据此证明成交、配方功效或人群适用，也不要求把资料所有卖点写进片。未知不影响当前有依据的选题时，保留该边界。引用必须是本组可回读的 source evidence ID，不能把听写当人工听审。若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。
 仅输出 JSON {feedback_scope:"none"|"copy"|"baseline",units:[{unit_id,status:"ok"|"fix"|"unresolved",source_role,takeaway,evidence_ids:[...],reason}]}。每组恰好一条，ok 必须引用证据。禁止改稿或调用工具。`;
 
-const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。从本点原片证据先核产品卖点、买家顾虑和她怎样表达，connection 说明这个手法具体多给了什么判断依据。复述动作或只列功能、混淆原片促单与达人CTA、照搬别片形式均判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
+const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。用本点原片证据核对作者的卖点、买家顾虑和拍法。connection 直接回答买家多了哪一项具体判断依据，选题或答案只复述动作时，即使换了词或问题带「为什么」，也判 fix。只列功能、混淆原片促单与达人CTA、照搬别片形式同样判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
 const baselineInstructions=(source:BaselineSource)=>instructions+(source.pointReview?pointInstructions:'');
 
 export function teachingBaselineDigest(source:BaselineSource) {
