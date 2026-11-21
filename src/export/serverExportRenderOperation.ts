@@ -169,6 +169,7 @@ async function readSnapshot(
   t: Translate,
   signal?: AbortSignal,
   attemptId?: string,
+  exactAttempt = false,
 ): Promise<ExportJobSnapshot> {
   const readDeadline = AbortSignal.timeout(20_000);
   const readSignal = signal ? AbortSignal.any([signal, readDeadline]) : readDeadline;
@@ -193,7 +194,7 @@ async function readSnapshot(
     throw new Error(message ?? t('无法读取导出进度 ({status})', { status: response.status }));
   }
   const job = snapshot as ExportJobSnapshot;
-  if ((job.id !== undefined && job.id !== renderId) || (attemptId
+  if ((job.id !== undefined && job.id !== renderId) || (exactAttempt
     && (job.id !== renderId || job.params?.exportAttemptId !== attemptId))) {
     throw new Error(t('导出尝试已更换'));
   }
@@ -246,7 +247,8 @@ export async function pollExport(
   binding?: ExportPollBinding,
 ): Promise<ExportJobResult> {
   while (true) {
-    const snapshot = await readSnapshot(renderId, context.t, signal, binding?.attemptId);
+    const exactAttempt = !!binding && (binding.attemptId !== undefined || !binding.recovery);
+    const snapshot = await readSnapshot(renderId, context.t, signal, binding?.attemptId, exactAttempt);
     const observedAttempt = snapshot.params?.exportAttemptId;
     if (binding?.recovery && binding.attemptId === undefined
       && (binding.recovery.submissionId !== undefined || observedAttempt !== undefined)) {

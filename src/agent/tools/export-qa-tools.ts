@@ -35,7 +35,7 @@ interface ResolvedExport {
   sourceStartSeconds?: number;
 }
 
-async function resolveExportSrc(args: Args): Promise<ResolvedExport | { error: string }> {
+async function resolveExportSrc(args: Args, projectId?: string): Promise<ResolvedExport | { error: string }> {
   const direct = typeof args.src === 'string' ? args.src.trim() : '';
   if (direct) return direct.startsWith('/media/uploads/')
     ? { src: direct }
@@ -43,7 +43,7 @@ async function resolveExportSrc(args: Args): Promise<ResolvedExport | { error: s
 
   const renderId = typeof args.renderId === 'string' ? args.renderId.trim() : '';
   if (!renderId) return { error: 'renderId or src is required' };
-  const job = await fetchRenderJob(renderId);
+  const job = await fetchRenderJob(renderId, projectId);
   if (!('ok' in job)) return job;
   if (job.status !== 'completed') {
     return { error: `render job ${job.renderId} is ${job.status}; wait for completion before QA` };
@@ -65,7 +65,7 @@ async function verifyExport(args: Args, ctx: AgentContext): Promise<unknown> {
   try {
     if (isManifestSelfCheckCall(args)) return transitionSelfCheckResult(args.executionManifest);
     const transitions = args.executionManifest === undefined ? undefined : checkTransitionManifest(args.executionManifest);
-    const resolved = await resolveExportSrc(args);
+    const resolved = await resolveExportSrc(args, ctx.getProjectId?.());
     if ('error' in resolved) return resolved;
 
     const state = ctx.getState();

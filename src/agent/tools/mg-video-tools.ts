@@ -122,7 +122,7 @@ async function register(args: Args, ctx: AgentContext): Promise<unknown> {
   let outputUrl = '';
   const renderId = typeof args.renderId === 'string' ? args.renderId.trim() : '';
   if (renderId) {
-    const job = await fetchRenderJob(renderId);
+    const job = await fetchRenderJob(renderId, ctx.getProjectId?.());
     if (!('ok' in job)) return { error: job.error };
     if (!job.downloadUrl) {
       return { error: `render ${renderId} is not complete yet (status: ${job.status}); wait with track_export action=wait first, or pass outputUrl as a fallback` };

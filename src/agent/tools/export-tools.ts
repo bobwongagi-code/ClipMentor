@@ -7,11 +7,13 @@ import { exportFailureFrom } from '../../export/exportFailure';
 import { exportMediaExtension } from '../../export/exportMediaExtension';
 import {
   agentExportMediaPoolState,
+  agentExportAttemptKey,
   notifyAgentExportSubmitted,
   resetAgentExportTrackingState,
   saveTrackedAgentExport,
   type AgentExportMediaPoolPlan,
 } from '../../export/agentExportTracking';
+import { exportAttemptQuery } from '../../export/serverExportRenderOperation';
 import type { ExportJobResult } from '../../export/exportWorkflowTypes';
 import type { ProjectDoc } from '../../editor/types';
 import { committedAgentExportBlock } from '../../export/agentExportCheckpoint';
@@ -51,8 +53,10 @@ function mapStatus(status: string): string {
 /** Backend /export/job/:id Fields that the tool cares about in the snapshot (others are ignored). */
 interface JobSnapshot extends JobReportBase<'queued' | 'running' | 'succeeded' | 'failed'> {
   id: string;
+  params?: { exportAttemptId?: string };
   progress: number;
   result?: {
+    assetId?: string;
     path?: string;
     name?: string;
     sizeBytes?: number;
@@ -69,6 +73,8 @@ export type PollResult =
   | {
     ok: true;
     renderId: string;
+    attemptId?: string;
+    assetId?: string;
     status: string;
     progress: number;
     downloadUrl?: string;
@@ -107,24 +113,49 @@ function waitForNextPoll(signal: AbortSignal): Promise<void> {
  * stands in). Full ids not in the registry still pass straight through to the
  * server. ponytail: session-scoped; add a /export/jobs list endpoint if
  * cross-reload latest ever matters. */
-interface SessionJob { renderId: string; timelineId?: string; saveToMediaPool: boolean }
-// push order = submission order → newest is the LAST entry (no clock needed).
-const sessionJobs: SessionJob[] = [];
+interface SessionJob {
+  renderId: string;
+  attemptId?: string;
+  projectId?: string;
+  timelineId?: string;
+  saveToMediaPool: boolean;
+}
+// Insertion order follows acceptance. Reusing an ID replaces its session entry.
+const sessionJobs = new Map<string, SessionJob>();
+const recordedAttempts = new Set<string>();
+
+interface ExportSelection {
+  renderId: string;
+  foreignProject: boolean;
+  job?: SessionJob;
+  observed?: { attemptId?: string };
+}
+
+function sessionJobKey(projectId: string | undefined, renderId: string): string {
+  return JSON.stringify([projectId, renderId]);
+}
+
+function selectExport(renderId: string, projectId?: string): ExportSelection {
+  const matching = [...sessionJobs.values()].filter((job) => job.renderId === renderId);
+  const job = projectId === undefined ? matching.at(-1) : sessionJobs.get(sessionJobKey(projectId, renderId));
+  return {
+    renderId, job, observed: job && { attemptId: job.attemptId },
+    foreignProject: projectId !== undefined && !job && matching.some((entry) => entry.projectId !== undefined),
+  };
+}
 
 /** Test seam: reset the session job registry. */
 export function __resetExportSessionJobs(): void {
-  sessionJobs.length = 0;
+  sessionJobs.clear();
+  recordedAttempts.clear();
   resetAgentExportTrackingState();
 }
 
-// A completed job would be re-seen on every poll; dedupe by renderId so repeated
-// status/wait calls record the export exactly once (per session).
-const recordedRenderIds = new Set<string>();
-
-/** Record a completed async render into the global export history (once per renderId). */
 function recordIfCompleted(result: PollResult): void {
-  if (!('ok' in result) || !isComplete(result.status) || !result.downloadUrl || recordedRenderIds.has(result.renderId)) return;
-  recordedRenderIds.add(result.renderId);
+  if (!('ok' in result) || !isComplete(result.status) || !result.downloadUrl) return;
+  const key = agentExportAttemptKey(result.renderId, result.attemptId);
+  if (recordedAttempts.has(key)) return;
+  recordedAttempts.add(key);
   const format = result.codec === 'mp3' || result.codec === 'wav' ? 'audio' : 'video';
   void recordExport({ name: result.name ?? result.renderId, format, codec: result.codec, sizeBytes: result.sizeBytes, createdAt: Date.now() });
 }
@@ -152,11 +183,10 @@ function mediaPoolPlan(
   };
 }
 
-function withMediaPoolState(result: PollResult): PollResult {
+function withMediaPoolState(result: PollResult, job: SessionJob | undefined, projectId?: string): PollResult {
   if (!('ok' in result) || !isComplete(result.status)) return result;
-  const job = sessionJobs.find((candidate) => candidate.renderId === result.renderId);
-  if (!job?.saveToMediaPool) return result;
-  const state = agentExportMediaPoolState(result.renderId) ?? { status: 'pending' as const };
+  if (!job?.saveToMediaPool || job.projectId !== projectId) return result;
+  const state = agentExportMediaPoolState(result.renderId, result.attemptId) ?? { status: 'pending' as const };
   if (state.status === 'saved') {
     return { ...result, mediaPoolStatus: 'saved', mediaAssetId: state.mediaAssetId, mediaPoolPath: state.path };
   }
@@ -166,14 +196,18 @@ function withMediaPoolState(result: PollResult): PollResult {
 
 /** GET /export/job/:id once, mapping the snapshot to the tool result; transmission/unknown renderId will return a clean error and never throw a naked exception.
  * Exported for register_converted_video (mg-video-tools): resolve a finished render's downloadUrl by renderId. */
-export async function fetchRenderJob(renderId: string): Promise<PollResult> {
-  try { return await pollOnce(renderId, AbortSignal.timeout(DEFAULT_WAIT_SECONDS * 1000)); }
+export async function fetchRenderJob(renderId: string, projectId?: string): Promise<PollResult> {
+  try { return await pollOnce(selectExport(renderId, projectId), AbortSignal.timeout(DEFAULT_WAIT_SECONDS * 1000)); }
   catch { return { error: `render job ${renderId} status unavailable; query the same render ID` }; }
 }
 
-async function pollOnce(renderId: string, signal?: AbortSignal): Promise<PollResult> {
+async function pollOnce(selection: ExportSelection, signal?: AbortSignal): Promise<PollResult> {
   signal?.throwIfAborted();
-  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}`, { method: 'GET', signal });
+  const { renderId, observed } = selection;
+  if (selection.foreignProject) return { error: `render job ${renderId} belongs to a different project` };
+  const response = await fetch(`/export/job/${encodeURIComponent(renderId)}${exportAttemptQuery(observed?.attemptId)}`, {
+    method: 'GET', signal,
+  });
   signal?.throwIfAborted();
   if (response.status === 404) return { error: `render job ${renderId} not found` };
   const snapshot = (await response.json().catch(() => null)) as JobSnapshot | { error?: string } | null;
@@ -183,14 +217,19 @@ async function pollOnce(renderId: string, signal?: AbortSignal): Promise<PollRes
     return { error: message ?? `track_export failed (${response.status})` };
   }
   if (snapshot.id !== renderId) return { error: `render job ${renderId} status identity mismatch` };
+  const attemptId = snapshot.params?.exportAttemptId;
+  if (observed && observed.attemptId !== attemptId) return { error: `render job ${renderId} attempt identity mismatch` };
+  selection.observed = { attemptId };
   const completed = isComplete(snapshot.status);
   const result = snapshot.result;
   return {
     ok: true,
     renderId: snapshot.id,
+    ...(attemptId === undefined ? {} : { attemptId }),
     status: mapStatus(snapshot.status),
     progress: snapshot.progress,
     ...(completed && result?.path ? {
+      ...(result.assetId === undefined ? {} : { assetId: result.assetId }),
       downloadUrl: result.path,
       name: result.name,
       sizeBytes: result.sizeBytes,
@@ -243,7 +282,10 @@ async function submitRenderJob(args: Args, ctx: AgentContext): Promise<unknown> 
     });
     const data = (await response.json().catch(() => ({}))) as { renderId?: string; attemptId?: string; error?: string };
     if (!response.ok || !data.renderId) return { error: data.error ?? `render job submit failed (${response.status})` };
-    sessionJobs.push({ renderId: data.renderId, timelineId, saveToMediaPool: !!savePlan });
+    const attemptId = typeof data.attemptId === 'string' ? data.attemptId : undefined;
+    const key = sessionJobKey(projectId, data.renderId);
+    sessionJobs.delete(key);
+    sessionJobs.set(key, { renderId: data.renderId, attemptId, projectId, timelineId, saveToMediaPool: !!savePlan });
     if (projectId) {
       const codec = format === 'audio' ? 'mp3' : args.codec === 'vp8' ? 'vp8' : 'h264';
       const extension = format === 'audio' && args.codec === 'wav'
@@ -251,7 +293,7 @@ async function submitRenderJob(args: Args, ctx: AgentContext): Promise<unknown> 
         : exportMediaExtension(format, codec);
       notifyAgentExportSubmitted({
         renderId: data.renderId,
-        ...(typeof data.attemptId === 'string' ? { attemptId: data.attemptId } : {}),
+        attemptId,
         projectId,
         label: typeof args.name === 'string' && args.name.trim()
           ? args.name
@@ -282,24 +324,27 @@ async function submitRenderJob(args: Args, ctx: AgentContext): Promise<unknown> 
 
 /** Comma separated ids/prefixes → complete list of renderIds. Prefix parses the session submission record; unknown
  *  The token is transparently transmitted to the server as it is (it may be the complete ID obtained elsewhere). Ambiguous prefixes report clarity errors.*/
-function resolveRenderIds(raw: string): { ids: string[] } | { error: string } {
+function resolveRenderIds(raw: string, projectId?: string): { ids: string[] } | { error: string } {
   const tokens = raw.split(',').map((t) => t.trim()).filter(Boolean);
   if (!tokens.length) return { error: 'renderIds is empty — pass comma-separated render job IDs or prefixes' };
   const ids: string[] = [];
+  const jobs = [...sessionJobs.values()];
   for (const token of tokens) {
-    if (sessionJobs.some((j) => j.renderId === token)) { ids.push(token); continue; }
-    const matches = sessionJobs.filter((j) => j.renderId.startsWith(token));
-    if (matches.length > 1) return { error: `renderIds prefix "${token}" is ambiguous (${matches.map((m) => m.renderId).join(', ')})` };
-    ids.push(matches.length === 1 ? matches[0]!.renderId : token);
+    if (jobs.some((job) => job.renderId === token)) { ids.push(token); continue; }
+    const matches = [...new Set(jobs.filter((j) => (projectId === undefined || j.projectId === projectId)
+      && j.renderId.startsWith(token)).map((j) => j.renderId))];
+    if (matches.length > 1) return { error: `renderIds prefix "${token}" is ambiguous (${matches.join(', ')})` };
+    ids.push(matches[0] ?? token);
   }
   return { ids: [...new Set(ids)] };
 }
 
 /** When renderIds is omitted, select from this session's submitted jobs. */
-function selectLatestJobs(args: Args): { ids: string[]; note?: string; activeOnly?: boolean } | { error: string } {
+function selectLatestJobs(args: Args, projectId?: string): { ids: string[]; note?: string; activeOnly?: boolean } | { error: string } {
   const timelineQ = typeof args.timelineId === 'string' ? args.timelineId.trim() : '';
-  const candidates = sessionJobs
-    .filter((j) => !timelineQ || (j.timelineId ?? '').startsWith(timelineQ))
+  const candidates = [...sessionJobs.values()]
+    .filter((j) => (projectId === undefined || j.projectId === projectId)
+      && (!timelineQ || (j.timelineId ?? '').startsWith(timelineQ)))
     .reverse(); // newest (last submitted) first — filter() copies, reverse is safe
   if (!candidates.length) {
     return { error: timelineQ
@@ -315,6 +360,7 @@ function selectLatestJobs(args: Args): { ids: string[]; note?: string; activeOnl
 function completedExportResult(result: PollResult): ExportJobResult | null {
   if (!('ok' in result) || !isComplete(result.status)) return null;
   return {
+    assetId: result.assetId,
     path: result.downloadUrl,
     name: result.name,
     sizeBytes: result.sizeBytes,
@@ -326,27 +372,26 @@ function completedExportResult(result: PollResult): ExportJobResult | null {
   };
 }
 
-async function pollAll(ids: string[], ctx: AgentContext, signal: AbortSignal, observed: Map<string, PollResult>): Promise<PollResult[]> {
-  const polled = await Promise.all(ids.map(async (id) => {
-    const result = await pollOnce(id, signal);
-    if ('ok' in result) observed.set(id, result);
-    return result;
+async function pollAll(selections: ExportSelection[], ctx: AgentContext, signal: AbortSignal, observed: Map<string, PollResult>): Promise<PollResult[]> {
+  const polled = await Promise.all(selections.map(async (selection) => {
+    const result = await pollOnce(selection, signal);
+    if ('ok' in result) observed.set(selection.renderId, result);
+    return { result, job: selection.job };
   }));
   signal.throwIfAborted();
-  for (const result of polled) {
+  for (const { result, job } of polled) {
     const completed = completedExportResult(result);
-    const job = 'ok' in result
-      ? sessionJobs.find((candidate) => candidate.renderId === result.renderId)
-      : undefined;
-    if (completed && job?.saveToMediaPool) {
-      await saveTrackedAgentExport(job.renderId, completed, {
+    if (completed && job?.saveToMediaPool && job.projectId === ctx.getProjectId?.()) {
+      await saveTrackedAgentExport(job, completed, {
         commands: ctx.commands,
         getDoc: ctx.getDoc,
+        canRegister: () => job.projectId === ctx.getProjectId?.(),
+        draft: !!ctx.getAgentRunId?.(),
       }, signal).catch(() => undefined);
       signal.throwIfAborted();
     }
   }
-  const results = polled.map(withMediaPoolState);
+  const results = polled.map(({ result, job }) => withMediaPoolState(result, job, ctx.getProjectId?.()));
   for (const r of results) recordIfCompleted(r);
   return results;
 }
@@ -370,28 +415,30 @@ async function trackExport(args: Args, ctx: AgentContext): Promise<unknown> {
   const seconds = action === 'wait' ? bounded : DEFAULT_WAIT_SECONDS;
   const timer = seconds > 0 ? setTimeout(() => deadline.abort(), seconds * 1000) : undefined;
   const observed = new Map<string, PollResult>();
-  let ids: string[] = [];
+  let selections: ExportSelection[] = [];
   let note: string | undefined;
   try {
+    const projectId = ctx.getProjectId?.();
+    const select = (renderId: string) => selectExport(renderId, projectId);
     // renderIds (comma separated) take precedence; old singular renderIds are still compatible; both lack → latest semantics.
     const rawIds = typeof args.renderIds === 'string' && args.renderIds.trim()
       ? args.renderIds
       : typeof args.renderId === 'string' && args.renderId.trim() ? args.renderId : '';
     if (rawIds) {
-      const resolved = resolveRenderIds(rawIds);
+      const resolved = resolveRenderIds(rawIds, projectId);
       if ('error' in resolved) return resolved;
-      ids = resolved.ids;
+      selections = resolved.ids.map(select);
     } else {
-      const selected = selectLatestJobs(args);
+      const selected = selectLatestJobs(args, projectId);
       if ('error' in selected) return selected;
-      ids = selected.ids;
+      selections = [...new Set(selected.ids)].map(select);
       note = selected.note;
       if (selected.activeOnly) {
         let active = false;
-        for (const id of selected.ids) {
-          ids = [id];
-          const result = await pollOnce(id, signal);
-          if ('ok' in result) observed.set(id, result);
+        for (const selection of selections) {
+          selections = [selection];
+          const result = await pollOnce(selection, signal);
+          if ('ok' in result) observed.set(selection.renderId, result);
           if ('ok' in result && !isTerminal(result.status)) {
             active = true;
             break;
@@ -403,16 +450,16 @@ async function trackExport(args: Args, ctx: AgentContext): Promise<unknown> {
 
     for (;;) {
       signal.throwIfAborted();
-      const results = await pollAll(ids, ctx, signal, observed);
+      const results = await pollAll(selections, ctx, signal, observed);
       const allSettled = results.every((r) => !('ok' in r) || isTerminal(r.status));
       if (action === 'status' || allSettled) return presentJobs(results, note);
       await waitForNextPoll(signal);
     }
   } catch (error) {
     if (signal.aborted) {
-      const latest = ids.map((id) => {
-        const result = observed.get(id);
-        return result && 'ok' in result ? withMediaPoolState(result) : { renderId: id, status: 'unknown' as const };
+      const latest = selections.map(({ renderId, job }) => {
+        const result = observed.get(renderId);
+        return result && 'ok' in result ? withMediaPoolState(result, job, ctx.getProjectId?.()) : { renderId, status: 'unknown' as const };
       });
       return {
         ...presentJobs(latest, note),

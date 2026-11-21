@@ -52,6 +52,7 @@ export interface ExportJobSnapshot {
 }
 
 export interface ExportJobResult {
+  assetId?: string;
   path?: string;
   name?: string;
   sizeBytes?: number;
