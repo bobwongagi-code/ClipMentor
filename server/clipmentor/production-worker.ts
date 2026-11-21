@@ -76,7 +76,7 @@ export async function persistProductionGatewayDecision(record:ReturnType<typeof 
  const saved=await deps.load(record.projectId,record.artifactId)??await deps.archived?.(record);
  if(!matches(saved??null))throw Error('gateway_recovery_decision_not_saved');
 }
-import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,isPanelBlueprintDraft,panelBlueprintRequirementsDigest,type StageWorker,type ProductionTask} from './production-task';
+import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,isPanelBlueprintDraft,panelBlueprintRequirementsDigest,type StageWorker,type StageContext,type StageResult,type ProductionTask} from './production-task';
 
 const hostNames=new Set(['load_skill','edit_item','edit_asset','read_clipmentor_analysis','revise_clipmentor_analysis','observe_clipmentor_source',
  'observe_clipmentor_source_video','read_clipmentor_source_video','view_asset_frames','view_timeline_frames','save_clipmentor_source_frame','submit_voice']);
@@ -388,6 +388,119 @@ export function productionBoardPhaseIssues(doc:ProjectDoc){
  })??[];
 }
 
+async function runProductionCopyReview({
+ task,stage,editor,doc,policy,criteria,openingComparison,teachingBriefDigest,baselinePolicyDigest,
+ teachingDigest,panelScope,panelDraft,strictEditorial,executeWithRecovery,operation,
+}:{
+ task:ProductionTask;
+ stage:StageContext;
+ editor:Awaited<ReturnType<typeof openHeadlessEditor>>;
+ doc:ProjectDoc;
+ policy:Awaited<ReturnType<typeof productionReviewRequirements>>;
+ criteria:ReturnType<typeof boundVisualCriteria>;
+ openingComparison:ReturnType<typeof productionOpeningComparison>;
+ teachingBriefDigest:string|undefined;
+ baselinePolicyDigest:string;
+ teachingDigest:string|undefined;
+ panelScope:ProductionTask['input']['panelDelivery'];
+ panelDraft:boolean;
+ strictEditorial:boolean;
+ executeWithRecovery:(name:string,args:Record<string,unknown>,id:string)=>Promise<unknown>;
+ operation:(scope:string)=>string;
+}):Promise<StageResult>{
+ const a=doc.clipMentorAnalysis!;
+ const authorCriteria=productionAuthorCriteria(task,policy),authorCriteriaDigest=digestValue(authorCriteria);
+ const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
+ if(task.input.panelDelivery){
+  const issues=productionBoardPhaseIssues(doc);
+  if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues)}`},repair:'blueprint'};
+ }
+ const prepared=await createProductionPreparation(doc);
+ if(task.input.panelDelivery&&prepared.rawPacket.units.some(unit=>unit.source_context?.scope!=='frozen_task_scope'))
+  return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"source_review_scope_missing","id":"analysis"}]'},repair:'blueprint'};
+ if(openingComparison&&prepared.rawPacket.delivery_sections?.filter(section=>section.kind==='performance_opening').length!==1)
+  return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
+ const openingSection=prepared.rawPacket.delivery_sections?.find(section=>section.kind==='performance_opening');
+ if(openingComparison?.results&&openingSection&&!confirmedOpeningResultsMatch(openingSection,openingComparison.results))
+  return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_results_missing_or_changed","id":"delivery"}]'},repair:'blueprint'};
+ try{assertVisualCriteriaPlan(criteria,prepared.rawPacket.delivery_sections,prepared.rawPacket.units.map(u=>u.unit_id),doc.activeTimelineId);}catch(e){
+  return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify([{code:String((e as Error).message),id:'delivery'}])}`},repair:'blueprint'};
+ }
+ if(task.input.panelDelivery){
+  const content=await currentCreatorDocument(doc);
+  const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
+  if(!issues.length&&!await verifyPanelPartnerCard(doc,task.input.panelDelivery,content,undefined,stage.signal))issues.push('existing_partner_composition_invalid');
+  if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues.map(code=>({code,id:'delivery'})))}`},repair:'blueprint'};
+ }
+ const digest=prepared.reviewed.subject.digest;
+ if(task.input.humanBlueprintReview){
+  const pictures=panelScope?deliveryPictureBindings(doc,prepared.rawPacket.delivery_sections):undefined;
+  const hostDeliveryEvidence:Record<string,unknown>|undefined=pictures?{
+   pictureBindings:pictures,
+   referenceText:pictures.flatMap(binding=>{
+    if(binding.status!=='ready'||!('roles' in binding)||!binding.roles)return [];
+    return Object.entries(binding.roles).map(([role,{source_rect:r}])=>
+     `${binding.section_id} ${role} 原图实际裁切 ${r.x}, ${r.y}, ${r.width} × ${r.height} 像素`);
+   }),
+  }:undefined;
+  if(hostDeliveryEvidence&&partnerStoryboardRequired(panelScope)){
+   const pdf=await creatorStoryboard(doc,stage.signal);
+   hostDeliveryEvidence.storyboardAttachment={mediaType:'application/pdf',pages:pdf.pages,
+    inputDigest:pdf.inputDigest,status:'complete_pdf_bytes_verified_for_this_source',
+    note:'交付布局的 attachment 素材字段标识绑定的原片 Storyboard。独立 PDF 已由宿主读取，成片确认时经随片附件入口交付。'};
+  }
+  const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence,panelDraft);
+  if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
+  const issues=check.checks.filter(entry=>entry.status!=='ok');
+  if(issues.length)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
+  if(panelDraft){
+   const currentPolicy=await productionReviewRequirements(task.projectId);
+   if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest)return repairRequirements();
+   const current=await loadOfflineStoredProject(task.projectId);
+   if(current?.revision!==editor.revision)throw Error('blueprint_author_self_check_stale');
+   return {artifact:{revision:editor.revision,blueprint_digest:digest,authorSelfCheck:'passed',teaching_baseline_digest:teachingDigest,
+    author_self_check_source_digest:check.sourceDigest,requirementsDigest:panelBlueprintRequirementsDigest(currentPolicy)},awaitBlueprintFeedback:true};
+  }
+ }
+ const submitPolicy=await productionReviewRequirements(task.projectId);
+ if(panelBlueprintRequirementsDigest(submitPolicy)!==baselinePolicyDigest
+  ||digestValue(productionAuthorCriteria(task,submitPolicy))!==authorCriteriaDigest)return repairRequirements();
+ if((stage.remaining?.('review')??1)<=0&&!stage.hasEffect?.('review',operation('independent-review')))
+  throw new Error('review budget exhausted');
+ const result=await (task.input.budget.routine?executeWithRecovery:editor.execute)('request_clipmentor_copy_review',{operationId:operation('independent-review'),maxRequests:1,expectedRevision:a.revision},'copy-review') as Record<string,unknown>;
+ if(result.error){
+  const diagnostic=result.diagnostic as {code?:string;requestsAttempted?:number}|undefined;
+  if(diagnostic?.code==='opening_comparison_section_missing'&&diagnostic.requestsAttempted===0)
+   return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
+  if(diagnostic?.code==='review_requirements_changed')
+   return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
+  if(task.input.budget.routine&&(stage.remaining?.('review')??0)<=0
+   &&diagnostic?.requestsAttempted===1)throw new Error('review budget exhausted');
+  throw new Error(String(result.error));
+ }
+ if(criteria&&!visualCriteriaPlanReceiptMatches(criteria,editor.getDoc().clipMentorAnalysis?.production_copy_review))
+  throw Error('handoff_visual_criteria_review_missing_or_stale');
+ const currentPolicy=await productionReviewRequirements(task.projectId);
+ if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest
+  ||digestValue(productionAuthorCriteria(task,currentPolicy))!==authorCriteriaDigest)return repairRequirements();
+ const gate=await checkCopyProduction(editor.getDoc(),'clipmentor',undefined,productionOpeningComparison(task,currentPolicy),strictEditorial,teachingBriefDigest);
+ if(!gate.allowed){
+  if(gate.code==='copy_teaching_brief_review_stale')return repairRequirements();
+  if('delivery_issues' in gate&&gate.delivery_issues?.some(issue=>['opening_comparison_review_missing_or_stale','ending_picture_review_missing_or_stale'].includes(issue)))
+   return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
+  const repair=await currentReviewRepair(editor.getDoc());
+  if(task.input.humanBlueprintReview&&(repair.status!=='bound'||
+   !/^copy_(?:(?:group|teaching|narration|delivery)_)?review_not_passed$/.test(gate.code))){
+   throw new Error(`独立审核门禁无法推进：${gate.code}`);
+  }
+  if(task.input.budget.routine&&needsVisualReviewCompletion(repair))
+   return {artifact:{receipt:result,revision:editor.revision,blueprint_digest:digest,repair,review_contract_recheck:true},repair:'copy_review'};
+  return {artifact:{receipt:result,revision:editor.revision,blueprint_digest:digest,repair},repair:'blueprint'};
+ }
+ return {artifact:{revision:editor.revision,gate,receipt:result,blueprint_digest:digest,requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),...(task.input.humanBlueprintReview?{authorSelfCheck:'passed'}:{}),
+  ...(task.input.panelDelivery?{panelDeliveryVerified:true}:{})}};
+}
+
 /** The same service worker is used by the HTTP task and by zero-provider regression fixtures. */
 export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
@@ -622,96 +735,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }
   }
   if(task.stage==='copy_review'){
-   const authorCriteria=productionAuthorCriteria(task,policy),authorCriteriaDigest=digestValue(authorCriteria);
-   const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
-   if(task.input.panelDelivery){
-    const issues=productionBoardPhaseIssues(doc);
-    if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues)}`},repair:'blueprint'};
-   }
-   const prepared=await createProductionPreparation(doc);
-   if(task.input.panelDelivery&&prepared.rawPacket.units.some(unit=>unit.source_context?.scope!=='frozen_task_scope'))
-    return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"source_review_scope_missing","id":"analysis"}]'},repair:'blueprint'};
-   if(openingComparison&&prepared.rawPacket.delivery_sections?.filter(section=>section.kind==='performance_opening').length!==1)
-    return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
-   const openingSection=prepared.rawPacket.delivery_sections?.find(section=>section.kind==='performance_opening');
-   if(openingComparison?.results&&openingSection&&!confirmedOpeningResultsMatch(openingSection,openingComparison.results))
-    return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_results_missing_or_changed","id":"delivery"}]'},repair:'blueprint'};
-   try{assertVisualCriteriaPlan(criteria,prepared.rawPacket.delivery_sections,prepared.rawPacket.units.map(u=>u.unit_id),doc.activeTimelineId);}catch(e){
-    return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify([{code:String((e as Error).message),id:'delivery'}])}`},repair:'blueprint'};
-   }
-   if(task.input.panelDelivery){
-    const content=await currentCreatorDocument(doc);
-    const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
-    if(!issues.length&&!await verifyPanelPartnerCard(doc,task.input.panelDelivery,content,undefined,stage.signal))issues.push('existing_partner_composition_invalid');
-    if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues.map(code=>({code,id:'delivery'})))}`},repair:'blueprint'};
-   }
-   const digest=prepared.reviewed.subject.digest;
-   if(task.input.humanBlueprintReview){
-    const pictures=panelScope?deliveryPictureBindings(doc,prepared.rawPacket.delivery_sections):undefined;
-    const hostDeliveryEvidence:Record<string,unknown>|undefined=pictures?{
-     pictureBindings:pictures,
-     referenceText:pictures.flatMap(binding=>{
-      if(binding.status!=='ready'||!('roles' in binding)||!binding.roles)return [];
-      return Object.entries(binding.roles).map(([role,{source_rect:r}])=>
-       `${binding.section_id} ${role} 原图实际裁切 ${r.x}, ${r.y}, ${r.width} × ${r.height} 像素`);
-     }),
-    }:undefined;
-    if(hostDeliveryEvidence&&partnerStoryboardRequired(panelScope)){
-     const pdf=await creatorStoryboard(doc,stage.signal);
-     hostDeliveryEvidence.storyboardAttachment={mediaType:'application/pdf',pages:pdf.pages,
-      inputDigest:pdf.inputDigest,status:'complete_pdf_bytes_verified_for_this_source',
-      note:'交付布局的 attachment 素材字段标识绑定的原片 Storyboard。独立 PDF 已由宿主读取，成片确认时经随片附件入口交付。'};
-    }
-    const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence,panelDraft);
-    if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
-    const issues=check.checks.filter(entry=>entry.status!=='ok');
-    if(issues.length)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
-    if(panelDraft){
-     const currentPolicy=await productionReviewRequirements(task.projectId);
-     if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest)return repairRequirements();
-     const current=await loadOfflineStoredProject(task.projectId);
-     if(current?.revision!==editor.revision)throw Error('blueprint_author_self_check_stale');
-     return {artifact:{revision:editor.revision,blueprint_digest:digest,authorSelfCheck:'passed',teaching_baseline_digest:teachingDigest,
-      author_self_check_source_digest:check.sourceDigest,requirementsDigest:panelBlueprintRequirementsDigest(currentPolicy)},awaitBlueprintFeedback:true};
-    }
-   }
-   const submitPolicy=await productionReviewRequirements(task.projectId);
-   if(panelBlueprintRequirementsDigest(submitPolicy)!==baselinePolicyDigest
-    ||digestValue(productionAuthorCriteria(task,submitPolicy))!==authorCriteriaDigest)return repairRequirements();
-   if((stage.remaining?.('review')??1)<=0&&!stage.hasEffect?.('review',operation('independent-review')))
-    throw new Error('review budget exhausted');
-   const result=await (task.input.budget.routine?executeWithRecovery:editor.execute)('request_clipmentor_copy_review',{operationId:operation('independent-review'),maxRequests:1,expectedRevision:a.revision},'copy-review') as Record<string,unknown>;
-   if(result.error){
-    const diagnostic=result.diagnostic as {code?:string;requestsAttempted?:number}|undefined;
-    if(diagnostic?.code==='opening_comparison_section_missing'&&diagnostic.requestsAttempted===0)
-     return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
-    if(diagnostic?.code==='review_requirements_changed')
-     return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
-    if(task.input.budget.routine&&(stage.remaining?.('review')??0)<=0
-     &&diagnostic?.requestsAttempted===1)throw new Error('review budget exhausted');
-    throw new Error(String(result.error));
-   }
-   if(criteria&&!visualCriteriaPlanReceiptMatches(criteria,editor.getDoc().clipMentorAnalysis?.production_copy_review))
-    throw Error('handoff_visual_criteria_review_missing_or_stale');
-   const currentPolicy=await productionReviewRequirements(task.projectId);
-   if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest
-    ||digestValue(productionAuthorCriteria(task,currentPolicy))!==authorCriteriaDigest)return repairRequirements();
-   const gate=await checkCopyProduction(editor.getDoc(),'clipmentor',undefined,productionOpeningComparison(task,currentPolicy),strictEditorial,teachingBriefDigest);
-   if(!gate.allowed){
-    if(gate.code==='copy_teaching_brief_review_stale')return repairRequirements();
-    if('delivery_issues' in gate&&gate.delivery_issues?.some(issue=>['opening_comparison_review_missing_or_stale','ending_picture_review_missing_or_stale'].includes(issue)))
-     return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
-    const repair=await currentReviewRepair(editor.getDoc());
-    if(task.input.humanBlueprintReview&&(repair.status!=='bound'||
-     !/^copy_(?:(?:group|teaching|narration|delivery)_)?review_not_passed$/.test(gate.code))){
-     throw new Error(`独立审核门禁无法推进：${gate.code}`);
-    }
-    if(task.input.budget.routine&&needsVisualReviewCompletion(repair))
-     return {artifact:{receipt:result,revision:editor.revision,blueprint_digest:digest,repair,review_contract_recheck:true},repair:'copy_review'};
-    return {artifact:{receipt:result,revision:editor.revision,blueprint_digest:digest,repair},repair:'blueprint'};
-   }
-   return {artifact:{revision:editor.revision,gate,receipt:result,blueprint_digest:digest,requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),...(task.input.humanBlueprintReview?{authorSelfCheck:'passed'}:{}),
-    ...(task.input.panelDelivery?{panelDeliveryVerified:true}:{})}};
+   // Keep the editor lease through review and receipt publication.
+   return await runProductionCopyReview({task,stage,editor,doc,policy,criteria,openingComparison,teachingBriefDigest,
+    baselinePolicyDigest,teachingDigest,panelScope,panelDraft,strictEditorial,executeWithRecovery,operation});
   }
   if(['audio','edit','export','self_check'].includes(task.stage)){
    assertSharedProduction(task,doc);

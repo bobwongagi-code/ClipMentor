@@ -2,6 +2,9 @@ import './native-execution.verify';
 import './production-format.verify';
 import './production-source-evidence.verify';
 import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {productionPreviewFacts,productionAuthorTaskData,productionStageToolAllowed,loadProductionAuthorGuidance,executionMappingDiagnostic,productionGatewayDecisionArtifact} from './production-worker';
 import {isValidAgentArtifactRecord} from '../../src/persist/agentRuntimeCodec';
 import {sha256Text} from '../../src/persist/agentRuntimeStore';
@@ -14,6 +17,8 @@ import { verifyAuthorSelfCheckRecovery } from './production-author-self-check.ve
 import {createProductionPreparation} from './production-readiness';
 import {isBoundCanvasReflow,assertCanvasReflowPreservation} from './production-worker';
 import {digestValue} from '../agent-runs/store-values';
+import type {ProductionTask,StageContext} from './production-task';
+import type {ProjectDoc} from '../../src/editor/types';
 const recoveryArtifact=productionGatewayDecisionArtifact({taskId:'fixture',projectId:'fixture',stage:'blueprint',
  input:{budget:{observation:3}}} as import('./production-task').ProductionTask,'v3-fixture','observation',
  {operation_id:'a24963be-10e4-4738-83f8-b15d03f8bc78',action:'retry_charged',reason:'部分上传，保留次数'},2);
@@ -517,3 +522,94 @@ await persistProductionGatewayDecision(recoveryArtifact,decisionDeps);await pers
 assert.equal(decisionWrites,1);await assert.rejects(persistProductionGatewayDecision({...recoveryArtifact,runId:'another'},decisionDeps),/not_saved/);
 await assert.rejects(persistProductionGatewayDecision({...recoveryArtifact,body:'changed'},decisionDeps),/not_saved/);
 console.log('PASS repeated immutable gateway decision is idempotent; changed content/owner still refuse');
+
+// Exercise the worker and project store. Replace only the external review effect.
+{
+ const root=await mkdtemp(join(tmpdir(),'production-copy-review-'));
+ const priorDirectory=process.env.OPENCHATCUT_DATA_DIR,priorFetch=globalThis.fetch;
+ process.env.OPENCHATCUT_DATA_DIR=root;
+ let network=0;
+ globalThis.fetch=async()=>{network++;throw Error('Unexpected network request');};
+ try{
+  const {productionStageWorker}=await import('./production-worker');
+  const {setStoredEntry}=await import('../plugins/project-store');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {claimOfflineProjectOwnership,releaseProjectEditOwnership}=await import('../external-agent/project-edit-ownership');
+  const projectId='worker-copy-review-fixture';
+  const candidate=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
+  const reviewed=candidate.clipMentorAnalysis!.production_copy_review!;
+  delete candidate.clipMentorAnalysis!.production_copy_review;
+  await setStoredEntry('projects',[{id:projectId,name:'Worker copy review fixture',updatedAt:1}]);
+  await setStoredEntry(`project:${projectId}`,candidate);
+  const before=(await loadOfflineStoredProject(projectId))!;
+  assert(before);
+  const initialTask={
+   taskId:'worker-copy-review-task',projectId,projectRevision:before.revision,stage:'copy_review',
+   repairs:0,feedbackUsed:false,effects:{},
+   input:{sourceAssetId:candidate.clipMentorAnalysis!.source.asset_id,brief:'Copy review fixture',budget:{review:1},
+    author:{origin:'http://127.0.0.1:5199'},
+    reviewer:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'chat'}},
+  } satisfies Partial<ProductionTask> as ProductionTask;
+  const keys:string[]=[];
+  const bodies=new Map<string,{body:{operationId:string;requestsAttempted:number;receipt:typeof reviewed};status:number}>();
+  let submissions=0;
+  let staleReceipt=true;
+  let reviewRemaining=1;
+  const stage:StageContext={
+   signal:new AbortController().signal,
+   remaining:()=>reviewRemaining,
+   hasEffect:(kind,key)=>kind==='review'&&bodies.has(key),
+   async effect<T>(kind:Parameters<StageContext['effect']>[0],key:string){
+    assert.equal(kind,'review');
+    keys.push(key);
+    const retained=bodies.get(key);
+    if(retained)return {...retained,body:{...retained.body,cached:true}} as T;
+    submissions++;
+    const competing=await claimOfflineProjectOwnership(projectId,'while-reviewing');
+    if(competing.status==='claimed')await releaseProjectEditOwnership(competing.claim);
+    assert.notEqual(competing.status,'claimed','review must hold the editor lease across the awaited effect');
+    const receipt={...reviewed,author_run_id:initialTask.taskId,reviewer_run_id:`clipmentor-review:${key}`,
+     analysis_revision:reviewed.analysis_revision-(staleReceipt?1:0)};
+    const result={body:{operationId:key,requestsAttempted:1,receipt},status:200};
+    if(!staleReceipt)bodies.set(key,result);
+    return result as T;
+   },
+  };
+  await assert.rejects(productionStageWorker({...initialTask,projectRevision:'v3-stale'},stage),/production_project_changed/);
+  assert.equal(keys.length,0,'stale task revision must stop before reserving an effect');
+  await assert.rejects(productionStageWorker(initialTask,stage),/Review could not be completed or bound/);
+  assert.deepEqual(await loadOfflineStoredProject(projectId),before,'old receipt must not change the current project');
+  assert.equal(submissions,1,'the stale receipt must actually reach the worker once');
+  staleReceipt=false;
+  const currentTask={...initialTask,repairs:1};
+  const current=await productionStageWorker(currentTask,stage);
+  assert.equal(current.repair,undefined);
+  assert.equal((current.artifact.gate as {allowed:boolean}).allowed,true);
+  const stored=(await loadOfflineStoredProject(projectId))!;
+  assert.notEqual(stored.revision,before.revision);
+  assert.equal(current.artifact.revision,stored.revision);
+  const operationId=keys[1];
+  const receipt=current.artifact.receipt as {operationId:string;requestsSent:number;saved:boolean;projectRevision:string};
+  assert.deepEqual([receipt.operationId,receipt.requestsSent,receipt.saved,receipt.projectRevision],[operationId,1,true,stored.revision]);
+  assert.deepEqual(stored.doc.clipMentorAnalysis!.production_copy_review,bodies.get(operationId)!.body.receipt);
+
+  reviewRemaining=0;
+  await assert.rejects(productionStageWorker({...currentTask,repairs:2,projectRevision:stored.revision},stage),/review budget exhausted/);
+  assert.equal(keys.length,2,'a new operation cannot dispatch on exhausted budget');
+  const replay=await productionStageWorker({...currentTask,projectRevision:stored.revision},stage);
+  const replayReceipt=replay.artifact.receipt as {operationId:string;requestsSent:number;cached:boolean};
+  assert.deepEqual([replayReceipt.operationId,replayReceipt.requestsSent,replayReceipt.cached],[operationId,0,true]);
+  assert.deepEqual(await loadOfflineStoredProject(projectId),stored);
+  assert.equal(keys.length,3,'only the two fresh cases and a replay enter the review effect');
+  assert.notEqual(keys[0],operationId,'repair epochs have distinct effect keys');
+  assert.equal(keys[2],operationId,'the same stage and repair resume the original effect');
+  assert.equal(submissions,2,'one fake submission per fresh review, none on stale start or replay');
+  assert.equal(network,0);
+  console.log('PASS real copy_review worker: stale task and receipt refused, lease held, fresh review saved/read back, exhausted-budget replay submits zero times');
+ }finally{
+  globalThis.fetch=priorFetch;
+  if(priorDirectory===undefined)delete process.env.OPENCHATCUT_DATA_DIR;
+  else process.env.OPENCHATCUT_DATA_DIR=priorDirectory;
+  await rm(root,{recursive:true,force:true});
+ }
+}
