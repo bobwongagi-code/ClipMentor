@@ -9,7 +9,7 @@ import exemplars from './fixtures/exemplar-teaching-comparison-20261121.json';
 import accepted from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import { projectDoc } from '../external-agent/offline-runtime.verify-fixtures';
 import type { ProjectDoc } from '../../src/editor/types';
-import type { ClipMentorAnalysis } from '../../src/clipmentor/analysis';
+import type { AnalysisEvidence,ClipMentorAnalysis } from '../../src/clipmentor/analysis';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
 import type { ProductionInput,ProductionTask } from './production-task';
 import { confirmedOpeningResultsMatch,deliveryReview,type DeliverySection } from '../../src/clipmentor/delivery-sections';
@@ -19,6 +19,24 @@ const prior=process.env.OPENCHATCUT_DATA_DIR,realFetch=globalThis.fetch;
 process.env.OPENCHATCUT_DATA_DIR=path;
 let calls:string[]=[];
 let analysisCorrection:SourceBreakdown|undefined;
+const draftLine={id:'fixture-line',point_ids:['fixture-point'],narration_ms:'Berus ini menyentuh sisi hidung.',
+ caption_lines:['Berus ini menyentuh sisi hidung.'],zh:'刷子碰到鼻侧。',source_seconds:[0,4.5],labels:[]};
+const firstDraft={source_candidate_id:null,candidate_id:'script_candidate_first',plan_id:'picture_plan_first',
+ line_guidance:'回看同组原片。',lines:[draftLine],plan:{
+  phases:[
+   {mode:'original',source_range_seconds:[0,4.5],picture:'保留原片',evidence_ids:['fixture-visual']},
+   {mode:'explanation',line_id:draftLine.id,source_range_seconds:[0,4.5],picture:'回看本组',evidence_ids:['fixture-visual'],
+    context_source_ranges:[{segment_id:'fixture-segment',source_range_seconds:[0,4.5],purpose:'本组证据'}]},
+  ],
+  viewer_stage_cues:{original:{text:'Video asal',enter:'原片开始时',exit:'原片结束时'},
+   revisit:[{line_ids:[draftLine.id],text:'Ulasan',enter:'解说开始时',exit:'解说结束时'}]},
+  selected_narration:[draftLine],
+ }};
+let draftAttempt:{
+ change?:Record<string,unknown>;
+ receipts:Array<{ok?:boolean;revision?:number;error?:string}>;
+ skillText?:string;
+}|undefined;
 const host=createServer(async(req,res)=>{
  const chunks:Buffer[]=[];
  for await(const chunk of req)chunks.push(Buffer.from(chunk));
@@ -30,6 +48,34 @@ const host=createServer(async(req,res)=>{
    object:'chat.completion.chunk',created:0,model:'baseline-fixture',choices:[{index:0,delta,finish_reason}]})+'\n\n');
  };
  if(!data.units||!data.purpose){
+  if(data.stage==='blueprint'&&draftAttempt){
+   calls.push('draft');
+   const send=stream();
+   const returned=body.messages.filter(message=>message.role==='tool');
+   const previous=returned.at(-1);
+   const write={action:'set_copy_candidate',id:'fixture-group',record:firstDraft};
+   let tool:{name:string;args:Record<string,unknown>}|undefined;
+   if(!previous){
+    tool={name:'load_skill',args:{name:'clipmentor',file:'references/pre-edit-analysis.md'}};
+   }else{
+    if(returned.length===1)draftAttempt.skillText=previous.content;
+    else draftAttempt.receipts.push(JSON.parse(previous.content));
+    const change=draftAttempt.change;
+    if(returned.length===1||returned.length===2&&change){
+     const expectedRevision=returned.length===1?data.revision:draftAttempt.receipts[0].revision??data.revision;
+     tool={name:'revise_clipmentor_analysis',args:{...(returned.length===1&&change?change:write),
+      actor:data.actor,expectedRevision,reason:'假服务检查基线与首稿保存'}};
+    }
+   }
+   if(tool){
+    send({role:'assistant',tool_calls:[{index:0,id:'call_draft_'+returned.length,type:'function',
+     function:{name:tool.name,arguments:JSON.stringify(tool.args)}}]},null);
+    send({},'tool_calls');
+   }else{
+    send({role:'assistant',content:'本地写稿夹具结束。'},null);send({},'stop');
+   }
+   res.end('data: [DONE]\n\n');return;
+  }
   if(data.stage==='analysis'&&analysisCorrection){
    calls.push('analysis');
    const send=stream();
@@ -89,7 +135,8 @@ try{
  const {revisionOf}=await import('../../src/agent/external-edit-session');
  const {digestValue}=await import('../agent-runs/store-values');
  const {teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
-  unchangedRejectedTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,confirmedTeachingDigest}=await import('./production-teaching-baseline');
+  unchangedRejectedTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,
+  confirmedTeachingDigest,teachingDefinitionDigest}=await import('./production-teaching-baseline');
  const {copyPreparationReady,checkSourceBreakdown,breakdownPointEvidence}=await import('../../src/clipmentor/source-breakdown');
  const old=projectDoc(1080,1920);
  old.assets=[{id:'source',kind:'video',src:'/media/uploads/judy-fixture.mp4',name:'fixture',durationInFrames:2020,width:1080,height:1920,sourceContentHash:'a'.repeat(64)}];
@@ -132,6 +179,79 @@ try{
   await productionTaskStore.save(task);
   return task;
  };
+ const firstCopyDoc=projectDoc(1080,1920);
+ const visible:AnalysisEvidence={evidence_id:'fixture-visual',kind:'visible_action',text:'刷子与鼻侧同框。',
+  status:'agent_observed_candidate',source_range_seconds:[0,3.5],supporting_evidence_ids:[],source_ids:[],
+  call_status:'unknown',observation_method:'isolated_visible_excerpt_fixture'};
+ const breakdown:SourceBreakdown={version:1,review_scope:{kind:'full_source',instruction:'核对鼻侧拍法。'},
+  segments:[{segment_id:'fixture-segment',source_range_seconds:[0,4.5],visible_evidence_ids:[visible.evidence_id],
+   claim_evidence_ids:[],interpretation_evidence_ids:[],unknowns:[]}],
+  points:[{point_id:'fixture-point',segment_ids:['fixture-segment'],buying_concern:'观察修容位置',
+   teaching_question:'为什么这一镜能让买家分辨刷子落在鼻侧哪一处？',filming_conditions:['刷子和鼻侧同框'],
+   role:'primary',importance:'must_explain',teaching_basis:{selling_point:'刷子落点可见',evidence_ids:[visible.evidence_id],
+    method:visible.text,connection:'买家能按鼻尖位置辨认落点。',must_capture:'刷子和面部的位置关系。',
+    claim_limit:'仅描述可见落点。',exemplar:'buyer-first',difference:'证据取自本组。'}}],
+  units:[{unit_id:'fixture-group',original_segment_ids:['fixture-segment'],original_source_ranges:[[0,4.5]],
+   explanation_segment_ids:['fixture-segment'],coverage:[{point_id:'fixture-point',treatment:'explain',role:'primary'}],
+   revisits:[{from_segment_id:'fixture-segment',to_segment_id:'fixture-segment',reason:'回看刷子位置。'}]}]};
+ firstCopyDoc.assets=[{...old.assets[0],durationInFrames:135}];
+ firstCopyDoc.clipMentorAnalysis={schema_version:1,analysis_id:'first-copy-fixture',revision:1,import_origin:'isolated_fixture',
+  source:{asset_id:'source',sourceContentHash:'a'.repeat(64),fps:30,duration_seconds:4.5},product:{name:'Fixture palette',category:'修容盘'},
+  evidence:[visible],transcripts:[],reviews:[],audit:[],source_breakdown:breakdown,
+  points:[{point_id:'fixture-point',unit_id:'fixture-group',source_range_seconds:[0,4.5],buying_reason_or_function:'辨认落点',
+   filming_conditions:['刷子和鼻侧同框'],evidence_ids:[visible.evidence_id],uncertainties:[],required:true,
+   explanation_priority:'辅助于整片理解',status:'candidate',review_status:'pending',provenance:'fixture'}],
+  blueprint:[{unit_id:'fixture-group',point_ids:['fixture-point'],intent_zh:'辨认落点',line_guidance:'本组原窗。'}]};
+ const revisedBreakdown=structuredClone(breakdown);
+ revisedBreakdown.points[0].teaching_question='为什么同框能让买家区分落点和周围皮肤？';
+ revisedBreakdown.points[0].change_reason='从原片补核落点和周围皮肤的关系。';
+ for(const scenario of [
+  {label:'unchanged'},
+  {label:'definition',change:{action:'set_source_breakdown',record:revisedBreakdown}},
+  {label:'evidence',change:{action:'revise',collection:'evidence',id:visible.evidence_id,record:{...visible,text:'刷子与鼻翼边缘同框。'}}},
+  {label:'unrelated evidence',change:{action:'revise',collection:'evidence',id:'fixture-unrelated',
+   record:{...visible,evidence_id:'fixture-unrelated',text:'补充观察。'}}},
+  {label:'legacy',legacy:true},
+ ]){
+  const doc=structuredClone(firstCopyDoc);
+  doc.clipMentorAnalysis!.evidence.push({...visible,evidence_id:'fixture-unrelated',text:'未被教学点引用的记录。'});
+  const task=await taskFor('teaching-first-copy-'+scenario.label.replace(' ','-'),doc,0,scenario.legacy?undefined:'exemplar-v1');
+  const before=(await loadOfflineStoredProject(task.projectId))!;
+  draftAttempt={change:scenario.change,receipts:[]};
+  calls=[];
+  await advanceProductionTask(task,productionStageWorker);
+  const attempt=draftAttempt;
+  draftAttempt=undefined;
+  assert.deepEqual(calls,['baseline',...Array(scenario.change?4:3).fill('draft')],scenario.label);
+  const after=(await loadOfflineStoredProject(task.projectId))!;
+  const saved=after.doc.clipMentorAnalysis!.blueprint[0] as {internal_review?:Record<string,unknown>};
+  if(scenario.change){
+   assert.equal(attempt.receipts[0].ok,true,`the ${scenario.label} change must actually apply first: ${JSON.stringify(attempt.receipts[0])}`);
+   assert.equal(after.doc.clipMentorAnalysis!.audit.some(entry=>entry.action===(scenario.label==='definition'?'set_source_breakdown':'revise')
+    &&entry.revision===attempt.receipts[0].revision),true);
+  }
+  const copyReceipt=attempt.receipts.at(-1)!;
+  if(scenario.label==='definition'||scenario.label==='evidence'){
+   assert.equal(copyReceipt.error,'teaching_baseline_changed_before_copy');
+   assert.equal(saved.internal_review?.current_script_candidate,undefined);
+   assert.equal(saved.internal_review?.current_picture_plan,undefined);
+   assert.notEqual(confirmedTeachingDigest(after.doc),confirmedTeachingDigest(before.doc));
+   assert.equal(teachingDefinitionDigest(after.doc)===teachingDefinitionDigest(before.doc),scenario.label==='evidence');
+  }else{
+   assert.equal(copyReceipt.ok,true,JSON.stringify(copyReceipt));
+   assert(attempt.skillText?.includes('为什么这样拍有助于买家判断这个购买关注点？'),
+    'the production author receives the buyer-judgment question through load_skill');
+   assert(!attempt.skillText.includes('这项拍法怎样把这个购买关注展示清楚'));
+   assert.equal(saved.internal_review?.current_script_candidate,firstDraft.candidate_id);
+   assert.equal(saved.internal_review?.current_picture_plan,firstDraft.plan_id);
+   const candidate=saved.internal_review?.[firstDraft.candidate_id] as {lines:unknown}|undefined;
+   assert.deepEqual(candidate?.lines,firstDraft.lines);
+   assert.notEqual(after.revision,before.revision);
+   assert.equal(confirmedTeachingDigest(after.doc),confirmedTeachingDigest(before.doc));
+  }
+ }
+ console.log('PASS qualified first copy saves on the unchanged project and rejects real definition or same-ID evidence changes');
+ calls=[];
  const draft=structuredClone(old);
  for(const unit of draft.clipMentorAnalysis!.blueprint)delete (unit as any).internal_review;
  assert.equal(checkSourceBreakdown(draft).status,'structurally_ready','actual revision-9 teaching baseline passed the old pre-copy structural gate');

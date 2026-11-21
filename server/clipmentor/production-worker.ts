@@ -922,7 +922,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      }
      if(task.input.panelDelivery&&task.stage==='blueprint'&&name==='revise_clipmentor_analysis'
       &&['set_copy_candidate','select_copy_lines','set_picture_plan'].includes(String(args.action))){
-      if(panelDraft&&teachingDefinitionDigest(editor.getDoc())!==teachingDefinition)
+      if(panelDraft&&qualifiedTeaching(editor.getDoc())!==teachingDefinition)
        return {error:'teaching_baseline_changed_before_copy',next_step:'先结束此轮并保留基线；宿主会重新核验后接续写稿。'};
       const plan=(args.record as {plan?:Record<string,unknown>}|undefined)?.plan;
       if(plan&&typeof plan==='object'&&currentPicturePhases(plan,undefined,args.id,a.source.fps,a.source.duration_seconds).issues.length)
