@@ -63,7 +63,8 @@ try{
  const firstAudio=audioFiles[0]!;
  await setStoredEntry(`project:${id}`,savedPlan);
  const accepted=(await loadOfflineStoredProject(id))!.doc;
- for(const failExport of [false,true]){
+ const acceptedRevision=(await loadOfflineStoredProject(id))!.revision;
+ for(const mode of ['success','legacy','failed','changed-snapshot','changed-timeline','changed-attempt','legacy-replaced','wrong-operation'] as const){
   let posts=0,polls=0;
   globalThis.fetch=async(input,init)=>{
    const path=new URL(String(input)).pathname;
@@ -71,26 +72,38 @@ try{
     posts++;const body=JSON.parse(String(init.body));assert.deepEqual(body.project,accepted);
     const {planExport}=await import('../plugins/export-plan');const plan=planExport(body);
     assert.equal(plan.projectRevision,(await loadOfflineStoredProject(id))!.revision);
-    return Response.json({renderId:'fixture-job',projectRevision:plan.projectRevision,timelineId:plan.timelineId});
+    return Response.json({renderId:mode==='wrong-operation'?'different-job':'fixture-job',
+     attemptId:mode==='legacy'||mode==='legacy-replaced'?undefined:'original-attempt',
+     projectRevision:plan.projectRevision,timelineId:plan.timelineId});
    }
    assert.equal(path,'/export/job/fixture-job');polls++;
    const editing=await claimOfflineProjectOwnership(id,'while-rendering');
    assert.equal(editing.status,'claimed','production worker must release editing before it polls the immutable export');
    if(editing.status==='claimed')await releaseProjectEditOwnership(editing.claim);
-   return Response.json({id:'fixture-job',status:failExport?'failed':'succeeded',result:failExport?undefined:{path:'/media/uploads/fake.mp4'}});
+   return Response.json({id:'fixture-job',status:mode==='failed'?'failed':'succeeded',
+    params:{projectRevision:mode==='changed-snapshot'?'new-project-revision':acceptedRevision,
+     timelineId:mode==='changed-timeline'?'different-timeline':accepted.activeTimelineId,
+     exportAttemptId:mode==='changed-attempt'||mode==='legacy-replaced'?'replacement-attempt':mode==='legacy'?undefined:'original-attempt'},
+    result:mode==='failed'?undefined:{path:'/media/uploads/fake.mp4'}});
   };
   const task={taskId:'export-fixture',projectId:id,stage:'export',input:{sourceAssetId:accepted.clipMentorAnalysis!.source.asset_id,
    author:{origin:'http://127.0.0.1:5199'},reviewer:{provider:'openai',model:'fixture',origin:'http://127.0.0.1:5199',apiMode:'responses'}}} as import('./production-task').ProductionTask;
   const stage={signal:new AbortController().signal,effect:async<T>(_kind:unknown,_key:string,work:(id:string)=>Promise<T>)=>work('fixture-job')};
-  if(!failExport){
+  if(mode==='success'){
    await unlink(firstAudio.file);
    await assert.rejects(productionStageWorker(task,stage),/production_audio_file_missing/);
    assert.equal(posts,0);
    await writeFile(firstAudio.file,firstAudio.bytes);
   }
-  if(failExport)await assert.rejects(productionStageWorker(task,stage),/committed editing retained/);
-  else{const result=await productionStageWorker(task,stage);assert.equal(result.artifact.revision,(await loadOfflineStoredProject(id))!.revision);assert.equal(typeof result.artifact.facts_digest,'string');}
-  assert.equal(posts,1);assert.equal(polls,1);assert.deepEqual((await loadOfflineStoredProject(id))!.doc,accepted,'success/failure leaves the saved project unchanged');
+  if(mode==='success'||mode==='legacy'){
+   const result=await productionStageWorker(task,stage);
+   assert.equal(result.artifact.revision,acceptedRevision);assert.equal(typeof result.artifact.facts_digest,'string');
+  }else{
+   const error=mode==='failed'?/committed editing retained/:/Render .*binding mismatch/;
+   await assert.rejects(productionStageWorker(task,stage),error,mode);
+  }
+  assert.equal(posts,1);assert.equal(polls,mode==='wrong-operation'?0:1);
+  assert.deepEqual((await loadOfflineStoredProject(id))!.doc,accepted,'success/failure leaves the saved project unchanged');
  }
  console.log('Actual production export stage: missing narration blocks submission, restored approved fixture exports, releases project before polling, retains committed edits after job failure; fake jobs, zero renders');
 
@@ -142,7 +155,7 @@ try{
     operationId=body.operationId;
     assert(operationId);
     const settled=Promise.withResolvers<void>();
-    await createGenerationJob({kind:'export',projectRevision:original.revision,timelineId:body.timelineId},async()=>{
+    await createGenerationJob({kind:'export',projectRevision:original.revision,timelineId:body.timelineId,exportAttemptId:assetId},async()=>{
      await writeFile(temporary,bytes);
      return {assetId,path:'/media/uploads/'+name,kind:'video',name:'Fixture',sizeBytes:bytes.length};
     },{operationId,onSettled:()=>settled.resolve()});
@@ -156,6 +169,8 @@ try{
    }else{
     assert.equal(method,'POST');
     assert.equal(url.pathname,`/export/job/${operationId}/promote`);
+    assert.equal(url.searchParams.get('attemptId'),assetId,'recovery must carry the original attempt into promotion');
+    assert.equal(url.searchParams.get('assetId'),assetId);
     await assertProjectLease(false);
     if(truncateAtPromotion){
      truncateAtPromotion=false;

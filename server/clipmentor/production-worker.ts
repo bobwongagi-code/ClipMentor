@@ -36,7 +36,7 @@ import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset
 import {creatorStoryboard} from './creator-storyboard';
 import {assertCreatorDocumentEdit,currentCreatorDocument} from './creator-storyboard-document';
 import {createProductionPreparation,productionBoardPhaseIssues,verifyProductionNarrationFiles,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
-import {openHeadlessEditor} from './headless-editor';
+import {openHeadlessEditor,type RenderSnapshotBinding} from './headless-editor';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
 import {productionPreviewFacts,previewFactsDigest,assertPreviewExportBinding} from './production-preview-facts';
@@ -230,11 +230,11 @@ async function runProductionExport(task:ProductionTask,editor:Awaited<ReturnType
  await verifyProductionNarrationFiles(doc,task.input.voice);
  const facts=productionPreviewFacts(doc,editor.context.getState(),await copyTeachingPacketFromDoc(doc));
  const exportedRevision=editor.revision,factsDigest=previewFactsDigest(facts);
- const result=await editor.execute('submit_render_job',{format:'video',codec:'h264',resolution:'720p',videoBitrate:3000000,name:'ClipMentor-review-preview.mp4'},'export') as {renderId:string};
+ const result=await editor.execute('submit_render_job',{format:'video',codec:'h264',resolution:'720p',videoBitrate:3000000,name:'ClipMentor-review-preview.mp4'},'export') as RenderSnapshotBinding;
  if(!result.renderId)throw new Error('Missing render ID');
  await editor.close(); // The queued export owns its snapshot, not the editable project.
  for(;;){
-  signal.throwIfAborted();const snapshot=await editor.readExport(result.renderId) as {status:string;result?:Record<string,unknown>;error?:string};
+  signal.throwIfAborted();const snapshot=await editor.readExport(result.renderId,result) as {status:string;result?:Record<string,unknown>;error?:string};
   if(['succeeded','completed'].includes(snapshot.status)&&snapshot.result){
    let outputDimensions:{width:number;height:number}|undefined;
    if(task.input.panelDelivery){
