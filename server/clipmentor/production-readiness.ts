@@ -1,3 +1,4 @@
+import {currentPicturePhases} from '../../src/clipmentor/blueprint-picture-notices';
 import {deliverySectionsFromDoc,deliveryAudio} from '../../src/clipmentor/delivery-sections';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
 import {copyTeachingPacketFromDoc,copyReviewSubject,buildCopyTeachingReviewRequest,checkCopyProduction} from '../../src/clipmentor/production-gate';
@@ -176,4 +177,17 @@ export async function productionExecutionReport(before:ProjectDoc,saved:ProjectD
  if(captions.status==='mismatch')throw new Error('execution_caption_text_mismatch');
  return {blueprint:expected.subject,narration:verification.narration,actual_source_bindings:verification.binding.bindings,
   differences:diff,captions,remaining_checks:['normal_speed_continuous_viewing','visual_readability','teaching_value','native_language_final_acceptance',...(captions.status==='unverified'?['caption_text_not_mechanically_verified']:[])],complete_film_accepted:false};
+}
+
+/** Use the same phase reader as the human board before reserving a review. */
+export function productionBoardPhaseIssues(doc:ProjectDoc){
+ const analysis=doc.clipMentorAnalysis;
+ return analysis?.blueprint.flatMap(unit=>{
+  const internal=(unit as unknown as {internal_review?:Record<string,unknown>}).internal_review;
+  const plan=internal?.[String(internal.current_picture_plan)];
+  const valid=plan&&typeof plan==='object'&&!Array.isArray(plan)
+   &&currentPicturePhases(plan as Record<string,unknown>,(doc as unknown as Record<string,unknown>).estimated_picture_timeline,
+    unit.unit_id,analysis.source.fps,analysis.source.duration_seconds).issues.length===0;
+  return valid?[]:[{code:'picture_plan_phase_board_unreadable',id:unit.unit_id}];
+ })??[];
 }
