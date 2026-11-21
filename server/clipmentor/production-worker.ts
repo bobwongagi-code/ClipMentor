@@ -527,6 +527,30 @@ async function runProductionCopyReview({
   ...(task.input.panelDelivery?{panelDeliveryVerified:true}:{})}};
 }
 
+async function runProductionExport(task:ProductionTask,editor:Awaited<ReturnType<typeof openHeadlessEditor>>,doc:ProjectDoc,signal:AbortSignal):Promise<StageResult>{
+ await verifyProductionNarrationFiles(doc,task.input.voice);
+ const facts=productionPreviewFacts(doc,editor.context.getState(),await copyTeachingPacketFromDoc(doc));
+ const exportedRevision=editor.revision,factsDigest=previewFactsDigest(facts);
+ const result=await editor.execute('submit_render_job',{format:'video',codec:'h264',resolution:'720p',videoBitrate:3000000,name:'ClipMentor-review-preview.mp4'},'export') as {renderId:string};
+ if(!result.renderId)throw new Error('Missing render ID');
+ await editor.close(); // The queued export owns its snapshot, not the editable project.
+ for(;;){
+  signal.throwIfAborted();const snapshot=await editor.readExport(result.renderId) as {status:string;result?:Record<string,unknown>;error?:string};
+  if(['succeeded','completed'].includes(snapshot.status)&&snapshot.result){
+   let outputDimensions:{width:number;height:number}|undefined;
+   if(task.input.panelDelivery){
+    const src=snapshot.result.path??snapshot.result.downloadUrl;
+    const file=typeof src==='string'?resolveUploadFile(src.replace(/^\/media\/uploads\//,'')):null;
+    if(!file)throw Error('Preview missing');
+    outputDimensions=await verifyProductionOutput(file,signal);
+   }
+   return {artifact:{renderId:result.renderId,...snapshot.result,...(outputDimensions?{outputDimensions}:{}),revision:exportedRevision,facts_digest:factsDigest,feedback_project_digest:feedbackProjectDigest(doc)}};
+  }
+  if(['failed','cancelled'].includes(snapshot.status))throw new Error(snapshot.error??'Render failed; committed editing retained');
+  await new Promise<void>((resolve,reject)=>{const stop=()=>{clearTimeout(timer);reject(signal.reason);};const timer=setTimeout(()=>{signal.removeEventListener('abort',stop);resolve();},1000);signal.addEventListener('abort',stop,{once:true});});
+ }
+}
+
 /** The same service worker is used by the HTTP task and by zero-provider regression fixtures. */
 export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
@@ -794,29 +818,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      blueprintReadiness:await productionBlueprintReadiness(saved.doc,task.input.voice),semantic_quality:'not_certified_by_structure'}};
    }
   }
-  if(task.stage==='export'){
-   await verifyProductionNarrationFiles(doc,task.input.voice);
-   const facts=productionPreviewFacts(doc,editor.context.getState(),await copyTeachingPacketFromDoc(doc));
-   const exportedRevision=editor.revision,factsDigest=previewFactsDigest(facts);
-   const result=await editor.execute('submit_render_job',{format:'video',codec:'h264',resolution:'720p',videoBitrate:3000000,name:'ClipMentor-review-preview.mp4'},'export') as {renderId:string};
-   if(!result.renderId)throw new Error('Missing render ID');
-   await editor.close(); // The queued export owns its snapshot, not the editable project.
-   for(;;){
-    stage.signal.throwIfAborted();const snapshot=await editor.readExport(result.renderId) as {status:string;result?:Record<string,unknown>;error?:string};
-    if(['succeeded','completed'].includes(snapshot.status)&&snapshot.result){
-     let outputDimensions:{width:number;height:number}|undefined;
-     if(task.input.panelDelivery){
-      const src=snapshot.result.path??snapshot.result.downloadUrl;
-      const file=typeof src==='string'?resolveUploadFile(src.replace(/^\/media\/uploads\//,'')):null;
-      if(!file)throw Error('Preview missing');
-      outputDimensions=await verifyProductionOutput(file,stage.signal);
-     }
-     return {artifact:{renderId:result.renderId,...snapshot.result,...(outputDimensions?{outputDimensions}:{}),revision:exportedRevision,facts_digest:factsDigest,feedback_project_digest:feedbackProjectDigest(doc)}};
-    }
-    if(['failed','cancelled'].includes(snapshot.status))throw new Error(snapshot.error??'Render failed; committed editing retained');
-    await new Promise<void>((resolve,reject)=>{const stop=()=>{clearTimeout(timer);reject(stage.signal.reason);};const timer=setTimeout(()=>{stage.signal.removeEventListener('abort',stop);resolve();},1000);stage.signal.addEventListener('abort',stop,{once:true});});
-   }
-  }
+  if(task.stage==='export')return await runProductionExport(task,editor,doc,stage.signal);
   if(task.stage==='self_check'){
    const exported=task.completed.export?.artifact,src=exported?.path??exported?.downloadUrl;
    if(typeof src!=='string')throw new Error('Exported preview path missing');
