@@ -202,7 +202,13 @@ try{
    fetch:async(_url:unknown,init:RequestInit)=>{posts++;const body=JSON.parse(String(init.body));return Response.json({renderId:'fixture-operation',projectRevision:revisionOf(body.project),timelineId:body.timelineId});},
    effect:async(_kind:unknown,_key:unknown,work:(id:string)=>Promise<unknown>)=>cached??(cached=await work('fixture-operation')),
   }));
-  try{await e.execute('submit_render_job',{},'same');await e.execute('update_item_props',{itemId:e.getDoc().timelines[0]!.items[0]!.id,props:{text:'NEW VERSION'}},'edit');
+  try{
+   await e.execute('submit_render_job',{},'same');
+   const original=cached;
+   cached={...(original as object),projectId:'foreign-project'};
+   await assert.rejects(e.execute('submit_render_job',{},'same'),/Cached render snapshot/);
+   cached=original;
+   await e.execute('update_item_props',{itemId:e.getDoc().timelines[0]!.items[0]!.id,props:{text:'NEW VERSION'}},'edit');
    await assert.rejects(e.execute('submit_render_job',{},'same'),/Cached render snapshot/);assert.equal(posts,1);
   }finally{await e.close();}
  });

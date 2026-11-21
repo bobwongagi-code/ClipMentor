@@ -46,6 +46,12 @@ export interface HeadlessOptions {
  effect<T>(kind:'review'|'observation'|'tts'|'render'|'preview_review',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
  persistence?:OfflineEditPersistence;browserConnected?:(id:string)=>boolean;fetch?:typeof fetch;
 }
+export interface RenderSnapshotBinding {
+ renderId:string;
+ projectRevision:string;
+ timelineId:string;
+ attemptId?:string;
+}
 /** Server-owned editor. No MCP connection, DOM, user browser or Codex process. */
 export async function openHeadlessEditor(options:HeadlessOptions) {
  const checkedOrigin=new URL(options.origin);
@@ -160,16 +166,22 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   committed=doc;engine=makeDraft(doc);sync();return {saved:true,revision,projectId:options.projectId};
  });}
  const commit=()=>exclusive(async()=>{try{return await commitDraft();}catch(error){engine=makeDraft(committed);sync();throw error;}});
- async function readExport(id:string){
+ async function readExport(id:string,binding?:RenderSnapshotBinding){
   options.signal?.throwIfAborted();
   if(!/^[a-zA-Z0-9_-]+$/.test(id))throw new Error('Render ID required');
   const response=await local(`/export/job/${id}`),result=await response.json();
   options.signal?.throwIfAborted();if(!response.ok)throw new Error('Render read failed');if(result.id!==id)throw new Error('Render binding mismatch');
+  const attemptId=typeof result.params?.exportAttemptId==='string'?result.params.exportAttemptId:undefined;
+  if(binding&&(binding.renderId!==id||binding.projectRevision!==result.params?.projectRevision
+   ||binding.timelineId!==result.params?.timelineId||binding.attemptId!==attemptId))
+   throw new Error('Render snapshot binding mismatch; inspect original job, no resubmission');
   if(['completed','succeeded'].includes(result.status)&&typeof result.result?.path==='string'
    &&result.result.path.startsWith('/media/uploads/openchatcut-export-job-')){
    const temporary=exportJobResultName(result.result.path,String(result.result.assetId??''));
    if(!temporary)throw Error('Preview publication source binding mismatch');
-   const publishedResponse=await local(`/export/job/${id}/promote`,{method:'POST'});
+   const expected=new URLSearchParams({assetId:result.result.assetId});
+   if(attemptId)expected.set('attemptId',attemptId);
+   const publishedResponse=await local(`/export/job/${id}/promote?${expected}`,{method:'POST'});
    options.signal?.throwIfAborted();if(!publishedResponse.ok)throw Error('Preview publication failed; saved render retained');
    const published=await publishedResponse.json();
    if(published.assetId!==result.result.assetId||published.path!==`/media/uploads/${temporary.replace('openchatcut-export-job-','openchatcut-derived-')}`)
@@ -237,10 +249,20 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     const result=await options.effect('render',callId,async(operationId)=>{
      const response=await local('/export/job',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...args,operationId,format:'video',state:ctx.getState(),project:committed,timelineId:committed.activeTimelineId})});
      const result=await response.json();if(!response.ok||!result.renderId)throw new Error(result.error??'Render submission failed');
-     if(result.projectRevision!==revision||result.timelineId!==committed.activeTimelineId)throw new Error('Render snapshot binding mismatch; inspect original job, no resubmission');
+     if(result.renderId!==operationId||result.projectRevision!==revision||result.timelineId!==committed.activeTimelineId)
+      throw new Error('Render snapshot binding mismatch; inspect original job, no resubmission');
      return {...result,projectId:options.projectId};
-    },async(operationId)=>{const response=await local(`/export/job/${operationId}`);if(!response.ok)throw new Error('Original render operation unavailable; do not resubmit');const job=await response.json();if(job.id!==operationId||job.params?.projectRevision!==revision||job.params?.timelineId!==committed.activeTimelineId)throw new Error('Render snapshot binding missing or mismatch; no resubmission');return {renderId:job.id,projectRevision:job.params.projectRevision,timelineId:job.params.timelineId,projectId:options.projectId};});
-    if(result.projectRevision!==revision||result.timelineId!==committed.activeTimelineId)throw new Error('Cached render snapshot binding mismatch; no resubmission');
+    },async(operationId)=>{
+     const response=await local(`/export/job/${operationId}`);
+     if(!response.ok)throw new Error('Original render operation unavailable; do not resubmit');
+     const job=await response.json();
+     if(job.id!==operationId||job.params?.projectRevision!==revision||job.params?.timelineId!==committed.activeTimelineId)
+      throw new Error('Render snapshot binding missing or mismatch; no resubmission');
+     return {renderId:job.id,projectRevision:job.params.projectRevision,timelineId:job.params.timelineId,
+      attemptId:job.params.exportAttemptId,projectId:options.projectId};
+    });
+    if(result.projectId!==options.projectId||result.projectRevision!==revision||result.timelineId!==committed.activeTimelineId)
+     throw new Error('Cached render snapshot binding mismatch; no resubmission');
     return result;
    }
    if(name==='track_export'){

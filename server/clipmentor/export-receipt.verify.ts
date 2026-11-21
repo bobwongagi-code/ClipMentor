@@ -98,7 +98,7 @@ try{
   const finishedId=randomUUID(),assetId=randomUUID(),filename=exportJobFilename(assetId,'mp4'),file=join(uploadDir(),filename);
   const output=Buffer.from('synthetic fixture bytes');
   const controller=new AbortController(),started=Promise.withResolvers<void>(),complete=Promise.withResolvers<void>(),finished=Promise.withResolvers<void>();
-  await createGenerationJob({kind:'export'},async()=>{
+  await createGenerationJob({kind:'export',exportAttemptId:assetId},async()=>{
    started.resolve();await complete.promise;
    return {assetId,path:'/media/uploads/'+filename,kind:'video',name:'Fixture',sizeBytes:output.length,durationSeconds:1};
   },{operationId:finishedId,cleanupPolicy:'server-export',onSettled:id=>{forgetExportJobController(id);finished.resolve();}});
@@ -128,7 +128,14 @@ try{
   }
   await writeFile(file,output);
   assert.equal((await status()).status,'succeeded','same-ID readback works again once the original file is available');
-  const promotion=await fetch(`${url}/${finishedId}/promote`,{method:'POST'});
+  const outdatedPromotion=await fetch(`${url}/${finishedId}/promote?attemptId=${randomUUID()}`,{method:'POST'});
+  assert.equal(outdatedPromotion.status,409,'an older reader cannot promote a replacement render attempt');
+  await outdatedPromotion.text();
+  const outdatedOutput=await fetch(`${url}/${finishedId}/promote?assetId=${randomUUID()}`,{method:'POST'});
+  assert.equal(outdatedOutput.status,409,'an older reader cannot promote a replacement output without an attempt ID');
+  await outdatedOutput.text();
+  await assert.rejects(readFile(join(uploadDir(),`openchatcut-derived-${assetId}.mp4`)),{code:'ENOENT'});
+  const promotion=await fetch(`${url}/${finishedId}/promote?attemptId=${assetId}`,{method:'POST'});
   assert.equal(promotion.status,200);
   await promotion.text();
   assert.deepEqual(await readFile(join(uploadDir(),`openchatcut-derived-${assetId}.mp4`)),output);

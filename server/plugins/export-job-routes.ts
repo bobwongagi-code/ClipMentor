@@ -102,11 +102,20 @@ export function registerExportJobRoute(server: ViteDevServer): void {
     }
 
     if (req.method === 'POST' && action === 'promote' && segments.length === 2) {
+      const binding = new URL(req.url ?? '/', 'http://localhost').searchParams;
+      const expectedAttempt = binding.get('attemptId');
+      const expectedAsset = binding.get('assetId');
       const snapshot = await readJob(id);
       if (snapshot === null) return;
       if (snapshot?.params.kind !== 'export') { sendError(res, 404, `render job ${id} not found`); return; }
+      if (expectedAttempt !== null && snapshot.params.exportAttemptId !== expectedAttempt) {
+        sendError(res, 409, 'render no longer matches the requested attempt'); return;
+      }
       if (snapshot.status !== 'succeeded' || !snapshot.result) {
         sendError(res, 409, `render job ${id} is not complete`); return;
+      }
+      if (expectedAsset !== null && snapshot.result.assetId !== expectedAsset) {
+        sendError(res, 409, 'render no longer matches the requested output'); return;
       }
       try {
         sendJson(res, 200, await promoteExportResult(snapshot.result, uploadDir(), runtimeProfile()));
