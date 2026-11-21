@@ -7,7 +7,7 @@ import {productionFeedbackAnchor} from '../clipmentor/production-feedback';
 import type {Plugin} from 'vite';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {editorCredentialAuthorized} from '../editor-auth';
-import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,requeuePanelAuthorCheck,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
+import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,requeuePanelAuthorCheck,ProductionCheckpointSuperseded,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
 import {productionStageWorker,reconcileBlockedBlueprint} from '../clipmentor/production-worker';
 import {productionBlueprintReadiness} from '../clipmentor/production-readiness';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
@@ -28,13 +28,25 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    // A dead process can leave an unexpired edit lease. Wait for the normal
    // ownership claim instead of turning a recoverable conflict into a stop.
    let delay=1000;
+   let retryContext=context;
+   const assertCheckpoint=async()=>{
+    const latest=await productionTaskStore.load(item.projectId,item.taskId);
+    if(latest.sequence!==item.sequence||latest.updatedAt!==item.updatedAt)
+     throw new ProductionCheckpointSuperseded('production_checkpoint_superseded');
+   };
    for(;;){
     context.signal.throwIfAborted();
-    try{return await worker(item,context);}
+    try{return await worker(item,retryContext);}
     catch(error){
      if(!(error instanceof Error)||error.message!=='project_busy')throw error;
      try{await sleep(delay,undefined,{signal:context.signal});}
      catch(waitError){context.signal.throwIfAborted();throw waitError;}
+     await assertCheckpoint();
+     // Keep the fence through the lease acquisition and the first resumed effect.
+     retryContext={...context,
+      async assertCurrent(){await context.assertCurrent?.();await assertCheckpoint();},
+      async effect(kind,key,work,recover){await assertCheckpoint();return context.effect(kind,key,work,recover);},
+     };
      delay=Math.min(delay*2,5000);
     }
    }
@@ -67,6 +79,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(current){
      const sameCheckpoint=current.sequence===task.sequence&&current.updatedAt===task.updatedAt;
      Object.assign(task,current);
+     if(error instanceof ProductionCheckpointSuperseded)return;
      if(sameCheckpoint&&(!current.blueprintApproval||batchValidated)&&['queued','running','blocked'].includes(current.status)){
       const next={...structuredClone(current),status:'blocked' as const,error:String(error).slice(0,1600)};
       await saveProductionControl(current,next,productionTaskStore);

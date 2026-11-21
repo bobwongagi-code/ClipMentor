@@ -68,6 +68,7 @@ export interface ProductionTask {
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
  blueprintFeedbackRevision?:string;
+ blueprintFeedbackUnitIds?:string[];
  blueprintFeedbackRepair?:number;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
  visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
@@ -117,8 +118,8 @@ export async function requeuePanelAuthorCheck(task:ProductionTask){
  if((policyEntry.found&&digestValue(policyEntry.value)!==digestValue(policy))
   ||(await productionReviewRequirements(task.projectId))?.digest!==policy?.digest)return false;
  const guards=[{key,digest:digestValue(project.value)},{key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null}];
- const pending=task.repairContext?.pending_blueprint_feedback as {text?:string;revision?:string}|undefined;
- if(pending)return pending.revision===revision&&(await queueDraftBlueprintFeedback(task,revision,pending.text,productionTaskStore,guards))==='queued';
+ const pending=task.repairContext?.pending_blueprint_feedback as {text?:string;revision?:string;unitIds?:string[]}|undefined;
+ if(pending)return pending.revision===revision&&(await queueDraftBlueprintFeedback(task,revision,pending.text,productionTaskStore,guards,pending.unitIds))==='queued';
  const next={...structuredClone(task),status:'queued' as const};
  delete next.error;
  delete next.completed.copy_review;
@@ -421,6 +422,7 @@ export interface StageContext {
 }
 export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
+export class ProductionCheckpointSuperseded extends Error {}
 /** Observational context in the existing bounded run log, never a checkpoint or authority.
  * It intentionally has no serverEvent envelope: terminal transport replay stays closed. */
 export async function recordProductionDecision(task:ProductionTask,decision:ProductionDecisionDetails){
@@ -592,7 +594,13 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   }
   if(task.status==='running'){task.status='awaiting_review';await publishStage();}
   if(abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user'))abort.signal.throwIfAborted();
- }catch(error){task.status=abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user')?'cancelled':'blocked';task.error=String(error).slice(0,1600);try{await save();}catch(persistenceError){task.error=`${task.error}; checkpoint_write_failed: ${String(persistenceError).slice(0,500)}; last persisted checkpoint is authoritative, do not resubmit unknown effects`;}}
+ }catch(error){
+  if(error instanceof ProductionCheckpointSuperseded)throw error;
+  task.status=abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user')?'cancelled':'blocked';
+  task.error=String(error).slice(0,1600);
+  try{await save();}
+  catch(persistenceError){task.error=`${task.error}; checkpoint_write_failed: ${String(persistenceError).slice(0,500)}; last persisted checkpoint is authoritative, do not resubmit unknown effects`;}
+ }
  finally{clearTimeout(timer);}
  const run=await recoverServerRun(task.projectId,task.taskId);
  if(run){run.error=task.error??null;pushRunEvent(run,'production-stage',{stage:task.stage,status:task.status,attempts:task.attempts,error:task.error});await setRunStatus(run,['awaiting_blueprint','awaiting_review'].includes(task.status)?'awaiting-user':task.status==='cancelled'?'cancelled':'failed');}
@@ -652,29 +660,59 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
   }finally{clearTimeout(timer);}
  });
 }
-export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
+function blueprintFeedbackBudgetExhausted(task:ProductionTask){
+ return task.attempts.model>=task.input.budget.model||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs;
+}
+
+async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:string,dispatch:boolean,store:TaskStore,guards?:EntryPreconditions,unitIds?:string[]){
+ const next=structuredClone(task);
+ next.blueprintFeedback=text;
+ // Clear optional fields explicitly so the live task matches the saved checkpoint on launch.
+ next.blueprintFeedbackSummary=undefined;
+ if(next.repairContext&&(dispatch||task.blueprintFeedback!==text||task.blueprintFeedbackRevision!==revision))
+  delete next.repairContext.teaching_rebuild;
+ if(dispatch){
+  next.error=undefined;
+  next.focusedBlueprintIssues=undefined;
+  next.focusedAuthorChecks=undefined;
+  if(next.repairContext)delete next.repairContext.pending_blueprint_feedback;
+  next.projectRevision=revision;
+  next.blueprintFeedbackRevision=revision;
+  next.blueprintFeedbackUnitIds=unitIds;
+  next.stage='blueprint';
+  next.status='queued';
+  next.repairs++;
+  next.blueprintFeedbackRepair=next.repairs;
+  clearProductionStagesFrom(next,'blueprint');
+  next.editPublication=undefined;
+ }else{
+  next.repairContext={...next.repairContext,pending_blueprint_feedback:{text,revision,...(unitIds?{unitIds}:{})}};
+ }
+ if(guards)await saveProductionControl(task,next,store,guards,undefined,task.sequence);else await saveProductionCheckpoint(store,next);
+ Object.assign(task,next);
+}
+
+export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,
+ store=productionTaskStore,guards?:EntryPreconditions,unitIds?:string[]){
  if(!task.input.humanBlueprintReview||task.status!=='awaiting_blueprint'||task.stage!=='copy_review')throw new Error('蓝图当前不在待确认状态');
  if(typeof displayedRevision!=='string'||displayedRevision!==task.projectRevision||displayedRevision!==savedRevision
   ||task.completed.copy_review?.artifact.revision!==displayedRevision
   ||task.completed.copy_review.artifact.authorSelfCheck!=='passed'
   ||(task.completed.copy_review.artifact.gate as {allowed?:boolean}|undefined)?.allowed!==true)throw new Error('蓝图版本已变化，请重新打开审片板');
- const next=structuredClone(task);
- if(feedback===undefined&&next.input.panelDelivery&&!next.input.panelDelivery.audience)throw new Error('dual_delivery_execution_requires_variant_selection');
  if(feedback!==undefined){
   if(typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw new Error('请输入有效的蓝图修改意见');
-  if(next.attempts.model>=next.input.budget.model)throw new Error('本次制作已达到资源上限');
-  delete next.focusedBlueprintIssues;
-  delete next.focusedAuthorChecks;
-  next.blueprintFeedback=feedback.trim();next.blueprintFeedbackRevision=displayedRevision;delete next.blueprintFeedbackSummary;next.repairs++;next.blueprintFeedbackRepair=next.repairs;next.stage='blueprint';
-  if(next.repairContext)delete next.repairContext.teaching_rebuild;
-  clearProductionStagesFrom(next,'blueprint');
- }else{
-  delete next.blueprintFeedback;
-  delete next.blueprintFeedbackRevision;
-  delete next.blueprintFeedbackRepair;
-  delete next.blueprintFeedbackSummary;
-  next.stage='audio';
+  if(blueprintFeedbackBudgetExhausted(task))throw new Error('本次制作已达到资源上限');
+  await saveBlueprintFeedback(task,displayedRevision,feedback.trim(),true,store,guards,unitIds);
+  return task;
  }
+ if(task.input.panelDelivery&&!task.input.panelDelivery.audience)throw new Error('dual_delivery_execution_requires_variant_selection');
+ const next=structuredClone(task);
+ next.blueprintFeedback=undefined;
+ next.blueprintFeedbackRevision=undefined;
+ next.blueprintFeedbackUnitIds=undefined;
+ next.blueprintFeedbackRepair=undefined;
+ next.blueprintFeedbackSummary=undefined;
+ next.stage='audio';
  next.status='queued';
  if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
  Object.assign(task,next);return task;
@@ -686,49 +724,23 @@ export function acceptsDraftBlueprintFeedback(task:ProductionTask,revision:strin
     &&(revision!==task.projectRevision||!task.completed.copy_review));
 }
 
-export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,guards?:EntryPreconditions){
+export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,
+ guards?:EntryPreconditions,unitIds?:string[]){
  if(!acceptsDraftBlueprintFeedback(task,revision)
   ||typeof revision!=='string'||!revision.trim()
   ||typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw Error('蓝图当前不能接收修改意见');
  const text=feedback.trim(),pending=task.repairContext?.pending_blueprint_feedback;
  if(task.blueprintFeedbackRevision===revision&&task.blueprintFeedback===text&&!pending)return 'already_dispatched';
- const next=structuredClone(task);
- next.blueprintFeedback=text;
- if(next.repairContext&&(task.blueprintFeedback!==text||task.blueprintFeedbackRevision!==revision))delete next.repairContext.teaching_rebuild;
- delete next.blueprintFeedbackSummary;
- const exhausted=next.attempts.model>=next.input.budget.model||Date.now()>=next.createdAt+next.input.budget.maxElapsedMs;
- const savedOnly=exhausted||!!next.blueprintApproval;
- if(savedOnly){
-  next.repairContext={...next.repairContext,pending_blueprint_feedback:{text:next.blueprintFeedback,revision}};
- }else{
-  delete next.error;
-  delete next.focusedBlueprintIssues;
-  delete next.focusedAuthorChecks;
-  if(next.repairContext)delete next.repairContext.pending_blueprint_feedback;
-  next.projectRevision=revision;
-  next.blueprintFeedbackRevision=revision;
-  next.stage='blueprint';
-  next.status='queued';
-  next.repairs++;
-  next.blueprintFeedbackRepair=next.repairs;
-  clearProductionStagesFrom(next,'blueprint');
- }
- if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
- delete task.blueprintFeedbackSummary;
- if(!savedOnly){
-  delete task.error;
-  delete task.focusedBlueprintIssues;
-  delete task.focusedAuthorChecks;
-  delete task.editPublication;
- }
- Object.assign(task,next);
+ const exhausted=blueprintFeedbackBudgetExhausted(task);
+ const savedOnly=exhausted||!!task.blueprintApproval;
+ await saveBlueprintFeedback(task,revision,text,!savedOnly,store,guards,unitIds);
  return exhausted?'limit':savedOnly?'saved':'queued';
 }
 
 /** Control intents keep the preview they were based on, but may merge a
  * concurrently published immutable shared-body marker. Never overwrite another
  * worker's effects, counters, feedback or acceptance with an old control clone. */
-export async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc){
+export async function saveProductionControl(base:ProductionTask,next:ProductionTask,store:TaskStore,guards?:EntryPreconditions,expectedDoc?:ProjectDoc,expectedSequence?:number){
  const {productionParentControlGuards}=await import('./production-continuation');
  const bindParent=!!base.input.panelDelivery?.audience&&next.status!=='cancelled';
  let parentGuards=bindParent?await productionParentControlGuards(base):[];
@@ -736,9 +748,12 @@ export async function saveProductionControl(base:ProductionTask,next:ProductionT
  let contention:unknown=new Error('agent_runtime_precondition_changed');
  for(let attempt=0;attempt<3;attempt++){
   const key=agentRuntimeKey(base.projectId,await currentAgentSessionGeneration(base.projectId)),entry=await getStoredEntry(key);
-  if(!entry.found){await saveProductionCheckpoint(store,next,[...(guards??[]),...parentGuards]);return;}
+  if(!entry.found){
+   if(expectedSequence!==undefined)throw Error('production_control_subject_changed');
+   await saveProductionCheckpoint(store,next,[...(guards??[]),...parentGuards]);return;
+  }
   const current=await productionTaskStore.load(base.projectId,base.taskId);
-  if(subject(current)!==subject(base))throw Error('production_control_subject_changed');
+  if((expectedSequence!==undefined&&current.sequence!==expectedSequence)||subject(current)!==subject(base))throw Error('production_control_subject_changed');
   const a=base.sharedProduction,b=current.sharedProduction;
   if(a&&b&&(a.projectId!==b.projectId||a.taskId!==b.taskId||a.prepared&&b.prepared&&(a.endFrame!==b.endFrame||a.digest!==b.digest)))throw Error('shared_producer_binding_changed');
   const marker=b?.prepared?b:a?.prepared?a:b??a;

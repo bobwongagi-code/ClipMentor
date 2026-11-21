@@ -3,7 +3,8 @@ import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:http';
+import { createServer,type RequestListener } from 'node:http';
+import { execFileSync } from 'node:child_process';
 import fixture from './fixtures/judydoll-teaching-baseline-r9.json';
 import exemplars from './fixtures/exemplar-teaching-comparison-20261121.json';
 import accepted from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
@@ -19,6 +20,8 @@ const prior=process.env.OPENCHATCUT_DATA_DIR,realFetch=globalThis.fetch;
 process.env.OPENCHATCUT_DATA_DIR=path;
 let calls:string[]=[];
 let analysisCorrection:SourceBreakdown|undefined;
+let reviewAction:'repeat'|'reject-paraphrase'|undefined;
+let panelRequest:RequestListener|undefined;
 const draftLine={id:'fixture-line',point_ids:['fixture-point'],narration_ms:'Berus ini menyentuh sisi hidung.',
  caption_lines:['Berus ini menyentuh sisi hidung.'],zh:'刷子碰到鼻侧。',source_seconds:[0,4.5],labels:[]};
 const firstDraft={source_candidate_id:null,candidate_id:'script_candidate_first',plan_id:'picture_plan_first',
@@ -38,6 +41,9 @@ let draftAttempt:{
  skillText?:string;
 }|undefined;
 const host=createServer(async(req,res)=>{
+ if(panelRequest&&req.url?.startsWith('/api/clipmentor/production-task?')){
+  panelRequest(req,res);return;
+ }
  const chunks:Buffer[]=[];
  for await(const chunk of req)chunks.push(Buffer.from(chunk));
  const body=JSON.parse(Buffer.concat(chunks).toString()) as {messages:Array<{role:string;content:string}>};
@@ -97,7 +103,7 @@ const host=createServer(async(req,res)=>{
  calls.push('baseline');
  const fail=data.units[0].points[0].teaching_question===fixture.source_breakdown.points[0].teaching_question.normalize('NFKC');
  const verdict={
-  feedback_scope:data.feedback?'baseline':'none',summary:'ok',
+  feedback_scope:data.feedback?(fail?'baseline':'copy'):'none',summary:'ok',
   units:data.units.map((unit:any)=>({
    unit_id:unit.unit_id,status:fail?'fix':'ok',source_role:fail?'展示动作未说明教学功能':'以相同参照让受众判断差异',
    takeaway:fail?'需要回到原片确认怎样呈现购买理由':'达人可学走把观察对象和比较结果放在一起的拍法',
@@ -106,8 +112,9 @@ const host=createServer(async(req,res)=>{
    ...(data.pointReview?{point_checks:unit.points.map((point:any)=>{
     assert(!('exemplar' in point.teaching_basis||'difference' in point.teaching_basis),'reviewer cannot receive author exemplar labels');
     const evidence=data.evidence.find((item:any)=>point.teaching_basis.evidence_ids.includes(item.id))!;
-    return {point_id:point.point_id,status:'ok',learner_takeaway:point.teaching_basis.connection,
-     connection:point.teaching_basis.connection,question_quote:point.teaching_question,source_evidence_id:evidence.id,source_quote:evidence.text,
+    const connection=reviewAction==='repeat'?evidence.text:point.teaching_basis.connection;
+    return {point_id:point.point_id,status:reviewAction==='reject-paraphrase'?'fix':'ok',learner_takeaway:connection,
+     connection,question_quote:point.teaching_question,source_evidence_id:evidence.id,source_quote:evidence.text,
      visual_check:'Read the planned visible action',omission_loss:'Visual comparison remains observable'};
    })}:{}),
   })),
@@ -136,7 +143,7 @@ try{
  const {digestValue}=await import('../agent-runs/store-values');
  const {teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
   unchangedRejectedTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,
-  confirmedTeachingDigest,teachingDefinitionDigest}=await import('./production-teaching-baseline');
+  confirmedTeachingDigest,teachingDefinitionDigest,rejectsTeachingDirection}=await import('./production-teaching-baseline');
  const {copyPreparationReady,checkSourceBreakdown,breakdownPointEvidence}=await import('../../src/clipmentor/source-breakdown');
  const old=projectDoc(1080,1920);
  old.assets=[{id:'source',kind:'video',src:'/media/uploads/judy-fixture.mp4',name:'fixture',durationInFrames:2020,width:1080,height:1920,sourceContentHash:'a'.repeat(64)}];
@@ -251,6 +258,139 @@ try{
   }
  }
  console.log('PASS qualified first copy saves on the unchanged project and rejects real definition or same-ID evidence changes');
+ for(const [feedback,rewind] of [
+  ['第1组教学方向是错的。',true],
+  ['第1组教错了。',true],
+  ['不是字幕的问题而是教学方向错了。',true],
+  ['不是说，教学方向错了，只改字幕。',false],
+  ['只把“第1组，教学方向错了。”这句字幕删掉。',false],
+  ['字幕箭头方向错了，只把箭头改向右。',false],
+  ['不用判断是方向错了还是字幕错了，只改字幕。',false],
+  ['【教错了】四字删掉。',false],
+  ['这组教学方向错了。',false],
+  ['第1组教错了吗',false],
+ ] as const)assert.equal(rejectsTeachingDirection(feedback),rewind,feedback);
+ const {createMiniConnect}=await import('../../desktop/mini-connect');
+ const {clipMentorProductionPlugin}=await import('../plugins/clipmentor-production');
+ const {ffmpegBin}=await import('../media-binaries');
+ const {uploadDir:fixtureMediaDir}=await import('../media-dir');
+ const sourceName='qualification-fixture.mp4',sourcePath=join(fixtureMediaDir(),sourceName);
+ await mkdir(fixtureMediaDir(),{recursive:true});
+ execFileSync(ffmpegBin(),['-v','error','-y','-f','lavfi','-i','color=size=108x192:rate=30:duration=4.5','-c:v','libx264',sourcePath]);
+ const {sha256File}=await import('../../shared/node-content-hash');
+ const withCopy=(await loadOfflineStoredProject('teaching-first-copy-unchanged'))!.doc;
+ const sourceHash=await sha256File(sourcePath);
+ const boardDoc=JSON.parse(JSON.stringify(withCopy).replaceAll('a'.repeat(64),sourceHash).replaceAll('judy-fixture.mp4',sourceName)) as ProjectDoc;
+ const boardStages=new Map<string,string[]>();
+ const app=createMiniConnect(error=>{throw error;});
+ panelRequest=(req,res)=>app.handle(req,res);
+ (clipMentorProductionPlugin(async(t,ctx)=>{
+  const stages=boardStages.get(t.taskId);
+  if(!stages)throw Error('unexpected fixture task dispatch');
+  stages.push(t.stage);
+  if(t.stage==='analysis')throw Error('fixture stops after routing back to analysis');
+  return productionStageWorker(t,ctx);
+ }).configureServer as any)({httpServer:host,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
+ const qualificationRoutes:Record<string,{calls:string[];stages:string[]}>={};
+ for(const scenario of [
+  {id:'direction',feedback:'第1组教学方向是错的。'},
+  {id:'caption',feedback:'不是说，教学方向错了，只把字幕字号调大。',reviewed:true},
+  {id:'action-only',repeat:true},
+  {id:'action-only-receipt',receipt:'repeat'},
+  {id:'action-paraphrase',receipt:'reject-paraphrase'},
+  {id:'spoken-claim'},
+ ] as const){
+  const feedback='feedback' in scenario?scenario.feedback:undefined;
+  const doc=structuredClone(feedback?boardDoc:firstCopyDoc);
+  if('repeat' in scenario||scenario.id==='action-paraphrase'){
+   const basis=doc.clipMentorAnalysis!.source_breakdown!.points[0].teaching_basis!;
+   basis.method='保留刷头和落点的近景';
+   basis.connection=scenario.id==='action-paraphrase'?'镜头先给脸颊，再拍刷头伸到鼻子旁边。':visible.text;
+  }
+  if(scenario.id==='spoken-claim'){
+   const analysis=doc.clipMentorAnalysis!;
+   const spoken='原片优惠一共到手三支。';
+   Object.assign(analysis.evidence[0],{kind:'original_claim',text:spoken});
+   const baseline=analysis.source_breakdown!;
+   baseline.segments[0].visible_evidence_ids=[];
+   baseline.segments[0].claim_evidence_ids=[visible.evidence_id];
+   Object.assign(baseline.points[0],{buying_concern:'促单时能拿到几支',teaching_question:'为什么片尾同时摆出三支唇釉？'});
+   Object.assign(baseline.points[0].teaching_basis,{selling_point:'买一送二的件数优惠',method:'摆出三支并读出优惠',connection:spoken});
+  }
+  const task=await taskFor('teaching-qualification-'+scenario.id,doc,2,'exemplar-v1');
+  reviewAction='receipt' in scenario?scenario.receipt:undefined;
+  const stages:string[]=[];
+  calls=[];
+  if(feedback){
+   const reviewed='reviewed' in scenario;
+   const revision=task.projectRevision!;
+   const artifact={revision,authorSelfCheck:'passed',author_self_check_source_digest:'c'.repeat(64),
+    teaching_baseline_digest:'d'.repeat(64),requirementsDigest:panelBlueprintRequirementsDigest(null),gate:{allowed:true}};
+   task.completed.blueprint={at:Date.now(),artifact};
+   if(reviewed)task.completed.copy_review={at:Date.now(),artifact};
+   task.status='awaiting_blueprint';task.stage='copy_review';
+   await productionTaskStore.save(task);
+   boardStages.set(task.taskId,stages);
+   const url=origin+'/api/clipmentor/production-task';
+   const headers={Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'};
+   const query=new URLSearchParams({view:'panel',projectId:task.projectId});
+   const state=await realFetch(url+'?'+query,{headers});
+   assert.equal(state.status,200);
+   const {task:{boardIdentity,blueprintRevision}}=await state.json();
+   assert.equal(blueprintRevision,revision);
+   const boardQuery=new URLSearchParams({view:'panel_board',projectId:task.projectId,revision,boardIdentity});
+   const board=await realFetch(url+'?'+boardQuery,{headers});
+   const boardHtml=await board.text();
+   assert.equal(board.status,200,board.ok?'':boardHtml);
+   assert.match(boardHtml,/data-card="group-1"/);
+   const submit=()=>realFetch(url+'?'+query,{method:'POST',headers,
+    body:JSON.stringify({action:'revise_blueprint',revision,boardIdentity,text:feedback})});
+   const results=await Promise.all([submit(),submit()]);
+   assert.deepEqual(results.map(response=>response.status).sort(),[200,409],await results[0].clone().text());
+   await Promise.all(results.map(response=>response.arrayBuffer()));
+   let current=await productionTaskStore.load(task.projectId,task.taskId);
+   const deadline=Date.now()+10_000;
+   while(current.status!=='blocked'&&Date.now()<deadline){
+    await new Promise(resolve=>setTimeout(resolve,10));
+    current=await productionTaskStore.load(task.projectId,task.taskId);
+   }
+   assert.equal(current.status,'blocked');
+   assert.equal(current.blueprintFeedback,feedback);
+   assert.equal(current.blueprintFeedbackRevision,revision);
+   assert.deepEqual(current.blueprintFeedbackUnitIds,reviewed?undefined:['fixture-group']);
+   assert.equal(current.blueprintFeedbackRepair,1,'only one browser request may publish a user repair');
+   assert.equal(current.repairs,reviewed?1:2);
+   assert.equal(current.completed.copy_review,undefined);
+   if(!reviewed){
+    const freshDoc=structuredClone(doc);
+    // A neutral asset update creates a new project revision after the feedback was accepted.
+    freshDoc.assets[0].name='Updated source display name';
+    const restarted={...current,projectRevision:revisionOf(freshDoc)};
+    assert.notEqual(restarted.projectRevision,revision);
+    assert.equal(teachingBaselineDigest(teachingBaselineSource(freshDoc,restarted,[])),
+     teachingBaselineDigest(teachingBaselineSource(doc,current,[])),
+     'the saved group binding stays part of the same qualification identity after reopening');
+   }
+  }else await advanceProductionTask(task,async(t,ctx)=>{
+    stages.push(t.stage);
+    if(t.stage==='analysis')throw Error('fixture stops after the baseline repair is routed');
+    return productionStageWorker(t,ctx);
+   });
+  reviewAction=undefined;
+  qualificationRoutes[scenario.id]={calls,stages};
+  const after=(await loadOfflineStoredProject(task.projectId))!;
+  assert.equal(confirmedTeachingDigest(after.doc),confirmedTeachingDigest(doc));
+  assert.equal(teachingDraftPointersDigest(after.doc),teachingDraftPointersDigest(doc));
+ }
+ assert.deepEqual(qualificationRoutes,{
+  direction:{calls:['baseline'],stages:['blueprint','analysis']},
+  caption:{calls:['baseline','author'],stages:['blueprint']},
+  'action-only':{calls:[],stages:['blueprint','analysis']},
+  'action-only-receipt':{calls:['baseline'],stages:['blueprint','analysis']},
+  'action-paraphrase':{calls:['baseline'],stages:['blueprint','analysis']},
+  'spoken-claim':{calls:['baseline','author'],stages:['blueprint']},
+ });
+ console.log('PASS teaching direction rewinds, caption feedback reaches author, and action-only baseline or reviewer answer cannot reach writing');
  calls=[];
  const draft=structuredClone(old);
  for(const unit of draft.clipMentorAnalysis!.blueprint)delete (unit as any).internal_review;
@@ -488,6 +628,11 @@ try{
   {...strictPositive,feedback:{text:'我觉得方向错了。',revision:'reviewed-board'}});
  assert.equal(forcedRebuild.feedback_scope,'baseline');
  assert(forcedRebuild.units.every(u=>u.status==='fix'));
+ const scoped=validateTeachingBaselineReview({...positiveReceipt,feedback_scope:'copy'},
+  {...strictPositive,feedback:{text:'第2组教学方向是错的。',revision:'reviewed-board',rejectedUnitIds:['green-1']}});
+ assert.deepEqual(scoped.units.filter(unit=>unit.status==='fix').map(unit=>unit.unit_id),['green-1']);
+ assert.throws(()=>validateTeachingBaselineReview({...positiveReceipt,feedback_scope:'copy'},
+  {...strictPositive,feedback:{text:'第2组教学方向是错的。',revision:'stale-or-unbound-board'}}),/feedback_scope_unresolved/);
  const rebuildWithExemplar=teachingRebuild(strictPositive,old,forcedRebuild);
  const relabeled=structuredClone(strictPositive);
  relabeled.units[0].points[0].teaching_basis!.difference='仅重写范例笔记，没改变本组教学';

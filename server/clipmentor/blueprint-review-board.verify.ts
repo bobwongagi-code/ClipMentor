@@ -485,6 +485,7 @@ try{
    const reviseCurrent=(boardIdentity:string,text:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:revised.revision,boardIdentity,text})});
    const first=await currentBoard();
    assert.deepEqual(await (await reviseCurrent(first,'旧意见')).json(),{accepted:true,saved:true,dispatched:false,reason:'limit'});
+  const checkedBeforeOtherWrites=await productionTaskStore.load(projectId,task.taskId);
    const second=await currentBoard();
    assert.notEqual(first,second);
    assert.deepEqual(await (await reviseCurrent(second,'新意见')).json(),{accepted:true,saved:true,dispatched:false,reason:'limit'});
@@ -494,6 +495,10 @@ try{
    assert.equal((await reviseCurrent(third,'旧意见')).status,200,'a deliberate repeat on the fresh board is a new submission');
    assert.notEqual(await currentBoard(),second,'repeating the text cannot revive an older board control token');
    assert.equal((await reviseCurrent(second,'新意见')).status,409,'the previous middle request stays stale after A-B-A');
+  const {queueDraftBlueprintFeedback}=await import('./production-task');
+  await assert.rejects(queueDraftBlueprintFeedback(checkedBeforeOtherWrites,revised.revision,'跨进程迟到的意见',productionTaskStore,[]),
+   /production_control_subject_changed/,'a request that already validated the first A cannot commit after A-B-A');
+  assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintFeedback,'旧意见');
    assert.equal(received.length,1);
 
   }finally{
