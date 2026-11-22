@@ -74,6 +74,14 @@ try {
     assert(!prompt.includes(skill.body));
   }
 
+  // Keep the held-out source out of authored examples, including indirect skill reads.
+  const clipMentor=pluginFiles.PLUGIN_SKILLS.find(skill=>skill.slug==='clipmentor')!;
+  assert.doesNotMatch(clipMentor.body,/judydoll/i);
+  for(const file of clipMentor.files.filter(file=>file.endsWith('.md'))){
+    const content=await readFile(new URL(`./clipmentor/${file}`,import.meta.url),'utf8');
+    assert.doesNotMatch(content,/judydoll/i,file);
+  }
+
   // ClipMentor's workflow must remain usable outside the local production workspace.
   for (const file of [
     'references/planning.md',
@@ -107,6 +115,9 @@ try {
     assert.equal(result.contents[file], expected, `${file} must load completely`);
     assert.equal(offset, null);
     if (file === 'references/reproduction-lessons.md') {
+      for(const label of ['BT-02 · Barely There','GM-04 · Green Makes','TS-05 · TeaShell','NM-04 · NIUMO']){
+        assert(result.contents[file].includes(label),`missing manual unit ${label} in the loaded skill`);
+      }
       const cases = JSON.parse(await readFile(new URL('../../clipmentor/fixtures/barely-there-learning-20261030.json', import.meta.url), 'utf8'));
       // Real excerpts must remain reachable through the shipped skill, not
       // merely in a planner's production folder. This is packaging, not grading.

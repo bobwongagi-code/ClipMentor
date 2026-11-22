@@ -104,6 +104,9 @@ const deps: CopyReviewDependencies = {
     assert(prompt.includes('CURRENT_PLAN_CONTENT'));
     for (const marker of ['CURRENT_HANDOFF', 'ORIGINAL_ENTER', 'REVISIT_ENTER', 'CURRENT_PICTURE', 'CURRENT_USE', 'CURRENT_CONSTRAINT', 'SAFE_AREA']) assert(prompt.includes(marker), 'retain current operational evidence: ' + marker);
     assert(!prompt.includes('AUTHOR_'));
+    for(const example of ['人工拆解单元：同一主题怎样讲得具体','BT-02 · Barely There','GM-04 · Green Makes','TS-05 · TeaShell','NM-04 · NIUMO']){
+      assert(!prompt.includes(example),`independent copy review receives author material: ${example}`);
+    }
     assert(prompt.includes('"omission_views"'));
     assert(prompt.includes('"target_line_id":"' + line.line_id + '"'));
     assert(prompt.includes('"remaining_line_ids":[]'), 'single-line group deletion still reaches the actual review entry');
