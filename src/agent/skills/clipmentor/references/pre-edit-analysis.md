@@ -33,6 +33,8 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 4. `units` 分别登记原声展示和讲解使用的源片单元，以及每个重点的 `explain / merged / visual_only / omit` 处理。后3种须有理由，合并须指向同组真正解释的点；出现过不等于讲清。必讲点不能直接omit，作者不能自行降低primary/必讲级别绕过审核；证据不足保留待核，不编造解释。合法的基线内容纠正需要新的 `change_reason` 和重新审核。
 
+先用 `segments` 盘点原片范围，用 `analysis.points` 记录有出处的卖点、手法和证据状态，再选实质影响买家判断的教学单元。卖点可以讲解、合并、有据地省略或留待核实，去向记入既有重点和覆盖记录。由选中的单元归纳整片教学价值。可借用[人工拆解单元](reproduction-lessons.md#human-teaching-units)比较取舍，当前片的证据决定是否适用。选题获准后，先估每组完整解释需要的时间，再分别找原声回放与讲解重看的画面。时长不足记录缺少的动作、结果或上下文。
+
 通过现有 `revise_clipmentor_analysis` 保存：`action:"set_source_breakdown"`、当前 `expectedRevision`、既有actor/reason以及 `record`。首次登记不默认要求用户逐项确认。历史重点和段落ID不能从后续记录消失；修订后复读，用返回的具体问题ID继续处理。未登记就保存新的文案候选会被拒绝；历史旧稿仍可读取。缺覆盖可保存为待修候选，但不是制作通过。
 
 网页共用蓝图在写稿前先读原任务和原片证据，再核已存基线选了什么。逐组说明该段的表达功能、观众要判断什么、原作者怎样让它可见或可听、达人能借鉴什么。教学方向或选点需改时，先修 `source_breakdown`，保留历史点与原话，等宿主回读通过后成组更新受影响的讲解和画面。只改标题或备注不能解决教学缺口。组数、开场方式与保留哪些卖点由本片证据决定。

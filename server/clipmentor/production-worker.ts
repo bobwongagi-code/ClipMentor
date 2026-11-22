@@ -909,9 +909,9 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    instruction:'按 sectionId 定位教学组（时间线 ID 表示全部组）。用 view_asset_frames 按 reference.assetId 和 seconds 查看指定参照，再回看本片证据。先确定它改变了本组哪项选材或讲解安排，把该取舍写进现行计划和实际稿；参照只供比较。组尚未建立时按原始要求建立该组，不能改指其他组。'} }:{}),
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&['analysis','blueprint'].includes(task.stage)?{
    teachingSelection:task.stage==='analysis'
-    ?'先独立从完整原片、原话候选和本品资料判断买家要做什么决定，再选整片最值得达人学的手法。筛选有来源的卖点，标明可见、原话候选或待核。比较最强的另一个讲法：为什么选这条主线，保留哪些独立顾虑，哪些动作只作支持，漏哪一段会改变判断。主线的取舍写进现有主讲点 coverage.reason，作用写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；有消费者促单就单列，具体对象和建议只讲有证据部分。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
+    ?'先按证据盘点完整原片的表达选择和对应的买家顾虑，再从有出处的卖点里选值得达人学的单元。比较最强的另一个讲法：为什么选这条主线，保留哪些独立顾虑，哪些动作只作支持，漏哪一段会改变判断。根据选中的单元概括本片可学的价值，写进现有主讲点 coverage.reason，具体作用写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；有消费者促单就单列，具体对象和建议只讲有证据部分。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
     :'先按核验通过的选题说明每组需要保住的证据：静态细节、完整动作及结果、共同参照或套装与价格。先估保留这些信息所需的最短完整时段，再找逐句窗口。设想换成最接近的另一段会少哪一项判断；实际解释画面保住这个关系。原声给事实和反应，讲解说明拍法为什么有用，短标指向判断对象。优先合理回看；仍无足够画面就说明具体缺口，别靠缩讲解或合组填平。普通做法与她的差异、声画配合、同框比较、先后承接可按实际证据组织。',
-   teachingExemplars:'按范例库的 principle ID 择一，把每个 source_breakdown.points 的 teaching_question 写成为什么这个拍法帮助买家判断。teaching_basis={selling_point,evidence_ids,method,connection,must_capture,claim_limit,exemplar,difference}；证据是本点关联的原片原话候选或可见动作，reference 资料不充原片事实。difference 写本片条件与具名范例的差异。原片确有消费者促单时单列教学点，保留达人邀请为独立片尾。清楚的听写候选可以支持原话转述，但注明未听审。纯画面例外须在 coverage.reason 说明为什么成立。',
+   teachingExemplars:'每个 source_breakdown.points 的 teaching_question 说明为什么这个拍法帮助买家判断。teaching_basis={selling_point,evidence_ids,method,connection,must_capture,claim_limit,exemplar,difference}；证据来自本点关联的原话候选或可见动作，范例资料只供思考。exemplar 登记本片证据适用的 principle ID，difference 说明本片成立条件与范例的差异，或说明为何本片不宜套用范例做法。原片确有消费者促单时单列教学点，保留达人邀请为独立片尾。清楚的听写候选可以支持原话转述，但注明未听审。纯画面例外须在 coverage.reason 说明为什么成立。',
    ...(task.input.openingComparison?.results?{openingResultsInstruction:
     `马来语口播及同文字幕按同款前提、成绩提问、一次邀请的顺序。成绩用 ${task.input.openingComparison.results.views} tontonan、${task.input.openingComparison.results.units} unit terjual、Revenue ${task.input.openingComparison.results.revenue}。不上创作者人数前提。收入不写佣金或商品 GMV。`}:{})
   }:{}),

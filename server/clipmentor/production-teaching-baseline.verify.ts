@@ -7,6 +7,7 @@ import { createServer,type RequestListener } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import fixture from './fixtures/judydoll-teaching-baseline-r9.json';
 import exemplars from './fixtures/exemplar-teaching-comparison-20261121.json';
+import humanTeachingCalibration from './fixtures/human-teaching-calibration.json';
 import accepted from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import { projectDoc } from '../external-agent/offline-runtime.verify-fixtures';
 import type { ProjectDoc } from '../../src/editor/types';
@@ -23,6 +24,8 @@ let analysisCorrection:SourceBreakdown|undefined;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
 let wholeFilmAction:'missing'|'omission'|undefined;
 let panelRequest:RequestListener|undefined;
+const authorPrompts=new Map<string,string>();
+const independentPrompts:string[]=[];
 const draftLine={id:'fixture-line',point_ids:['fixture-point'],narration_ms:'Berus ini menyentuh sisi hidung.',
  caption_lines:['Berus ini menyentuh sisi hidung.'],zh:'刷子碰到鼻侧。',source_seconds:[0,4.5],labels:[]};
 const firstDraft={source_candidate_id:null,candidate_id:'script_candidate_first',plan_id:'picture_plan_first',
@@ -55,6 +58,9 @@ const host=createServer(async(req,res)=>{
    object:'chat.completion.chunk',created:0,model:'baseline-fixture',choices:[{index:0,delta,finish_reason}]})+'\n\n');
  };
  if(!data.units||!data.purpose){
+  if(['analysis','blueprint'].includes(data.stage)&&!authorPrompts.has(data.stage)){
+   authorPrompts.set(data.stage,JSON.stringify(body.messages));
+  }
   if(data.stage==='blueprint'&&draftAttempt){
    calls.push('draft');
    const send=stream();
@@ -102,6 +108,7 @@ const host=createServer(async(req,res)=>{
   return;
  }
  calls.push('baseline');
+ independentPrompts.push(JSON.stringify(body.messages));
  const fail=data.units[0].points[0].teaching_question===fixture.source_breakdown.points[0].teaching_question.normalize('NFKC');
  const mainPoint=data.units.flatMap((unit:any)=>unit.points).find((point:any)=>point.role==='primary');
  const mainEvidence=data.evidence.find((entry:any)=>mainPoint?.teaching_basis?.evidence_ids.includes(entry.id));
@@ -629,6 +636,36 @@ try{
   point_checks:[{point_id:p.point_id,status:'ok',learner_takeaway:p.connection_excerpt,connection:p.connection_excerpt,
    question_quote:p.question,source_evidence_id:p.evidence.id,source_quote:p.evidence.text}]}))};
  assert(validateTeachingBaselineReview(positiveReceipt,strictPositive).units.every(u=>u.status==='ok'));
+ // Replay the blind local decisions. Semantic judgment is supplied by the
+ // reviewer; the product checks that each verdict is complete and source-bound.
+ for(const sample of humanTeachingCalibration){
+  const [start,end]=sample.sourceSeconds;
+  const range:[number,number]=[start,end];
+  const evidence={...strictPositive.evidence[0],id:sample.id,range,text:sample.source};
+  const [unit]=structuredClone(strictPositive.units);
+  const [point]=unit.points;
+  unit.source_ranges=[range];
+  point.buying_concern=sample.buyer;
+  point.teaching_question=sample.question;
+  point.teaching_basis!.evidence_ids=[evidence.id];
+  point.teaching_basis!.method=sample.source;
+  point.teaching_basis!.selling_point=sample.sellingPoint;
+  const source={...strictPositive,units:[unit],evidence:[evidence]};
+  const [decision]=structuredClone(positiveReceipt.units);
+  decision.evidence_ids=[evidence.id];
+  const [check]=decision.point_checks;
+  Object.assign(check,{source_evidence_id:evidence.id,source_quote:sample.source,question_quote:point.teaching_question});
+  const wholeFilm={...positiveReceipt.whole_film,evidence_id:evidence.id,source_quote:sample.source};
+  for(const [connection,status] of [[sample.useful,'ok'],[sample.actionOnly,'fix'],[sample.overclaim,'fix']] as const){
+   point.teaching_basis!.connection=connection;
+   Object.assign(check,{connection,status,learner_takeaway:connection});
+   const review=validateTeachingBaselineReview({...positiveReceipt,whole_film:wholeFilm,units:[decision]},source);
+   assert.equal(review.units[0].status,status,`${sample.id} ${connection}`);
+  }
+  check.source_quote=humanTeachingCalibration.find(other=>other.id!==sample.id)!.source;
+  assert.throws(()=>validateTeachingBaselineReview({...positiveReceipt,whole_film:wholeFilm,units:[decision]},source),/point_source_quote_invalid/);
+ }
+ console.log('PASS paired position-blind calibration verdicts remain bound to the current product evidence');
  const {whole_film:_omitted,...unitsOnly}=positiveReceipt;
  assert.throws(()=>validateTeachingBaselineReview(unitsOnly,strictPositive),/teaching_whole_film_review_invalid/,
   'passing each submitted topic cannot replace the whole-film decision');
@@ -809,6 +846,9 @@ try{
   'rebinding the same reference ID must invalidate the old board requirement digest');
  const author=await productionAuthorTaskData(referencesTask,referenceDoc);
  const analysisAuthor=await productionAuthorTaskData({...referencesTask,stage:'analysis'},referenceDoc);
+ for(const taskData of [author,analysisAuthor])assert.match(taskData.teachingExemplars??'',/为何本片不宜套用范例做法/);
+ assert.match(analysisAuthor.teachingSelection??'',/先按证据盘点完整原片.*根据选中的单元概括/);
+ assert.match(author.teachingSelection??'',/先估保留这些信息所需的最短完整时段/);
  assert.match(analysisAuthor.teachingSelection??'',/比较最强的另一个讲法/);
  assert.match(author.teachingSelection??'',/最短完整时段，再找逐句窗口/);
  assert.deepEqual(author.teachingReferences?.references,[{id:criteria.id,sectionId:criteria.sectionId,pictureStage:criteria.pictureStage,
@@ -877,6 +917,21 @@ try{
   /production_confirmed_teaching_baseline_changed/);
  assert.deepEqual(calls,[]);
  console.log('PASS downstream output repairs preserve the shared approved teaching baseline');
+ const cardLabels=['BT-02 · Barely There','GM-04 · Green Makes','TS-05 · TeaShell','NM-04 · NIUMO'];
+ for(const stage of ['analysis','blueprint']){
+  const prompt=authorPrompts.get(stage);
+  assert(prompt,`missing real ${stage} author request`);
+  for(const label of cardLabels)assert(prompt.includes(label),`${stage} author missing ${label}`);
+ }
+ assert(independentPrompts.length>0,'the fake service must receive a real independent review request');
+ for(const prompt of independentPrompts){
+  assert(!prompt.includes('人工拆解单元：同一主题怎样讲得具体'));
+  for(const label of cardLabels)assert(!prompt.includes(label));
+  for(const sample of humanTeachingCalibration){
+   for(const answer of [sample.useful,sample.actionOnly,sample.overclaim])assert(!prompt.includes(answer));
+  }
+ }
+ console.log('PASS production authors receive the four cards while independent baseline review receives no exemplar answers');
 }finally{
  globalThis.fetch=realFetch;
  host.closeAllConnections();await new Promise<void>(resolve=>host.close(()=>resolve()));
