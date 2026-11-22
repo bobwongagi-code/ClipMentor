@@ -160,7 +160,11 @@ type BaselineSource = ReturnType<typeof teachingBaselineSource>;
 type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takeaway:string;connection:string;question_quote:string;
  source_evidence_id:string;source_quote:string;visual_check?:string;omission_loss?:string};
 type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string;point_checks?:PointDecision[]};
-type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[]};
+type WholeFilmDecision = {
+ status:Decision['status'];main_point_id:string|null;focus:string;alternative:string;reason:string;
+ evidence_id:string|null;source_quote:string|null;affected_unit_ids:string[];
+};
+type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[];whole_film?:WholeFilmDecision};
 
 function repeatsTeachingAction(method:string|undefined,evidence:readonly string[],answer:string){
  return [method,...evidence].some(input=>typeof input==='string'&&sameWords(input,answer));
@@ -183,6 +187,8 @@ export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
   });
   if(!basis||selected.length!==basis.evidence_ids.length)
    return [point.point_id+' 缺教学依据或本点原片证据'];
+  if(sameWords(basis.selling_point,point.buying_concern))
+   return [point.point_id+' 卖点与买家顾虑重复，分别写清商品提供什么和买家要解决的问题'];
   if(repeatsTeachingAction(basis.method,selected.filter(e=>e.kind==='visible_action').map(e=>e.text),basis.connection)
    ||[basis.selling_point,point.buying_concern].some(input=>sameWords(input,basis.connection)))
    return [point.point_id+' 作用栏只重复原片动作、卖点或顾虑，缺买家的具体判断'];
@@ -250,11 +256,37 @@ function baselineReviewInput(source:BaselineSource){
  const {referenceBinding:_reference,evidenceBinding:_evidence,...input}=source;
  return input.pointReview?{...input,units:input.units.map(unit=>({...unit,points:unit.points.map(pointForIndependentReview)}))}:input;
 }
+
+function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDecision {
+ const invalid=()=>Error('teaching_whole_film_review_invalid');
+ const judgment=(text:unknown):text is string=>shortText(text)&&(text.match(/[\p{L}\p{N}]/gu)?.length??0)>=4;
+ if(!row(value)||(value.status!=='ok'&&value.status!=='fix'&&value.status!=='unresolved')
+  ||!judgment(value.focus)||!judgment(value.alternative)||!judgment(value.reason)
+  ||sameWords(value.focus,value.alternative)||sameWords(value.focus,value.reason)||sameWords(value.alternative,value.reason)
+  ||!Array.isArray(value.affected_unit_ids)||new Set(value.affected_unit_ids).size!==value.affected_unit_ids.length
+  ||!value.affected_unit_ids.every(id=>source.units.some(unit=>unit.unit_id===id)))throw invalid();
+ const {status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}=value;
+ if((status==='ok')!==(affected_unit_ids.length===0))throw invalid();
+ const main=source.units.find(unit=>unit.points.some(point=>point.point_id===main_point_id&&point.role==='primary')
+  &&unit.coverage.some(coverage=>coverage.point_id===main_point_id&&['explain','visual_only'].includes(coverage.treatment)))
+  ?.points.find(point=>point.point_id===main_point_id);
+ if((main_point_id!==null||status==='ok')&&!main)throw invalid();
+ const evidence=source.evidence.find(entry=>entry.id===evidence_id);
+ if(status!=='unresolved'||evidence_id!==null||source_quote!==null){
+  if(!evidence||!exactExcerpt(source_quote,evidence.text))throw invalid();
+  if(status==='ok'&&!main?.teaching_basis?.evidence_ids.includes(evidence.id))throw invalid();
+ }
+ return {status,main_point_id:main?.point_id??null,focus,alternative,reason,evidence_id:evidence?.id??null,
+  source_quote:typeof source_quote==='string'?source_quote:null,affected_unit_ids};
+}
+
 export function validateTeachingBaselineReview(value: unknown, source: BaselineSource): BaselineReview {
  const invalid = () => Error('teaching_baseline_review_invalid');
  if (!row(value) || !Array.isArray(value.units) || value.units.length !== source.units.length
   || (source.feedback ? value.feedback_scope!=='copy'&&value.feedback_scope!=='baseline' : value.feedback_scope !== 'none')) throw invalid();
  const decisions = value.units;
+ const whole_film=source.pointReview?readWholeFilmDecision(value.whole_film,source):undefined;
+ const wholeFilmResult=whole_film?{whole_film}:{};
  const units = source.units.map(unit => {
   const matches = decisions.filter(entry => row(entry) && entry.unit_id === unit.unit_id);
   const entry = matches[0];
@@ -282,11 +314,12 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
    const invalidBinding=!groups.includes(0)&&source.feedback?.rejectedUnitIds!==undefined
     &&(!targets.length||targets.some(id=>!units.some(unit=>unit.unit_id===id)));
    if(invalidBinding||rejected.every(unit=>unit.status==='ok'))throw Error('teaching_baseline_feedback_scope_unresolved');
-   return {feedback_scope:'baseline',units:rejected};
+   return {feedback_scope:'baseline',units:rejected,...wholeFilmResult};
   }
  }
- if (value.feedback_scope==='baseline' && !source.rebuilding && units.every(unit=>unit.status==='ok')) throw invalid();
- return {feedback_scope:value.feedback_scope as BaselineReview['feedback_scope'],units};
+ if (value.feedback_scope==='baseline' && !source.rebuilding && (!whole_film||whole_film.status==='ok')&&units.every(unit=>unit.status==='ok')) throw invalid();
+ return {feedback_scope:source.feedback&&whole_film&&whole_film.status!=='ok'?'baseline':value.feedback_scope as BaselineReview['feedback_scope'],
+  units,...wholeFilmResult};
 }
 
 type PriorTeachingMaterial=Omit<ReturnType<typeof currentTeachingMaterial>,'spoken'|'voice'>&{voice?:string};
@@ -295,6 +328,7 @@ export type TeachingRebuild = {
  affected:Array<{unitId:string;pointIds:string[]}>;
  prior:Record<string,PriorTeachingMaterial>;
  definitions:Record<string,string>;
+ wholeFilm?:{definition:string;evidenceId:string|null;evidence:string;status:'fix'|'unresolved';reason:string;unitIds:string[]};
 };
 
 function teachingMeaning(unit:BaselineSource['units'][number]) {
@@ -315,11 +349,33 @@ function evidenceDigest(source:BaselineSource,unit:BaselineSource['units'][numbe
  return digestValue({evidence:[...new Set(evidence)].sort(),transcripts:[...new Set(transcripts)].sort()});
 }
 
+function wholeTeachingMeaning(source:BaselineSource) {
+ return digestValue(source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)]));
+}
+
+function wholeTeachingEvidence(source:BaselineSource) {
+ const evidence=source.evidence.map(({kind,range,text,status})=>digestValue({kind,range,text:normalized(text),status}));
+ const transcripts=source.transcripts.flatMap(transcript=>transcript.words.map(({start_seconds,end_seconds,text})=>
+  digestValue({start_seconds,end_seconds,text:normalized(text),status:transcript.status})));
+ return digestValue({evidence:[...new Set(evidence)].sort(),transcripts:[...new Set(transcripts)].sort()});
+}
+
+export function unchangedWholeFilmTeaching(source:BaselineSource,rebuild:TeachingRebuild) {
+ const finding=rebuild.wholeFilm;
+ return !!finding&&finding.definition===wholeTeachingMeaning(source)
+  &&(finding.status==='fix'||finding.evidence===wholeTeachingEvidence(source));
+}
+
 export function teachingRebuild(source: BaselineSource, doc: ProjectDoc, review: BaselineReview, previous?:TeachingRebuild):TeachingRebuild {
  const rejected=review.units.filter(decision => decision.status !== 'ok').map(decision => {
   const unit=source.units.find(item=>item.unit_id===decision.unit_id)!;
   return {unitId:unit.unit_id,pointIds:unit.points.map(point=>point.point_id),definition:teachingMeaning(unit),evidence:evidenceDigest(source,unit),status:decision.status,reason:decision.reason};
  });
+ const whole=review.whole_film;
+ const wholeFilm:TeachingRebuild['wholeFilm']=whole&&whole.status!=='ok'?{
+  definition:wholeTeachingMeaning(source),evidenceId:whole.evidence_id,evidence:wholeTeachingEvidence(source),
+  status:whole.status,reason:whole.reason,unitIds:whole.affected_unit_ids,
+ }:whole?undefined:previous?.wholeFilm;
  return {
   prior:previous?.prior ?? Object.fromEntries(source.units.map(unit => {
    const {spoken:_spoken,...prior}=currentTeachingMaterial(doc,unit.unit_id);
@@ -327,6 +383,7 @@ export function teachingRebuild(source: BaselineSource, doc: ProjectDoc, review:
   })),
   definitions:previous?.definitions ?? Object.fromEntries(source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)])),
   rejected, affected:[...new Map([...(previous?.affected??[]),...rejected].map(unit=>[unit.unitId,{unitId:unit.unitId,pointIds:unit.pointIds}])).values()],
+  ...(wholeFilm?{wholeFilm}:{}),
  };
 }
 
@@ -386,7 +443,8 @@ const instructions = `只读核验教学选题，不审稿。先从任务要求�
 仅输出 JSON {feedback_scope:"none"|"copy"|"baseline",units:[{unit_id,status:"ok"|"fix"|"unresolved",source_role,takeaway,evidence_ids:[...],reason}]}。每组恰好一条，ok 必须引用证据。禁止改稿或调用工具。`;
 
 const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。用本点原片证据核对作者的卖点、买家顾虑和拍法。connection 直接回答买家多了哪一项具体判断依据，选题或答案只复述动作时，即使换了词或问题带「为什么」，也判 fix。只列功能、混淆原片促单与达人CTA、照搬别片形式同样判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
-const baselineInstructions=(source:BaselineSource)=>instructions+(source.pointReview?pointInstructions:'');
+const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画面证据独立找最有解释力的教学主线及一个合理备选。比较两者会帮助买家做什么决定，前后哪些内容为主线服务，有没有一项漏掉会改变购买判断的内容。不要把多段相似演示当多个购买理由，也不要因为强证据更容易截图就让辅助点变主线。另在同一 JSON 增加 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。各项简洁具体。ok 时 main_point_id 是实际承载主线的主讲重点，evidence_id 属于该点，affected_unit_ids 为空。整片重点选错、排序影响理解或有重要遗漏，即使各组单独成立也标 fix，引用能说明问题的全片原证据，可来自未选中的段落。证据决定当前关键结论却无法核清，标 unresolved；仅当无可引用证据时 evidence_id 和 source_quote 均填 null。fix 或 unresolved 要列出受影响的现行组 ID，主线未成立时 main_point_id 可为 null。保留原片实际收尾促单作为独立教学，达人邀请属于交付。';
+const baselineInstructions=(source:BaselineSource)=>instructions+(source.pointReview?wholeFilmInstructions+pointInstructions:'');
 
 export function teachingBaselineDigest(source:BaselineSource) {
  return digestValue({source,instructions:baselineInstructions(source)});

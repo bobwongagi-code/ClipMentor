@@ -21,6 +21,7 @@ process.env.OPENCHATCUT_DATA_DIR=path;
 let calls:string[]=[];
 let analysisCorrection:SourceBreakdown|undefined;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
+let wholeFilmAction:'missing'|'omission'|undefined;
 let panelRequest:RequestListener|undefined;
 const draftLine={id:'fixture-line',point_ids:['fixture-point'],narration_ms:'Berus ini menyentuh sisi hidung.',
  caption_lines:['Berus ini menyentuh sisi hidung.'],zh:'刷子碰到鼻侧。',source_seconds:[0,4.5],labels:[]};
@@ -102,8 +103,18 @@ const host=createServer(async(req,res)=>{
  }
  calls.push('baseline');
  const fail=data.units[0].points[0].teaching_question===fixture.source_breakdown.points[0].teaching_question.normalize('NFKC');
+ const mainPoint=data.units.flatMap((unit:any)=>unit.points).find((point:any)=>point.role==='primary');
+ const mainEvidence=data.evidence.find((entry:any)=>mainPoint?.teaching_basis?.evidence_ids.includes(entry.id));
+ const wholeEvidence=wholeFilmAction==='omission'?data.evidence.find((entry:any)=>entry.id==='fixture-unselected-result'):mainEvidence;
  const verdict={
   feedback_scope:data.feedback?(fail?'baseline':'copy'):'none',summary:'ok',
+  ...(data.pointReview&&wholeFilmAction!=='missing'?{whole_film:{
+   status:wholeFilmAction==='omission'?'fix':'ok',main_point_id:mainPoint.point_id,
+   focus:'在相同参照下判断落点或关系',alternative:'单独解释包装和产品辨认',
+   reason:wholeFilmAction==='omission'?'原片另有买家需要的结果，逐个动作成立仍不能替代这段解释。':'该组选点比单独介绍产品更能回答具体购买疑问。',
+   evidence_id:wholeEvidence.id,source_quote:wholeEvidence.text,
+   affected_unit_ids:wholeFilmAction==='omission'?[data.units[0].unit_id]:[],
+  }}:{}),
   units:data.units.map((unit:any)=>({
    unit_id:unit.unit_id,status:fail?'fix':'ok',source_role:fail?'展示动作未说明教学功能':'以相同参照让受众判断差异',
    takeaway:fail?'需要回到原片确认怎样呈现购买理由':'达人可学走把观察对象和比较结果放在一起的拍法',
@@ -142,7 +153,7 @@ try{
  const {revisionOf}=await import('../../src/agent/external-edit-session');
  const {digestValue}=await import('../agent-runs/store-values');
  const {teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
-  unchangedRejectedTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,
+  unchangedRejectedTeaching,unchangedWholeFilmTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,
   confirmedTeachingDigest,teachingDefinitionDigest,rejectsTeachingDirection}=await import('./production-teaching-baseline');
  const {copyPreparationReady,checkSourceBreakdown,breakdownPointEvidence}=await import('../../src/clipmentor/source-breakdown');
  const old=projectDoc(1080,1920);
@@ -610,11 +621,74 @@ try{
    teaching_basis:{selling_point:sample.selling_point,evidence_ids:[sample.evidence.id],method:sample.evidence.text,
     connection:sample.connection_excerpt,must_capture:sample.evidence.text,claim_limit:'仅以可见演示说明表达方式',exemplar:sample.principle as 'buyer-first',difference:'以这条原片证据说明本次用途'}}],
  }));
- const positiveReceipt={feedback_scope:'none',units:samples.map((p,i)=>({unit_id:'green-'+i,status:'ok',source_role:p.buying_concern,
+ const positiveReceipt={feedback_scope:'none',whole_film:{status:'ok',main_point_id:samples[0].point_id,
+  focus:'围绕产品表现帮助观众判断',alternative:'集中讲产品的包装信息',reason:'当前案例的原片演示承担了更直接的购买判断。',
+  evidence_id:samples[0].evidence.id,source_quote:samples[0].evidence.text,affected_unit_ids:[] as string[]},
+  units:samples.map((p,i)=>({unit_id:'green-'+i,status:'ok',source_role:p.buying_concern,
   takeaway:p.connection_excerpt,evidence_ids:[p.evidence.id],reason:'fixture replay',
   point_checks:[{point_id:p.point_id,status:'ok',learner_takeaway:p.connection_excerpt,connection:p.connection_excerpt,
    question_quote:p.question,source_evidence_id:p.evidence.id,source_quote:p.evidence.text}]}))};
  assert(validateTeachingBaselineReview(positiveReceipt,strictPositive).units.every(u=>u.status==='ok'));
+ const {whole_film:_omitted,...unitsOnly}=positiveReceipt;
+ assert.throws(()=>validateTeachingBaselineReview(unitsOnly,strictPositive),/teaching_whole_film_review_invalid/,
+  'passing each submitted topic cannot replace the whole-film decision');
+ for(const patch of [
+  {alternative:positiveReceipt.whole_film.focus+'。'},
+  {alternative:'……。'},
+  {evidence_id:samples[1].evidence.id,source_quote:samples[1].evidence.text},
+  {affected_unit_ids:['green-0']},
+  {status:'fix',affected_unit_ids:['not-a-current-unit']},
+ ]){
+  assert.throws(()=>validateTeachingBaselineReview({...positiveReceipt,whole_film:{...positiveReceipt.whole_film,...patch}},strictPositive),
+   /teaching_whole_film_review_invalid/);
+ }
+ const unresolvedWholeFilm=validateTeachingBaselineReview({...positiveReceipt,whole_film:{...positiveReceipt.whole_film,status:'unresolved',
+  main_point_id:null,evidence_id:null,source_quote:null,affected_unit_ids:['green-0']}},strictPositive);
+ assert.equal(unresolvedWholeFilm.whole_film?.status,'unresolved');
+ assert(unresolvedWholeFilm.units.every(unit=>unit.status==='ok'));
+ assert.deepEqual(validateTeachingBaselineReview(unresolvedWholeFilm,strictPositive),unresolvedWholeFilm,'saved whole-film receipts can be read back');
+ const uncertainty=teachingRebuild(strictPositive,old,{...unresolvedWholeFilm,whole_film:{...unresolvedWholeFilm.whole_film!,
+  evidence_id:samples[0].evidence.id,source_quote:samples[0].evidence.text}});
+ const evidenceClone={...strictPositive.evidence[0],id:'copy-of-existing-evidence'};
+ assert(unchangedWholeFilmTeaching({...strictPositive,evidence:[...strictPositive.evidence,evidenceClone]},uncertainty));
+ const newEvidence={...evidenceClone,text:'音轨另有可核购买建议，补足原来未确认的对象。'};
+ assert.equal(unchangedWholeFilmTeaching({...strictPositive,evidence:[...strictPositive.evidence,newEvidence]},uncertainty),false,
+  'real new evidence may resolve a whole-film uncertainty without rewriting the cited observation');
+ const omittedReview=validateTeachingBaselineReview({...positiveReceipt,whole_film:{...positiveReceipt.whole_film,
+  status:'fix',affected_unit_ids:['green-0'],reason:'整条遗漏了其他段落的选择依据。'}},strictPositive);
+ const wholeFilmRebuild=teachingRebuild(strictPositive,old,omittedReview);
+ assert(unchangedWholeFilmTeaching(strictPositive,wholeFilmRebuild));
+ assert.deepEqual(unchangedRejectedTeaching(strictPositive,wholeFilmRebuild),[],'an omission is not a defect in an otherwise correct existing unit');
+ const newGroup={...strictPositive.units[0],unit_id:'new-omitted-group'};
+ const addedTopic={...strictPositive,units:[...strictPositive.units,newGroup]};
+ assert.equal(unchangedWholeFilmTeaching(addedTopic,wholeFilmRebuild),false,'adding the omitted group is progress without rewriting the old one');
+ assert(staleRebuiltTeaching(addedTopic,old,wholeFilmRebuild).includes(newGroup.unit_id),'a new teaching group cannot inherit old copy');
+ for(const mode of ['missing','omission','duplicate-concern'] as const){
+  const doc=structuredClone(firstCopyDoc);
+  const analysis=doc.clipMentorAnalysis!;
+  analysis.evidence.push({...visible,evidence_id:'fixture-unselected-result',text:'随后并排呈现两种结果，作者指向明显差异。'});
+  if(mode==='duplicate-concern'){
+   const point=analysis.source_breakdown!.points[0];
+   point.teaching_basis!.selling_point=point.buying_concern+'。';
+  }
+  const task=await taskFor('whole-film-'+mode,doc,2,'exemplar-v1');
+  const stages:string[]=[];
+  calls=[];
+  wholeFilmAction=mode==='duplicate-concern'?undefined:mode;
+  await advanceProductionTask(task,async(t,ctx)=>{
+   stages.push(t.stage);
+   if(t.stage==='analysis')throw Error('fixture observes repair routing only');
+   return productionStageWorker(t,ctx);
+  });
+  wholeFilmAction=undefined;
+  assert.deepEqual(stages,mode==='missing'?['blueprint']:['blueprint','analysis']);
+  assert.deepEqual(calls,mode==='duplicate-concern'?[]:['baseline']);
+  if(mode==='missing')assert.match(task.error??'',/teaching_whole_film_review_invalid/);
+  if(mode==='omission')assert.match(task.repairContext?.teaching_baseline_issue as string,/整片选题.*原片另有/);
+  const saved=(await loadOfflineStoredProject(task.projectId))!;
+  assert.equal(teachingDraftPointersDigest(saved.doc),teachingDraftPointersDigest(doc));
+ }
+ console.log('PASS whole-film omission, missing verdict and duplicate concerns cannot reach first-copy authoring');
  const wrongQuote=structuredClone(positiveReceipt);
  wrongQuote.units[0].point_checks[0].source_quote=samples[1].evidence.text;
  assert.throws(()=>validateTeachingBaselineReview(wrongQuote,strictPositive),/point_source_quote_invalid/);
@@ -700,7 +774,7 @@ try{
   const visualOnly=otherBreakdown.units.some(unit=>unit.coverage.some(coverage=>coverage.point_id===point.point_id&&coverage.treatment==='visual_only'));
   const evidence=otherSource.evidence.find(item=>registered.includes(item.id)&&(!visualOnly||item.kind==='visible_action'))!;
   assert(evidence,point.point_id);
-  point.teaching_basis={selling_point:point.buying_concern,evidence_ids:[evidence.id],method:evidence.text,
+  point.teaching_basis={selling_point:evidence.text,evidence_ids:[evidence.id],method:evidence.text,
    connection:point.teaching_question,must_capture:evidence.text,claim_limit:'保留实际拍法和片中表达边界',
    exemplar:'buyer-first',difference:'原片证据来自本商品'};
  }
@@ -734,6 +808,9 @@ try{
  assert.notEqual(panelBlueprintRequirementsDigest(priorReferencePolicy),panelBlueprintRequirementsDigest(reboundReferencePolicy),
   'rebinding the same reference ID must invalidate the old board requirement digest');
  const author=await productionAuthorTaskData(referencesTask,referenceDoc);
+ const analysisAuthor=await productionAuthorTaskData({...referencesTask,stage:'analysis'},referenceDoc);
+ assert.match(analysisAuthor.teachingSelection??'',/比较最强的另一个讲法/);
+ assert.match(author.teachingSelection??'',/最短完整时段，再找逐句窗口/);
  assert.deepEqual(author.teachingReferences?.references,[{id:criteria.id,sectionId:criteria.sectionId,pictureStage:criteria.pictureStage,
   quote:criteria.quote,question:criteria.question,reference:{...criteria.reference,sha256:reference.sourceContentHash}}]);
  const frozenAuthor=await productionAuthorTaskData({...referencesTask,input:{...referencesTask.input,openingComparison:fixed}},referenceDoc);

@@ -7,7 +7,7 @@ import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewComplet
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
 import {checkTeachingBaseline,confirmedTeachingDigest,newlyChangedTeaching,panelTeachingPurpose,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
- teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,type TeachingRebuild} from './production-teaching-baseline';
+ teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,type TeachingRebuild} from './production-teaching-baseline';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {createRun,flushRunPersistence} from '../agent-runs/store';
@@ -541,11 +541,16 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    teachingDefinition=qualifiedTeaching(doc);
    const unchanged=rebuild?unchangedRejectedTeaching(source,rebuild):[];
    if(unchanged.length)throw Error('teaching_baseline_repair_no_progress: '+unchanged.map(unit=>unit.unitId+' '+unit.reason).join('；'));
+   if(rebuild?.wholeFilm&&unchangedWholeFilmTeaching(source,rebuild))
+    throw Error('teaching_baseline_repair_no_progress: 整片选题 '+rebuild.wholeFilm.reason);
    const checked=await checkTeachingBaseline(task,stage,source);
    if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
     return {artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:task.stage as 'blueprint'|'copy_review'};
-   if(!checked.review.units.every(unit=>unit.status==='ok'))
-    return repairBaseline(checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason).join('；'),teachingRebuild(source,doc,checked.review,rebuild));
+   const topics=checked.review.whole_film;
+   const topicIssue=topics&&topics.status!=='ok'?'整片选题 '+topics.reason:undefined;
+   const unitIssues=checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason);
+   const issues=topicIssue?[topicIssue,...unitIssues]:unitIssues;
+   if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
    teachingDigest=checked.digest;
    if(task.stage==='blueprint'&&panelScope){
     let qualifiedCopy=teachingDraftPointersDigest(doc);
@@ -702,7 +707,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const taskData={...await productionAuthorTaskData(task,editor.getDoc(),{policy,references}),goal,
    ...(panelDraft?{objective:policy?.brief.objective??null,doneCriteria:baselineRequirements}:{}),
    ...(panelDraft&&task.stage==='analysis'?{teachingPurpose:panelTeachingPurpose,teachingFeedback:task.blueprintFeedback??null,
-    ...(rebuild?{teachingFindings:rebuild.rejected.map(({unitId,reason})=>({unitId,reason})),beforeCopy:'分析只改基线；先证明每组的选题与证据能回答任务，再写稿。'}:{})}:{}),
+    ...(rebuild?{teachingFindings:rebuild.rejected.map(({unitId,reason})=>({unitId,reason})),
+     ...(rebuild.wholeFilm?{wholeFilmFinding:{reason:rebuild.wholeFilm.reason,evidenceId:rebuild.wholeFilm.evidenceId,unitIds:rebuild.wholeFilm.unitIds}}:{}),
+     beforeCopy:'分析只改基线；先证明整片主线和每组的证据能回答任务，再写稿。'}:{})}:{}),
    ...(panelDraft&&task.stage==='blueprint'&&rebuild?{teachingRebuild:rebuild.affected.map(({unitId,pointIds})=>({unitId,pointIds})),
     beforeCopy:'新教学基线已核。按受影响组原子保存新口播、同文字幕、短标和画面；只换标题、说明或候选ID无法交审。保持其余组已核内容。'}:{}),
    ...(localSpeech?{localSpeech:{...localSpeech,...(localSpeech.status==='machine_transcript_candidate'?{
@@ -901,6 +908,9 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
   ...(references.length?{teachingReferences:{references,
    instruction:'按 sectionId 定位教学组（时间线 ID 表示全部组）。用 view_asset_frames 按 reference.assetId 和 seconds 查看指定参照，再回看本片证据。先确定它改变了本组哪项选材或讲解安排，把该取舍写进现行计划和实际稿；参照只供比较。组尚未建立时按原始要求建立该组，不能改指其他组。'} }:{}),
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&['analysis','blueprint'].includes(task.stage)?{
+   teachingSelection:task.stage==='analysis'
+    ?'先独立从完整原片、原话候选和本品资料判断买家要做什么决定，再选整片最值得达人学的手法。筛选有来源的卖点，标明可见、原话候选或待核。比较最强的另一个讲法：为什么选这条主线，保留哪些独立顾虑，哪些动作只作支持，漏哪一段会改变判断。主线的取舍写进现有主讲点 coverage.reason，作用写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；有消费者促单就单列，具体对象和建议只讲有证据部分。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
+    :'先按核验通过的选题说明每组需要保住的证据：静态细节、完整动作及结果、共同参照或套装与价格。先估保留这些信息所需的最短完整时段，再找逐句窗口。设想换成最接近的另一段会少哪一项判断；实际解释画面保住这个关系。原声给事实和反应，讲解说明拍法为什么有用，短标指向判断对象。优先合理回看；仍无足够画面就说明具体缺口，别靠缩讲解或合组填平。普通做法与她的差异、声画配合、同框比较、先后承接可按实际证据组织。',
    teachingExemplars:'按范例库的 principle ID 择一，把每个 source_breakdown.points 的 teaching_question 写成为什么这个拍法帮助买家判断。teaching_basis={selling_point,evidence_ids,method,connection,must_capture,claim_limit,exemplar,difference}；证据是本点关联的原片原话候选或可见动作，reference 资料不充原片事实。difference 写本片条件与具名范例的差异。原片确有消费者促单时单列教学点，保留达人邀请为独立片尾。清楚的听写候选可以支持原话转述，但注明未听审。纯画面例外须在 coverage.reason 说明为什么成立。',
    ...(task.input.openingComparison?.results?{openingResultsInstruction:
     `马来语口播及同文字幕按同款前提、成绩提问、一次邀请的顺序。成绩用 ${task.input.openingComparison.results.views} tontonan、${task.input.openingComparison.results.units} unit terjual、Revenue ${task.input.openingComparison.results.revenue}。不上创作者人数前提。收入不写佣金或商品 GMV。`}:{})
