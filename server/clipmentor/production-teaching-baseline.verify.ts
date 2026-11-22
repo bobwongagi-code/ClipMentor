@@ -636,6 +636,8 @@ try{
   point_checks:[{point_id:p.point_id,status:'ok',learner_takeaway:p.connection_excerpt,connection:p.connection_excerpt,
    question_quote:p.question,source_evidence_id:p.evidence.id,source_quote:p.evidence.text}]}))};
  assert(validateTeachingBaselineReview(positiveReceipt,strictPositive).units.every(u=>u.status==='ok'));
+ const {verifyFrozenTopics}=await import('./production-frozen-topics.verify-suite');
+ await verifyFrozenTopics(draft,strictTask,strictPositive,validateTeachingBaselineReview(positiveReceipt,strictPositive));
  // Replay the blind local decisions. Semantic judgment is supplied by the
  // reviewer; the product checks that each verdict is complete and source-bound.
  for(const sample of humanTeachingCalibration){

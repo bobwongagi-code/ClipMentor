@@ -6,8 +6,8 @@ import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFe
 import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
-import {checkTeachingBaseline,confirmedTeachingDigest,newlyChangedTeaching,panelTeachingPurpose,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
- teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,type TeachingRebuild} from './production-teaching-baseline';
+import {checkTeachingBaseline,confirmedTeachingDigest,frozenTeachingTopics,newlyChangedTeaching,panelTeachingPurpose,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
+ teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,wholeFilmIssue,type TeachingRebuild} from './production-teaching-baseline';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {createRun,flushRunPersistence} from '../agent-runs/store';
@@ -546,10 +546,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    const checked=await checkTeachingBaseline(task,stage,source);
    if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
     return {artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:task.stage as 'blueprint'|'copy_review'};
-   const topics=checked.review.whole_film;
-   const topicIssue=topics&&topics.status!=='ok'?'整片选题 '+topics.reason:undefined;
+   const topicIssue=wholeFilmIssue(checked.review.whole_film);
    const unitIssues=checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason);
-   const issues=topicIssue?[topicIssue,...unitIssues]:unitIssues;
+   const issues=topicIssue?['整片选题 '+topicIssue,...unitIssues]:unitIssues;
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
    teachingDigest=checked.digest;
    if(task.stage==='blueprint'&&panelScope){
@@ -901,7 +900,10 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
  const prepared=['audio','edit'].includes(task.stage)?await currentExecutionPreparation(doc,task.input.voice):null;
  const references=['analysis','blueprint'].includes(task.stage)
   ?checked?.references??await teachingReferenceInputs(doc,boundVisualCriteria(policy),{resolve:resolveUploadFile,hash:sha256File}):[];
+ const frozenTopics=['analysis','blueprint'].includes(task.stage)?frozenTeachingTopics(doc,task):undefined;
  return {evidenceInspection:productionEvidenceInspection(doc,task),task:task.input.brief,stage:task.stage,goal,feedback:task.stage==='blueprint'?task.blueprintFeedback??task.feedback??null:task.feedback??null,repairContext:task.repairContext?.repair?{repair:task.repairContext.repair,revision:task.repairContext.revision,final_feedback:task.repairContext.final_feedback??null}:task.repairContext??null,
+  ...(frozenTopics?{frozenTopics,
+   frozenTopicInstruction:'在主线重点的 teaching_basis.evidence_ids 中分别登记两段可见依据。背景只能保留在原片或作为引入上下文。将 closing 原文登记到蓝图最后一个教学组的原片收尾回放段 segments[].unknowns，手背试色继续承担比较参照。证据未核定前不另建促单组。'}:{}),
   ...(task.sharedProduction?.prepared?{sharedBody:{end_frame:task.sharedProduction.endFrame,
    instruction:'片头和教学主体已从同批另一版本复用，实际时间线中此前的画面、音频、字幕和样式全部保持。只为本版本补齐片尾，不能重新剪主体、重复配同文音频或改动前段。'}}:{}),
   ...(policy||task.input.openingComparison?{doneCriteria:productionAuthorCriteria(task,policy)}:{}),
