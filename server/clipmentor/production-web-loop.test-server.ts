@@ -8,6 +8,8 @@ import {join,resolve,dirname,basename} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+const uiPort=Number(process.env.CLIPMENTOR_WEB_TEST_UI_PORT);
+if(!Number.isInteger(uiPort)||uiPort<1||uiPort>65535)throw Error('Explicit CLIPMENTOR_WEB_TEST_UI_PORT is required');
 const root=process.env.CLIPMENTOR_WEB_TEST_DATA;
 if(!root||dirname(resolve(root))!==resolve(tmpdir())||!basename(root).startsWith('cm-web-loop-')||(await readdir(root)).length)throw Error('Explicit empty temporary CLIPMENTOR_WEB_TEST_DATA is required');
 process.env.OPENCHATCUT_DATA_DIR=root;
@@ -143,7 +145,7 @@ const server=createServer(async(req,res)=>{try{
  const url=new URL(req.url!,origin);
  if(!url.pathname.startsWith('/api/')&&url.pathname!=='/audit'){
   assert.equal(req.method,'GET','Only GET static assets may reach the existing frontend service');
-  const upstream=httpRequest({hostname:'127.0.0.1',port:5173,path:req.url,method:'GET'},response=>{res.writeHead(response.statusCode??502,response.headers);response.pipe(res);});
+  const upstream=httpRequest({hostname:'127.0.0.1',port:uiPort,path:req.url,method:'GET'},response=>{res.writeHead(response.statusCode??502,response.headers);response.pipe(res);});
   upstream.on('error',error=>{res.statusCode=502;res.end(String(error));});upstream.end();return;
  }
  if(url.pathname==='/api/clipmentor/fixture-requirements'){
@@ -183,4 +185,7 @@ const server=createServer(async(req,res)=>{try{
  }catch(error){res.statusCode=409;res.setHeader('content-type','application/json');res.end(JSON.stringify({error:String(error)}));}});
 server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();assert(address&&typeof address==='object');origin=`http://127.0.0.1:${address.port}`;
 console.log(JSON.stringify({ready:true,origin,project,profile:runtimeProfile().rootDir,fixtureWorker:true,providerCalls}));
-process.on('SIGTERM',()=>server.close(()=>process.exit()));
+process.once('SIGTERM',()=>{
+ server.close(()=>process.exit());
+ server.closeAllConnections();
+});

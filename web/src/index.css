@@ -1,0 +1,13 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; }
+body {
+  font-family: "PingFang SC", "HarmonyOS Sans SC", system-ui, sans-serif;
+  background: #fffbf7;
+  color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea { font: inherit; }
+button { border: 0; cursor: pointer; }
+button:disabled { cursor: default; }
+textarea { resize: none; }
+a { color: inherit; }

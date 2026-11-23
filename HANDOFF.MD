@@ -696,3 +696,15 @@ The production panel translates checkpoints into business progress and shows onl
 The first adversarial pass compared the JUDYDOLL board with the saved Green Makes fixture. It checked that the two endings, the CTA evidence and source limits remained available while maintenance notes disappeared. It also checked that a warning for one line does not spill into a similarly named line. The second pass followed the actual feedback request. A current dual-ending draft used to match the production-confirmation branch even for a feedback request. That branch now also requires the explicit production action. The regression checks that a timed-out S7 draft records feedback against the displayed revision with no child output or dispatch, and that direct production confirmation remains blocked.
 
 The live JUDYDOLL check used read-only requests. The saved task digest and stage attempt counts matched before and after. The CTA applicability still awaits an operator decision. The separate Green Makes fixture and browser checks used isolated data and zero external calls.
+
+### 2026-11-23 · Give the ClipMentor business app its own frontend
+
+The business app now lives under `web/`. It owns the upload panel, blueprint, two ending previews, and its browser tests. The existing editor backend, project storage, and receipt IDs stay in place. Only the local web dev proxy connects to the selected project. A separate static build still runs in demo mode. Chimera's original login and prototype routes belong in the Chimera repository.
+
+Validate the migration before removing the other copy. The new frontend opened the current JUDYDOLL v3-ebdc6da6 board through a GET-only relay. Both endpoints returned the same revision, board identity, four-asset receipt, and exact HTML with two endings. The saved task digest and attempt counts matched. No production action was submitted.
+
+The first review found an inherited test-port fallback, a button reset lost when removing the shared CSS, and missing web CI paths for common backend code. Require the fixture UI port, preserve the button border reset, and trigger the browser workflow on editor and backend changes. The restored Chimera tree retains the original route and login implementation plus coverage for signed-out entry, bookmarked preview, and authenticated preview.
+
+The second review checked the standalone install and build, explicit port isolation, and the restored Chimera source against v0.1.1. The clean ClipMentor build emitted about 51 kB of compressed JavaScript and 2 kB of compressed CSS. The original Chimera route implementation stays aligned with v0.1.1, with its current CI platform and separate route regression.
+
+Linux browser CI exposed a fixture shutdown hang after a two-tab response case had passed its product assertions. Launch the TypeScript fixture directly in the tracked Node process and close its test-only HTTP connections on termination. The test harness still waits for the process to exit before removing the temporary profile.
