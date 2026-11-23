@@ -190,13 +190,17 @@ async function runProductionCopyReview({
   const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence,panelDraft);
   if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
   const issues=check.checks.filter(entry=>entry.status!=='ok');
-  if(issues.length)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
+  const pendingBusinessClaim=panelDraft&&issues.length===1&&issues[0].id==='S7'&&issues[0].status==='unresolved'?issues[0]:undefined;
+  if(issues.length&&!pendingBusinessClaim)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
   if(panelDraft){
    const currentPolicy=await productionReviewRequirements(task.projectId);
    if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest)return repairRequirements();
    const current=await loadOfflineStoredProject(task.projectId);
    if(current?.revision!==editor.revision)throw Error('blueprint_author_self_check_stale');
-   return {artifact:{revision:editor.revision,blueprint_digest:digest,authorSelfCheck:'passed',teaching_baseline_digest:teachingDigest,
+   return {artifact:{revision:editor.revision,blueprint_digest:digest,
+    authorSelfCheck:pendingBusinessClaim?'needs_human_review':'passed',
+    ...(pendingBusinessClaim?{authorSelfCheckNotice:pendingBusinessClaim.reason,authorSelfCheckFinding:pendingBusinessClaim}:{}),
+    teaching_baseline_digest:teachingDigest,
     author_self_check_source_digest:check.sourceDigest,requirementsDigest:panelBlueprintRequirementsDigest(currentPolicy),
     ...(task.input.doneCriteria?.length?{sourceCriteriaDigest:digestValue(task.input.doneCriteria)}:{})},awaitBlueprintFeedback:true};
   }

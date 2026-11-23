@@ -24,7 +24,7 @@ try{
   for(const plan of result.plans){assert.equal(plan.rows.length,13);assert.deepEqual(plan.rows.map(r=>r.stage),['opening','original','explanation','original','explanation','original','explanation','original','explanation','original','explanation','explanation','closing']);assert.equal(plan.rows.flatMap(r=>r.lines).length,8);assert.equal(plan.frame_count,35);const g1=plan.rows.find(r=>r.line_ids.includes('GM-L01'))!;assert.deepEqual(g1.range,[0,10.5]);assert.deepEqual(g1.frames.map(f=>f.frame),[0,157,314]);assert(g1.picture.includes('源帧21')&&g1.picture.includes('195'));assert(g1.notices.some(s=>/散文提到具体帧|画面说明提到指定画面/u.test(s)));assert(!g1.frames.some(f=>f.frame===21||f.frame===195));assert.deepEqual(g1.colors,['#FFD83D','#111111']);}
   const {blueprintPictureNotices}=await import('../../src/clipmentor/blueprint-picture-notices');
   const prepared=planReviewBoards(input(v,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[])),{humanBoardQuestions}=await import('./blueprint-review-board-human');
-  for(const plan of prepared.plans){const notices=blueprintPictureNotices(plan.rows.map(r=>({...r,location:r.key}))),reported=prepared.lint.findings.filter(f=>f.rule_id==='B10'||f.rule_id==='B11');assert(notices.length>0);assert.deepEqual(notices.map(n=>n.message),reported.map(n=>n.message));const questions=humanBoardQuestions(plan,prepared.lint);for(const notice of notices)for(const key of notice.row_keys){const row=plan.rows.find(r=>r.key===key)!;assert(questions.get(row.unit_id)?.has(notice.message));assert(row.notices.includes(notice.message));}}
+  for(const plan of prepared.plans){const notices=blueprintPictureNotices(plan.rows.map(r=>({...r,location:r.key}))),reported=prepared.lint.findings.filter(f=>f.rule_id==='B10'||f.rule_id==='B11');assert(notices.length>0);assert.deepEqual(notices.map(n=>n.message),reported.map(n=>n.message));const questions=humanBoardQuestions(plan);for(const notice of notices)for(const key of notice.row_keys){const row=plan.rows.find(r=>r.key===key)!;assert(!questions.get(row.unit_id)?.has(notice.message));assert(row.notices.includes(notice.message));}}
   assert.equal(JSON.stringify(v),before);
  });
  await test('Shared notices remain identical for current and legacy saved plans',async()=>{
@@ -32,33 +32,21 @@ try{
   for(const [value,materials]of [[c.green,[c.newBinding,c.existingBinding]],[c.barelyFour,undefined],[c.barelyV5,[c.barelyFour]]] as const){
    const result=planReviewBoards(input(value,materials as unknown as ProjectDoc[]));
    for(const plan of result.plans){
-    const notices=blueprintPictureNotices(plan.rows.map(r=>({...r,location:r.key}))),findings=result.lint.findings.filter(f=>f.rule_id==='B10'||f.rule_id==='B11'),questions=humanBoardQuestions(plan,result.lint);
+    const notices=blueprintPictureNotices(plan.rows.map(r=>({...r,location:r.key}))),findings=result.lint.findings.filter(f=>f.rule_id==='B10'||f.rule_id==='B11'),questions=humanBoardQuestions(plan);
     assert.deepEqual(notices.map(n=>n.message),findings.map(f=>f.message));
-    for(const notice of notices)for(const key of notice.row_keys){const row=plan.rows.find(r=>r.key===key)!;assert(questions.get(row.unit_id)?.has(notice.message));}
+    for(const notice of notices)for(const key of notice.row_keys){const row=plan.rows.find(r=>r.key===key)!;assert(!questions.get(row.unit_id)?.has(notice.message));}
    }
   }
  });
- await test('Human board surfaces a likely timing overrun without upgrading the lint verdict',async()=>{
+ await test('Human board keeps capacity estimates and binding repairs out of business decisions',async()=>{
   const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
-  const prepared=planReviewBoards(input(c.green,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[]));
-  const {data,lint}=prepared,board=prepared.plans[0];
+  const {plans,data,lint}=planReviewBoards(input(c.green,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[]));
   const group=lint.groups.find(g=>g.line_ids.includes('GM-L02'))!;
-  const card=(overrides:Partial<typeof group>,id='group-2')=>{
-   const report={...lint,groups:[{...group,...overrides}]};
-   return humanReviewBoardPage(board,data,report).split('data-card="'+id+'"')[1].split('</section>')[0];
-  };
-  // Green Makes saved L02: point estimate above capacity, empirical lower estimate below it.
-  const values={complete:true,estimated_seconds:13.731998,picture_seconds:12,empirical_lower_seconds:10.833947};
-  assert.match(card(values),/口播估计约13\.7秒，画面约12秒；估算可能偏长，待配音后核对。/);
-  assert.doesNotMatch(card(values,'group-1'),/估算可能偏长/);
-  assert.match(card({...values,empirical_lower_seconds:12.1}),/是否偏紧？这是估算，仍以配音实测为准。/);
-  for(const overrides of [
-   {...values,estimated_seconds:12,empirical_lower_seconds:10},
-   {...values,estimated_seconds:12.04,empirical_lower_seconds:10},
-   {...values,complete:false},
-   {...values,picture_seconds:null},
-   {...values,estimated_seconds:null},
-  ])assert.doesNotMatch(card(overrides),/估算可能偏长|是否偏紧/);
+  const report={...lint,groups:[{...group,complete:true,estimated_seconds:13.73,picture_seconds:2.9,empirical_lower_seconds:12.1}],
+   findings:[...lint.findings,{rule_id:'DELIVERY_BINDING',level:'warn' as const,location:'delivery_sections.fixture',excerpt:'fixture',message:'existing_partner_pdf_binding'}]};
+  const html=humanReviewBoardPage(plans[0],data,report);
+  assert.doesNotMatch(html,/估算可能偏长|是否偏紧|缺独立 Storyboard PDF 交付绑定|画面说明相同，是否/);
+  assert.match(html,/模型听写，未经人工听审/);
  });
  await test('A4 actual four-group middle and historical full v5 reuse retain separate source facts',async()=>{
   const four=planReviewBoards(input(c.barelyFour)).plans[0];assert.equal(four.rows.filter(r=>r.stage==='original').length,4);assert(four.reuse.some(r=>r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L04'))&&r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L06'))));
@@ -158,8 +146,8 @@ try{
   const {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest}=await import('../../src/clipmentor/production-gate');const d=bindings[0];const before=buildCopyTeachingReviewRequest([{case_id:'unchanged',packet:await copyTeachingPacketFromDoc(d)}]);planReviewBoards(input(d));(d as any).author_self_check={remaining_gaps:'BOARD_AUTHOR_SENTINEL'};assert.deepEqual(buildCopyTeachingReviewRequest([{case_id:'unchanged',packet:await copyTeachingPacketFromDoc(d)}]),before);
  });
  await test('H2-H6 human has one body, Chinese first, illustration boundaries and neutral warnings',async()=>{
-  const {humanBoardQuestions}=await import('./blueprint-review-board-human');const prepared=planReviewBoards(input(green,bindings)),questions=humanBoardQuestions(prepared.plans[0],(await import('../../src/clipmentor/blueprint-lint')).lintBlueprint(green));
-  assert([...questions.get('GM-G1')??[]].some(q=>q.includes('指定画面')));assert([...questions.get('GM-G5')??[]].some(q=>q.includes('画面说明相同')));for(const id of ['GM-G2','GM-G3','GM-G4'])assert(!questions.has(id));
+  const {humanBoardQuestions}=await import('./blueprint-review-board-human');const prepared=planReviewBoards(input(green,bindings)),questions=humanBoardQuestions(prepared.plans[0]);
+  assert(![...questions.get('GM-G1')??[]].some(q=>q.includes('指定画面')));assert(![...questions.get('GM-G5')??[]].some(q=>q.includes('画面说明相同')));for(const id of ['GM-G2','GM-G3','GM-G4'])assert(!questions.has(id));
   const result=await renderReviewBoards(await generateInput(),join(root,'human'),undefined,'human');assert.equal(result.artifacts.length,1);assert.equal(result.artifacts[0].frame_count,38);const page=await readFile(result.artifacts[0].path,'utf8');
   assert.equal((page.match(/data-card="group-/g)??[]).length,5);assert.equal((page.match(/class="explanation"/g)??[]).length,6);assert.equal((page.match(/class="ending"/g)??[]).length,2);assert(page.includes('<h2>片头</h2>'));assert(page.includes('版式示意，非渲染'));assert(page.includes('示意模板'));assert(!page.includes('text-shadow'));
   const visible=page.split('<footer>')[0].replace(/<style>[\s\S]*?<\/style>/g,'').replace(/<details[\s\S]*?<\/details>/g,'').replace(/<[^>]+>/g,'');assert(!/[a-f0-9]{64}|#[a-f0-9]{6}|\bf\d+\b|Reference only|tool_crop_px|asset_id|B05/iu.test(visible));assert(!/画面已匹配|审核通过|验收通过/.test(visible));assert(!/data-verdict=/.test(page));assert(!page.includes('<details id="technical"')&&!page.includes('候选业务登记'));
@@ -177,7 +165,7 @@ try{
   const board={...prepared.plans[0],rows:[...prepared.plans[0].rows,second]};
   const page=()=>humanReviewBoardPage(board,prepared.data,prepared.lint);
   assert(page().includes('同一张原图与同一裁切'));
-  assert(page().includes('原海报的佣金区'));
+  assert(page().includes('活动价、佣金等合作条件'));
   assert(page().includes('本商品的原片 Storyboard'));
   second.asset_hash='a'.repeat(64);
   assert(!page().includes('同一张原图与同一裁切'));
@@ -187,7 +175,7 @@ try{
   board.rows.pop();
   assert(!page().includes('同一张原图与同一裁切'));
   first.unit_id='unclassified';
-  assert(!page().includes('原海报的佣金区'));
+  assert(!page().includes('活动价、佣金等合作条件'));
   assert(!page().includes('本商品的原片 Storyboard'));
   const output=await renderReviewBoards(await generateInput(),join(root,'ending-source-proof'),undefined,'human');
   const html=await readFile(output.artifacts[0].path,'utf8');
@@ -198,17 +186,23 @@ try{
   assert(html.includes('data:image/jpeg;base64,'+(await readFile(reference)).toString('base64')));
   assert.equal(networks,0);
  });
- await test('H6 declared repetition, two levels of estimated capacity, and visible quantity produce questions',async()=>{
-  const {humanBoardQuestions}=await import('./blueprint-review-board-human'),{lintBlueprint}=await import('../../src/clipmentor/blueprint-lint');const prepared=planReviewBoards(input(green,bindings)),board=clone(prepared.plans[0]),lint=lintBlueprint(green),last=board.rows.find(r=>r.line_ids.includes('GM-L06'))!;last.range=[53,56];last.lint.push({rule_id:'B04',level:'warn',location:'GM-L06',excerpt:'RM20,000',message:'not a decision'});const g=lint.groups.find(g=>g.line_ids.includes('GM-L06'))!;g.estimated_seconds=30;g.empirical_lower_seconds=25;g.picture_seconds=10;
-  const questions=()=>[...humanBoardQuestions(board,lint).get('GM-G5')??[]];
-  const q=questions();assert(q.some(q=>q.includes('重复使用')));assert(q.some(q=>q.includes('RM20,000')));assert(q.some(q=>q.includes('估计约30秒')&&q.includes('是否偏紧')));
-  g.empirical_lower_seconds=9;assert(questions().some(q=>q.includes('估计约30秒')&&q.includes('估算可能偏长')));assert(!questions().some(q=>q.includes('估计约30秒')&&q.includes('是否偏紧')));
+ await test('H6 visible quantities remain reviewable while picture diagnostics stay with the planner',async()=>{
+  const {humanBoardQuestions}=await import('./blueprint-review-board-human');
+  const board=clone(planReviewBoards(input(green,bindings)).plans[0]);
+  const last=board.rows.find(r=>r.line_ids.includes('GM-L06'))!;
+  last.range=[53,56];
+  last.lint.push({rule_id:'B04',level:'warn',location:'GM-L06',excerpt:'RM20,000',message:'visible amount'});
+  last.lint.push({rule_id:'B04',level:'warn',location:'GM-L060',excerpt:'RM99,999',message:'different sentence'});
+  const q=[...humanBoardQuestions(board).get('GM-G5')??[]];
+  assert.equal(q.length,1);
+  assert.match(q[0],/RM20,000/);
+  assert(last.notices.some(n=>n.includes('B05')),'the planner retains the estimate');
  });
  await test('Adversarial H6 includes opening and ending visible-quantity questions',async()=>{
   const {humanBoardQuestions,humanReviewBoardPage}=await import('./blueprint-review-board-human');const p=planReviewBoards(input(green,bindings)),board=clone(p.plans[0]);
-  for(const stage of ['opening','closing']){const row=board.rows.find(r=>r.stage===stage)!;row.lint.push({rule_id:'B04',level:'warn',location:row.line_ids[0],excerpt:'RM20,000',message:'Visible quantity absent'});const questions=humanBoardQuestions(board,p.lint);assert([...questions.get(row.key)??[]].some(q=>q.includes('RM20,000')),stage+' must retain its warning');}
-  const page=humanReviewBoardPage(board,p.data,p.lint);const opening=page.slice(page.indexOf('data-card="opening"'),page.indexOf('data-card="group-1"')),ending=page.slice(page.indexOf('data-card="endings"'),page.indexOf('<footer>'));assert(opening.includes('画面上有RM20,000'));assert(ending.includes('画面上有RM20,000'));
-  const first=board.rows.find(r=>r.stage==='closing')!,second=clone(p.plans[1].rows.find(r=>r.stage==='closing')!);first.unit_id=second.unit_id='shared-closing-section';first.key='closing/new';second.key='closing/existing';second.lint=[];board.rows.push(second);const scoped=humanBoardQuestions(board,p.lint);assert([...scoped.get(first.key)??[]].some(q=>q.includes('RM20,000')));assert(![...scoped.get(second.key)??[]].some(q=>q.includes('RM20,000')),'one ending warning must not leak into the other with same section ID');
+  for(const stage of ['opening','closing']){const row=board.rows.find(r=>r.stage===stage)!;row.lint.push({rule_id:'B04',level:'warn',location:row.line_ids[0],excerpt:'RM20,000',message:'Visible quantity absent'});const questions=humanBoardQuestions(board);assert([...questions.get(row.key)??[]].some(q=>q.includes('RM20,000')),stage+' must retain its warning');}
+  const page=humanReviewBoardPage(board,p.data,p.lint);const opening=page.slice(page.indexOf('data-card="opening"'),page.indexOf('data-card="group-1"')),ending=page.slice(page.indexOf('data-card="endings"'),page.indexOf('<footer>'));assert(opening.includes('计划上屏有RM20,000'));assert(ending.includes('计划上屏有RM20,000'));
+  const first=board.rows.find(r=>r.stage==='closing')!,second=clone(p.plans[1].rows.find(r=>r.stage==='closing')!);first.unit_id=second.unit_id='shared-closing-section';first.key='closing/new';second.key='closing/existing';second.lint=[];board.rows.push(second);const scoped=humanBoardQuestions(board);assert([...scoped.get(first.key)??[]].some(q=>q.includes('RM20,000')));assert(![...scoped.get(second.key)??[]].some(q=>q.includes('RM20,000')),'one ending warning must not leak into the other with same section ID');
  });
  await test('Adversarial H5 every line sharing a phase has its own illustration and zoom source',async()=>{
   const {humanReviewBoardPage}=await import('./blueprint-review-board-human');const p=planReviewBoards(input(green,bindings)),board=clone(p.plans[0]),rows=board.rows.filter(r=>r.stage==='explanation'),lastUnit=rows.at(-1)!.unit_id,sameUnit=rows.filter(r=>r.unit_id===lastUnit),first=sameUnit[0],second=sameUnit[1];first.lines.push(...second.lines);first.line_ids.push(...second.line_ids);board.rows=board.rows.filter(r=>r!==second);
@@ -350,8 +344,8 @@ try{
    const status=async()=>(await (await realFetch(panel,{headers})).json()).task;
    const board=(identity?:string)=>realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({
     view:'panel_board',projectId,revision:snapshot.revision,...(identity?{boardIdentity:identity}:{})}),{headers});
-   const action=(action:string,boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
-    action,revision:snapshot.revision,boardIdentity,text:'核对本组卖点'})});
+   const action=(action:string,boardIdentity:string,text='核对本组卖点')=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
+    action,revision:snapshot.revision,boardIdentity,text})});
    await productionTaskStore.save(task);
    assert.equal((await status()).blueprintRevision,undefined,'legacy structure-only checkpoint is not presented for review');
    assert.equal((await board()).status,409,'direct HTML access cannot bypass the check');
@@ -373,6 +367,17 @@ try{
    const opened=await board(checked.boardIdentity);
    assert.equal(opened.status,200,await (opened.ok?Promise.resolve(''):opened.text()));
    assert.match(await opened.text(),/data-card="group-1"/);
+   const pass=structuredClone(task.completed.blueprint.artifact);
+   task.completed.blueprint.artifact={...pass,authorSelfCheck:'needs_human_review',
+    authorSelfCheckNotice:'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对'};
+   await productionTaskStore.save(task);
+   const needsBusiness=await status();
+   assert.equal(needsBusiness.canConfirmBlueprint,false);
+   assert.match(needsBusiness.blueprintMessage,/核对计划上屏的承诺/);
+   assert.doesNotMatch(JSON.stringify(needsBusiness),/PRIVATE_S7_SENTINEL|片尾有待确认|authorSelfCheckNotice/);
+   assert.equal((await action('produce_versions',needsBusiness.boardIdentity)).status,409);
+   assert.equal(task.completed.blueprint.artifact.authorSelfCheckNotice,'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对');
+   task.completed.blueprint.artifact=structuredClone(pass);
    // A saved but unprocessed edit invalidates confirmation even at the same revision.
    task.repairContext={pending_blueprint_feedback:{text:'核对本组卖点',revision:snapshot.revision}};
    await productionTaskStore.save(task);
@@ -390,6 +395,22 @@ try{
    task.completed.blueprint={at:Date.now(),artifact:{revision:snapshot.revision}};
    await productionTaskStore.save(task);
    assert.equal(await requeuePanelAuthorCheck(task),false,'expired authority is never silently extended');
+   task.completed.blueprint.artifact={...pass,authorSelfCheck:'needs_human_review',
+    authorSelfCheckNotice:'PRIVATE_S7_SENTINEL：有待核实的上屏事实'};
+   delete task.repairContext;
+   await productionTaskStore.save(task);
+   const feedbackBoard=await status();
+   const feedbackHtml=await board(feedbackBoard.boardIdentity);
+   assert.equal(feedbackHtml.status,200,await (feedbackHtml.ok?Promise.resolve(''):feedbackHtml.text()));
+   const feedbackText='核对片头上屏事实';
+   const feedbackResponse=await action('revise_blueprint',feedbackBoard.boardIdentity,feedbackText);
+   assert.equal(feedbackResponse.status,200,await feedbackResponse.clone().text());
+   assert.deepEqual(await feedbackResponse.json(),{accepted:true,saved:true,dispatched:false,reason:'limit'});
+   const savedFeedback=await productionTaskStore.load(projectId,task.taskId);
+   assert.equal(savedFeedback.blueprintFeedback,feedbackText);
+   assert.deepEqual(savedFeedback.repairContext?.pending_blueprint_feedback,{text:feedbackText,revision:snapshot.revision});
+   assert.equal(savedFeedback.productionChildren,undefined);
+   assert.deepEqual(savedFeedback.attempts,originalAttempts);
    assert.equal(launched,0);
   }finally{await new Promise<void>(r=>server.close(()=>r()));}
  });

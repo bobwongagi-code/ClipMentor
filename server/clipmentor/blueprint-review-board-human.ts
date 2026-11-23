@@ -4,7 +4,6 @@ import type {ProjectDoc} from '../../src/editor/types';
 import {sourceSpeech,unitUnknowns,translatedLabels,stageTranslations,overlaps} from './blueprint-review-board-human-context';
 import type {readBlueprint,lintBlueprint} from '../../src/clipmentor/blueprint-lint';
 import {reviewBoardInteractions} from './blueprint-review-board-page';
-import {blueprintPictureNotices} from '../../src/clipmentor/blueprint-picture-notices';
 import type {VisualReferenceFrame} from './visual-done-criteria';
 type Data=ReturnType<typeof readBlueprint>;
 type Lint=ReturnType<typeof lintBlueprint>;
@@ -20,43 +19,23 @@ export function endingLabel(variant:string,index=0){
  if(variant==='existing_partner')return'已合作达人';
  return `达人结尾${index+1}`;
 }
-/** Only the five deterministic advisory classes in the approved specification. */
-export function humanBoardQuestions(board:ReviewBoardPlan,lint:Lint){
- const byUnit=new Map<string,Set<string>>();const add=(unit:string,q:string)=>{if(!byUnit.has(unit))byUnit.set(unit,new Set());byUnit.get(unit)!.add(q);};
- const missingDelivery:Record<string,string>={
-  existing_partner_product_image:'已合作片尾缺本商品图绑定。',
-  existing_partner_storyboard:'已合作片尾缺本片 Storyboard 绑定。',
-  existing_partner_pdf_binding:'已合作片尾缺独立 Storyboard PDF 交付绑定。',
-  new_contact_cta_image:'新建联片尾缺上传的 CTA 图片。',
-  opening_original_underlay_missing:'片头缺原片铺底。',
- };
- for(const f of lint.findings.filter(f=>f.rule_id==='DELIVERY_BINDING')){
-  const row=board.rows.find(row=>'delivery_sections.'+row.unit_id===f.location);
-  const message=missingDelivery[f.message];
-  if(message)add(row?questionKey(row):'delivery-scope',message);
- }
- const explanations=board.rows.filter(r=>r.stage==='explanation');const ids=[...new Set(explanations.flatMap(r=>r.line_ids))];const lineLabel=(id:string)=>`第${ids.indexOf(id)+1}句`;
+/** Ask about visible claims with an editorial choice. The planner retains repair diagnostics. */
+export function humanBoardQuestions(board:ReviewBoardPlan){
+ const byUnit=new Map<string,Set<string>>();
  for(const row of board.rows){
-  for(const f of row.lint.filter(f=>f.rule_id==='B04'&&f.level==='warn')){const amounts=f.excerpt.match(/(?:RM|MYR|USD)\s*[\d,.]+|[\d,.]+\s*%/gu);add(questionKey(row),amounts?.length?`画面上有${[...new Set(amounts)].join('、')}，口播没有说，是否要保留这项承诺？`:'画面上有口播未提到的数字，是否需要保留这项表达？');}
- }
- for(const finding of blueprintPictureNotices(board.rows.map(r=>({...r,location:r.key}))))for(const key of finding.row_keys){const row=board.rows.find(r=>r.key===key)!;add(row.unit_id,finding.message);}
- for(let i=0;i<explanations.length;i++)for(let j=i+1;j<explanations.length;j++){
-  const a=explanations[i],b=explanations[j];if(a.line_ids.some(id=>b.line_ids.includes(id)))continue;
-  if(a.asset_id===b.asset_id&&a.range&&b.range){const start=Math.max(a.range[0],b.range[0]),end=Math.min(a.range[1],b.range[1]);if(end>start||end===start&&(a.range[0]===a.range[1]||b.range[0]===b.range[1])){const q=`${n(start)}–${n(end)}秒的原片在${a.line_ids.map(lineLabel).join('、')}和${b.line_ids.map(lineLabel).join('、')}讲解里重复使用，要保留这次重复吗？`;add(a.unit_id,q);add(b.unit_id,q);}}
- }
- for(const group of lint.groups){
-  const {complete,estimated_seconds:estimate,picture_seconds:picture,empirical_lower_seconds:lower}=group;
-  if(!complete||estimate===null||picture===null)continue;
-  const lowerExceeds=lower!==null&&lower>picture;
-  if(!lowerExceeds&&Number(n(estimate))<=Number(n(picture)))continue;
-  const summary=`这组口播估计约${n(estimate)}秒，画面约${n(picture)}秒`;
-  const question=lowerExceeds?`${summary}，是否偏紧？这是估算，仍以配音实测为准。`:`${summary}；估算可能偏长，待配音后核对。`;
-  for(const row of explanations.filter(r=>r.line_ids.some(id=>group.line_ids.includes(id))))add(row.unit_id,question);
+  for(const finding of row.lint.filter(f=>f.rule_id==='B04'&&f.level==='warn'&&row.line_ids.includes(f.location))){
+   const amounts=finding.excerpt.match(/(?:RM|MYR|USD)\s*[\d,.]+|[\d,.]+\s*%/gu);
+   const question=amounts?.length?`计划上屏有${[...new Set(amounts)].join('、')}，请核对是否适用于本次内容。`:'计划上屏有口播未提到的数字，请核对是否适用于本次内容。';
+   const key=questionKey(row);
+   const questions=byUnit.get(key)??new Set<string>();
+   questions.add(question);
+   byUnit.set(key,questions);
+  }
  }
  return byUnit;
 }
 export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_materials:ProjectDoc[]=[],references:VisualReferenceFrame[]=[],embedded=false,teachingExcerptUnit?:string){
- const body=board.rows.filter(r=>r.stage==='original'||r.stage==='explanation'),unitIds=[...new Set(body.map(r=>r.unit_id))],questions=humanBoardQuestions(board,lint);
+ const body=board.rows.filter(r=>r.stage==='original'||r.stage==='explanation'),unitIds=[...new Set(body.map(r=>r.unit_id))],questions=humanBoardQuestions(board);
  const title=text(obj(data.analysis.product).name)||'剪辑蓝图';const version=board.candidate_id.match(/(?:^|[-_])v(\d+)/iu)?.[1];
  const revision=version?`第${version}版候选`:'现行保存候选';
  const teaching=(id:string)=>{const u=data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit;return text(u?.intent_zh)||arr(obj(data.analysis.source_breakdown).points).map(obj).filter(p=>arr(u?.point_ids).includes(p.point_id)).map(p=>text(p.teaching_question)).filter(Boolean).join('；')||'本组教学点尚未登记';};
@@ -135,7 +114,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
    :layout==='recruitment_card'||layout==='product_commission'?'new_contact':row.unit_id;
   const label=endingLabel(audience,i);
   if(row.ending_variant)audiences.set(row.ending_variant,label);
-  const prompt=label==='新建联达人'?'核对原海报的佣金区和已确认的合作条件是否在计划画面中可见。':
+  const prompt=label==='新建联达人'?'请核对海报中计划上屏的活动价、佣金等合作条件是否仍适用于本次邀约。需要删改时，请在修改意见中注明。':
    label==='已合作达人'?'如计划展示或随片提供本商品的原片 Storyboard，请核对对应画面。':'';
   const route=label==='新建联达人'?'上传的 CTA 素材':label==='已合作达人'?'产品图＋Storyboard':'';
   const fullPicture=row.full_picture?.jpeg?`<details class="picture-note"><summary>核对未裁原图</summary><img style="display:block;width:100%;height:auto" src="data:image/jpeg;base64,${row.full_picture.jpeg}" alt="绑定素材的未裁原图"></details>`:'';
@@ -150,5 +129,5 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
 @media(max-width:600px){header,main,footer{padding-left:14px;padding-right:14px}.group,.delivery{padding:20px}.source-block{grid-template-columns:1fr}.source-description{grid-column:auto}.explanation,.delivery-body,.delivery-check,.ending-grid{grid-template-columns:1fr}.mock{width:min(100%,300px);margin:auto}.source-strip{max-width:100%}.ending+.ending{border-left:0;border-top:1px solid #e0e4d8;padding-left:0;padding-top:24px}.source-speech{padding:16px}.meaning{font-size:21px}h1{font-size:25px}}
 .layered-opening .delivery-body{grid-template-columns:1fr}.layered-opening .provided{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr));gap:12px}.layered-opening figure{margin:0;text-align:center}
 .teaching-excerpt{margin:0 0 22px}.teaching-excerpt button{font:inherit;color:inherit;background:#fff;border:1px solid #c9d2c4;padding:6px 12px;cursor:pointer}.teaching-excerpt [role=status]{margin-left:10px;font-size:13px}.teaching-excerpt video{display:block;max-width:min(100%,320px);max-height:65vh;background:#101310}.teaching-excerpt video[hidden]{display:none}
-</style></head><body><header><p class="kicker">剪辑蓝图 · 人审版</p><h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解 · ${endings.length}种结尾${durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${questionHtml('delivery-scope')}${openingHtml}${groups}${endingsHtml}</main><footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer><dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded)}${excerptUnit?excerptScript:''}</body></html>`;
+</style></head><body><header><p class="kicker">剪辑蓝图 · 人审版</p><h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解 · ${endings.length}种结尾${durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main><footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer><dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded)}${excerptUnit?excerptScript:''}</body></html>`;
 }

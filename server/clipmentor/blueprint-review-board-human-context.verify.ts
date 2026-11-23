@@ -57,9 +57,10 @@ try{
   const plan=board.plans.find(candidate=>candidate.rows.some(row=>row.unit_id==='existing_partner'));
   assert(plan);
   const page=humanReviewBoardPage(plan,board.data,board.lint,[doc]);
-  assert.match(page,/已合作片尾缺本商品图绑定/);
-  assert.match(page,/已合作片尾缺独立 Storyboard PDF 交付绑定/);
-  assert(!page.includes('existing_partner_pdf_binding'),'the human board uses Chinese business language');
+  const internalBindings=board.lint.findings.filter(finding=>finding.rule_id==='DELIVERY_BINDING').map(finding=>finding.message);
+  assert(internalBindings.includes('existing_partner_product_image'));
+  assert(internalBindings.includes('existing_partner_pdf_binding'));
+  assert.doesNotMatch(page,/已合作片尾缺本商品图绑定|已合作片尾缺独立 Storyboard PDF 交付绑定|existing_partner_product_image|existing_partner_pdf_binding/);
   assert(panelDeliveryIssues(doc,{...scope,audience:'new_contact'}).includes('delivery_audience_scope_mismatch'));
   for(const audience of ['new_contact','existing_partner'] as const){
    const one=clone(doc),onePlan=(one.clipMentorAnalysis!.blueprint[0] as any).internal_review;
