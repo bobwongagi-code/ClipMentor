@@ -1,3 +1,4 @@
+import {pictureRepairNotice} from '../clipmentor/production-decisions';
 import {createProductionPanel,currentPanelTask,panelServiceUnavailable} from '../clipmentor/production-panel';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {activateOfflineAgentRuntimeBackend} from '../external-agent/agent-runtime-persistence';
@@ -185,6 +186,8 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(isActive(task.taskId,task.projectId))throw new Error('Production task already running');
     if(['resume','feedback','accept'].includes(String(body.action)))await publishedProductionParent(task);
     if(body.action==='resume'){
+     const blocked=pictureRepairNotice(task);
+     if(blocked)throw Error(blocked);
      if(!await requeuePanelAuthorCheck(task)){
       if(task.status==='awaiting_blueprint')throw Error('蓝图没有可恢复的自检任务');
       await reconcileBlockedBlueprint(task);
@@ -198,7 +201,12 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     throw new Error('Unknown production action');
    }catch(error){
     if(panelRequest)console.error('ClipMentor panel request failed',error);
-    send(409,{error:panelRequest?panelServiceUnavailable:error instanceof Error?error.message:'Production request failed',production_approved:false});
+    const code=error instanceof Error?error.message:'';
+    const panelReasons=new Set(['source_criteria_invalid','source_criteria_empty','source_criteria_original_changed','source_criteria_sales_changed',
+     'source_criteria_checkpoint_changed','source_criteria_materials_missing','source_teaching_window_outside_original','source_performance_evidence_changed',
+     'confirmed_teaching_scope_cannot_change','confirmed_opening_scope_cannot_change']);
+    send(409,{error:panelRequest?panelServiceUnavailable:code||'Production request failed',
+     ...(panelRequest&&panelReasons.has(code)?{reason:code}:{}),production_approved:false});
    }finally{if(controlId)controls.delete(controlId);}
   });
  }};

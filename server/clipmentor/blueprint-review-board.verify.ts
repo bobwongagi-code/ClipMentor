@@ -172,8 +172,8 @@ try{
   const prepared=planReviewBoards(input(green,bindings));
   const first=prepared.plans[0].rows.find(r=>r.stage==='closing')!;
   const second=structuredClone(first);
-  first.key='ending/new';first.ending_variant='new_contact';
-  second.key='ending/existing';second.ending_variant='existing_partner';second.asset_id='separate-upload-same-bytes';
+  first.key='ending/new';first.ending_variant='new_contact';first.unit_id='new_contact';
+  second.key='ending/existing';second.ending_variant='existing_partner';second.unit_id='existing_partner';second.asset_id='separate-upload-same-bytes';
   const board={...prepared.plans[0],rows:[...prepared.plans[0].rows,second]};
   const page=()=>humanReviewBoardPage(board,prepared.data,prepared.lint);
   assert(page().includes('同一张原图与同一裁切'));
@@ -186,7 +186,7 @@ try{
   assert(!page().includes('同一张原图与同一裁切'));
   board.rows.pop();
   assert(!page().includes('同一张原图与同一裁切'));
-  first.ending_variant='unclassified';
+  first.unit_id='unclassified';
   assert(!page().includes('原海报的佣金区'));
   assert(!page().includes('本商品的原片 Storyboard'));
   const output=await renderReviewBoards(await generateInput(),join(root,'ending-source-proof'),undefined,'human');

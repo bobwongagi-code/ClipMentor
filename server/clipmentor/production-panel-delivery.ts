@@ -12,24 +12,21 @@ import {loadCreatorStoryboardDocument,currentCreatorDocument,creatorDocumentHash
 import type {ProductionTask} from './production-task';
 import type {BlueprintFinding} from '../../src/clipmentor/blueprint-lint';
 import type {AnalysisEvidence} from '../../src/clipmentor/analysis';
-import type {OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
+import type {OpeningComparisonCriterion,SourcePerformanceCriterion} from '../../shared/clipmentor-handoff';
 
-const judydollTeachingQuote='把原话、画面证据、达人能学什么和讲解怎么承载都做实';
-const judydollOpeningQuote='同样是拍这款商品，为什么这支视频拿到 339.32k 播放、135 件销量、RM5.31k Revenue？一起看看她怎么拍的。';
+import {registeredSourceBound} from './production-source-policy';
 
-export function panelTeachingRequirements(task:ProductionTask){
- return task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&task.input.openingComparison?.quote===judydollOpeningQuote
-  ?[judydollTeachingQuote]:[];
+export function declaredPanelOpening(doc:ProjectDoc,criterion:SourcePerformanceCriterion|undefined,sourceId:string,salesId:string):OpeningComparisonCriterion{
+ if(!criterion)return panelOpeningComparison();
+ if(criterion.source.assetId!==sourceId||criterion.evidence.assetId!==salesId
+  ||!registeredSourceBound(doc,criterion.source)
+  ||!doc.assets.some(asset=>asset.id===salesId&&asset.kind==='image'&&asset.sourceContentHash===criterion.evidence.sha256))
+  throw Error('source_performance_binding_changed');
+ return {kind:'opening_comparison',quote:criterion.quote,results:criterion.results};
 }
 
-// This approved count belongs to this source and this evidence upload.
-export function panelOpeningComparison(sourceHash:string|undefined,salesHash:string|undefined):OpeningComparisonCriterion{
- const approved=sourceHash==='567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49'
-  &&salesHash==='4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24';
- return {kind:'opening_comparison',quote:approved
-  ?judydollOpeningQuote
-  :'同样是拍这款商品，为什么这支视频能拿到这些成绩？一起看看她怎么拍的。',
-  ...(approved?{results:{views:'339.32k',units:'135',revenue:'RM5.31k'}}:{})};
+export function panelOpeningComparison():OpeningComparisonCriterion{
+ return {kind:'opening_comparison',quote:'同样是拍这款商品，为什么这支视频能拿到这些成绩？一起看看她怎么拍的。'};
 }
 
 /** The operator uploads this slot as the source video's performance evidence. */
@@ -108,6 +105,14 @@ export async function preparePanelStoryboardForAuthor(doc:ProjectDoc,signal:Abor
  catch(error){if(!isCreatorDocumentIssue(error))throw error;return {issue:(error as Error).message};}
 }
 
+export function boundPanelSalesEvidence(doc:ProjectDoc,scope:NonNullable<ProductionTask['input']['panelDelivery']>){
+ const analysis=doc.clipMentorAnalysis;
+ const evidence=analysis?.evidence.find(item=>item.evidence_id===scope.salesEvidenceId);
+ if(evidence?.kind==='operator_supplied'&&evidence.call_status!=='failed'
+  &&evidence.source_ids.includes(scope.salesAssetId)&&evidence.source_ids.includes(analysis!.source.asset_id)
+  &&createHash('sha256').update(evidence.text).digest('hex')===scope.salesEvidenceSha256)return evidence;
+}
+
 export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionTask['input']['panelDelivery']>,content:CreatorStoryboardDocument|null|undefined=creatorDocumentFromSourceAsset(doc)){
  const sections=deliverySectionsFromDoc(doc);
  const opening=sections.find(s=>s.kind==='performance_opening');
@@ -117,11 +122,8 @@ export function panelDeliveryIssues(doc:ProjectDoc,scope:NonNullable<ProductionT
  const freshLayout=fresh?.picture.layout,partnerLayout=partner?.picture.layout;
  const poster=freshLayout?.kind==='recruitment_card'?freshLayout.poster:fresh?.picture;
  const layered=scope.bookends==='layered-v1',layout=opening?.picture.layout;
- const salesEvidence=scope.salesEvidenceId&&doc.clipMentorAnalysis?.evidence.find(e=>e.evidence_id===scope.salesEvidenceId);
- const salesAllowed=!!salesEvidence&&salesEvidence.kind==='operator_supplied'&&salesEvidence.call_status!=='failed'
-  &&salesEvidence.source_ids.includes(scope.salesAssetId)&&salesEvidence.source_ids.includes(doc.clipMentorAnalysis!.source.asset_id)
-  &&createHash('sha256').update(salesEvidence.text).digest('hex')===scope.salesEvidenceSha256
-  &&opening?.evidence_ids.includes(salesEvidence.evidence_id);
+ const salesEvidence=boundPanelSalesEvidence(doc,scope);
+ const salesAllowed=!!salesEvidence&&!!opening?.evidence_ids.includes(salesEvidence.evidence_id);
  return [
   ...(scope.audience&&(invited.length!==1||invited[0].section_id!==scope.audience)?['delivery_audience_scope_mismatch']:[]),
   ...(layered?(layout?.kind!=='original_underlay'?['opening_original_underlay_missing']:[])
@@ -204,7 +206,11 @@ export async function preparePanelPartnerCard(doc:ProjectDoc,scope:PanelScope,si
  if(!inputs)return;
  signal.throwIfAborted();
  const existing=panelPartnerPicture(doc,scope,content);
- if(existing&&await verifyPanelPartnerCard(doc,scope,content,existing,signal))return;
+ if(existing){
+  const issue=await panelPartnerCardIssue(doc,scope,content,existing,signal);
+  if(!issue)return;
+  if(issue==='existing_partner_composition_verifier_unavailable')throw Error(issue);
+ }
  const bytes=await renderPartnerCard(inputs.layout);
  signal.throwIfAborted();
  const hash=createHash('sha256').update(bytes).digest('hex'),id='clipmentor-partner-'+hash;
@@ -218,23 +224,40 @@ export async function preparePanelPartnerCard(doc:ProjectDoc,scope:PanelScope,si
 }
 
 /** Check the actual planned image against the composition made from both frozen inputs. */
-export async function verifyPanelPartnerCard(doc:ProjectDoc,scope:PanelScope,content?:CreatorStoryboardDocument|null,
+export async function panelPartnerCardIssue(doc:ProjectDoc,scope:PanelScope,content?:CreatorStoryboardDocument|null,
  picture?:Pick<DeliverySection['picture'],'asset_id'|'src'|'sha256'|'layout'>,signal?:AbortSignal){
- if(!partnerStoryboardRequired(scope))return true;
+ if(!partnerStoryboardRequired(scope))return;
  picture??=deliverySectionsFromDoc(doc).find(s=>s.section_id==='existing_partner')?.picture;
  const inputs=partnerCardInputs(doc,scope,content);
- if(!inputs||!picture?.layout||digestValue(picture.layout)!==digestValue(inputs.layout))return false;
+ if(!inputs||!picture?.layout||digestValue(picture.layout)!==digestValue(inputs.layout))return 'existing_partner_layout_binding_changed';
  try{
   const document=await creatorStoryboard(doc,signal);
-  if(createHash('sha256').update(document.preview).digest('hex')!==inputs.layout.storyboard.sha256)return false;
+  if(createHash('sha256').update(document.preview).digest('hex')!==inputs.layout.storyboard.sha256)return 'existing_partner_storyboard_preview_changed';
   const registered=panelPartnerPicture(doc,scope,content);
-  if(!registered||registered.asset_id!==picture.asset_id||registered.src!==picture.src||registered.sha256!==picture.sha256)return false;
+  if(!registered||registered.asset_id!==picture.asset_id||registered.src!==picture.src||registered.sha256!==picture.sha256)return 'existing_partner_composition_binding_changed';
   const actual=await partnerRoleBytes(picture);
-  const meta=await sharp(actual).metadata();
-  if(meta.format!=='png'||(meta.pages??1)!==1||(meta.orientation??1)!==1)return false;
+  const meta=await sharp(actual).metadata().catch(()=>undefined);
+  if(meta?.format!=='png'||(meta.pages??1)!==1||(meta.orientation??1)!==1)return 'existing_partner_composition_image_invalid';
   const expected=await renderPartnerCard(inputs.layout);
-  const [pixels,reference]=await Promise.all([sharp(actual).ensureAlpha().raw().toBuffer({resolveWithObject:true}),
+  const [pixels,reference]=await Promise.all([sharp(actual).ensureAlpha().raw().toBuffer({resolveWithObject:true}).catch(()=>undefined),
    sharp(expected).ensureAlpha().raw().toBuffer({resolveWithObject:true})]);
-  return pixels.info.width===reference.info.width&&pixels.info.height===reference.info.height&&pixels.data.equals(reference.data);
- }catch(error){if(signal?.aborted)throw error;return false;}
+  if(!pixels)return 'existing_partner_composition_image_invalid';
+  if(pixels.info.width!==reference.info.width||pixels.info.height!==reference.info.height||!pixels.data.equals(reference.data))
+   return 'existing_partner_composition_pixels_mismatch';
+ }catch(error){
+  if(signal?.aborted)throw error;
+  if(error instanceof Error&&['existing_partner_composition_source_missing','existing_partner_composition_source_changed'].includes(error.message))
+   return error.message;
+  return 'existing_partner_composition_verifier_unavailable';
+ }
+}
+
+export function assertPanelDeliveryReady(issues:string[],partnerIssue:string|undefined){
+ if(partnerIssue==='existing_partner_composition_verifier_unavailable')
+  throw Error('片尾文件核验暂时不可用，已保留当前蓝图供维护侧核对。');
+ if(issues.length||partnerIssue)throw Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
+}
+
+export async function verifyPanelPartnerCard(...args:Parameters<typeof panelPartnerCardIssue>){
+ return !await panelPartnerCardIssue(...args);
 }

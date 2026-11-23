@@ -35,7 +35,7 @@ export function buildPreviewRevision(doc: ProjectDoc, plan: PreviewEditPlan): Pr
   if (doc.timelines.some(t => t.id === id)) throw new Error('Preview revision already exists');
   if (plan.native) return buildNativeComparisonRevision(doc, plan, id);
   const timeline: Timeline = {
-    id, name: plan.audio ? 'Teashell两段 · 近鼻讲解精简（待审）' : '88秒基线 · 已授权局部修订（待审）', order: Math.max(-1, ...doc.timelines.map(t => t.order)) + 1,
+    id, name: plan.audio ? '局部讲解精简（待审）' : '局部画面修订（待审）', order: Math.max(-1, ...doc.timelines.map(t => t.order)) + 1,
     fps: plan.fps, width: plan.baseline.width!, height: plan.baseline.height!, fit: 'contain',
     selectedId: null, selectedIds: [], transitions: [], captions: null,
     trackOrder: plan.audio ? ['preview_patches','preview_baseline','preview_audio'] : ['preview_labels', 'preview_patches', 'preview_baseline'],
@@ -90,7 +90,7 @@ function buildNativeComparisonRevision(doc:ProjectDoc,plan:PreviewEditPlan,id:st
     i.id===n.stillId?{...i,startFrame:a+n.videoFrames,durationInFrames:b-a-n.videoFrames}:i);
   items.push({id:`${id}_annotation`,name:'比较区域框与箭头',track,kind:'image',startFrame:a+n.videoFrames,
     durationInFrames:b-a-n.videoFrames,src:annotation.src,sourceAssetId:annotation.id,width:t.width,height:t.height,sourceRevision:annotation.sourceRevision});
-  const timeline:Timeline={...t,id,name:'Teashell · 比较对象与框箭头修正（待审）',order:Math.max(...doc.timelines.map(t=>t.order))+1,
+  const timeline:Timeline={...t,id,name:'比较对象与框箭头修正（待审）',order:Math.max(...doc.timelines.map(t=>t.order))+1,
     selectedId:null,selectedIds:[],items,trackOrder:[track,...(t.trackOrder??Object.keys(t.tracks??{}))],tracks:{...t.tracks,[track]:{kind:'video',name:'比较区域重点强调'}},
     markers:[...(t.markers??[]),{id:`${id}_pending`,scope:'project',fromFrame:a,durationFrames:b-a,color:'yellow',
       note:`${PREVIEW_EDIT_SCOPE} ${plan.operationId}；仅比较画面与框箭头；文字/音频/其他段落不变，旧审核不恢复，待用户看片。`}]};
@@ -128,14 +128,14 @@ export async function editClipMentorPreview(args: Record<string,unknown>, ctx: A
         note:'Applied exactly the host-authorized local revision; no independent approval granted. Existing text/audio reused except the explicitly authorized removal.'};
     }
     if(args.action==='render') {
-      await previewEditRequest('reserve_render',args,ctx);
+      const permit=await previewEditRequest('reserve_render',args,ctx);
       if(ctx.getDoc()!==before) throw new Error('Project changed before export; attempt consumed');
       const {execExportTool}=await import('../agent/tools/export-tools');
       if(ctx.getDoc()!==before) throw new Error('Project changed before export; attempt consumed');
       const snapshotContext: AgentContext = {...ctx,getDoc:()=>before,
         getState:()=>before.timelines.find(t=>t.id===before.activeTimelineId)!};
-      const native=before.timelines.find(t=>t.id===before.activeTimelineId)?.name.includes('比较对象与框箭头');
-      return {...await execExportTool('submit_render_job',{format:'video',codec:'h264',...(native?{resolution:'720p',fps:30,videoBitrate:3000000,saveToMediaPool:true}:{}),name:native?'Teashell-比较段最小修正-待审.mp4':before.timelines.find(t=>t.id===before.activeTimelineId)?.name.includes('近鼻讲解精简')?'Teashell-近鼻讲解精简-待审.mp4':'Teashell-88秒-局部承接修订-待审.mp4'},snapshotContext) as object,
+      const native=permit.kind==='native_comparison';
+      return {...await execExportTool('submit_render_job',{format:'video',codec:'h264',...(native?{resolution:'720p',fps:30,videoBitrate:3000000,saveToMediaPool:true}:{}),name:native?'比较段修正-待审.mp4':permit.kind==='sniff_merge'?'讲解精简-待审.mp4':'局部画面修订-待审.mp4'},snapshotContext) as object,
         scope:PREVIEW_EDIT_SCOPE,full_film_accepted:false,quality_status:'review_required'};
     }
     throw new Error('Unknown preview action');

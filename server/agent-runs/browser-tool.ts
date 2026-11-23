@@ -24,6 +24,7 @@ import {
 } from './store';
 
 export interface ServerToolHost {
+  normalizeArgs?(name:string,args:Record<string,unknown>):Record<string,unknown>;
   execute(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;
   beforeRequest():Promise<void>;
   signal?:AbortSignal;
@@ -73,6 +74,7 @@ export async function executeBrowserTool(
   try {
     activation.host?.signal?.throwIfAborted();
     activation.current = activation.current.admit(schema.name);
+    args=activation.host?.normalizeArgs?.(schema.name,args)??args;
     assertCanonicalToolInvocation(schema, args, activation.current.schemas());
     const signal = activation.host?.signal ?? run.abort?.signal;
     const assertDispatch = await reserveHandoff(run, 'tool', toolCallId, schema.name, args, signal);

@@ -1,5 +1,5 @@
 import {outputProductionBudget} from './production-budget';
-import {panelDeliveryIssues,panelTeachingRequirements,partnerStoryboardRequired,verifyPanelPartnerCard} from './production-panel-delivery';
+import {panelDeliveryIssues,partnerStoryboardRequired,panelPartnerCardIssue,assertPanelDeliveryReady} from './production-panel-delivery';
 import {currentCreatorDocument} from './creator-storyboard-document';
 import {productionOutputsMatch} from './production-decisions';
 import {digestValue} from '../agent-runs/store-values';
@@ -84,8 +84,7 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  });
  const saved=await loadOfflineStoredProject(projectId);
  if(!saved)throw Error('制作副本未保存');
- const teachingCriteria=[...new Set([...panelTeachingRequirements(parent),...(
-  selectedRequirements?.brief.doneCriteria.filter((criterion):criterion is string=>typeof criterion==='string')??[])])];
+ const teachingCriteria=selectedRequirements?.brief.doneCriteria.filter((criterion):criterion is string=>typeof criterion==='string')??[];
  const approval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
   digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),
   ...(selectedRequirements?{requirements:selectedRequirements}:{}),
@@ -116,8 +115,7 @@ export async function createBlueprintContinuations(parent:ProductionTask,source:
  if(scope&&partnerStoryboardRequired(scope)){
   const content=await currentCreatorDocument(source.doc);
   const issues=panelDeliveryIssues(source.doc,scope,content);
-  if(issues.length||!await verifyPanelPartnerCard(source.doc,scope,content))
-   throw Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
+  assertPanelDeliveryReady(issues,issues.length?undefined:await panelPartnerCardIssue(source.doc,scope,content));
  }
  selectProductionAudience(source.doc,'existing_partner');selectProductionAudience(source.doc,'new_contact');
  const first=await createBlueprintContinuation(parent,source,'existing_partner',requirements,origin);

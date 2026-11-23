@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import {matchMeasuredNarration,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
+import groupedProject from '../../src/clipmentor/fixtures/grouped-registration-v1.json';
+import {productionBoardPhaseIssues} from './production-readiness';
+import {pictureRepairFindings,repeatedPictureRepair} from './production-decisions';
 import savedProjects from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
 import {performance} from 'node:perf_hooks';
@@ -15,6 +18,27 @@ for(const patch of [{text:'stale copy'},{speed:1.2},{durationSeconds:0},{duratio
 }
 assert.throws(()=>matchMeasuredNarration(lines,[{...assets[0],props:{}}],voice));
 console.log('production readiness: exact current text, confirmed voice, measured duration and normal speed per line; missing/stale/speed-up cases refused, valid group accepted');
+
+const partial=structuredClone(groupedProject) as unknown as ProjectDoc;
+const internal=partial.clipMentorAnalysis!.blueprint[0].internal_review as Record<string,any>;
+const plan=internal[internal.current_picture_plan],cues=plan.viewer_stage_cues.revisit;
+const removed=cues.splice(0,2);
+const missingCues=(await productionBlueprintReadiness(partial)).code;
+assert(pictureRepairFindings(missingCues).some(({targets})=>targets?.length===2));
+cues.unshift(removed[0]);
+const remainingCue=(await productionBlueprintReadiness(partial)).code;
+assert.equal(repeatedPictureRepair(missingCues,remainingCue),undefined);
+assert(repeatedPictureRepair(remainingCue,remainingCue));
+cues.splice(1,0,removed[1]);
+await prepareProductionBlueprint(partial);
+const phase=plan.phases.find((value:any)=>value.mode==='explanation');
+const lineId=phase.line_id;delete phase.line_id;phase.source_range_seconds=[0,9999];
+const diagnosed=()=> 'blueprint_stage_incomplete:'+JSON.stringify(productionBoardPhaseIssues(partial));
+const both=diagnosed();
+assert.deepEqual(pictureRepairFindings(both).map(({code})=>code),
+ ['picture_plan_phase_binding_invalid','picture_plan_phase_content_missing']);
+phase.line_id=lineId;
+assert.equal(repeatedPictureRepair(both,diagnosed()),undefined);
 
 let modelCalls=0;
 globalThis.fetch=(async()=>{modelCalls++;throw Error('Unexpected network in blueprint regression');}) as typeof fetch;

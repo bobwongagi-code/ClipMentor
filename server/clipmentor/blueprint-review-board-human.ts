@@ -16,8 +16,8 @@ const json=(v:unknown)=>JSON.stringify(v).replace(/</g,'\\u003c');
 const n=(v:number)=>Number(v.toFixed(1)).toString();
 const questionKey=(r:ReviewBoardRow)=>r.stage==='opening'||r.stage==='closing'?r.key:r.unit_id;
 export function endingLabel(variant:string,index=0){
- if(['new_contact','GM-CTA-NEW','GM-END-NEW','GM-END-new_contact','GM-CTA-new'].includes(variant))return'新建联达人';
- if(['existing_partner','GM-CTA-EXISTING','GM-END-EXISTING','GM-END-existing_partner','GM-CTA-existing'].includes(variant))return'已合作达人';
+ if(variant==='new_contact')return'新建联达人';
+ if(variant==='existing_partner')return'已合作达人';
  return `达人结尾${index+1}`;
 }
 /** Only the five deterministic advisory classes in the approved specification. */
@@ -107,14 +107,34 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   video.src=url;video.hidden=false;button.hidden=true;status.textContent='';video.focus();
  });
  </script>`;
- const groups=unitIds.map((id,index)=>{const originals=body.filter(r=>r.unit_id===id&&r.stage==='original'),explanations=body.filter(r=>r.unit_id===id&&r.stage==='explanation'),observation=originalDescription(id),originalDuration=originals.reduce((sum,r)=>sum+(r.range?r.range[1]-r.range[0]:0),0),excerpt=observation?`<div class="source-description"><h3>原片观察摘录 <span>· ${esc(observation.range.join('–'))}秒</span></h3><p>${esc(observation.text)}</p>${observation.range[1]-observation.range[0]<originalDuration?`<p class="observation-scope">只描述其中${esc(observation.range.join('–'))}秒。</p>`:''}</div>`:'';return`<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组 · 教什么</span>${esc(teaching(id))}</h2><div class="source-block"><h3>原片</h3>${originals.map(r=>strip(r,'source-strip')).join('')}${excerpt}</div>${stageList(originals)}${id===excerptUnit?excerptHtml:''}${speechBlock(index,originals)}${explanations.flatMap(r=>r.lines.map(l=>`<div class="explanation"><div>${mock(r,l)}</div><div class="explanation-copy"><h3>讲解</h3>${sourceLink(r,index,originals)}${stageList([r])}${copy(r,[l])}<details class="picture-note"><summary>策划画面说明</summary><p>${esc(r.picture)}</p></details></div></div>`)).join('')}${unknownBlock(id)}${questionHtml(id)}</section>`;}).join('');
+ const groups=unitIds.map((id,index)=>{
+  const rows=body.filter(row=>row.unit_id===id),originals=rows.filter(row=>row.stage==='original');
+  const observation=originalDescription(id),originalDuration=originals.reduce((sum,row)=>sum+(row.range?row.range[1]-row.range[0]:0),0);
+  const excerpt=observation?`<div class="source-description"><h3>原片观察摘录 <span>· ${esc(observation.range.join('–'))}秒</span></h3><p>${esc(observation.text)}</p>${observation.range[1]-observation.range[0]<originalDuration?`<p class="observation-scope">只描述其中${esc(observation.range.join('–'))}秒。</p>`:''}</div>`:'';
+  const runs:ReviewBoardRow[][]=[];
+  for(const row of rows){
+   const previous=runs.at(-1);
+   if(previous?.[0].stage===row.stage)previous.push(row);
+   else runs.push([row]);
+  }
+  const playback=runs.map((run,position)=>run[0].stage==='original'
+   ?`<div class="source-block"><h3>原片</h3>${run.map(r=>strip(r,'source-strip')).join('')}${position===0?excerpt:''}</div>${stageList(run)}`
+   :run.flatMap(r=>r.lines.map(l=>`<div class="explanation"><div>${mock(r,l)}</div><div class="explanation-copy"><h3>讲解</h3>${sourceLink(r,index,originals)}${stageList([r])}${copy(r,[l])}<details class="picture-note"><summary>策划画面说明</summary><p>${esc(r.picture)}</p></details></div></div>`)).join('')).join('');
+  return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组 · 教什么</span>${esc(teaching(id))}</h2>${id===excerptUnit?excerptHtml:''}${playback}${speechBlock(index,originals)}${unknownBlock(id)}${questionHtml(id)}</section>`;
+ }).join('');
+
  const endings=board.rows.filter(r=>r.stage==='closing');
  const edges=['left','top','right','bottom'] as const;
  const sharedCrop=endings.some((row,i)=>row.asset_hash&&endings.slice(i+1).some(other=>
   row.asset_hash===other.asset_hash&&edges.every(edge=>(row.crop?.[edge]??0)===(other.crop?.[edge]??0)),
  ));
+ const audiences=new Map<string,string>();
  const endingCards=endings.map((row,i)=>{
-  const label=endingLabel(row.ending_variant??'',i);
+  const layout=row.deliveryLayout?.layout?.kind;
+  const audience=layout==='product_storyboard'?'existing_partner'
+   :layout==='recruitment_card'||layout==='product_commission'?'new_contact':row.unit_id;
+  const label=endingLabel(audience,i);
+  if(row.ending_variant)audiences.set(row.ending_variant,label);
   const prompt=label==='新建联达人'?'核对原海报的佣金区和已确认的合作条件是否在计划画面中可见。':
    label==='已合作达人'?'如计划展示或随片提供本商品的原片 Storyboard，请核对对应画面。':'';
   const route=label==='新建联达人'?'上传的 CTA 素材':label==='已合作达人'?'产品图＋Storyboard':'';
@@ -122,7 +142,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   return `<article class="ending"><h3>${esc(label)}</h3>${route?`<p class="ending-route">${esc(route)}</p>`:''}<div class="ending-body"><div class="provided"><p class="sampling-note">计划上屏</p>${image(row,0)}${fullPicture}</div>${visualQuestions(row.unit_id)}${prompt?`<p>${esc(prompt)}</p>`:''}${copy(row)}${questionHtml(questionKey(row))}</div></article>`;
  }).join('');
  const endingsHtml=endings.length?`<section class="delivery" data-card="endings"><h2>${endings.length===2?'两种达人结尾':'达人结尾'}</h2>${endings.length===2?'<p>共用片头与教学主体，按达人阶段生成两个片尾版本。</p>':''}${sharedCrop?'<aside class="questions"><p>两个达人结尾使用同一张原图与同一裁切。请分别核对合作条件与开拍参考是否已经体现。</p></aside>':''}<div class="ending-grid">${endingCards}</div></section>`:'';
- const durationSummary=lint.durations.map((d,i)=>`${endingLabel(d.variant,i)}约${d.estimated_total_seconds===null?'未知':Math.round(d.estimated_total_seconds)+'秒'}`).join('；');
+ const durationSummary=lint.durations.map((d,i)=>`${audiences.get(d.variant)??endingLabel('',i)}约${d.estimated_total_seconds===null?'未知':Math.round(d.estimated_total_seconds)+'秒'}`).join('；');
  const payload=json({hash:board.candidate_sha256,mode:board.hash_mode}),pictures=json(board.rows.map(r=>r.frames.map((f,i)=>({jpeg:f.jpeg,label:frameLabel(r,i)}))));
  return`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; ${excerptUnit?'media-src blob:; ':''}script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>人审版 · ${esc(title)} · ${revision}</title><style>
 .source-speech{margin:0 0 30px;padding:22px 24px;background:#f5f6f0;border-left:3px solid #a1ae95}.provenance-note{font-size:12px;color:#72806c}.speech-record{scroll-margin-top:24px;padding:14px 0;border-top:1px solid #dde3d5}.speech-time{font-size:12px;color:#64745e;margin-bottom:7px}.speech-meaning{font-size:18px;line-height:1.8;margin-bottom:8px}.source-ms{font-size:13px;color:#64745e}.source-ms p{margin:10px 0 0;white-space:pre-wrap}.source-link,.stage-translations{font-size:13px;color:#687565}.source-link a{color:#3f6d54;text-underline-offset:4px}.stage-translations{margin-bottom:14px}.label-copy h4{font-size:12px;font-weight:500;margin:0 0 6px}.label-copy ul{list-style:none;padding:0;margin:0}.label-copy li{margin:4px 0}.input-notice,.missing-translation{color:#8b591d;font-size:13px}.evidence-boundaries{font-size:13px;border-top:1px solid #e1e5da;padding-top:14px;margin-top:22px;color:#687565}.evidence-boundaries ul{padding-left:20px}.delivery-check{display:grid;grid-template-columns:1fr 1fr;gap:24px;border-top:1px solid #e1e5da;padding-top:20px;margin-top:20px;font-size:14px;overflow-wrap:anywhere}.delivery-check blockquote{margin:0;padding:0}.delivery-check blockquote>span{font-size:11px;color:#75826e}.delivery-check p{white-space:pre-wrap}.ending .delivery-check{grid-template-columns:1fr;gap:12px}.thumb-strip figure{margin:0;min-width:0}.thumb-strip figcaption{font-size:11px;color:#718069;margin-top:5px;text-align:center}.speech-record:target{background:#fff8e8;outline:2px solid #d5aa3e;outline-offset:6px}

@@ -30,6 +30,43 @@ assert.deepEqual(good.issues,[]);assert.deepEqual(good.placements.U1,{timeline_i
 assert.deepEqual(good.placements.U2,{timeline_id:'tl',original_frames:[60,120],explanation_frames:[210,270]});
 assert.equal(good.bindings.length,5);assert.equal(JSON.stringify(project),before,'actual inspection cannot revise or restamp the blueprint');
 assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON.stringify(checkSourceBreakdown(project,true).issues));
+const combined=structuredClone(project);
+const combinedAnalysis=combined.clipMentorAnalysis!;
+const combinedUnit=combinedAnalysis.source_breakdown!.units[1];
+combinedUnit.original_source_ranges=[[2,2.5],[2.5,4]];
+const lastSegment={...combinedAnalysis.source_breakdown!.segments[1],segment_id:'S2-tail',source_range_seconds:[2.5,4] as [number,number]};
+combinedAnalysis.source_breakdown!.segments.push(lastSegment);
+combinedUnit.original_segment_ids.push(lastSegment.segment_id);
+combinedUnit.revisits[0].from_segment_id=lastSegment.segment_id;
+const combinedPlan=(combinedAnalysis.blueprint[1] as any).internal_review.plan;
+combinedPlan.phases.splice(0,1,...combinedUnit.original_source_ranges.map(range=>({mode:'original',source_range_seconds:range,picture:'Original'})));
+assert.equal(checkSourceBreakdown(combined,true).status,'structurally_ready','both source windows precede a shared explanation');
+const disordered=structuredClone(combined);
+const combinedOriginal=disordered.timelines[0].items.shift()!;
+disordered.timelines[0].items.push(
+ {...combinedOriginal,id:'first-unit-source',startFrame:0,srcInFrame:0,durationInFrames:60},
+ {...combinedOriginal,id:'second-unit-tail',startFrame:60,srcInFrame:75,durationInFrames:45},
+ {...combinedOriginal,id:'second-unit-start',startFrame:105,srcInFrame:60,durationInFrames:15});
+assert(nativeExecutionMapping(disordered).issues.some(issue=>issue.id==='U2'&&issue.code==='unit_output_order_invalid'));
+assert.notEqual(checkSourceBreakdown(disordered,true).status,'structurally_ready','reversing the two windows still blocks delivery');
+const middleSwap=structuredClone(combined);
+const middleReview=(middleSwap.clipMentorAnalysis!.blueprint[1] as any).internal_review;
+for(const [index,id] of ['L3','L4','L5'].entries()){
+ const text='Additional '+id,start=270+index*30;
+ const sample=middleSwap.assets.find(asset=>asset.id==='a2')!;
+ const voice={...sample,id:'a'+id,src:'/media/uploads/'+id+'.mp3',durationInFrames:30,
+  props:{generation:{...sample.props!.generation,text,durationSeconds:1}}};
+ middleSwap.assets.push(voice);
+ middleReview.copy.lines.push({...middleReview.copy.lines[0],id,narration_ms:text,caption_lines:[text]});
+ middleReview.plan.phases.push({...middleReview.plan.phases.at(-1),line_id:id});
+ middleReview.plan.viewer_stage_cues.revisit.push({line_ids:[id],text:'Lihat semula',enter:'start',exit:'end'});
+ middleSwap.timelines[0].items.push(
+  {...middleSwap.timelines[0].items.find(item=>item.id==='line2')!,id,sourceAssetId:voice.id,src:voice.src,startFrame:start,durationInFrames:30},
+  {...middleSwap.timelines[0].items.find(item=>item.id==='revisit2')!,id:'picture-'+id,startFrame:start,durationInFrames:30});
+}
+assert.deepEqual(nativeExecutionMapping(middleSwap).issues,[]);
+[middleReview.plan.phases[3],middleReview.plan.phases[4]]=[middleReview.plan.phases[4],middleReview.plan.phases[3]];
+assert(nativeExecutionMapping(middleSwap).issues.some(issue=>issue.id==='U2'&&issue.code==='unit_output_order_invalid'));
 // Editor defaults may persist an empty gap-cap map; only actual gap edits are nonlinear.
 const emptyGaps=structuredClone(project);
 for(const item of emptyGaps.timelines[0].items.filter(i=>i.kind==='video'))item.gapCapsMs={};

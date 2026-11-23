@@ -31,6 +31,7 @@ import {sha256File} from '../../shared/node-content-hash';
 import {extractOneFrame} from '../plugins/extract-frames';
 import {copyReviewDependencies,reviewClipMentorCopy} from './copy-review';
 import {exportJobResultName} from '../plugins/export-runtime';
+import {readStoryboardSnapshot,storyboardReadError} from './storyboard-api';
 import {apiCopyReviewDependencies,type ReviewApiConfig} from './copy-review-api';
 
 export interface HeadlessOptions {
@@ -72,6 +73,17 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  }
  const hostFetch:typeof fetch=async(input,init)=>{
   const path=String(input),body=JSON.parse(String(init?.body??'{}'));
+  const url=new URL(path,origin);
+  if(url.pathname==='/api/clipmentor/production-task'&&url.searchParams.get('view')==='storyboard'){
+   try {
+    init?.signal?.throwIfAborted();
+    await options.assertCurrent?.();
+    const {data}=await readStoryboardSnapshot(url,undefined,async projectId=>
+     projectId===options.projectId?{doc:committed}:null);
+    init?.signal?.throwIfAborted();
+    return Response.json(data);
+   }catch(error){return Response.json(storyboardReadError(error),{status:409});}
+  }
   if(path==='/api/clipmentor/review-copy'){
    const dependencies=options.reviewBackend==='codex'?copyReviewDependencies():apiCopyReviewDependencies(options.review);
    const result=await options.effect('review',body.operationId,async()=>{

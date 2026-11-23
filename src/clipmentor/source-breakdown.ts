@@ -1,5 +1,6 @@
 import {deliverySectionsFromDoc,deliveryTimeline,deliveryAudio} from './delivery-sections';
 import { isSourceReviewScope, type SourceReviewScope } from './source-alignment';
+import type { SourceClosingStatus } from '../../shared/clipmentor-handoff';
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
 
@@ -10,6 +11,7 @@ export interface SourceBreakdown {
   version: 1;
   /** Frozen task scope, never inferred from the clips selected for playback. Missing on legacy drafts. */
   review_scope?: SourceReviewScope;
+  source_closing?: {status:SourceClosingStatus;segment_id:string;note:string};
   segments: Array<{
     segment_id: string;
     source_range_seconds: [number, number];
@@ -79,7 +81,12 @@ function teachingBasis(value:unknown):value is NonNullable<SourceBreakdown['poin
 }
 
 export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
-  if (!row(v) || v.version !== 1 || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
+  if (!row(v)) return false;
+  const closing=v.source_closing;
+  if (v.version !== 1 || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
+    || closing!==undefined&&(!row(closing)
+      || !['confirmed','weak_candidate','none'].some(status=>status===closing.status)
+      || !text(closing.segment_id)||!text(closing.note)||closing.note.length>300)
     || !rows(v.segments, (s) => text(s.segment_id) && range(s.source_range_seconds)
       && strings(s.visible_evidence_ids) && strings(s.claim_evidence_ids) && strings(s.interpretation_evidence_ids) && strings(s.unknowns))
     || !rows(v.points, (p) => text(p.point_id) && strings(p.segment_ids) && p.segment_ids.length > 0
@@ -181,6 +188,28 @@ export function originalPlaybackRanges(b: SourceBreakdown, unit: SourceBreakdown
   });
 }
 
+export class PicturePlanIssue extends Error {
+  readonly code:string;
+  readonly unitId:string;
+  readonly targets:string[];
+  constructor(code:string,unitId:string,targets:string[] = []) {
+    super([code,unitId,...targets].join(':'));
+    this.code=code;
+    this.unitId=unitId;
+    this.targets=targets;
+  }
+}
+
+function contiguousPlaybackRuns(windows: Array<[number,number]>, tolerance: number) {
+  const runs: Array<[number,number]> = [];
+  for (const [start,end] of windows) {
+    const previous = runs.at(-1);
+    if (previous && Math.abs(start-previous[1])<=tolerance && end>previous[1]) previous[1]=end;
+    else runs.push([start,end]);
+  }
+  return runs;
+}
+
 /** Derive grouped playback relations once for both project checks and review projection.
  * Legacy picture phases without playback modes keep their existing ledger semantics. */
 export function groupedPlaybackRelations(phases: unknown, lineIds: string[], unitId: string) {
@@ -188,27 +217,29 @@ export function groupedPlaybackRelations(phases: unknown, lineIds: string[], uni
   const originals: Array<[number, number]> = [];
   const revisits: Array<{ from_source_range: [number, number]; to_source_range: [number, number] }> = [];
   const explanationLines: string[] = [];
-  const groups: Array<{original:[number,number]; explanations:Array<{lineId:string;source:[number,number]}>}> = [];
-  let current: [number, number] | undefined, explained = false;
+  const groups: Array<{originals:Array<[number,number]>; explanations:Array<{lineId:string;source:[number,number]}>}> = [];
   for (const [i, phase] of phases.entries()) {
-    if (!row(phase) || (phase.mode !== 'original' && phase.mode !== 'explanation')) throw new Error(`picture_plan_phase_mode_invalid:${unitId}:${i}`);
+    if (!row(phase) || (phase.mode !== 'original' && phase.mode !== 'explanation')) throw new PicturePlanIssue('picture_plan_phase_mode_invalid',unitId,[`phase[${i}]`]);
     const value = phase.source_range_seconds ?? phase.source_seconds;
-    if (!range(value)) throw new Error(`picture_plan_phase_range_invalid:${unitId}:${i}`);
+    if (!range(value)) throw new PicturePlanIssue('picture_plan_phase_range_invalid',unitId,[`phase[${i}]`]);
     const source = value as [number, number];
     if (phase.mode === 'original') {
-      if (current && !explained) throw new Error(`picture_plan_group_explanation_missing:${unitId}:${i}`);
-      current = source; explained = false; originals.push(source);
-      groups.push({original:source,explanations:[]});
+      originals.push(source);
+      if (!groups.length || groups.at(-1)!.explanations.length) groups.push({originals:[],explanations:[]});
+      groups.at(-1)!.originals.push(source);
     } else {
-      if (!current) throw new Error(`picture_plan_phase_original_missing:${unitId}:${i}`);
-      if (!text(phase.line_id) || !lineIds.includes(phase.line_id)) throw new Error(`picture_plan_phase_line_invalid:${unitId}:${i}`);
-      explanationLines.push(phase.line_id); explained = true;
-      groups.at(-1)!.explanations.push({lineId:phase.line_id,source});
-      const revisit = { from_source_range: current, to_source_range: source };
+      const group = groups.at(-1);
+      if (!group) throw new PicturePlanIssue('picture_plan_phase_original_missing',unitId,[`phase[${i}]`]);
+      if (!text(phase.line_id) || !lineIds.includes(phase.line_id)) throw new PicturePlanIssue('picture_plan_phase_line_invalid',unitId,[`phase[${i}]`]);
+      explanationLines.push(phase.line_id);
+      group.explanations.push({lineId:phase.line_id,source});
+      const revisit = { from_source_range: group.originals.at(-1)!, to_source_range: source };
       if (!revisits.some(r => JSON.stringify(r) === JSON.stringify(revisit))) revisits.push(revisit);
     }
   }
-  if (!explained || !lineIds.every(id => explanationLines.includes(id))) throw new Error(`picture_plan_group_explanation_missing:${unitId}`);
+  const missingLines = lineIds.filter(id => !explanationLines.includes(id)).sort();
+  if (!explanationLines.length) missingLines.push('original_run_has_no_explanation');
+  if (missingLines.length) throw new PicturePlanIssue('picture_plan_group_explanation_missing',unitId,missingLines);
   return { originals, revisits, explanationLines, groups };
 }
 
@@ -218,21 +249,22 @@ export function registeredRevisitRanges(
   unit: SourceBreakdown['units'][number],
   segmentRange: (id: string) => [number, number] | undefined,
   grouped: ReturnType<typeof groupedPlaybackRelations>,
+  mismatchSlots:string[] = [],
 ) {
-  if (grouped && grouped.revisits.length !== unit.revisits.length) return null;
   const result: NonNullable<ReturnType<typeof groupedPlaybackRelations>>['revisits'] = [];
-  for (const [index, entry] of unit.revisits.entries()) {
-    const from = segmentRange(entry.from_segment_id), to = segmentRange(entry.to_segment_id);
-    if (!from || !to) return null;
-    if (!grouped) { result.push({ from_source_range: from, to_source_range: to }); continue; }
-    const phase = grouped.revisits[index];
-    const contains = (outer: [number, number], inner: [number, number]) => outer[0] <= inner[0] && outer[1] >= inner[1];
+  const count = Math.max(unit.revisits.length,grouped?.revisits.length??0);
+  const contains = (outer: [number, number], inner: [number, number]) => outer[0] <= inner[0] && outer[1] >= inner[1];
+  for (let index=0;index<count;index++) {
+    const entry=unit.revisits[index],phase=grouped?.revisits[index];
+    const from=entry&&segmentRange(entry.from_segment_id),to=entry&&segmentRange(entry.to_segment_id);
+    if(!from||!to||grouped&&!phase){mismatchSlots.push(`revisit[${index}]`);continue;}
+    if (!phase) { result.push({ from_source_range: from, to_source_range: to }); continue; }
     if ((!unit.original_segment_ids.includes(entry.from_segment_id) && JSON.stringify(from) !== JSON.stringify(phase.from_source_range))
       || (!unit.explanation_segment_ids.includes(entry.to_segment_id) && JSON.stringify(to) !== JSON.stringify(phase.to_source_range))
-      || !contains(phase.from_source_range, from) || !contains(to, phase.to_source_range)) return null;
-    result.push(phase);
+      || !contains(phase.from_source_range, from) || !contains(to, phase.to_source_range)) mismatchSlots.push(`revisit[${index}]`);
+    else result.push(phase);
   }
-  return result;
+  return mismatchSlots.length?null:result;
 }
 
 function rangesCover(ranges: Array<[number, number]>, target: [number, number], tolerance: number) {
@@ -362,11 +394,9 @@ function checkPlannedRows(
     const phases = row(plan) && Array.isArray(plan.phases) ? plan.phases : [];
     const grouped = groupedPlaybackRelations(phases, lines.map(l=>String(l.id)), u.unit_id);
     if (grouped) {
-      const expected: Array<{source:[number,number];lines:string[]}> = [];
-      for (const phase of phases as Row[]) {
-        if (phase.mode === 'original') expected.push({source:(phase.source_range_seconds??phase.source_seconds) as [number,number],lines:[]});
-        else expected.at(-1)!.lines.push(String(phase.line_id));
-      }
+      const expected = grouped.groups.map(group => ({
+        sources:group.originals,lines:group.explanations.map(part => part.lineId),
+      }));
       const actual: Array<{originals:typeof accepted;explanations:typeof accepted}> = [];
       for (const r of sorted) {
         if (r.row.kind === 'original') {
@@ -379,11 +409,11 @@ function checkPlannedRows(
       const tolerance = 1/tl.fps + 1e-6;
       for (const [index, group] of actual.entries()) {
         const target = expected[index];
-        if (!target || !group.originals.length || !group.explanations.length) { orderValid=false; continue; }
-        const sources = group.originals.map(r=>r.source);
-        if (Math.abs(sources[0][0]-target.source[0])>tolerance
-          || Math.abs(sources.at(-1)![1]-target.source[1])>tolerance
-          || sources.some((s,i)=>i>0 && Math.abs(s[0]-sources[i-1][1])>tolerance)) orderValid=false;
+        if (!target || !group.originals.length) { orderValid=false; continue; }
+        const sources = contiguousPlaybackRuns(group.originals.map(r=>r.source),tolerance);
+        const expectedSources = contiguousPlaybackRuns(target.sources,tolerance);
+        if (sources.length!==expectedSources.length || sources.some(([start,end],i) =>
+          Math.abs(start-expectedSources[i][0])>tolerance || Math.abs(end-expectedSources[i][1])>tolerance)) orderValid=false;
         const positions = new Map<string,{first:number;last:number}>();
         for (const [position,r] of group.explanations.entries()) for (const id of r.row.line_ids as string[]) {
           const previous = positions.get(id);
@@ -520,27 +550,41 @@ export function nativeExecutionMapping(doc:ProjectDoc){
       }
       if(!rangesCover(spans,window,0))fail('native_mapping_picture_missing',line.id);
     }
-    const phases=(plan.phases as Row[]),groups=phases.reduce<Array<{original:number;lines:string[]}>>((out,p)=>{
-      if(p.mode==='original')out.push({original:out.length,lines:[]});else if(p.mode==='explanation')out.at(-1)?.lines.push(String(p.line_id));return out;
-    },[]);
-    for(const [index,g] of groups.entries()){
-      const first=lines.find(l=>l.id===g.lines[0]),last=lines.find(l=>l.id===g.lines.at(-1));
-      if(!originals[index]||!first||!last||originals[index][1]>first.item.startFrame
-        ||originals[index+1]&&last.item.startFrame+last.item.durationInFrames>originals[index+1][0])fail('unit_output_order_invalid',u.unit_id);
-    }
+    const groupOrderValid=()=>{
+      try{
+        const grouped=groupedPlaybackRelations(plan.phases,(candidate.lines as Row[]).map(line=>String(line.id)),u.unit_id);
+        if(!grouped||originals.length!==grouped.originals.length
+          ||originals.some((window,index)=>index>0&&window[0]<originals[index-1][1]))return false;
+        let offset=0;
+        return grouped.groups.every(group=>{
+          offset+=group.originals.length;
+          let previousId:string|undefined;
+          let end=originals[offset-1][1];
+          for(const part of group.explanations){
+            if(part.lineId===previousId)continue;
+            const audio=lines.find(line=>line.id===part.lineId)?.item;
+            if(!audio||audio.startFrame<end)return false;
+            end=audio.startFrame+audio.durationInFrames;
+            previousId=part.lineId;
+          }
+          return !originals[offset]||end<=originals[offset][0];
+        });
+      }catch{return false;}
+    };
+    if(!groupOrderValid())fail('unit_output_order_invalid',u.unit_id);
     if(originals.length&&lines.length)placements[u.unit_id]={timeline_id:t.id,original_frames:[originals[0][0],originals.at(-1)![1]],explanation_frames:[lines[0].item.startFrame,lines.at(-1)!.item.startFrame+lines.at(-1)!.item.durationInFrames]};
   }
   return {issues,bindings,placements};
 }
 
 export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
-  const issues: Array<{ code: string; id: string }> = [];
+  const issues: Array<{ code: string; id: string; targets?: string[] }> = [];
   let deliveryOffset=0;
   const native=checkTimeline?nativeExecutionMapping(doc):undefined;
   if(native)issues.push(...native.issues);
   try{const sections=deliverySectionsFromDoc(doc);if(checkTimeline){const delivery=deliveryTimeline(doc,sections,native?.placements);deliveryOffset=delivery.offset;for(const code of delivery.issues)issues.push({code,id:'delivery'});}}catch(e){issues.push({code:e instanceof Error?e.message:'delivery_sections_invalid',id:'delivery'});}
   const bindings: Array<{ unit_id: string; phase: string; item_id: string; source_range_seconds: [number, number]; segment_ids: string[] }> = [];
-  const issue = (code: string, id: string) => issues.push({ code, id });
+  const issue = (code: string, id: string, targets?:string[]) => issues.push({ code, id, ...(targets?.length?{targets}:{}) });
   const a = doc.clipMentorAnalysis;
   const b = a?.source_breakdown;
   const result = () => ({ status: issues.length ? 'review_required' as const : 'structurally_ready' as const,
@@ -556,6 +600,13 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
   if (!a.source.sourceContentHash || asset?.sourceContentHash !== a.source.sourceContentHash) issue('source_hash_missing_or_changed', a.source.asset_id);
   const segments = new Map(b.segments.map((s) => [s.segment_id, s]));
   const evidence = new Map(a.evidence.map((e) => [e.evidence_id, e]));
+  if(b.source_closing){
+    const closing=segments.get(b.source_closing.segment_id);
+    const tolerance=1/a.source.fps+1e-6;
+    if(!closing||closing.source_range_seconds[1]<a.source.duration_seconds-tolerance
+      ||b.source_closing.status==='confirmed'&&!closing.claim_evidence_ids.length)
+      issue('source_closing_evidence_binding_invalid',b.source_closing.segment_id);
+  }
   for (const s of b.segments) {
     if (s.source_range_seconds[1] > a.source.duration_seconds) issue('segment_time_out_of_bounds', s.segment_id);
     const groups = [
@@ -615,10 +666,18 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
       grouped = groupedPlaybackRelations(row(boundPlan) ? boundPlan.phases : undefined,
         row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row).map(l => String(l.id)) : [], u.unit_id);
       if (grouped) {
-        if (JSON.stringify(grouped.originals) !== JSON.stringify(originalRanges)) issue('picture_plan_original_order_mismatch', u.unit_id);
-        if (!registeredRevisitRanges(u, id => segments.get(id)?.source_range_seconds, grouped)) issue('picture_plan_revisits_mismatch', u.unit_id);
+        const {originals}=grouped;
+        const playbackSlots=Array.from({length:Math.max(originals.length,originalRanges.length)},(_,index)=>index)
+          .filter(index=>JSON.stringify(originals[index])!==JSON.stringify(originalRanges[index])).map(index=>`original[${index}]`);
+        if(playbackSlots.length)issue('picture_plan_original_order_mismatch',u.unit_id,playbackSlots);
+        const revisitSlots:string[]=[];
+        if (!registeredRevisitRanges(u, id => segments.get(id)?.source_range_seconds, grouped,revisitSlots))
+          issue('picture_plan_revisits_mismatch',u.unit_id,revisitSlots);
       }
-    } catch (error) { issue(error instanceof Error ? error.message.split(':')[0] : 'picture_plan_phase_invalid', u.unit_id); }
+    } catch (error) {
+      if(error instanceof PicturePlanIssue)issue(error.code,error.unitId,error.targets);
+      else issue('picture_plan_phase_invalid',u.unit_id);
+    }
     if (!grouped) for (let i = 1; i < order.length; i++) {
         const from = segments.get(order[i - 1])!, to = segments.get(order[i])!;
         if (to.source_range_seconds[0] < from.source_range_seconds[1] - 1 / a.source.fps
