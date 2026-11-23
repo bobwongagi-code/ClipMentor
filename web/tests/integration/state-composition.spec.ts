@@ -67,7 +67,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
         serverPath = join(proof, 'private-state-server.mts')
         await writeFile(serverPath, code)
       }
-      child = spawn(process.execPath, [join(source, 'node_modules/tsx/dist/cli.mjs'), serverPath], { cwd: source, env: { ...process.env, CLIPMENTOR_WEB_TEST_DATA: root }, stdio: ['ignore', 'pipe', 'pipe'] })
+      child = spawn(process.execPath, ['--import', 'tsx', serverPath], { cwd: source, env: { ...process.env, CLIPMENTOR_WEB_TEST_DATA: root }, stdio: ['ignore', 'pipe', 'pipe'] })
       child.stdout!.on('data', b => { logs += String(b) }); child.stderr!.on('data', b => { logs += String(b) })
       await expect.poll(() => { const line = logs.split('\n').find(s => s.startsWith('{"ready":true')); if (line) origin = JSON.parse(line).origin; return !!origin }, { timeout: 30_000 }).toBe(true)
       await context.route('**/*', async route => {
@@ -170,7 +170,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       expect(result.providerCalls).toBe(0)
       expect(result.actions.map((a: { status: number }) => a.status)).toEqual(replacement === 'render' ? [200, 200, 409, 200] : [200, timing === 'request' ? 409 : 200, 200])
       expect(result.actions.filter((a: { action: string; renderId: string }) => a.action === action && a.renderId === old.renderId)).toHaveLength(action === 'revise_preview' && replacement === 'render' ? 2 : 1)
-      expect(blocked.every(url => url.startsWith('https://fonts.googleapis.com/'))).toBe(true)
+      expect(blocked).toEqual([])
       // Retain raw persistent store files as an independent postcondition source.
       const persisted: Record<string, string> = {}
       for (const name of await readdir(root, { recursive: true })) if (/\.(json|jsonl)$/.test(name)) {

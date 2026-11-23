@@ -185,4 +185,7 @@ const server=createServer(async(req,res)=>{try{
  }catch(error){res.statusCode=409;res.setHeader('content-type','application/json');res.end(JSON.stringify({error:String(error)}));}});
 server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();assert(address&&typeof address==='object');origin=`http://127.0.0.1:${address.port}`;
 console.log(JSON.stringify({ready:true,origin,project,profile:runtimeProfile().rootDir,fixtureWorker:true,providerCalls}));
-process.on('SIGTERM',()=>server.close(()=>process.exit()));
+process.once('SIGTERM',()=>{
+ server.close(()=>process.exit());
+ server.closeAllConnections();
+});

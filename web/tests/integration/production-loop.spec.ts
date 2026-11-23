@@ -29,7 +29,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
   let logs = '', origin = ''
   const blocked: string[] = [], forwarded: string[] = []
   try {
-    child = spawn(process.execPath, [join(sourceRoot, 'node_modules/tsx/dist/cli.mjs'), join(sourceRoot, 'server/clipmentor/production-web-loop.test-server.ts')], {
+    child = spawn(process.execPath, ['--import', 'tsx', join(sourceRoot, 'server/clipmentor/production-web-loop.test-server.ts')], {
       cwd: sourceRoot, env: { ...process.env, CLIPMENTOR_WEB_TEST_DATA: root }, stdio: ['ignore', 'pipe', 'pipe'],
     })
     child.stdout!.on('data', bytes => { logs += String(bytes) })
@@ -135,7 +135,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     expect(result.workerEvents.every((event: {project:string}) => event.project.startsWith('web-loop-fixture'))).toBe(true)
     expect(result.actions.filter((action:{action:string,status:number}) => action.action === 'revise_blueprint' && action.status===200)).toHaveLength(1)
     expect(result.actions.filter((action:{action:string}) => action.action === 'revise_preview')).toHaveLength(1)
-    expect(blocked.every(request => request.startsWith('GET https://fonts.googleapis.com/'))).toBe(true)
+    expect(blocked).toEqual([])
     await page.screenshot({ path: join(proof, '03-confirmed-downloads.png'), fullPage: true })
     await writeFile(join(proof, 'audit.json'), JSON.stringify({ ...result, forwarded, blocked, firstRevision, revisedRevision: revised.blueprintRevision, scope: 'real HTTP handler and store, synthetic worker/reviewer/media; not live Agent production or semantic quality' }, null, 2))
   } finally {
