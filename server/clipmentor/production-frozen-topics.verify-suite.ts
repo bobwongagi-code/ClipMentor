@@ -206,7 +206,11 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  const distinct=await recordEditorApprovedGateProbe(restored,{...attestation(restored),approval:'Original candidate checked independently'});
  const registered=distinct.find(result=>result.count===2);
  assert(registered);
- const gateIssue='picture_plan_phase_mode_invalid:'+firstUnit.unit_id+':phase[0]';
+ const {productionBoardPhaseIssues}=await import('./production-readiness');
+ const {checkSourceBreakdown}=await import('../../src/clipmentor/source-breakdown');
+ const gateIssue='blueprint_stage_incomplete:'+JSON.stringify([
+  ...productionBoardPhaseIssues(restored),...checkSourceBreakdown(restored).issues,
+ ]);
  assert(await firstSuspectedGateDefect(sourceHash,gateIssue));
  assert.equal(await firstSuspectedGateDefect('f'.repeat(64),gateIssue),undefined);
  console.log('PASS frozen topic scope rejects false overall approval, reuses saved decisions and binds the original ending to board order');

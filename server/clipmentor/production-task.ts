@@ -37,7 +37,7 @@ export function productionRepairContext(previous:Record<string,unknown>|undefine
   ...(previous?.final_feedback?{final_feedback:previous.final_feedback}:{})};
 }
 
-export async function structuralRepairPause(task:ProductionTask,issue:unknown,sourceHash?:string){
+export async function structuralRepairPause(task:ProductionTask,issue:unknown,sourceHash?:string|null){
  if(!pictureRepairFindings(issue).length)return;
  if(sourceHash){
   const defect=await firstSuspectedGateDefect(sourceHash,issue);
