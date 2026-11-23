@@ -985,7 +985,7 @@ try{
   const evidence={assetId:'earlier-sales',sha256:assets[2].sourceContentHash};
   const criteria=[{kind:'source_performance',source,evidence,quote:'同款商品，这支怎么样？',results:{views:'10k',units:'42',revenue:'RM51'}}];
   const detached=[{...criteria[0],evidence:{...evidence,sha256:'f'.repeat(64)}}];
-  const {registerPanelSourceCriteria,readPanelSourceCriteria}=await import('../clipmentor/production-source-policy');
+  const {registerPanelSourceCriteria,readPanelSourceCriteria}=await import('../clipmentor/production-panel-source-requirements');
   await assert.rejects(registerPanelSourceCriteria(projectId,detached,assets[0],assets[2]),/source_criteria_sales_changed/);
   assert.equal((await intake({action:'start',doneCriteria:criteria})).status,409);
   await registerPanelSourceCriteria(projectId,criteria,assets[0],assets[2]);

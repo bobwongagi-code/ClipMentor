@@ -30,7 +30,8 @@ import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {deliveryFileName,attachmentDisposition} from './delivery-filename';
 import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
-import {readPanelSourceCriteria,frozenTeachingTopics} from './production-source-policy';
+import {frozenTeachingTopics} from './production-source-policy';
+import {readPanelSourceCriteria} from './production-panel-source-requirements';
 import {bindTeachingFeedbackUnits} from './production-teaching-baseline';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,

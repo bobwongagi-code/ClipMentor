@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { loadOfflineStoredProject } from '../external-agent/offline-project-store';
 import { activateOfflineAgentRuntimeBackend } from '../external-agent/agent-runtime-persistence';
 import { latestPanelProductionTask } from './production-task';
-import { bindPanelSourceCriteria, frozenTeachingTopics, registerPanelSourceCriteria } from './production-source-policy';
+import { bindPanelSourceCriteria, frozenTeachingTopics } from './production-source-policy';
+import { registerPanelSourceCriteria } from './production-panel-source-requirements';
 
 const [file]=process.argv.slice(2);
 if(!file)throw Error('Usage: tsx server/clipmentor/register-panel-source-requirements.mts <confirmed-project-requirements.json>');
