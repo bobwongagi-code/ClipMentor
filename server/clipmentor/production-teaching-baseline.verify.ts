@@ -21,6 +21,7 @@ const prior=process.env.OPENCHATCUT_DATA_DIR,realFetch=globalThis.fetch;
 process.env.OPENCHATCUT_DATA_DIR=path;
 let calls:string[]=[];
 let analysisCorrection:SourceBreakdown|undefined;
+let rejectSupplement=false;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
 let wholeFilmAction:'missing'|'omission'|undefined;
 let panelRequest:RequestListener|undefined;
@@ -92,7 +93,14 @@ const host=createServer(async(req,res)=>{
   if(data.stage==='analysis'&&analysisCorrection){
    calls.push('analysis');
    const send=stream();
-   if(body.messages.some(message=>message.role==='tool')){
+   const toolReplies=body.messages.filter(message=>message.role==='tool');
+   if(rejectSupplement&&toolReplies.length===1){
+    const args={action:'append',expectedRevision:data.revision+1,reason:'补充已上传图片说明',
+     actor:{operator:'fixture',executor:'builtin_api_agent',instruction:'核对素材',identity:'local_declared_not_authenticated'},
+     records:{evidence:[{kind:'operator_supplied',status:'operator_provided_not_independently_verified',source_ids:[]}]}};
+    send({role:'assistant',tool_calls:[{index:0,id:'call_supplement',type:'function',function:{name:'revise_clipmentor_analysis',arguments:JSON.stringify(args)}}]},null);
+    send({},'tool_calls');
+   }else if(toolReplies.length){
     send({role:'assistant',content:'已保存教学选题。'},null);send({},'stop');
    }else{
     const args={action:'set_source_breakdown',expectedRevision:data.revision,record:analysisCorrection,reason:'按现场原片证据修订购买关注与作用',
@@ -587,6 +595,25 @@ try{
  assert.equal(realCorrection.clipMentorAnalysis!.source_breakdown!.points[0].teaching_question,b.points[0].teaching_question);
  assert.equal(teachingDraftPointersDigest(realCorrection),teachingDraftPointersDigest(old),'analysis rewrite leaves old candidates for the draft phase');
  assert.equal(correctionTask.teachingAnalysisPublication,undefined,'analysis publication body is cleared once its stage settles');
+ rejectSupplement=true;
+ for(const complete of [true,false]){
+  const item=await taskFor('teaching-supplement-'+complete,firstCopyDoc,0,'exemplar-v1');
+  item.stage='analysis';delete item.completed.analysis;
+  analysisCorrection=structuredClone(breakdown);
+  if(!complete)analysisCorrection.points[0].buying_concern=analysisCorrection.points[0].teaching_basis!.selling_point;
+  const original=(await loadOfflineStoredProject(item.projectId))!;
+  const context={signal:new AbortController().signal,effect:async()=>null} as Parameters<typeof productionStageWorker>[1];
+  if(complete){
+   const result=await productionStageWorker(item,context);
+   assert.ok(result.artifact.recoveredAnalysisWrite,'worker cites the two real tool calls');
+   assert.equal(result.artifact.revision,(await loadOfflineStoredProject(item.projectId))?.revision);
+  }else{
+   await assert.rejects(productionStageWorker(item,context),/tool failed/i);
+   assert.equal((await loadOfflineStoredProject(item.projectId))?.revision,original.revision);
+  }
+ }
+ console.log('PASS failed supplementary write publishes only a complete registered analysis for independent review');
+ rejectSupplement=false;
  analysisCorrection=undefined;
  console.log('PASS real worker executes the analysis tool and checks the corrected source before authoring can resume');
 

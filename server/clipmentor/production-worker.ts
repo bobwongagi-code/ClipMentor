@@ -1,3 +1,4 @@
+import {recoveredAnalysisWrite} from './production-analysis-recovery';
 import {frozenTeachingTopics,sourceClosingPolicy} from './production-source-policy';
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
 import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
@@ -780,7 +781,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    return {artifact:{revision:editor.revision,teaching_baseline_issue:'教学选点在写稿途中改变，需重新核对后再写。',
     ...(changed?{teaching_rebuild:changed}:{})},repair:'blueprint'};
   }
-  if(run.status!=='completed')throw new Error(run.error??'Author stage failed');
+  const recoveredWrite=teachingAnalysis&&run.status==='failed'&&!stage.signal.aborted
+   ?recoveredAnalysisWrite(editor.getDoc(),run.events,run.error??'',baselineSource):undefined;
+  if(run.status!=='completed'&&!recoveredWrite)throw new Error(run.error??'Author stage failed');
+  if(recoveredWrite)await stage.assertCurrent?.();
   captureBlueprintFeedbackSummary(task,feedbackSource,run.events.filter(event=>event.type==='text-delta').map(event=>(event.data as {text?:string}).text??'').join(''));
   let next=editor.getDoc();const analysis=next.clipMentorAnalysis;
   if(!isClipMentorAnalysis(analysis)||!analysis.points.length||!analysis.blueprint.length||!analysis.evidence.length)throw new Error('analysis_stage_incomplete');
@@ -828,7 +832,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    editor.context.commands.applyDoc(next);
    analysisCopyDigest=teachingDraftPointersDigest(next);
    const revision=revisionOf(next);
-   const artifact={revision,analysisRevision:analysis.revision,runId:run.id,exemplarRead,semantic_quality:'not_certified_by_structure'};
+   const artifact={revision,analysisRevision:analysis.revision,runId:run.id,exemplarRead,...(recoveredWrite?{recoveredAnalysisWrite:recoveredWrite}:{}),semantic_quality:'not_certified_by_structure'};
    if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
     return {artifact:{revision:editor.revision,reason:'review_requirements_changed'},repair:'analysis'};
    await stage.checkpointTeachingAnalysis?.({baseRevision:editor.revision,revision,repairEpoch:task.repairs,inputDigest:analysisAuthority(policy),outputDigest:digestValue(next),artifact,analysis:next.clipMentorAnalysis!});
