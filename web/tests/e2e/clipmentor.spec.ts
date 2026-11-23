@@ -191,7 +191,7 @@ test('saved materials lead to board, preview and download on the same page', asy
       await route.fulfill({ json: { accepted: true } })
       return
     }
-    await route.fulfill({ json: { task } })
+    await route.fulfill({ json: { task: task && { taskId: 'fixture-task', ...task } } })
   })
   await page.goto('/')
   await page.getByRole('button', { name: '开始制作' }).click()

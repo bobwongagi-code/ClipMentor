@@ -4,7 +4,7 @@ import { Check, Download, Play, Send } from 'lucide-react'
 import { ProgressNode } from '../components/processing/ProgressNode'
 import { productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
 
-const endpoint = '/api/clipmentor/production'
+const productionEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/production`
 type Task = {
   taskId?:string;sourceTaskId?:string
   status: string; stage: string; revision?: string; active: boolean; sequence: number
@@ -16,25 +16,41 @@ type Task = {
 }
 type Audience = 'new_contact' | 'existing_partner'
 type State = { task: Task | null; unavailable?: string; outputs?: {audience:Audience}[]; outputOwner?:{taskId:string;sequence:number} }
+type ActionReceipt = { accepted?: boolean; reason?: string }
 const serviceUnavailable = '制作服务暂时不可用。'
 const materialsUnavailable = '所需素材不齐全或无法读取，请重新核对上传素材。'
 
 function resourceUrl(view: string, key: string, value: string, audience?:Audience) {
-  return `${endpoint}?${new URLSearchParams({ view, [key]: value, ...(audience?{audience}:{}) })}`
+  return `${productionEndpoint}?${new URLSearchParams({ view, [key]: value, ...(audience?{audience}:{}) })}`
 }
 
-export default function ProductionPanel({ assets, onRecheck, outputAudience, sharedTask, onTask, unifiedBlueprint = false }: { assets: { id: string; title: string; name: string }[]; onRecheck: () => void; outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task)=>void; unifiedBlueprint?:boolean }) {
-  const endpoint = `/api/clipmentor/production${outputAudience?`?audience=${outputAudience}`:""}`
+async function readApiJson<T>(response: Response): Promise<T | undefined> {
+  if (response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') return undefined
+  return response.json().catch(() => undefined)
+}
+
+async function readPanelState(response: Response): Promise<State | undefined> {
+  if (!response.ok) return
+  const data = await readApiJson<State>(response)
+  if (!data || typeof data !== 'object' || !('task' in data)) return
+  if (data.task !== null && (typeof data.task?.status !== 'string' || !Number.isSafeInteger(data.task.sequence))) return
+  if (data.outputs !== undefined && (!Array.isArray(data.outputs) ||
+    data.outputs.some(output => output?.audience !== 'new_contact' && output?.audience !== 'existing_partner'))) return
+  return data
+}
+
+export default function ProductionPanel({ assets, onRecheck, requestApi, outputAudience, sharedTask, onTask, unifiedBlueprint = false }: { assets: { id: string; title: string; name: string }[]; onRecheck: () => void; requestApi: (url: string, init?: RequestInit) => Promise<Response>; outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task)=>void; unifiedBlueprint?:boolean }) {
+  const endpoint = outputAudience ? `${productionEndpoint}?audience=${outputAudience}` : productionEndpoint
   const assetUrl=(view:string,key:string,value:string)=>resourceUrl(view,key,value,outputAudience)
   const audienceTitle=outputAudience==="new_contact"?"新建联达人版":"已合作达人版"
   const [state, setState] = useState<State>()
   const [error, setError] = useState('')
   const [readError, setReadError] = useState('')
-  const [pendingKey, setPendingKey] = useState<string>()
+  const [pendingAction, setPendingAction] = useState<{key:string;controller:AbortController}>()
   const [board, setBoard] = useState<{ key:string; revision: string; identity?:string; html: string }>()
   const [boardError, setBoardError] = useState('')
   const [feedbackDraft, setFeedbackDraft] = useState<{key:string;text:string}>()
-  const [confirmation, setConfirmation] = useState<{key:string;checked:boolean}>()
+  const [confirmation, setConfirmation] = useState<{key:string;checked:boolean;acknowledged?:boolean}>()
   const boardFrame = useRef<HTMLIFrameElement>(null)
   const nextRead = useRef(0)
   const latestRead = useRef(0)
@@ -65,6 +81,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
   const visual = task?.visualCriteria
   const visualKey = `${task?.taskId}:${task?.renderId}:${visual?.digest}`
   const languageConfirmed = Boolean(confirmation?.key === visualKey && confirmation.checked)
+  const awaitingAcceptance = Boolean(confirmation?.key === visualKey && confirmation.acknowledged)
   const pollingActive = task?.active === true
   const boardRevision = reviewableBlueprintRevision(task)
   const boardIdentity=task?.boardIdentity
@@ -73,10 +90,10 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
   const currentBoard=board?.key===boardKey?board:undefined
   const actionKey=JSON.stringify([boardKey,task?.renderId,visual?.digest,state?.outputOwner?.taskId])
   const feedback=feedbackDraft?.key===actionKey?feedbackDraft.text:''
-  const currentActionKey=useRef(actionKey)
-  currentActionKey.current=actionKey
+  const currentAction=useRef({key:actionKey,sequence:task?.sequence})
+  currentAction.current={key:actionKey,sequence:task?.sequence}
   const actionController=useRef<AbortController>()
-  const pending=pendingKey===actionKey
+  const pending=(pendingAction?.key===actionKey && !pendingAction.controller.signal.aborted) || awaitingAcceptance
   useEffect(()=>()=>{actionController.current?.abort();actionController.current=undefined},[actionKey])
 
   useEffect(() => {
@@ -86,9 +103,9 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     async function read() {
       const readId=++nextRead.current
       try {
-        const response = await fetch(endpoint, { signal: controller.signal })
-        if (!response.ok) throw new Error('暂时无法读取制作状态')
-        const data: State = await response.json()
+        const response = await requestApi(endpoint, { signal: controller.signal })
+        const data = await readPanelState(response)
+        if (!data) throw new Error('暂时无法读取制作状态')
         if (!controller.signal.aborted) {
           remember(data,readId)
           failures = 0
@@ -104,7 +121,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     }
     void read()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [pollingActive, endpoint])
+  }, [pollingActive, endpoint, requestApi])
 
   useEffect(() => {
     setBoard(undefined)
@@ -115,7 +132,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     let timer: ReturnType<typeof setTimeout>
     async function readBoard(revision: string, attempt: number) {
       try {
-        const response = await fetch(boardUrl(revision,boardIdentity), { signal: controller.signal })
+        const response = await requestApi(boardUrl(revision,boardIdentity), { signal: controller.signal })
         if (!response.ok) throw new Error('Board unavailable')
         const identity=response.headers.get('X-ClipMentor-Board-Identity')??undefined
         if(boardIdentity&&identity!==boardIdentity)throw new Error('Board changed')
@@ -129,7 +146,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     }
     void readBoard(revision, 0)
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [boardKey])
+  }, [boardKey, requestApi])
 
   useEffect(() => {
     if (!currentBoard?.identity) return
@@ -146,7 +163,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
       let bytes: ArrayBuffer | undefined
       try {
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(50_000)])
-        const response = await fetch(boardUrl(revision, identity) + '&excerpt=1', { signal })
+        const response = await requestApi(boardUrl(revision, identity) + '&excerpt=1', { signal })
         if (!response.ok || response.headers.get('Content-Type') !== 'video/mp4'
           || response.headers.get('X-ClipMentor-Board-Identity') !== identity) throw new Error('Excerpt unavailable')
         bytes = await response.arrayBuffer()
@@ -162,34 +179,34 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     }
     window.addEventListener('message', receive)
     return () => { controller.abort(); window.removeEventListener('message', receive) }
-  }, [currentBoard, endpoint])
+  }, [currentBoard, endpoint, requestApi])
 
   async function action(name: string) {
-    if (actionController.current) return
+    if (actionController.current || awaitingAcceptance) return
     const controller=new AbortController()
     actionController.current=controller
     const signal=controller.signal
-    const stillCurrent=()=>currentActionKey.current===actionKey&&!signal.aborted
-    setPendingKey(actionKey)
+    const stillCurrent=()=>currentAction.current.key===actionKey&&!signal.aborted
+    setPendingAction({key:actionKey,controller})
     setError('')
     try {
       const revision = currentBoard?.revision
       const identity = currentBoard?.identity
       const subjectKey=boardKey
-      const submit = () => fetch(endpoint, {
+      const submit = () => requestApi(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
         body: JSON.stringify({ action: name, revision, boardIdentity:identity, renderId: task?.renderId, text: feedback, languageConfirmed,
           ...(name === 'accept' && visual ? { visualCriteriaDigest: visual.digest, wholePreviewConfirmed: languageConfirmed } : {}) }),
       })
       let response = await submit()
-      let result = response.ok ? undefined : await response.json().catch(() => ({}))
+      let result = await readApiJson<ActionReceipt>(response)
       if(!stillCurrent())return
       if (response.status === 409 && result?.reason === 'review_board_reload' && revision
         && (name === 'approve_blueprint' || name === 'revise_blueprint' || name === 'produce_versions')) {
         // This response is returned before any mutation. Restore exactly the
         // board the reviewer acted on before sending the same action once.
         if(!stillCurrent())return
-        const refreshed = await fetch(boardUrl(revision,identity),{signal})
+        const refreshed = await requestApi(boardUrl(revision,identity),{signal})
         if (refreshed.ok) {
           const refreshedIdentity=refreshed.headers.get('X-ClipMentor-Board-Identity')??undefined
           const html=await refreshed.text()
@@ -197,7 +214,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
           if(identity&&refreshedIdentity!==identity)throw new Error('Board changed')
           setBoard({ key:subjectKey, revision, identity:refreshedIdentity, html })
           response = await submit()
-          result = response.ok ? undefined : await response.json().catch(() => ({}))
+          result = await readApiJson<ActionReceipt>(response)
         }
       }
       if(!stillCurrent())return
@@ -206,17 +223,26 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
           materials:materialsUnavailable,
           review_board_changed:'蓝图已更新，请核对当前版本后再确认。',
         }
-        setError(messages[result?.reason] ?? '操作暂未完成，请稍后查看。')
+        setError(messages[result?.reason ?? ''] ?? '操作暂未完成，请稍后查看。')
 
         return
       }
+      if (result?.accepted !== true) throw new Error('Missing production acknowledgement')
+      if (name === 'accept') {
+        setConfirmation(current => current?.key === visualKey ? { ...current, acknowledged: true } : current)
+      }
       const readId=++nextRead.current
-      const next = await fetch(endpoint,{signal}).catch(() => undefined)
-      const latest:State|undefined=next?.ok?await next.json().catch(() => undefined):undefined
+      const next = await requestApi(endpoint,{signal}).catch(() => undefined)
+      const latest = next ? await readPanelState(next) : undefined
       if(!stillCurrent()||readId<latestRead.current)return
+      const confirmed = latest?.task?.status === 'completed' && !latest.task.deliveryUnavailable
+        && !!task?.taskId && latest.task.taskId === task.taskId && latest.task.renderId === task.renderId
+        && latest.task.sequence >= (currentAction.current.sequence ?? task.sequence)
       setFeedbackDraft(current=>current?.key===actionKey&&current.text===feedback?undefined:current)
-      setConfirmation(current=>current?.key===visualKey?undefined:current)
-      if(name === 'accept' && task?.renderId && (!latest||latest.task?.renderId===task.renderId&&latest.task?.taskId===task.taskId)){
+      if (name !== 'accept' || confirmed) {
+        setConfirmation(current => current?.key === visualKey ? undefined : current)
+      }
+      if (name === 'accept' && task?.renderId && confirmed) {
         const link=document.createElement('a')
         link.href=assetUrl('panel_download','renderId',task.renderId)
         link.download=task.downloadName ?? ''
@@ -228,7 +254,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     } finally {
       if(actionController.current===controller){
         actionController.current=undefined
-        setPendingKey(undefined)
+        setPendingAction(undefined)
       }
     }
   }
@@ -251,7 +277,7 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
     <div className="cm-heading"><h1>{productionPageTitle(sharedProgress)}</h1><p>{sharedBlueprint?'共用片头与教学主体，片尾分别面向新建联和已合作达人。':'共用主体只制作一次，再生成两个片尾版本。'}</p></div>
     <div className="cm-output-list">
     {state.outputs.filter(output=>!sharedBlueprint || output.audience==='existing_partner').map(output=><section key={output.audience} aria-label={sharedBlueprint?'共用蓝图':output.audience==='new_contact'?'新建联达人版':'已合作达人版'}>
-      <ProductionPanel assets={assets} onRecheck={onRecheck} unifiedBlueprint={sharedBlueprint} outputAudience={output.audience} sharedTask={sharedProgress} onTask={output.audience==='existing_partner'?reportSharedProgress:undefined} />
+      <ProductionPanel assets={assets} onRecheck={onRecheck} requestApi={requestApi} unifiedBlueprint={sharedBlueprint} outputAudience={output.audience} sharedTask={sharedProgress} onTask={output.audience==='existing_partner'?reportSharedProgress:undefined} />
     </section>)}
     </div>
   </>
@@ -292,8 +318,9 @@ export default function ProductionPanel({ assets, onRecheck, outputAudience, sha
           {boardRevision && <button className="cm-button" disabled={pending || currentBoard?.revision !== boardRevision || !canConfirm} onClick={() => void action(task.canConfirmBlueprint?'produce_versions':'approve_blueprint')}>确认蓝图，开始制作</button>}
           {boardRevision && !canConfirm && <p>{task.blueprintMessage ?? stopMessage ?? '蓝图检查尚未完成，暂不能开始制作。'}</p>}
           {awaitingPreview && <>
-            <label><input type="checkbox" checked={languageConfirmed} onChange={event => setConfirmation({key:visualKey,checked:event.target.checked})} /> 已核对成片及马来语，确认可交付</label>
+            <label><input type="checkbox" checked={languageConfirmed} disabled={pending} onChange={event => setConfirmation({key:visualKey,checked:event.target.checked})} /> 已核对成片及马来语，确认可交付</label>
             <button className="cm-button" disabled={pending || task.deliveryUnavailable || !task.renderId || !languageConfirmed} onClick={() => void action('accept')}>确认并下载成片</button>
+            {awaitingAcceptance && <p role="status">操作已收到，正在核对最新状态。</p>}
           </>}
           {(awaitingPreview || completed) && task.renderId && task.attachments?.map(file => <a key={file.assetId} className="cm-button secondary" href={`${assetUrl('panel_attachment', 'renderId', task.renderId!)}&${new URLSearchParams({assetId:file.assetId})}`} download={file.fileName}><Download size={17} /> 下载 Storyboard</a>)}
           {task.deliveryUnavailable && <p role="alert">随片资料暂时无法下载。</p>}

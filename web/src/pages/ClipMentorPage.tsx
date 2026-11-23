@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Check, Download, Film, Image, Send, Upload } from 'lucide-react'
 import './clipmentor.css'
 import ProductionPanel from './ProductionPanel'
@@ -83,11 +83,14 @@ function Feedback({ label, messages, onSend }: {
   </section>
 }
 
+const intakeEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/intake`
+
 export default function ClipMentorPage() {
   const [materials, setMaterials] = useState<Partial<Record<Slot, Material>>>({})
   const urls = useRef<Partial<Record<Slot, string>>>({})
-  const demo = !__CLIPMENTOR_INTAKE__ || new URLSearchParams(window.location.search).get('demo') === '1'
+  const demo = !__CLIPMENTOR_API_BASE_PATH__ || new URLSearchParams(window.location.search).get('demo') === '1'
   const [receipt, setReceipt] = useState<IntakeReceipt>()
+  const [accessLost, setAccessLost] = useState(false)
   const [checkingReceipt, setCheckingReceipt] = useState(!demo)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
@@ -102,6 +105,12 @@ export default function ClipMentorPage() {
   const sizeExceeded = size > 64 * 1024 * 1024 - 4096
   const ready = !sizeExceeded && slots.every(({ key }) => materials[key]?.status === 'ready')
 
+  const requestApi = useCallback(async (url: string, init?: RequestInit) => {
+    const response = await fetch(url, { ...init, mode: 'same-origin', redirect: 'error', cache: 'no-store' })
+    if (!init?.signal?.aborted && (response.status === 401 || response.status === 403)) setAccessLost(true)
+    return response
+  }, [])
+
   useEffect(() => () => {
     Object.values(urls.current).forEach(URL.revokeObjectURL)
     urls.current = {}
@@ -112,7 +121,7 @@ export default function ClipMentorPage() {
     const controller = new AbortController()
     void (async () => {
       try {
-        const response = await fetch('/api/clipmentor/intake', { signal: controller.signal })
+        const response = await requestApi(intakeEndpoint, { signal: controller.signal })
         if (!response.ok) throw new Error('无法读取上传记录，请稍后刷新。')
         const { receipt: saved } = await response.json() as { receipt: IntakeReceipt | null }
         if (!controller.signal.aborted && saved?.assets.length === slots.length) setReceipt(saved)
@@ -123,7 +132,7 @@ export default function ClipMentorPage() {
       }
     })()
     return () => controller.abort()
-  }, [demo])
+  }, [demo, requestApi])
 
   function addFile(slot: Slot, file?: File) {
     if (!file || uploadActive.current || receipt) return
@@ -167,7 +176,7 @@ export default function ClipMentorPage() {
     setUploading(true)
     setUploadError('')
     try {
-      const response = await fetch('/api/clipmentor/intake', { method: 'POST', body }).catch(() => undefined)
+      const response = await requestApi(intakeEndpoint, { method: 'POST', body }).catch(() => undefined)
       const result = await response?.json().catch(() => undefined)
       if (response?.ok && result?.projectId && result.assets?.length === slots.length) {
         setReceipt(result)
@@ -178,7 +187,7 @@ export default function ClipMentorPage() {
       }
       // A disconnected response can follow a successful commit. Read the
       // receipt once and bind all four entries to this upload before moving on.
-      const readback = await fetch('/api/clipmentor/intake').catch(() => undefined)
+      const readback = await requestApi(intakeEndpoint).catch(() => undefined)
       const saved: IntakeReceipt | undefined = readback?.ok
         ? (await readback.json().catch(() => undefined))?.receipt
         : undefined
@@ -209,12 +218,13 @@ export default function ClipMentorPage() {
       {demo && <span className="cm-demo">流程演示</span>}
     </header>
     <main className="cm-main page-enter">
+      {accessLost ? <p className="cm-caption cm-upload-error" role="alert">制作服务访问已失效，请刷新页面。</p> : <>
       {(!receipt || demo) && <nav aria-label="制作步骤"><ol className="cm-steps">
         {stages.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined}>
           <span>{index < step ? <Check size={15} /> : index + 1}</span>{label}
         </li>)}
       </ol></nav>}
-      {receipt && !demo ? <ProductionPanel assets={receipt.assets.map((asset, index) => ({ ...asset, title: slots[index].title }))} onRecheck={() => { setReceipt(undefined); setUploadError('') }} /> : checkingReceipt ? <p className="cm-caption" role="status">正在检查上传记录…</p> : step === 0 && <>
+      {receipt && !demo ? <ProductionPanel assets={receipt.assets.map((asset, index) => ({ ...asset, title: slots[index].title }))} requestApi={requestApi} onRecheck={() => { setReceipt(undefined); setUploadError('') }} /> : checkingReceipt ? <p className="cm-caption" role="status">正在检查上传记录…</p> : step === 0 && <>
         <div className="cm-heading"><h1>上传制作素材</h1><p>选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。</p></div>
         <section className="cm-panel">
           <div className="cm-materials">
@@ -280,6 +290,7 @@ export default function ClipMentorPage() {
               : <a className="cm-button" href={source?.url} download={`演示原片-${source?.file.name}`}><Download size={17} /> 下载演示文件</a>}
           </div>
         </section>
+      </>}
       </>}
     </main>
   </div>

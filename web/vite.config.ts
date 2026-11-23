@@ -4,15 +4,28 @@ import { request } from 'node:http'
 import path from 'path'
 
 export default defineConfig(({ mode, command, isPreview }) => {
-  const { CLIPMENTOR_PROJECT_ID: projectId, CLIPMENTOR_BACKEND_PORT = '5199' } = loadEnv(mode, process.cwd(), 'CLIPMENTOR_')
+  const {
+    CLIPMENTOR_PROJECT_ID: projectId,
+    CLIPMENTOR_BACKEND_PORT = '5199',
+    CLIPMENTOR_PUBLIC_API_BASE_PATH = '',
+  } = loadEnv(mode, process.cwd(), 'CLIPMENTOR_')
+  const development = command === 'serve' && !isPreview
   const backendPort = Number(CLIPMENTOR_BACKEND_PORT)
-  if (!/^\d{1,5}$/.test(CLIPMENTOR_BACKEND_PORT) || backendPort < 1 || backendPort > 65535) throw new Error('Invalid CLIPMENTOR_BACKEND_PORT')
-  const enabled = command === 'serve' && !isPreview && /^[a-zA-Z0-9_-]{1,160}$/.test(projectId ?? '')
+  if (development && (!/^\d{1,5}$/.test(CLIPMENTOR_BACKEND_PORT) || backendPort < 1 || backendPort > 65535)) {
+    throw new Error('Invalid CLIPMENTOR_BACKEND_PORT')
+  }
+  const localApiEnabled = development && /^[a-zA-Z0-9_-]{1,160}$/.test(projectId ?? '')
+  const publicApiPath = command === 'build' ? CLIPMENTOR_PUBLIC_API_BASE_PATH : ''
+  if (publicApiPath && (!publicApiPath.startsWith('/')
+    || publicApiPath.slice(1).split('/').some(segment => !segment || /[^a-zA-Z0-9_-]/.test(segment)))) {
+    throw new Error('Invalid CLIPMENTOR_PUBLIC_API_BASE_PATH: use a same-origin path such as /api/clipmentor')
+  }
+  const apiBasePath = localApiEnabled ? '/api/clipmentor' : publicApiPath
   return {
     plugins: [react(), {
       name: 'local-clipmentor-intake',
       configureServer(server) {
-        if (!enabled) return
+        if (!localApiEnabled) return
         server.middlewares.use('/api/clipmentor', (req, res, next) => {
           const url = new URL(req.url ?? '/', 'http://localhost')
           if (url.pathname !== '/intake' && url.pathname !== '/production') { next(); return }
@@ -64,7 +77,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
         })
       },
     }],
-    define: { __CLIPMENTOR_INTAKE__: JSON.stringify(enabled) },
+    define: { __CLIPMENTOR_API_BASE_PATH__: JSON.stringify(apiBasePath) },
     resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   }
 })
