@@ -73,6 +73,42 @@ try {
  await run('concurrent same-source callers produce one object',async()=>{
   const f=fake(),o=options(f,'concurrent');await Promise.all([prepareR2Video(o),prepareR2Video(o)]);assert.equal(f.calls.create,1);assert.equal(f.calls.part,2);
  });
+ for (const [extension, mimeType] of [['mov', 'video/quicktime'], ['webm', 'video/webm']] as const) {
+  await run(`${extension} uses the same typed source identity for verified R2 and inline bytes`, async () => {
+   const f = fake();
+   const storedTypes: string[] = [];
+   const create = f.store.create;
+   f.store.create = (key, signal, contentType) => {
+    storedTypes.push(contentType);
+    return create(key, signal, contentType);
+   };
+   const path = join(temporary, `source.${extension}`);
+   const bytes = Buffer.from(`source bytes for ${extension}`);
+   const sourceHash = hash(bytes);
+   await writeFile(path, bytes);
+   const opts = { ...options(f, extension), file: path, sha256: sourceHash };
+   const media = await prepareR2Video(opts);
+   const reused = await prepareR2Video(opts);
+   assert.deepEqual(storedTypes, [mimeType]);
+   assert.ok([...f.objects.keys()][0].endsWith(`.${extension}`));
+   assert.deepEqual([...f.objects.values()][0].data, bytes);
+   assert.equal(media.sha256, sourceHash);
+   assert.equal(reused.receipt.reused, true);
+   assert.ok('fileData' in media.part);
+   assert.equal(media.part.fileData.mimeType, mimeType);
+   const sourceRequest = { ...request, source: { ...request.source, src: `/media/uploads/source.${extension}`, hash: sourceHash } };
+   const direct = buildSourceVideoRequest(bytes, sourceRequest);
+   const linked = buildSourceVideoRequest(media, sourceRequest);
+   assert.equal(direct.input_sha256, linked.input_sha256);
+   assert.equal(direct.logical_request_sha256, linked.logical_request_sha256);
+   assert.deepEqual(JSON.parse(direct.body).contents[0].parts[0].inlineData, { mimeType, data: bytes.toString('base64') });
+   assert.equal(JSON.parse(linked.body).contents[0].parts[0].fileData.mimeType, mimeType);
+   assert.notEqual(direct.logical_request_sha256, buildSourceVideoRequest(bytes, {
+    ...sourceRequest, source: { ...sourceRequest.source, src: '/media/uploads/source.mp4' },
+   }).logical_request_sha256);
+   assert.throws(() => buildSourceVideoRequest(videoInput(bytes), sourceRequest), /format mismatch/);
+  });
+ }
  for(const failure of ['part_before','part_after','complete_after'] as const)await run(`bounded recovery ${failure}`,async()=>{
   const f=fake();f.failure=failure;await prepareR2Video(options(f,failure));assert.equal(f.calls.create,1);assert.equal(f.calls.part,failure==='part_before'?3:2);
  });

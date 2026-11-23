@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join, normalize, sep } from 'node:path';
 import { exportAttemptIdFromFilename, mimeFor, resolveUploadFile, serveDiskFile } from '../server/media-dir.ts';
 import { resolveCommittedExport } from '../server/plugins/export-delivery.ts';
-import { isPrivateExportFilename } from '../server/export-media-names.ts';
+import { isPrivateExportFilename } from '../shared/export-media-names.ts';
 import { editorCredentialAuthorized } from '../server/editor-auth.ts';
 import type { Middleware } from './mini-connect.ts';
 

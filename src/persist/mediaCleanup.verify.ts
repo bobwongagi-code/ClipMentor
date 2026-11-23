@@ -1,8 +1,9 @@
 // 素材清理纯逻辑检查:引用做差、级联删的独占判定语义(经内存态 projectStore 走真流程)。
-// 跑法:npx tsx src/persist/mediaCleanup.check.ts(已挂 verify:persist,随 pretest 执行)。
+// 跑法:npx tsx src/persist/mediaCleanup.verify.ts(已挂 verify:media-persist)。
 import assert from 'node:assert/strict';
-import { collectAllUploadRefs, orphanDocIdsToPurge, unreferencedOf } from './mediaCleanup';
+import { collectAllUploadRefs, deleteUnreferencedUploads, purgeProjectCascade, scanUnreferenced, unreferencedOf } from './mediaCleanup';
 import { createProject, listProjectDocIds, purgeProject } from './projectStore';
+import { configureSharedKvBackend, resetSharedKvMemory, type SharedKvBackend } from './sharedKv';
 import type { ProjectDoc } from '../editor/types';
 
 // ── unreferencedOf:盘面 − 引用 ──────────────────────────────────────────
@@ -11,21 +12,15 @@ import type { ProjectDoc } from '../editor/types';
     { name: 'a.mp4', bytes: 10, mtimeMs: 1 },
     { name: '李白_01_开篇.mp3', bytes: 20, mtimeMs: 2 },
     { name: 'kept.png', bytes: 30, mtimeMs: 3 },
+    { name: 'installed.cube', bytes: 40, mtimeMs: 4 },
+    { name: 'openchatcut-export-stage-01ab2345-6789-4abc-8def-012345678901.webm.part', bytes: 40, mtimeMs: 4 },
+    { name: 'openchatcut-export-job-01ab2345-6789-4abc-8def-012345678901.mp4', bytes: 40, mtimeMs: 4 },
+    { name: 'openchatcut-derived-01ab2345-6789-4abc-8def-012345678901.mp4', bytes: 40, mtimeMs: 4 },
   ];
   const refs = new Set(['/media/uploads/kept.png']);
   const orphans = unreferencedOf(files, refs);
   assert.deepEqual(orphans.map((f) => f.name), ['a.mp4', '李白_01_开篇.mp3'], '引用的不进无主清单(中文名照常)');
   console.log('unreferencedOf: OK');
-}
-
-// ── orphanDocIdsToPurge:索引健康守卫 ────────────────────────────────────
-{
-  assert.deepEqual(orphanDocIdsToPurge(new Set(['a']), ['a', 'b']), ['b'], '不在索引中的文档是孤儿');
-  assert.deepEqual(orphanDocIdsToPurge(new Set(['a']), ['a']), [], '索引齐全时无孤儿');
-  assert.deepEqual(orphanDocIdsToPurge(new Set(), []), [], '空库无事发生');
-  assert.deepEqual(orphanDocIdsToPurge(new Set(), ['a', 'b']), [],
-    '索引为空但文档存在 = 索引丢失/不可读,禁止把全部工程当孤儿清除');
-  console.log('orphanDocIdsToPurge: OK');
 }
 
 // ── 引用并集 + 独占判定(内存态 projectStore) ────────────────────────────
@@ -60,4 +55,92 @@ import type { ProjectDoc } from '../editor/types';
   console.log('collectAllUploadRefs/级联语义: OK');
 }
 
-console.log('\nmediaCleanup.check: ALL PASSED');
+const fixtureDoc = (src?: string): ProjectDoc => ({
+  version: 3, mediaFolders: [], activeTimelineId: 'timeline',
+  assets: src ? [{ id: 'asset', kind: 'video', name: 'fixture', src, durationInFrames: 30 }] : [],
+  timelines: [{ id: 'timeline', name: 'Fixture', order: 0, fps: 30, width: 1080, height: 1920, selectedId: null, items: [] }],
+});
+
+// A sibling window commits its document after the dashboard index read and
+// before enumeration. Opening the cleanup dialog must never purge anything.
+{
+  resetSharedKvMemory();
+  const entries = new Map<string, unknown>([
+    ['projects', [{ id: 'existing' }]], ['project:existing', fixtureDoc()],
+  ]);
+  const writes: string[] = [];
+  const backend: SharedKvBackend = {
+    get: async <T>(key: string) => entries.get(key) as T | undefined,
+    set: async (key, value) => { writes.push(key); entries.set(key, value); },
+    delete: async key => { writes.push(key); entries.delete(key); },
+    keys: async () => {
+      entries.set('project:new-window', fixtureDoc('/media/uploads/new.mp4'));
+      return [...entries.keys()];
+    },
+    writeAgentRuntime: async () => { throw new Error('unexpected agent write'); },
+    updateAgentRunLease: async () => { throw new Error('unexpected agent lease'); },
+  };
+  const originalFetch = globalThis.fetch;
+  let deletes = 0;
+  configureSharedKvBackend(backend);
+  globalThis.fetch = async (_input, options) => {
+    if (options?.method === 'DELETE') deletes++;
+    const files = ['new.mp4', 'candidate.mp4'].map(name => ({ name, bytes: 1, mtimeMs: 0 }));
+    return Response.json({ files });
+  };
+  try {
+    const scan = await scanUnreferenced();
+    assert.deepEqual(writes, [], 'a scan may not edit or purge store entries');
+    assert.equal(entries.has('project:new-window'), true);
+    assert.deepEqual(scan.files.map(file => file.name), ['candidate.mp4']);
+    entries.set('project:late-restore', fixtureDoc('/media/uploads/candidate.mp4'));
+    assert.equal(await deleteUnreferencedUploads(['candidate.mp4']), 0);
+    assert.equal(deletes, 0, 'the confirm action must recheck references changed after the scan');
+    entries.delete('project:late-restore');
+    entries.set('offline-edit-session:existing', {
+      version: 1, sessionId: 'test', clientName: 'Fixture', baseRevision: 'v3-test',
+      approvalMode: 'manual', createdAt: 0, updatedAt: 0, operations: [],
+      draftDoc: fixtureDoc('/media/uploads/candidate.mp4'),
+    });
+    assert.equal(await deleteUnreferencedUploads(['candidate.mp4']), 0);
+    assert.equal(deletes, 0, 'offline draft references are also rechecked in the client');
+  } finally { globalThis.fetch = originalFetch; resetSharedKvMemory(); }
+}
+
+// An unreadable surviving history must not be interpreted as empty even
+// after the operator explicitly removes another project's metadata.
+{
+  const shared = '/media/uploads/old original.mp4';
+  const entries = new Map<string, unknown>([
+    ['projects', [{ id: 'remove' }, { id: 'survive' }]],
+    ['project:remove', fixtureDoc(shared)], ['project:survive', fixtureDoc()],
+  ]);
+  const backend: SharedKvBackend = {
+    get: async <T>(key: string) => {
+      if (key === 'versions:survive') throw new Error('fixture history read error');
+      return entries.get(key) as T | undefined;
+    },
+    set: async (key, value) => { entries.set(key, value); },
+    delete: async key => { entries.delete(key); },
+    // A present history key that cannot be read, plus unrelated ordinary rows.
+    keys: async () => [...entries.keys(), 'versions:survive'],
+    writeAgentRuntime: async () => { throw new Error('unexpected agent write'); },
+    updateAgentRunLease: async () => { throw new Error('unexpected agent lease'); },
+  };
+  const originalFetch = globalThis.fetch;
+  let deletes = 0;
+  configureSharedKvBackend(backend);
+  globalThis.fetch = async (_input, options) => {
+    if (options?.method === 'DELETE') deletes++;
+    return new Response(null, { status: 200 });
+  };
+  try {
+    const result = await purgeProjectCascade('remove');
+    assert.equal(result.filesDeleted, 0, 'incomplete surviving history must not authorize a binary delete');
+    assert.equal(deletes, 0);
+    assert.equal(entries.has('project:remove'), false);
+    assert.equal(entries.has('project:survive'), true);
+  } finally { globalThis.fetch = originalFetch; resetSharedKvMemory(); }
+}
+
+console.log('\nmediaCleanup.verify: ALL PASSED');

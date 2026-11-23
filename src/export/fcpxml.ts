@@ -352,6 +352,25 @@ function retimeXml(item: TimelineItem, fps: number): string {
   ].join('\n        ');
 }
 
+function volumeAdjustmentXml(item: TimelineItem, trackMuted: boolean): string {
+  if (item.kind !== 'video' && item.kind !== 'audio') return '';
+  // Animated gain supersedes the item's base volume in the editor.
+  if (!trackMuted && item.keyframes?.volume?.length) return '';
+  const volume = trackMuted ? 0 : item.volume ?? 1;
+  if (!Number.isFinite(volume) || volume < 0 || volume === 1) return '';
+  // Final Cut writes muted audio as -96 dB. Keep this per placement because
+  // other clips can use the same source with their original audio enabled.
+  const decibels = Math.max(-96, 20 * Math.log10(volume));
+  return `<adjust-volume amount="${Number(decibels.toFixed(2))}dB"/>`;
+}
+
+function assetClipXml(attributes: string, ...elements: string[]): string {
+  const children = elements.filter(Boolean).join('\n        ');
+  return children ? `<asset-clip ${attributes}>
+        ${children}
+      </asset-clip>` : `<asset-clip ${attributes}/>`;
+}
+
 function itemToSpineElement(
   item: TimelineItem,
   fps: number,
@@ -359,29 +378,26 @@ function itemToSpineElement(
   assets: Map<string, AssetInfo>,
   renderedMotionGraphics: Map<string, RenderedMotionGraphicInfo>,
   backgroundFillActive: boolean,
+  trackMuted: boolean,
 ): string {
   const offset = rationalTime(item.startFrame, fps);
   const duration = rationalTime(item.durationInFrames, fps);
   const name = escapeXml(item.name);
   if (item.src) {
     const ref = assets.get(item.src)?.id ?? '';
+    const volumeAdjustment = volumeAdjustmentXml(item, trackMuted);
     const segs = transcriptSegments(item, fps);
     if (segs?.length) {
       // One clip for each reserved segment:offset is already the absolute frame of the timeline (keptSegments passed in startFrame)
       return segs
-        .map((seg) => `<asset-clip ref="${ref}" lane="${lane}" offset="${rationalTime(seg.fromFrame, fps)}" duration="${rationalTime(seg.durFrames, fps)}" start="${rationalTime(seg.srcStartFrame, fps)}" name="${name}"/>`)
+        .map((seg) => assetClipXml(
+          `ref="${ref}" lane="${lane}" offset="${rationalTime(seg.fromFrame, fps)}" duration="${rationalTime(seg.durFrames, fps)}" start="${rationalTime(seg.srcStartFrame, fps)}" name="${name}"`,
+          volumeAdjustment,
+        ))
         .join('\n        ');
     }
     const attributes = `ref="${ref}" lane="${lane}" offset="${offset}" duration="${duration}" start="${rationalTime(item.srcInFrame ?? 0, fps)}" name="${name}"`;
-    const retime = retimeXml(item, fps);
-    const children = [retime, backgroundFillActive ? backgroundFillMetadataXml(item) : '']
-      .filter(Boolean)
-      .join('\n        ');
-    return children
-      ? `<asset-clip ${attributes}>
-        ${children}
-      </asset-clip>`
-      : `<asset-clip ${attributes}/>`;
+    return assetClipXml(attributes, retimeXml(item, fps), volumeAdjustment, backgroundFillActive ? backgroundFillMetadataXml(item) : '');
   }
   if (item.kind === 'motion-graphic') {
     const rendered = renderedMotionGraphics.get(motionGraphicRenderKey(item));
@@ -455,6 +471,7 @@ export function timelineToFcpxml(
   const itemXml = sortedItems
     .map((item) => itemToSpineElement(
       item, fps, laneOf(item.track), assets, renderedMotionGraphics, isBackgroundFillActive(state, item),
+      state.tracks?.[item.track]?.muted === true,
     ));
   const spineChildren = [backgroundFillWarning, ...itemXml].filter(Boolean).join('\n        ');
 

@@ -2,7 +2,7 @@ import {echoesMediaSecret} from './video-input.ts';
 import {externalCall} from './external-call.ts';
 import { runtimeProfile } from '../runtime-profile.ts';
 import { sha256File } from '../../shared/node-content-hash.ts';
-import { seedKeystore } from '../keystore.ts';
+import { previewReviewCredential, seedKeystore } from '../keystore.ts';
 import { prepareVideoMedia, VideoMediaError } from './video-media.ts';
 import { readFile, writeFile, mkdir, access, stat } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
@@ -31,8 +31,8 @@ if (!['--video','--input','--out','--operation'].every(k=>options[k]) || ![4,5].
 }
 try { process.loadEnvFile(runtimeProfile().keystorePath); } catch { /* server environment is also supported */ }
 seedKeystore(Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string,string]=>entry[1]!==undefined)));
-const key = process.env.ROOTIFY_GATEWAY_API_KEY ?? '';
-if (!key.trim() || /[\r\n]/.test(key)) throw new Error('Preview review server credential unavailable');
+const key = previewReviewCredential(process.env.ROOTIFY_GATEWAY_API_KEY ?? '');
+if (!key) throw new Error('Preview review server credential unavailable');
 const file=resolve(options['--video']);
 const videoHash=await sha256File(file), videoBytes=(await stat(file)).size;
 const sourceBindingMatches=options['--expected-video-sha256']===undefined||videoHash===options['--expected-video-sha256'];

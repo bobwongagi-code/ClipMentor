@@ -18,7 +18,7 @@ import type {ReviewApiConfig} from './copy-review-api';
 import {openingComparisonCriterion,openingComparisonShape,parseProductionSourceCriteria,sourcePerformanceCriterion,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {productionDeliverables} from './production-deliverables';
-import {feedbackProjectDigest} from './production-feedback';
+import {feedbackProjectDigest,matchesExportedPreviewProject} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
 import {verifyProductionOutput} from './production-format';
 import {resolveUploadFile,isSafeUploadName} from '../media-dir';
@@ -886,10 +886,13 @@ export async function acceptProductionTask(task:ProductionTask,languageConfirmed
   const file=isSafeUploadName(name)?resolveUploadFile(name):null;
   if(!saved||!file)throw Error('final_output_evidence_missing_or_stale');
   await verifyProductionOutput(file);
+  if(!matchesExportedPreviewProject(task.completed.export?.artifact,saved))throw Error('final_output_evidence_missing_or_stale');
   const projectEntry=await getStoredEntry('project:'+task.projectId),normalized=projectEntry.found?runProjectMigrations(projectEntry.value)?.doc:null;
   if(!normalized||revisionOf(normalized)!==saved.revision)throw Error('final_output_evidence_missing_or_stale');
   entryPreconditions=[{key:'project:'+task.projectId,digest:digestValue(projectEntry.value)}];
-  assertFinalPreviewEvidence(task,saved.revision,await sha256File(file));
+  // The receipt binds the exported revision. The current document was checked
+  // separately above and is fenced through the acceptance write.
+  assertFinalPreviewEvidence(task,task.projectRevision??'',await sha256File(file));
   await productionDeliverables(saved.doc,undefined,task.completed.export?.at,task.input.panelDelivery);
  }
  const {readHandoffPolicy}=await import('./handoff');

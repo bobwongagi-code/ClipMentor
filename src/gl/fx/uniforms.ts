@@ -56,6 +56,14 @@ export interface SerializableFxDef {
   cube?: string;
 }
 
+export type TimelineFxDefinitions = Readonly<Record<string, SerializableFxDef>>;
+
+export function timelineFxDefinition(assetId: string, definitions: TimelineFxDefinitions | undefined,
+  catalog: Readonly<Record<string, FxDef>>): FxDef | undefined {
+  if (definitions && Object.hasOwn(definitions, assetId)) return definitions[assetId];
+  return Object.hasOwn(catalog, assetId) ? catalog[assetId] : undefined;
+}
+
 // Clamp properties[name] to the declared minimum and maximum.
 export function fxUniform(p: FxProperty, overrides?: Record<string, UniformValue>): UniformValue {
   const v = overrides?.[p.key];

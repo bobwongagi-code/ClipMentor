@@ -31,9 +31,14 @@ try {
       items: [], selectedId: null, trackOrder: ['track_v1'], tracks: { track_v1: { kind: 'video' } } },
       { id: 'other', name: 'Untouched', order: 1, fps: 30, width: 1920, height: 1080, items: [], selectedId: null }],
   });
-  const videoPath = join(root, 'fixture.mp4'), imagePath = join(root, 'fixture.png');
-  execFileSync(ffmpegBin(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=s=32x48',
-    '-f', 'lavfi', '-i', 'sine=frequency=500', '-t', '0.3', '-c:v', 'libx264', '-c:a', 'aac', videoPath]);
+  const videoPath = join(root, 'fixture.mp4'), imagePath = join(root, 'fixture.png'), landscape = join(root,'coded.mp4');
+  execFileSync(ffmpegBin(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=s=48x32',
+    '-f', 'lavfi', '-i', 'sine=frequency=500', '-t', '0.3', '-c:v', 'libx264', '-c:a', 'aac', landscape]);
+  const hasDisplayRotation = execFileSync(ffmpegBin(), ['-hide_banner', '-h', 'full'], { encoding: 'utf8' })
+    .includes('-display_rotation');
+  execFileSync(ffmpegBin(), ['-hide_banner', '-loglevel', 'error',
+    ...(hasDisplayRotation ? ['-display_rotation:v:0', '90'] : []), '-i', landscape, '-c', 'copy',
+    ...(!hasDisplayRotation ? ['-metadata:s:v:0', 'rotate=90'] : []), videoPath]);
   execFileSync(ffmpegBin(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=s=32x48',
     '-frames:v', '1', '-threads', '1', imagePath]);
   const video = new Blob([new Uint8Array(await readFile(videoPath))], { type: 'video/mp4' });
@@ -82,7 +87,7 @@ try {
     receipt.assets.map((a: { id: string; name: string; sourceContentHash: string }) => [a.id, a.name, a.sourceContentHash]));
   assert.equal(saved?.doc.timelines[0]?.items.length, 0);
   assert.deepEqual([saved?.doc.timelines[0]?.width,saved?.doc.timelines[0]?.height],[720,1280],'fresh upload must replace the generic landscape canvas before planning');
-  assert.deepEqual([saved?.doc.assets[0]?.width,saved?.doc.assets[0]?.height],[32,48],'source metadata is not the output canvas');
+  assert.deepEqual([saved?.doc.assets[0]?.width,saved?.doc.assets[0]?.height],[32,48],'coded landscape with a rotation tag must be saved using displayed dimensions');
   assert.deepEqual([saved?.doc.timelines[1]?.width,saved?.doc.timelines[1]?.height],[1920,1080],'unrelated empty timelines are not reformatted');
   const { claimBrowserProjectOwnership, releaseProjectEditOwnership } = await import('../external-agent/project-edit-ownership');
   const browser = await claimBrowserProjectOwnership(id, 'fixture-editor', receipt.revision);
@@ -116,13 +121,45 @@ try {
   assert.deepEqual(await readFile(productPath), await readFile(ctaPath), 'An old corrupt object may be referenced elsewhere; repair does not delete or overwrite it');
   await rm(productPath); // Fixture-only cleanup of the synthetic obsolete object.
   const missingPath = join(uploadDir(), saved.doc.assets[2].src.split('/').at(-1)!);
+  const beforeMissing = saved;
   await rm(missingPath);
-  assert.deepEqual(await (await read()).json(), { receipt: null });
-  const missingRepair = await submit(body()); assert.equal(missingRepair.status, 200);
+  const incomplete = await (await read()).json();
+  assert.deepEqual(incomplete, { receipt: null, repair: { ...repairedReceipt, missingSlots: ['sales'] } });
+  const restore = (file: Blob) => {
+    const form = new FormData(); form.append('sales', file, 'local-copy.png'); return submit(form);
+  };
+  assert.equal((await restore(cta)).status, 409, 'A different image cannot fill an existing bound slot');
+  const missingRepair = await restore(image); assert.equal(missingRepair.status, 200, await missingRepair.clone().text());
   saved = await loadOfflineStoredProject(id); assert(saved);
   assert.deepEqual(saved.doc.assets.map(a => a.id), originalIds);
+  assert.equal(saved.revision,beforeMissing.revision);
+  assert.equal(saved.doc.assets[2].src,beforeMissing.doc.assets[2].src);
+  assert.deepEqual(await readFile(missingPath),Buffer.from(await image.arrayBuffer()));
   assert.deepEqual(await (await read()).json(), { receipt: await missingRepair.json() });
   assert.equal((await readdir(uploadDir())).length, 4, 'Unused staged retry files are reclaimed');
+  await rm(missingPath);
+  const fullRetry = await submit(body());
+  assert.equal(fullRetry.status, 200, await fullRetry.clone().text());
+  assert.equal((await loadOfflineStoredProject(id))?.revision, beforeMissing.revision, 'Full retries also preserve the bound paths when files are absent');
+  const startedId = 'started-intake-project';
+  const startedDoc = structuredClone(saved.doc);
+  const source = startedDoc.assets[0];
+  startedDoc.timelines[0].items.push({
+    id: 'existing-source-clip', kind: 'video', track: 'track_v1', startFrame: 0, durationInFrames: 5,
+    src: source.src, sourceAssetId: source.id, name: source.name,
+  });
+  await setStoredEntry(`project:${startedId}`, startedDoc);
+  const started = (await loadOfflineStoredProject(startedId))!;
+  const boundCta = join(uploadDir(), saved.doc.assets[3].src.split('/').at(-1)!);
+  await rm(boundCta);
+  const startedEndpoint = `${origin}/?projectId=${startedId}`;
+  const missingStarted = await (await fetch(startedEndpoint, { headers: { 'sec-fetch-site': 'same-origin' } })).json();
+  assert.deepEqual(missingStarted.repair?.missingSlots, ['cta']);
+  const restoreCta = new FormData(); restoreCta.append('cta', cta, 'original.png');
+  const restoredStarted = await fetch(startedEndpoint, { method: 'POST', headers, body: restoreCta });
+  assert.equal(restoredStarted.status, 200, await restoredStarted.clone().text());
+  assert.equal((await loadOfflineStoredProject(startedId))?.revision, started.revision);
+  assert.deepEqual(await readFile(boundCta), Buffer.from(await cta.arrayBuffer()));
   const beforeDrift = saved;
   afterHash = async () => {
     const changed = structuredClone(beforeDrift.doc); changed.timelines[1].name = 'Concurrent edit';
@@ -187,7 +224,69 @@ try {
   await rm(join(uploadDir(), saved.doc.assets[3]!.src.split('/').at(-1)!));
   await setStoredEntry(`project:${id}`, { ...saved.doc, assets: prior });
   assert.deepEqual(await (await read()).json(), { receipt: null });
-  const backfill = await submit(body());
+  const { createServer: createViteServer } = await import('vite');
+  const { registerUploadRoutes } = await import('../plugins/upload-routes');
+  const cleanupServer = await createViteServer({
+    root, configFile: false, optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false },
+    plugins: [{ name: 'intake-cleanup-regression', configureServer(vite) {
+      registerUploadRoutes(vite, {
+        syncLegacy: async () => undefined,
+        resolveUpload: async () => { throw new Error('Unexpected media hydration in cleanup regression'); },
+      });
+    } }],
+  });
+  const cleanupHttp = createServer(cleanupServer.middlewares);
+  let backfill: Response;
+  try {
+    cleanupHttp.listen(0, '127.0.0.1');
+    await once(cleanupHttp, 'listening');
+    const cleanupAddress = cleanupHttp.address();
+    assert(cleanupAddress && typeof cleanupAddress !== 'string');
+    const cleanupOrigin = `http://127.0.0.1:${cleanupAddress.port}`;
+    const visibleUploads = async () => {
+      const response = await fetch(`${cleanupOrigin}/upload/list`);
+      assert.equal(response.status, 200);
+      const { files } = await response.json() as { files: { name: string }[] };
+      return files.map(file => file.name).sort();
+    };
+    const remove = (name: string) => fetch(`${cleanupOrigin}/upload?cleanup=1&name=${encodeURIComponent(name)}`, {
+      method: 'DELETE', headers: { origin: cleanupOrigin, 'sec-fetch-site': 'same-origin' },
+    });
+    const visibleBefore = await visibleUploads();
+    const staged = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    afterHash = async () => { staged.resolve(); await resume.promise; };
+    const pending = fetch(endpoint, { method: 'POST', headers, body: body(), signal: AbortSignal.timeout(10_000) });
+    let finalName: string;
+    try {
+      await Promise.race([staged.promise, pending.then(() => { throw new Error('Intake finished before the staging checkpoint'); })]);
+      const expectedCta = Buffer.from(await cta.arrayBuffer());
+      const files = await readdir(uploadDir());
+      const stagedFiles = await Promise.all(files.map(async name => ({ name, bytes: await readFile(join(uploadDir(), name)) })));
+      const stagedCta = stagedFiles.find(entry => entry.bytes.equals(expectedCta));
+      assert(stagedCta?.name.startsWith('.staged-'), 'the raw CTA bytes are on disk in a hidden stage before the project commit');
+      finalName = stagedCta.name.slice('.staged-'.length);
+      const deleting = await remove(finalName);
+      assert.equal(deleting.status, 200);
+      assert.equal((await deleting.json()).removed, 0, 'ordinary cleanup cannot remove an unpublished CTA');
+      assert.deepEqual(await visibleUploads(), visibleBefore, 'the real cleanup list hides all in-flight intake files');
+    } finally {
+      resume.resolve();
+      await pending.catch(() => undefined);
+    }
+    backfill = await pending;
+    const persisted = await loadOfflineStoredProject(id);
+    const publishedName = persisted?.doc.assets[3]?.src.split('/').at(-1);
+    assert.equal(publishedName, finalName, 'the pre-commit delete targeted the exact name that is eventually published');
+    assert(publishedName && (await visibleUploads()).includes(publishedName));
+    assert.equal((await remove(publishedName)).status, 409, 'published CTA is protected by its newly committed reference');
+    assert.deepEqual(await readFile(join(uploadDir(), publishedName)), Buffer.from(await cta.arrayBuffer()));
+  } finally {
+    cleanupHttp.closeAllConnections();
+    if (cleanupHttp.listening) await new Promise<void>(resolve => cleanupHttp.close(() => resolve()));
+    await cleanupServer.close();
+  }
   const backfillReceipt = await backfill.json();
   assert.equal(backfill.status, 200, JSON.stringify(backfillReceipt));
   assert.deepEqual(backfillReceipt.assets.slice(0, 3), receipt.assets.slice(0, 3));
@@ -308,6 +407,22 @@ try {
   const recovered = await fetch(uncertainEndpoint, { headers: { 'sec-fetch-site': 'same-origin' } });
   assert.equal((await recovered.json()).receipt.revision, committed.revision, 'A later read recovers the saved receipt without another upload');
   assert.equal((await loadOfflineStoredProject(uncertainId))?.revision, committed.revision);
+  const webmId = 'intake-native-webm';
+  await setStoredEntry(`project:${webmId}`, { ...saved.doc, assets: [] });
+  const genuine = join(root,'native.webm'), renamed = join(root,'matroska.webm');
+  execFileSync(ffmpegBin(),['-v','error','-f','lavfi','-i','testsrc2=size=96x128:rate=30',
+    '-f','lavfi','-i','sine=sample_rate=48000','-t','0.3','-c:v','libvpx-vp9','-c:a','libopus',genuine]);
+  execFileSync(ffmpegBin(),['-v','error','-i',genuine,'-c','copy','-f','matroska',renamed]);
+  const submitWebm = async (file:string) => {
+    const form = body();
+    form.set('source',new Blob([new Uint8Array(await readFile(file))], { type:'video/webm' }),'原片.webm');
+    return fetch(`${origin}/?projectId=${webmId}`, { method:'POST',headers,body:form });
+  };
+  assert.equal((await submitWebm(renamed)).status,409,'Matroska must not be admitted as native WebM even with WebM-compatible codecs');
+  assert.equal((await loadOfflineStoredProject(webmId))?.doc.assets.length,0);
+  const nativeWebm = await submitWebm(genuine);
+  assert.equal(nativeWebm.status,200,await nativeWebm.clone().text());
+  assert.equal((await nativeWebm.json()).assets[0].sourceContentHash,await hashIntakeFile(genuine));
   console.log('material intake verified: real-byte receipts, exact-content missing/corrupt repair, stale-read refusal, post-commit preservation, origin, idempotence and cleanup');
 } finally {
   if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));

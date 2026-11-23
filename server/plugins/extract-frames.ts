@@ -79,7 +79,7 @@ function run(cmd: string, args: string[], timeoutMs: number, signal?:AbortSignal
       clearTimeout(timer);
       signal?.removeEventListener('abort',abort);
       if (code === 0) resolve();
-      else reject(new Error(`${cmd} exit ${code}: ${stderr.slice(-400)}`));
+      else reject(new Error(`${cmd} exit ${code}: ${stderr.slice(-4000)}`));
     });
   });
 }
@@ -205,16 +205,21 @@ export async function extractOneFrame(input: string, timeMs: number, outPath: st
   // not width/height; no model-authored arithmetic or edited source asset is used.
   if (crop) filters.push(`crop=w=round(iw*(1-${crop.left}-${crop.right})):h=round(ih*(1-${crop.top}-${crop.bottom})):x=round(iw*${crop.left}):y=round(ih*${crop.top}):exact=1`);
   if (individual) filters.push("scale=w='min(iw,1280)':h='min(ih,1280)':force_original_aspect_ratio=decrease:force_divisible_by=2");
-  await run(ffmpegBin(), [
-    '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-    ...(await resolveHwDecodeArgs(ffmpegBin(), undefined)),
-    ...frameSeekArgs(timeMs),
-    '-i', input,
-    ...(filters.length ? ['-vf', filters.join(',')] : []),
-    '-frames:v', '1',
-    '-q:v', '4',
-    outPath,
-  ], FFMPEG_TIMEOUT_MS,signal);
+  const ffmpeg = ffmpegBin();
+  const hardware = await resolveHwDecodeArgs(ffmpeg, undefined);
+  const prefix = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y'];
+  const args = [...frameSeekArgs(timeMs), '-i', input,
+    ...(filters.length ? ['-vf', filters.join(',')] : []), '-frames:v', '1', '-q:v', '4', outPath];
+  const deadline = Date.now() + FFMPEG_TIMEOUT_MS;
+  try {
+    await run(ffmpeg, [...prefix, ...hardware, ...args], FFMPEG_TIMEOUT_MS, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    const remaining = deadline - Date.now();
+    if (!hardware.length || remaining <= 0 || !(error instanceof Error)
+      || !/device setup failed|no device available|device creation failed|error creating (?:hardware )?device|failed setup for format[^\n]*hwaccel|failed to (?:create|initiali[sz]e) (?:a )?(?:hardware|hwdevice)|(?:cannot|could not) (?:load|initiali[sz]e) (?:vaapi|videotoolbox|d3d11|libcuda)/i.test(error.message)) throw error;
+    await run(ffmpeg, [...prefix, ...args], remaining, signal);
+  }
 }
 
 export function extractFramesPlugin(): Plugin {

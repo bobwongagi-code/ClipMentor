@@ -8,6 +8,7 @@ import {
 import { AbsoluteFill, Audio as ServerAudio, Img, Sequence, useCurrentFrame } from 'remotion';
 import { ClipFx } from '../gl/ClipFx';
 import { firstGlEffect } from '../gl/clipEffects';
+import type { TimelineFxDefinitions } from '../gl/fx/uniforms';
 import { selectEffectPreviewAdapter, type SelectedPreviewStatusListener } from '../gl/previewAdapter';
 import { itemEditOpts, itemWindow, keptSegments } from '../transcript/edit';
 import { hasOperationalTranscript } from '../transcript/types';
@@ -243,12 +244,13 @@ export function SharedVideoVisualGroup({ group, fit, muted, canvasW, canvasH, pr
   );
 }
 
-export function BackgroundFillLayer({ item, frameOffset, canvasW, canvasH, browserRenderer }: {
+export function BackgroundFillLayer({ item, frameOffset, canvasW, canvasH, browserRenderer, effectDefinitions }: {
   item: TimelineItem;
   frameOffset: number;
   canvasW: number;
   canvasH: number;
   browserRenderer: boolean;
+  effectDefinitions?: TimelineFxDefinitions;
 }) {
   const appearance = backgroundFillAppearanceFor(item, canvasW, canvasH);
   const opacity = clipOpacityAt(item, useCurrentFrame() + frameOffset);
@@ -261,12 +263,12 @@ export function BackgroundFillLayer({ item, frameOffset, canvasW, canvasH, brows
     transform: `scale(${appearance.overscanScale})`,
     filter: backgroundFillFilter(appearance, filters),
   };
-  const effect = firstGlEffect(item);
+  const effect = firstGlEffect(item, effectDefinitions);
   return (
     <AbsoluteFill aria-hidden style={{ opacity, overflow: 'hidden', pointerEvents: 'none' }}>
       {effect
         ? <AbsoluteFill style={style}>
-            <ClipFx item={item} fit="cover" width={canvasW} height={canvasH} frameOffset={frameOffset} />
+            <ClipFx item={item} fit="cover" width={canvasW} height={canvasH} frameOffset={frameOffset} effectDefinitions={effectDefinitions} />
           </AbsoluteFill>
         : item.kind === 'image'
           ? <Img src={item.src!} style={style} />
@@ -287,6 +289,7 @@ interface MediaFillProps {
   borderRadius: number;
   gainAt: (frame: number) => number;
   browserRenderer: boolean;
+  effectDefinitions?: TimelineFxDefinitions;
   onPreviewStatus?: SelectedPreviewStatusListener;
 }
 
@@ -307,7 +310,8 @@ function EffectMediaFill({ props, trimBefore, volume }: {
     <>
       <VisualClipSurface item={item} fit={fit} canvasW={canvasW} canvasH={canvasH} borderRadius={borderRadius}>
         <ClipFx item={item} fit={fit === 'contain' ? 'cover' : fit} width={Math.max(1, Math.round(frame.width))}
-          height={Math.max(1, Math.round(frame.height))} frameOffset={frameOffset} onPreviewStatus={onPreviewStatus} />
+          height={Math.max(1, Math.round(frame.height))} frameOffset={frameOffset} onPreviewStatus={onPreviewStatus}
+          effectDefinitions={props.effectDefinitions} />
       </VisualClipSurface>
       {item.kind !== 'image' && !groupedAudio && <MixedRuntimeAudio item={item} browserRenderer={browserRenderer}
         trimBefore={trimBefore} playbackRate={item.playbackRate ?? 1} volume={volume} />}
@@ -349,7 +353,7 @@ export function MediaFill(props: MediaFillProps) {
       * clipFadeFactor(localFrame, item.durationInFrames, item.fadeInFrames, item.fadeOutFrames);
   };
   const adapter = selectEffectPreviewAdapter({
-    declared: !!firstGlEffect(item),
+    declared: !!firstGlEffect(item, props.effectDefinitions),
     texturable: item.kind === 'video' || item.kind === 'image',
   });
   return adapter.adapter === 'gl-effect'

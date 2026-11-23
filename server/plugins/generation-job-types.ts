@@ -1,5 +1,5 @@
 import type { H264EncoderProfile } from '../media-acceleration.ts';
-import { exportAttemptIdFromFilename } from '../export-media-names.ts';
+import { exportAttemptIdFromFilename } from '../../shared/export-media-names.ts';
 
 export type GenerationJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 export type GenerationRetryClass = 'none' | 'provider-retryable' | 'provider-terminal' | 'download-retryable' | 'restart-recoverable';

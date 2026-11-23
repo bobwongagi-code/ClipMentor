@@ -362,6 +362,11 @@ export function getKey(name: KeyName): string {
   return store.get(name) ?? "";
 }
 
+/** Credential accepted by the continuous preview review subprocess. */
+export function previewReviewCredential(value = getKey("ROOTIFY_GATEWAY_API_KEY")): string {
+  return value.trim() && !/[\r\n]/.test(value) ? value : "";
+}
+
 // Capability booleans derived from current key presence — SAME logic as config/vite.config.ts
 // `define` snapshot, but computed live so the agent perceives runtime key changes.
 export interface Caps {

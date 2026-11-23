@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -21,6 +21,7 @@ async function stopFixtureServer(child: ChildProcess | undefined) {
 // Runs the production panel HTTP handler and persistent store. Only the worker and
 // reviewer are deterministic local fixture replays. This is not a new Agent production run.
 test('web feedback, new board, guarded confirmation, two outputs and bound download through actual handlers', async ({ page }, info) => {
+  test.setTimeout(150_000)
   const sourceRoot = resolve(process.env.CLIPMENTOR_TEST_SOURCE_ROOT!)
   const root = await mkdtemp(join(tmpdir(), 'cm-web-loop-'))
   const proof = process.env.CLIPMENTOR_WEB_TEST_ARTIFACTS || info.outputPath('proof')
@@ -64,6 +65,35 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     // The first tab's confirmation must never bind to the second tab's newer cache.
     const firstBoard=(await state()).task
     expect(firstBoard.boardIdentity).toMatch(/^[a-f0-9]{64}$/)
+    // The task and its review board must survive loss of an exact upload.
+    const readIntake = async () => (await fetch(origin + '/api/clipmentor/intake', {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    })).json()
+    const savedIntake = (await readIntake()).receipt
+    const uploadDir = join(root, 'media/uploads')
+    const ctaBytes = await readFile(inputs.cta)
+    const registeredCopies: string[] = []
+    for (const name of await readdir(uploadDir)) {
+      if (name.startsWith('clipmentor-intake-') && name.endsWith('.png')
+        && (await readFile(join(uploadDir, name))).equals(ctaBytes)) registeredCopies.push(name)
+    }
+    expect(registeredCopies).toHaveLength(1)
+    const ctaCopy = join(uploadDir, registeredCopies[0])
+    await rm(ctaCopy)
+    await page.reload()
+    await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
+    await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
+    await page.getByLabel('CTA 行动号召图', { exact: true }).setInputFiles(inputs.cta)
+    await page.getByRole('button', { name: '补传素材' }).click()
+    await expect(page.getByRole('heading', { name: '补传缺失素材' })).toHaveCount(0)
+    await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
+    expect(await readFile(ctaCopy)).toEqual(ctaBytes)
+    expect((await readIntake()).receipt).toEqual(savedIntake)
+    expect((await state()).task).toMatchObject({
+      taskId: firstBoard.taskId, blueprintRevision: firstRevision,
+      boardIdentity: firstBoard.boardIdentity, sequence: firstBoard.sequence,
+    })
+    expect((await audit()).workerEvents).toHaveLength(0)
     const requirements=async(enabled:boolean)=>fetch(origin+'/api/clipmentor/fixture-requirements',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled})})
     expect((await requirements(true)).status).toBe(200)
     const secondBoard=(await state()).task
@@ -78,12 +108,12 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     expect((await state()).task.sequence).toBe(firstBoard.sequence)
     expect((await requirements(false)).status).toBe(200)
     await page.reload()
-    await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图')
+    await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
     await page.getByRole('textbox', { name: '修改意见' }).fill('把标题改成修订后测试')
     await page.getByRole('button', { name: '提交修改' }).click()
     await expect.poll(async () => { const task=(await state()).task; return task?.status==='awaiting_blueprint'&&typeof task.blueprintRevision==='string'&&task.blueprintRevision!==firstRevision }, { timeout:30000 }).toBe(true)
     await page.reload()
-    await expect(page.frameLocator('iframe').locator('body')).toContainText('修订后测试')
+    await expect(page.frameLocator('iframe').locator('body')).toContainText('修订后测试', { timeout: 30_000 })
     const revised = (await state()).task
     expect(revised.blueprintRevision).not.toBe(firstRevision)
     // Deliberately replaying the old revision must remain rejected by the real handler.
@@ -129,7 +159,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     expect(result.fakeReviewerCalls).toBe(2)
     expect(result.cancelledState).toBe('cancelled')
     expect(result.recoveredEffects).toBe(1)
-    expect(forwarded).toContain('POST /api/clipmentor/intake')
+    expect(forwarded.filter(route => route === 'POST /api/clipmentor/intake')).toHaveLength(2)
     expect(result.actions.map((action:{status:number}) => action.status)).toEqual([409,200,409,200,200,409,200,200])
     expect(result.actions.every((action:{project:string,taskId:string}) => action.project.startsWith('web-loop-fixture')&&!!action.taskId)).toBe(true)
     expect(result.workerEvents.every((event: {project:string}) => event.project.startsWith('web-loop-fixture'))).toBe(true)

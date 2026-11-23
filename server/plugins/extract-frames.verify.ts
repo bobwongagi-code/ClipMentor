@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { createServer, type ViteDevServer } from 'vite';
 import { seedKeystore } from '../keystore.ts';
 import { ffmpegBin, ffprobeBin } from '../media-binaries.ts';
-import { extractFramesPlugin, frameSeekArgs, pickDistinctTimes, sampleTimesMs } from './extract-frames.ts';
+import { extractFramesPlugin, extractOneFrame, frameSeekArgs, pickDistinctTimes, sampleTimesMs } from './extract-frames.ts';
 
 const source = await readFile(new URL('./extract-frames.ts', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /\bspawn\(ffprobeBin\(\)/, 'ffprobe must use the shared low-priority process launcher');
@@ -115,6 +115,51 @@ try {
   const legacyFile = join(directory, 'legacy.jpg'); await writeFile(legacyFile, Buffer.from(legacy.base64, 'base64'));
   const legacyProbe = JSON.parse(execFileSync(ffprobeBin(), ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'json', legacyFile], { encoding: 'utf8' }));
   assert.deepEqual([legacyProbe.streams[0].width, legacyProbe.streams[0].height], [640, 180]);
+  if (process.platform === 'darwin' || process.platform === 'linux') {
+    const previous = process.env.OPENCHATCUT_FFMPEG;
+    const device = process.env.OPENCHATCUT_VAAPI_DEVICE;
+    const hardware = process.platform === 'darwin' ? 'videotoolbox' : 'vaapi';
+    const shim = join(directory, 'ffmpeg-device-fixture');
+    const attempts = join(directory, 'decode-attempts.jsonl');
+    await writeFile(shim, `#!/usr/bin/env node
+const { spawnSync } = require('node:child_process');
+const { appendFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+if (args.includes('-hwaccels')) { console.log(${JSON.stringify(hardware)}); process.exit(0); }
+appendFileSync(${JSON.stringify(attempts)}, JSON.stringify(args.includes('-hwaccel')) + '\\n');
+if (args.some(arg => arg.endsWith('invalid-fixture.mp4'))) {
+  console.error('Invalid data found when processing input');
+  process.exit(1);
+}
+if (args.includes('-hwaccel')) {
+  console.error('Failed setup for format videotoolbox_vld: hwaccel initialisation returned error.');
+  process.exit(1);
+}
+const result = spawnSync(${JSON.stringify(ffmpegBin())}, args, { stdio: 'inherit' });
+process.exit(result.status ?? 1);
+`, { mode: 0o700 });
+    process.env.OPENCHATCUT_FFMPEG = shim;
+    process.env.OPENCHATCUT_VAAPI_DEVICE = '/dev/dri/renderD2147483647';
+    try {
+      const output = join(directory, 'cpu.jpg');
+      await extractOneFrame(join(directory, 'action.mp4'), 100, output);
+      const jpeg = await readFile(output);
+      assert.deepEqual(jpeg.subarray(0, 2), Buffer.from([0xff, 0xd8]));
+      const actual = (await readFile(attempts, 'utf8')).trim().split('\n');
+      assert.deepEqual(actual, hardware === 'vaapi' ? ['false'] : ['true', 'false']);
+      await writeFile(attempts, '');
+      await assert.rejects(extractOneFrame(join(directory, 'invalid-fixture.mp4'), 0, output), /Invalid data/);
+      assert.equal((await readFile(attempts, 'utf8')).trim(), hardware === 'vaapi' ? 'false' : 'true');
+      await writeFile(attempts, '');
+      await assert.rejects(extractOneFrame(join(directory, 'action.mp4'), 100, output, false, undefined, AbortSignal.abort()));
+      assert.equal(await readFile(attempts, 'utf8'), '');
+    } finally {
+      if (previous === undefined) delete process.env.OPENCHATCUT_FFMPEG;
+      else process.env.OPENCHATCUT_FFMPEG = previous;
+      if (device === undefined) delete process.env.OPENCHATCUT_VAAPI_DEVICE;
+      else process.env.OPENCHATCUT_VAAPI_DEVICE = device;
+    }
+  }
 } finally {
   await server?.close(); await rm(directory, { recursive: true, force: true });
 }

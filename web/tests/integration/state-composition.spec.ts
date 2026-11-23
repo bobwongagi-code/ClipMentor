@@ -84,7 +84,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       await page.getByRole('button', { name: '上传素材' }).click()
       await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
       await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
-      await expect.poll(async () => (await state()).task?.status).toBe('awaiting_review')
+      await expect.poll(async () => (await state()).task?.status, { timeout: 20_000 }).toBe('awaiting_review')
       await page.reload()
       const other = await context.newPage()
       await other.goto(origin)

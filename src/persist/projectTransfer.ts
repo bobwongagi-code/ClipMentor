@@ -100,7 +100,7 @@ export interface ProjectImportOptions {
   publish?: (staged: Pick<StagedProjectImport, 'name' | 'doc' | 'chat' | 'creativeMode'>) => Promise<ProjectMeta>;
 }
 
-/** The complete set of /media/uploads src referenced by doc (asset pool + each timeline items), without duplication and order preservation. */
+/** Collect local upload references from the asset pool, timeline items and saved effect definitions. */
 export function collectUploadSrcs(doc: ProjectDoc): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -118,6 +118,7 @@ export function collectUploadSrcs(doc: ProjectDoc): string[] {
       // If you miss it, the separated audio track being played will be deleted as an orphan.
       push((item as { denoisedSrc?: unknown }).denoisedSrc);
     }
+    for (const definition of Object.values(timeline.fxDefs ?? {})) push(definition?.cube);
   }
   return out;
 }

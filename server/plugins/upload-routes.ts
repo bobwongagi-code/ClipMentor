@@ -19,7 +19,7 @@ import {
 } from './upload-route-http.ts';
 import { diskUpload } from './upload-route-storage.ts';
 import { handleImportUrl, handleUpload } from './upload-route-write.ts';
-import { isPrivateExportFilename } from '../export-media-names.ts';
+import { isPrivateExportFilename } from '../../shared/export-media-names.ts';
 import { matchesCommittedExportFile, resolveCommittedExport } from './export-delivery.ts';
 import { readCommittedExportSizes } from './generation-job-store.ts';
 import { exportSizeMatches } from './generation-job-types.ts';

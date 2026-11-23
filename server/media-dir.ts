@@ -18,8 +18,8 @@ import {
 } from './runtime-profile.ts';
 import { resolveMediaReference } from './media-references.ts';
 import { sha256File } from '../shared/node-content-hash.ts';
-import { exportAttemptIdFromFilename } from './export-media-names.ts';
-export { exportAttemptIdFromFilename } from './export-media-names.ts';
+import { exportAttemptIdFromFilename } from '../shared/export-media-names.ts';
+export { exportAttemptIdFromFilename } from '../shared/export-media-names.ts';
 
 export const DEFAULT_UPLOAD_DIR = join(process.cwd(), 'public', 'media', 'uploads');
 

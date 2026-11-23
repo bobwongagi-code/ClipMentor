@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AbsoluteFill, Img, Video, continueRender, delayRender, getRemotionEnvironment, useCurrentFrame, useVideoConfig } from 'remotion';
 import { createGlRuntime, type GlRuntime } from './runtime';
 import { cubeSettled, ensureCube } from './fx/cube';
+import type { TimelineFxDefinitions } from './fx/uniforms';
 import { disposeRuntimeSlot, ensureRuntimeSlot } from './runtimeSlot';
 import { buildEffectShaderFrame, buildTransitionShaderFrame } from './shaderFrame';
 import { glPreviewFailureReason } from './previewAdapter';
@@ -37,6 +38,7 @@ interface GlTransitionProps {
   width: number;
   height: number;
   fit: AspectFit;
+  effectDefinitions?: TimelineFxDefinitions;
   outgoingBackgroundFill?: boolean;
   incomingBackgroundFill?: boolean;
   previewTargetId?: string;
@@ -105,7 +107,7 @@ function MediaSource({ item, trim, fit, elRef }: { item: TimelineItem; trim: num
   return <Video ref={elRef as React.MutableRefObject<HTMLVideoElement | null>} src={item.src!} trimBefore={trim} playbackRate={item.playbackRate ?? 1} muted style={style} />;
 }
 
-export function GlTransition({ type, direction, L, windowStart, outgoing, incoming, trimOut, trimIn, width, height, fit, outgoingBackgroundFill = false, incomingBackgroundFill = false, customFrag, customUniforms, previewTargetId, onPreviewStatus, onReadyChange }: GlTransitionProps) {
+export function GlTransition({ type, direction, L, windowStart, outgoing, incoming, trimOut, trimIn, width, height, fit, effectDefinitions, outgoingBackgroundFill = false, incomingBackgroundFill = false, customFrag, customUniforms, previewTargetId, onPreviewStatus, onReadyChange }: GlTransitionProps) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -135,14 +137,14 @@ export function GlTransition({ type, direction, L, windowStart, outgoing, incomi
       : GLSL_TRANSITIONS[type]),
     [type, customFrag, customUniforms],
   );
-  const outgoingEffects = useMemo(() => glEffects(outgoing), [outgoing]);
-  const incomingEffects = useMemo(() => glEffects(incoming), [incoming]);
+  const outgoingEffects = useMemo(() => glEffects(outgoing, effectDefinitions), [outgoing, effectDefinitions]);
+  const incomingEffects = useMemo(() => glEffects(incoming, effectDefinitions), [incoming, effectDefinitions]);
   const definitionKey = useMemo(
-    () => [
+    () => JSON.stringify([
       def?.frag ?? '',
-      ...outgoingEffects.map(({ def: effect }) => effect.frag),
-      ...incomingEffects.map(({ def: effect }) => effect.frag),
-    ].join('\u0000'),
+      outgoingEffects.map(({ def: effect }) => [effect.frag, effect.cube]),
+      incomingEffects.map(({ def: effect }) => [effect.frag, effect.cube]),
+    ]),
     [def?.frag, incomingEffects, outgoingEffects],
   );
 

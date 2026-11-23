@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { getKey } from '../keystore';
+import { getKey, previewReviewCredential } from '../keystore';
 import { codexModels, codexStatus } from '../plugins/codex-agent';
 import { getStoredEntry } from '../plugins/project-store';
 import { isProjectConnected } from '../external-agent/broker';
@@ -14,7 +14,7 @@ import { isSafeUploadName, resolveUploadFile, serveDiskFile } from '../media-dir
 import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-board';
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
 import {representativeTeachingExcerpt,renderTeachingExcerpt,verifyTeachingExcerptAsset,TEACHING_EXCERPT_MAX_BYTES} from './blueprint-teaching-excerpt';
-import { productionFeedbackAnchor,blueprintFeedbackPoints,feedbackProjectDigest } from './production-feedback';
+import { productionFeedbackAnchor,blueprintFeedbackPoints,matchesExportedPreviewProject } from './production-feedback';
 import { panelDeliveryIssues,panelDeliveryFindings,declaredPanelOpening,panelSalesEvidence,panelPartnerCardIssue,assertPanelDeliveryReady } from './production-panel-delivery';
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
@@ -51,7 +51,10 @@ type PanelSettings = { unavailable: string } | { provider:'openai'; model:string
 export const panelServiceUnavailable = '制作服务暂时不可用。';
 export const panelMaterialsUnavailable = '所需素材不齐全或无法读取，请重新核对上传素材。';
 
+const missingPreviewReviewCredential = '服务端尚未配置成片复核凭据。';
+
 async function readSettings(): Promise<PanelSettings> {
+  if (!previewReviewCredential()) return { unavailable: missingPreviewReviewCredential };
   if (!getKey('MINIMAX_API_KEY')) return { unavailable: '服务端尚未配置 MiniMax 配音。' };
   const apiModel = getKey('LLM_OPENAI_MODEL').trim();
   const apiMode = getKey('LLM_OPENAI_API_MODE') === 'chat' ? 'chat' : 'responses';
@@ -179,6 +182,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         let children=await readProductionOutputs(task);
         if(body.action!=='produce_versions'||children.some(child=>child.blueprintApproval?.sourceRevision!==body.revision))
           throw Error('蓝图版本已变化，请刷新');
+        if(!previewReviewCredential())throw Error(missingPreviewReviewCredential);
         children=await queueBlueprintContinuations(task);
         for(const child of children)if(child.status==='queued'&&!active(child.taskId,child.projectId))launch(child);
         res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');
@@ -239,7 +243,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const saved=await snapshot(),exported=task?.completed.export?.artifact;
         if(task?.status==='awaiting_review'&&task.completed.self_check?.artifact.receipt===undefined&&exported?.revision===undefined)
           return saved; // A legacy portrait preview may still be watched, but cannot be accepted without the receipt.
-        if(!exported||saved.revision!==exported.revision&&feedbackProjectDigest(saved.doc)!==exported.feedback_project_digest)
+        if(!matchesExportedPreviewProject(exported,saved))
           throw Error('预览已变化，请刷新');
         return saved;
       };
@@ -404,14 +408,15 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const teachingBrief=blueprintRevision?productionTeachingBrief(task,policy,draft?.doc):undefined;
       const teachingDigest=teachingBrief?await handoffDigest(teachingBrief):undefined;
       const needsHuman=!!blueprintRevision&&!!task&&panelAuthorNeedsHumanReview(task,blueprintRevision,panelBlueprintRequirementsDigest(policy));
-      const canApproveBlueprint=!!blueprintRevision&&!needsHuman
+      const previewReviewAvailable=!blueprintRevision||!!previewReviewCredential();
+      const canApproveBlueprint=!!blueprintRevision&&!needsHuman&&previewReviewAvailable
         &&task?.status==='awaiting_blueprint'&&blueprintRevision===task.projectRevision
         &&checked?.revision===blueprintRevision&&checked.authorSelfCheck==='passed'
         &&(checked.gate as {allowed?:boolean}|undefined)?.allowed===true
         &&(!policy||checked.requirementsDigest===requirementsDigest)
         &&(!teachingDigest||draft?.doc.clipMentorAnalysis?.production_copy_review?.teaching_brief_digest===teachingDigest)
         &&(!criteria||visualCriteriaPlanApproved(criteria,draft?.doc.clipMentorAnalysis?.production_copy_review));
-      const canConfirmBlueprint=!!blueprintRevision&&task?.status==='awaiting_blueprint'
+      const canConfirmBlueprint=!!blueprintRevision&&previewReviewAvailable&&task?.status==='awaiting_blueprint'
         &&blueprintRevision===task.projectRevision&&!!task.input.panelDelivery&&!task.input.panelDelivery.audience
         &&!task.blueprintApproval&&!task.repairContext?.pending_blueprint_feedback&&!running
         &&task.attempts.model<task.input.budget.model&&Date.now()<task.createdAt+task.input.budget.maxElapsedMs
@@ -432,6 +437,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         :needsHuman?'请核对计划上屏的承诺。如需补充事实或删改内容，请提交修改意见。'
         :atLimit||dualBlueprint&&!canConfirmBlueprint&&!!task&&task.attempts.model>=task.input.budget.model
           ?'本次制作已达到处理上限，当前蓝图仍可查看。'
+        :!previewReviewAvailable?'制作服务暂时不可用，当前蓝图仍可查看。'
         :stopReason||task&&needsSourceRequirementsMaintenance(task)?'蓝图检查已暂停，当前版本仍可查看。'
         :'蓝图检查尚未完成，暂不能开始制作。';
       let attachments:Array<{assetId:string;fileName:string}>=[],deliveryUnavailable=false;
@@ -530,6 +536,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           launch(existing);
         } else if (body.action === 'approve_blueprint' || body.action === 'revise_blueprint' || body.action==='produce_versions') {
           if (body.action === 'revise_blueprint' && typeof body.text !== 'string') throw new Error('请填写修改意见');
+          if (body.action !== 'revise_blueprint' && !previewReviewCredential()) throw Error(missingPreviewReviewCredential);
           const draftFeedback=body.action==='revise_blueprint'&&acceptsDraftBlueprintFeedback(existing,saved.revision)
             &&!!saved.doc.clipMentorAnalysis?.blueprint.length;
           const productionConfirmation=body.action==='produce_versions'&&!!existing.input.panelDelivery&&!existing.input.panelDelivery.audience
@@ -607,6 +614,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
               {digest:body.visualCriteriaDigest,confirmed:body.confirmedVisualCriteria,renderId:body.renderId,wholePreviewConfirmed:body.wholePreviewConfirmed});
           }
           else {
+            if (!previewReviewCredential()) throw Error(missingPreviewReviewCredential);
             await productionFeedback(existing,{kind:'content',text:body.text,preview:anchor.preview,unit_ids:[],item_ids:[]},productionTaskStore,saved.doc);
             launch(existing);
           }

@@ -13,8 +13,11 @@ if(!Number.isInteger(uiPort)||uiPort<1||uiPort>65535)throw Error('Explicit CLIPM
 const root=process.env.CLIPMENTOR_WEB_TEST_DATA;
 if(!root||dirname(resolve(root))!==resolve(tmpdir())||!basename(root).startsWith('cm-web-loop-')||(await readdir(root)).length)throw Error('Explicit empty temporary CLIPMENTOR_WEB_TEST_DATA is required');
 process.env.OPENCHATCUT_DATA_DIR=root;
+process.env.OPENCHATCUT_DEV_PROFILE_ID='11111111-1111-4111-8111-111111111111';
 // No runtime/profile-dependent module may be statically imported above this line.
 const {runtimeProfile}=await import('../runtime-profile');assert.equal(runtimeProfile().rootDir,root);
+const {setKeys}=await import('../keystore');
+await setKeys({ROOTIFY_GATEWAY_API_KEY:'local-fixture-only'});
 const {setStoredEntry}=await import('../plugins/project-store');
 const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
 const {activateOfflineAgentRuntimeBackend}=await import('../external-agent/agent-runtime-persistence');activateOfflineAgentRuntimeBackend();

@@ -650,3 +650,72 @@ test('intake for another project uses the same neutral upload instructions', asy
   await expect(page.getByText('选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。')).toBeVisible()
   await expect(page.getByText(/JUDYDOLL/)).toHaveCount(0)
 })
+
+test('a saved blueprint opens with a missing upload and restores only its registered slot', async ({ page }) => {
+  const assets = ['source.mp4', 'product.png', 'sales.png', 'cta.png'].map((name, index) => ({ id: String(index), name }))
+  const receipt = { projectId: 'saved-project', assets }
+  let repaired = false, submissions = 0
+  await page.route('**/api/clipmentor/intake', async route => {
+    if (route.request().method() === 'POST') {
+      submissions++
+      const multipart = route.request().postDataBuffer()!.toString('latin1')
+      expect(multipart).toContain('name="cta"')
+      expect(multipart).not.toMatch(/name="(?:source|product|sales)"/)
+      repaired = true
+      return route.fulfill({ json: receipt })
+    }
+    return route.fulfill({ json: { receipt: repaired ? receipt : null, ...(!repaired && { repair: { ...receipt, missingSlots: ['cta'] } }) } })
+  })
+  await page.route('**/api/clipmentor/production*', route => {
+    const params = new URL(route.request().url()).searchParams
+    if (params.get('view') === 'panel_board') {
+      expect(params.get('revision')).toBe('saved-revision')
+      return route.fulfill({ contentType: 'text/html', body: '<h2>同一个双结尾蓝图</h2>' })
+    }
+    expect(route.request().method()).toBe('GET')
+    return route.fulfill({ json: { task: {
+      taskId: 'saved-task', status: 'awaiting_blueprint', stage: 'copy_review', active: false,
+      blueprintRevision: 'saved-revision', sequence: 17,
+    } } })
+  })
+  await page.goto('/')
+  await expect(page.frameLocator('iframe').getByText('同一个双结尾蓝图')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
+  await expect(page.locator('input[type=file]')).toHaveCount(1)
+  await page.getByLabel('CTA 行动号召图', { exact: true }).setInputFiles({ ...image, name: 'local.png' })
+  await page.getByRole('button', { name: '补传素材' }).click()
+  await expect(page.getByRole('heading', { name: '补传缺失素材' })).toHaveCount(0)
+  await expect(page.frameLocator('iframe').getByText('同一个双结尾蓝图')).toBeVisible()
+  expect(submissions).toBe(1)
+})
+
+test('a recovered board can be opened in place after the read retries stop', async ({ page }) => {
+  await page.clock.install()
+  let boardReads = 0, healthy = false
+  await page.route('**/api/clipmentor/intake', route => route.fulfill({ json: { receipt: {
+    projectId: 'fixture', assets: ['source', 'product', 'sales', 'cta'].map(id => ({ id, name: id })),
+  } } }))
+  await page.route('**/api/clipmentor/production*', route => {
+    if (new URL(route.request().url()).searchParams.get('view') === 'panel_board') {
+      boardReads++
+      return healthy ? route.fulfill({ contentType: 'text/html', body: '<h2>恢复的原版审核板</h2>' }) : route.fulfill({ status: 503 })
+    }
+    return route.fulfill({ json: { task: { taskId: 'existing-task', status: 'awaiting_blueprint', stage: 'copy_review', active: false, sequence: 1, blueprintRevision: 'r1' } } })
+  })
+  await page.goto('/')
+  await expect.poll(() => boardReads).toBe(1)
+  await page.clock.fastForward(2000)
+  await expect.poll(() => boardReads).toBe(2)
+  await page.clock.fastForward(2000)
+  const reload = page.getByRole('button', { name: '重新加载审核板' })
+  await expect(reload).toBeVisible()
+  expect(boardReads).toBe(3)
+  const text = page.getByRole('textbox', { name: '修改意见' })
+  await text.fill('保留当前意见')
+  await expect(page.getByRole('button', { name: '提交修改' })).toBeDisabled()
+  healthy = true
+  await reload.click()
+  await expect(page.frameLocator('iframe').getByText('恢复的原版审核板')).toBeVisible()
+  await expect(text).toHaveValue('保留当前意见')
+  await expect(page.getByRole('button', { name: '提交修改' })).toBeEnabled()
+})

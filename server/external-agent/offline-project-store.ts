@@ -98,6 +98,8 @@ export interface OfflineProjectCommitInput {
   doc: ProjectDoc;
   ownership: ProjectEditOwnershipClaim;
   canCommit: () => boolean;
+  /** Publish staged local files under the same lock as the references to them. */
+  publishMedia?: () => Promise<void>;
 }
 
 interface CommitMetadata {
@@ -244,6 +246,7 @@ async function attemptCommit(input: CommitAttemptInput): Promise<OfflineProjectC
         originals[checkpointKey] = checkpoint;
       }
     }
+    await input.publishMedia?.();
     if (!await commitProjectEditRows(store, changes, originals, input.canCommit)) {
       return { status: 'browser-takeover' };
     }

@@ -22,6 +22,20 @@ const seamState = (): TimelineState => ({
   transitions: [transition],
 });
 
+// Editing the strength of a restored LUT must keep its current stored source.
+{
+  const id = 'plugin:portable-look';
+  const saved = { id, name: 'Look', desc: '', frag: 'shader', props: [], cube: '/media/uploads/saved.cube' };
+  const competing = { ...saved, cube: '/media/uploads/installed.cube' };
+  const state = { ...seamState(), fxDefs: { [id]: saved } };
+  const effect = { id: 'look', assetId: id, overrides: { intensity: 0.5 } };
+  const edited = reduce(state, { type: 'setEffects', id: 'a', effects: [effect], defs: [competing] });
+  assert.deepEqual(edited.items[0]?.effects, [effect]);
+  assert.equal(edited.fxDefs?.[id], saved);
+  const applied = reduce(seamState(), { type: 'setEffects', id: 'a', effects: [effect], defs: [competing] });
+  assert.equal(applied.fxDefs?.[id], competing, 'new application still stores an available definition');
+}
+
 // ── no-op reference stability(有转场在场时被拒/被夹为 0 的 action 不得产生新 state) ──
 {
   const s = seamState();
