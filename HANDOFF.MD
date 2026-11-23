@@ -740,3 +740,9 @@ A saved template, pending proposal, recoverable agent draft and pending upload j
 Recheck the registered hashes once when starting production. A pathname can survive a file replacement after the upload receipt was read. When restoring an existing slot, the browser can match the selected bytes directly even if the local browser lacks that codec. The server still verifies the bytes. Fresh uploads keep their media checks. Only a nonempty HTML board with the expected identity can enable review actions or authorize resubmission after a board-cache miss.
 
 In a stream-copied observation, either the audio or the video can uniquely identify the source clock. A static picture with distinct narration is a valid case. Verify both tracks and their alignment, and refuse ambiguous evidence. For FCPXML, an empty post-edit speech sequence has no placements and constant zero gain keyframes preserve silence. The native NLE import and real gateway admission remain separate checks.
+
+### 2026-11-23 · Recover a registered topic selection after a rejected supplement
+
+The analysis worker can publish a staged full-source selection when the matching successful write is followed by a rejected operator-supplied evidence append that explicitly changed nothing. It checks the request and response, current analysis revision, saved selection and current teaching requirements. The existing publication, readback and independent review still apply. An unmatched or outstanding write, a changed selection or an incomplete teaching basis keeps the stage blocked. Recovery does not approve the blueprint.
+
+Use the teaching-baseline worker regression for a loopback test with disposable projects. To replay an existing archived task without sending requests or writing to the project, run `npx tsx server/clipmentor/production-analysis-receipt-replay.mts <project-store-directory> <project-id> <task-artifact-json>`. A successful replay verifies progress recovery only.
