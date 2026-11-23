@@ -90,6 +90,22 @@ assert.deepEqual(pending.repairContext?.pending_review_repair,{status:'bound'});
  assert.match(unchecked.error??'',/human_blueprint_draft_binding_missing/);
 }
 {
+ const pending=fresh();pending.input.humanBlueprintReview=true;
+ pending.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};
+ const revision='saved-with-unconfirmed-cta',requirementsDigest='b'.repeat(64);
+ await advanceProductionTask(pending,async current=>current.stage==='copy_review'
+  ?{artifact:{revision,requirementsDigest,authorSelfCheck:'needs_human_review',authorSelfCheckNotice:'Approval terms not verified.',
+   author_self_check_source_digest:'a'.repeat(64),teaching_baseline_digest:'d'.repeat(64)},awaitBlueprintFeedback:true}
+  :{artifact:{revision}},store);
+ assert.equal(pending.status,'awaiting_blueprint');
+ assert.equal(production.panelAuthorCheckMatches(pending,revision,requirementsDigest),false);
+ assert.equal(production.panelAuthorNeedsHumanReview(pending,revision,requirementsDigest),true);
+ assert.equal(production.panelAuthorNeedsHumanReview(pending,'another-candidate',requirementsDigest),false);
+ assert.equal(production.panelAuthorNeedsHumanReview(pending,revision,'c'.repeat(64)),false);
+ assert.equal(pending.completed.copy_review,undefined);
+ assert.equal(pending.attempts.render,0);
+}
+{
  const task=fresh();task.input.humanBlueprintReview=true;
  task.input.panelDelivery={productAssetId:'product',salesAssetId:'sales',ctaAssetId:'cta'};
  const visited:string[]=[];

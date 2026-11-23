@@ -118,7 +118,7 @@ try{
  const panelTask=await createProductionTask({...input,author:{...input.author,origin},reviewer:{...input.reviewer,origin},humanBlueprintReview:true} as Parameters<typeof createProductionTask>[0]);
  const panelGet=async()=>await (await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}})).json();
  for(const [error,reason] of [
-  ['Error: 已用完自动返修额度。blueprint_stage_incomplete: private fixture','service'],
+  ['Error: 已用完自动返修额度。blueprint_stage_incomplete: private fixture','maintenance'],
   ['Error: Production deadline exceeded','limit'],
   ['Error: Original upload unavailable','materials'],
  ]){
@@ -136,7 +136,9 @@ try{
   {id:'U-03',code:'picture_plan_phase_board_unreadable'},
  ])};
  await productionTaskStore.save(panelTask);
- assert.match((await panelGet()).task.stopDetail,/缺内容.*绑定错.*门禁问题/);
+ const pausedView=(await panelGet()).task;
+ assert.equal(pausedView.stopReason,'maintenance');
+ assert.doesNotMatch(JSON.stringify(pausedView),/缺内容|绑定错|门禁问题|blueprint_repair_no_progress/);
  const paused=await post({action:'resume',projectId:panelTask.projectId,taskId:panelTask.taskId});
  assert.equal(paused.status,409);assert.match((await paused.json()).error,/回看方案返修已暂停/);
  assert.equal(steps.length,stepsBeforePause);
@@ -983,9 +985,13 @@ try{
   const evidence={assetId:'earlier-sales',sha256:assets[2].sourceContentHash};
   const criteria=[{kind:'source_performance',source,evidence,quote:'同款商品，这支怎么样？',results:{views:'10k',units:'42',revenue:'RM51'}}];
   const detached=[{...criteria[0],evidence:{...evidence,sha256:'f'.repeat(64)}}];
-  assert.equal((await intake({action:'start',doneCriteria:detached})).status,409);
-  assert.equal((await intake({action:'start',doneCriteria:[]})).status,409);
-  const response=await intake({action:'start',doneCriteria:criteria});
+  const {registerPanelSourceCriteria,readPanelSourceCriteria}=await import('../clipmentor/production-source-policy');
+  await assert.rejects(registerPanelSourceCriteria(projectId,detached,assets[0],assets[2]),/source_criteria_sales_changed/);
+  assert.equal((await intake({action:'start',doneCriteria:criteria})).status,409);
+  await registerPanelSourceCriteria(projectId,criteria,assets[0],assets[2]);
+  assert.equal(await readPanelSourceCriteria('unrelated-intake',assets[0],assets[2]),undefined);
+  assert.equal((await intake({action:'bind_source_requirements',doneCriteria:criteria})).status,409);
+  const response=await intake({action:'start'});
   assert(response.ok,await response.text());
   const {latestPanelProductionTask,productionExecutionActive}=await import('../clipmentor/production-task');
   const started=await latestPanelProductionTask(projectId);

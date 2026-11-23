@@ -110,15 +110,24 @@ export function panelBlueprintRequirementsDigest(policy:HandoffPolicy|null|undef
  return digestValue({objective:policy?.brief.objective??null,doneCriteria,...(references.length?{references}:{})});
 }
 
-export function panelAuthorCheckMatches(task:ProductionTask,revision:string,requirementsDigest:string,
+function panelAuthorCheckBound(task:ProductionTask,revision:string,requirementsDigest:string,
  artifact=task.completed.blueprint?.artifact){
  return task.projectRevision===revision&&artifact?.revision===revision
-  &&artifact.authorSelfCheck==='passed'
   &&typeof artifact.author_self_check_source_digest==='string'&&/^[a-f0-9]{64}$/.test(artifact.author_self_check_source_digest)
   &&typeof artifact.teaching_baseline_digest==='string'&&/^[a-f0-9]{64}$/.test(artifact.teaching_baseline_digest)
   &&artifact.requirementsDigest===requirementsDigest
   &&(!task.input.doneCriteria?.length||artifact.sourceCriteriaDigest===digestValue(task.input.doneCriteria));
 }
+
+export function panelAuthorCheckMatches(task:ProductionTask,revision:string,requirementsDigest:string,artifact=task.completed.blueprint?.artifact){
+ return artifact?.authorSelfCheck==='passed'&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
+}
+
+export function panelAuthorNeedsHumanReview(task:ProductionTask,revision:string,requirementsDigest:string,artifact=task.completed.blueprint?.artifact){
+ return artifact?.authorSelfCheck==='needs_human_review'&&typeof artifact.authorSelfCheckNotice==='string'
+  &&!!artifact.authorSelfCheckNotice.trim()&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
+}
+
 
 /** Requalify a saved unchecked draft only when its original execution is still authorized. */
 export async function requeuePanelAuthorCheck(task:ProductionTask){
@@ -128,7 +137,8 @@ export async function requeuePanelAuthorCheck(task:ProductionTask){
   ||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs||task.attempts.model>=task.input.budget.model)return false;
  if((await latestPanelProductionTask(task.projectId))?.taskId!==task.taskId)return false;
  const policy=await productionReviewRequirements(task.projectId);
- if(panelAuthorCheckMatches(task,revision,panelBlueprintRequirementsDigest(policy)))return false;
+ const requirementsDigest=panelBlueprintRequirementsDigest(policy);
+ if(panelAuthorCheckMatches(task,revision,requirementsDigest)||panelAuthorNeedsHumanReview(task,revision,requirementsDigest))return false;
  const key='project:'+task.projectId,project=await getStoredEntry(key);
  const doc=project.found?runProjectMigrations(project.value)?.doc:undefined;
  if(!doc||revisionOf(doc)!==revision||doc.clipMentorAnalysis?.source.asset_id!==task.input.sourceAssetId)return false;
@@ -626,7 +636,8 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
     if(task.stage!=='copy_review'||!isPanelBlueprintDraft(task)||!blueprint
      ||!task.projectRevision||blueprint.artifact.revision!==task.projectRevision||typeof requirementsDigest!=='string'
      ||!/^[a-f0-9]{64}$/.test(requirementsDigest)
-     ||!panelAuthorCheckMatches(task,task.projectRevision,requirementsDigest,result.artifact))
+     ||(!panelAuthorCheckMatches(task,task.projectRevision,requirementsDigest,result.artifact)
+       &&!panelAuthorNeedsHumanReview(task,task.projectRevision,requirementsDigest,result.artifact)))
      throw Error('human_blueprint_draft_binding_missing');
     blueprint.artifact={...blueprint.artifact,...result.artifact};
     task.status='awaiting_blueprint';await publishStage();break;
