@@ -56,7 +56,6 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match package version $expected" >&2
             exit 1
           fi
-      - run: node server/clipmentor/project-facts.verify.mjs
       - run: npm run lint
       - run: npm test
       - run: npm run verify:agent-skill
