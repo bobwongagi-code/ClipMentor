@@ -114,6 +114,15 @@ try {
 
     await setStoredEntry('versions:survivor', []);
 
+    const { registerMediaReference } = await import('../media-references');
+    const external = join(root, 'external-original.mp4');
+    await writeFile(external, 'outside upload storage');
+    await registerMediaReference(directory, 'reference-only.mp4', external);
+    await rm(external);
+    const referenceCleanup = await (await remove('reference-only.mp4')).json();
+    assert.equal(referenceCleanup.removed, 1, 'the stale reference manifest was removed');
+    assert.equal(referenceCleanup.localFileRemoved, false, 'removing a reference cannot attest to removing media bytes');
+
     // A draft reachable after an editor process restart can own bytes that the
     // current project and all versions have yet to reference.
     const {
@@ -179,7 +188,9 @@ try {
       assert.equal(await readFile(retainedPath, 'utf8'), 'retained bytes');
       await deleteStoredEntry(ownerKey);
     }
-    assert.equal((await remove(retainedName)).status, 200, 'discarding the final owner releases media');
+    const released = await remove(retainedName);
+    assert.equal(released.status, 200, 'discarding the final owner releases media');
+    assert.equal((await released.json()).localFileRemoved, true);
     await assert.rejects(readFile(retainedPath), { code: 'ENOENT' });
 
     const { createGenerationJob } = await import('./generation-job-lifecycle');

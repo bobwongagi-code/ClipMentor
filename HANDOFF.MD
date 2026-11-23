@@ -735,7 +735,7 @@ Check the version of the FFmpeg executable itself. A checkout can link its packa
 
 ### 2026-11-23 · Recheck the media-retention fixes at their consumers
 
-A saved template, pending proposal, recoverable agent draft and pending upload journal can own the last reference to media. Use the same owner set for browser, directory and SQLite cleanup. Preserve the local media cache when a delete has no confirmed disk removal. Releasing the last owner still allows confirmed cleanup.
+A saved template, pending proposal, recoverable agent draft and pending upload journal can own the last reference to media. Use the same owner set for browser, directory and SQLite cleanup. Preserve the local media cache unless the cleanup receipt confirms removal of a nonempty regular media file. Removing only a local reference manifest also increments the historical removal count. Releasing the last owner still allows confirmed cleanup.
 
 Recheck the registered hashes once when starting production. A pathname can survive a file replacement after the upload receipt was read. When restoring an existing slot, the browser can match the selected bytes directly even if the local browser lacks that codec. The server still verifies the bytes. Fresh uploads keep their media checks. Only a nonempty HTML board with the expected identity can enable review actions or authorize resubmission after a board-cache miss.
 

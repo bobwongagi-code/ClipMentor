@@ -117,7 +117,7 @@ const fixtureDoc = (src?: string): ProjectDoc => ({
   const template = await saveTemplate('Reusable', fixtureDoc(src));
   const previousFetch = globalThis.fetch;
   let deleteCalls = 0;
-  let reply = () => Response.json({ ok: true, removed: 1, r2Removed: false });
+  let reply = () => Response.json({ ok: true, removed: 1, localFileRemoved: true, r2Removed: false });
   globalThis.fetch = async (_input, options) => {
     if (options?.method === 'DELETE') { deleteCalls++; return reply(); }
     return new Response(null, {status: 404});
@@ -133,12 +133,14 @@ const fixtureDoc = (src?: string): ProjectDoc => ({
     for (const response of [
       () => new Response('<html>proxy fallback</html>'),
       () => Response.json({ ok: true, removed: 0, r2Removed: false }),
+      () => Response.json({ ok: true, removed: 1, localFileRemoved: false, r2Removed: false }),
+      () => Response.json({ ok: true, removed: 1, r2Removed: false }),
     ]) {
       reply = response;
       assert.equal(await deleteUnreferencedUploads(['template-only.mp4']), 0);
       assert.equal(await (await getMediaBlob(src))?.blob.text(), 'only cached copy');
     }
-    reply = () => Response.json({ ok: true, removed: 1, r2Removed: false });
+    reply = () => Response.json({ ok: true, removed: 1, localFileRemoved: true, r2Removed: false });
     assert.equal(await deleteUnreferencedUploads(['template-only.mp4']), 1);
     assert.equal(await getMediaBlob(src), undefined);
   } finally { globalThis.fetch = previousFetch; resetSharedKvMemory(); }

@@ -43,7 +43,7 @@ async function deleteUploadFile(name: string): Promise<boolean> {
   // disk deletion succeed. Cloud originals remain available for recovery.
   if (!res.ok) return false;
   const result = await res.json();
-  if (result?.ok !== true || result.r2Removed !== false
+  if (result?.ok !== true || result.r2Removed !== false || result.localFileRemoved !== true
     || !Number.isSafeInteger(result.removed) || result.removed <= 0) return false;
   await deleteMediaBlob(MEDIA_PREFIX + name);
   return true;
