@@ -12,17 +12,23 @@ export function stageCueColors(style:unknown):string[]{
  return colors.filter(color=>/^#[a-fA-F0-9]{6}$/.test(color));
 }
 
+export const picturePhaseIssueCode={
+ missing:'picture_plan_phase_content_missing',
+ binding:'picture_plan_phase_binding_invalid',
+ shape:'picture_plan_phase_schema_unsupported',
+} as const;
+
 /** Resolve the existing operational/legacy phase fields identically for both callers. */
 export function currentPicturePhases(plan: Row, timeline: unknown, unitId: unknown, fps: number, durationSeconds?: number) {
   const direct = Object.hasOwn(plan, 'phases');
   const operational = direct ? plan : obj(obj(plan.execution_plan).content);
   const prefix = direct ? '.phases' : '.execution_plan.content.phases';
-  const raw = arr(operational.phases), issues: Array<{ path: string; message: string }> = [];
+  const raw = arr(operational.phases), issues: Array<{ path: string; message: string; kind:'missing'|'binding'|'shape' }> = [];
   let phases = raw.map(obj), locations = phases.map((_, i) => `${prefix}[${i}]`);
   let pictureLocations = locations.map(path => path + '.picture'), legacyMissing = false;
   const ids = (p: Row) => [...new Set([text(p.line_id), ...arr(p.line_ids).map(text)].filter(Boolean))];
-  if (!Array.isArray(operational.phases) || !raw.length) issues.push({ path: prefix, message: 'Current picture phases missing, empty or not an array.' });
-  for (const [i, p] of raw.entries()) if (p === null || typeof p !== 'object' || Array.isArray(p)) issues.push({ path: `${prefix}[${i}]`, message: 'Picture phase must be an object.' });
+  if (!Array.isArray(operational.phases) || !raw.length) issues.push({ path: prefix, kind:operational.phases==null||Array.isArray(operational.phases)?'missing':'shape', message: 'Current picture phases missing, empty or not an array.' });
+  for (const [i, p] of raw.entries()) if (p === null || typeof p !== 'object' || Array.isArray(p)) issues.push({ path: `${prefix}[${i}]`, kind:'shape', message: 'Picture phase must be an object.' });
   // Only explicit, meaningful old explanation records may use old timeline rows.
   // Empty/malformed modern content is never evidence of a legacy format.
   const legacy = phases.length > 0 && phases.every(p => p.mode === undefined && ids(p).length > 0);
@@ -30,7 +36,7 @@ export function currentPicturePhases(plan: Row, timeline: unknown, unitId: unkno
     const allRows = arr(obj(timeline).rows).map(obj), rows = allRows.filter(r => r.unit_id === unitId), priorPhases = phases;
     locations = rows.map(r => `$.estimated_picture_timeline.rows[${allRows.indexOf(r)}]`);
     legacyMissing = rows.length === 0;
-    if (legacyMissing) issues.push({ path: prefix, message: 'Declared legacy phases have no corresponding timeline rows.' });
+    if (legacyMissing) issues.push({ path: prefix, kind:'missing', message: 'Declared legacy phases have no corresponding timeline rows.' });
     pictureLocations = rows.map(r => {
       if (text(r.picture)) return `$.estimated_picture_timeline.rows[${allRows.indexOf(r)}].picture`;
       const i = priorPhases.findIndex(p => ids(p).some(id => arr(r.line_ids).includes(id)));
@@ -43,14 +49,14 @@ export function currentPicturePhases(plan: Row, timeline: unknown, unitId: unkno
     });
     const declared = new Set(priorPhases.flatMap(ids));
     const mapped = new Set(phases.filter(p => p.mode === 'explanation').flatMap(ids));
-    if ([...declared].some(id => !mapped.has(id)) || [...mapped].some(id => !declared.has(id))) issues.push({ path: prefix, message: 'Legacy timeline explanation IDs do not match the declared picture phases.' });
+    if ([...declared].some(id => !mapped.has(id)) || [...mapped].some(id => !declared.has(id))) issues.push({ path: prefix, kind:'binding', message: 'Legacy timeline explanation IDs do not match the declared picture phases.' });
   }
   for (const [i, phase] of phases.entries()) {
     const stage = phase.mode === undefined && text(phase.line_id) ? 'explanation' : phase.mode;
-    if (stage !== 'original' && stage !== 'explanation') issues.push({ path: locations[i] + '.mode', message: 'Unknown or missing picture stage.' });
+    if (stage !== 'original' && stage !== 'explanation') issues.push({ path: locations[i] + '.mode', kind:'shape', message: 'Unknown or missing picture stage.' });
     const range = window(phase.source_range_seconds ?? phase.source_seconds);
-    if (!range || typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && (range[0] >= durationSeconds || range[1] > durationSeconds)) issues.push({ path: locations[i], message: 'Picture source range is missing, invalid or beyond the source.' });
-    if (stage === 'explanation' && !ids(phase).length) issues.push({ path: locations[i], message: 'Explanation phase has no line IDs.' });
+    if (!range || typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && (range[0] >= durationSeconds || range[1] > durationSeconds)) issues.push({ path: locations[i] + (Object.hasOwn(phase,'source_seconds')?'.source_seconds':'.source_range_seconds'), kind:phase.source_range_seconds==null&&phase.source_seconds==null?'missing':'binding', message: 'Picture source range is missing, invalid or beyond the source.' });
+    if (stage === 'explanation' && !ids(phase).length) issues.push({ path: locations[i] + '.line_id', kind:'missing', message: 'Explanation phase has no line IDs.' });
   }
   return { operational, phases, legacy, legacyMissing, locations, pictureLocations, issues };
 }

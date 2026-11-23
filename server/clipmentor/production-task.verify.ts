@@ -459,6 +459,11 @@ focused.attempts.model=focused.input.budget.model;
 assert.equal(grantFocusedBlueprintRepair(focused,issues(missing)),false);
 assert.equal(grantFocusedBlueprintRepair(fresh(),issues(missing)),false);
 assert.equal(grantFocusedBlueprintRepair({...focused,attempts:{...focused.attempts,model:0}},issues({id:'U-01',code:'source_hash_missing_or_changed'})),false);
+const focusedTargets=fresh();
+focusedTargets.input.humanBlueprintReview=true;
+assert.equal(grantFocusedBlueprintRepair(focusedTargets,issues({...missing,targets:['L1','L2']},null)),false);
+assert.equal(grantFocusedBlueprintRepair(focusedTargets,issues({...missing,targets:['L1','L2']})),true);
+assert.equal(grantFocusedBlueprintRepair(focusedTargets,issues({...missing,targets:['L2']})),true);
 console.log('Focused blueprint continuation: only new or strictly shrinking known defects under the model cap.');
 
 
@@ -817,3 +822,46 @@ for(const status of [400,401,403,422]){
  assert.equal(Object.values(task.effects).filter(e=>e.transportUnsubmitted).length,0,'partial HTTP100 uploads never refund a call');
 }
 console.log('Upload recovery: real HTTP100 regression, receipt reuse/isolation, unknown-outcome stop, frozen retry authority, charged limits, replay accounting and durable decisions passed; zero network/model calls.');
+
+for(const [finding,category] of [
+ [missing,'缺内容'],
+ [mismatched,'绑定错'],
+ [{id:'U-01',code:'picture_plan_phase_board_unreadable'},'门禁问题'],
+] as const){
+ const task=fresh();task.stage='blueprint';task.input.humanBlueprintReview=true;task.input.budget.maxRepairs=4;
+ let dispatches=0;
+ const replay=async(t:typeof task)=>{
+  assert.equal(t.stage,'blueprint');
+  dispatches++;
+  return {artifact:{revision:'candidate-'+dispatches,blueprint_structure_issue:issues(finding)},repair:'blueprint' as const};
+ };
+ await advanceProductionTask(task,replay,store);
+ assert.equal(task.status,'blocked');
+ assert.equal(task.repairs,1);
+ assert.equal(dispatches,2,'no third dispatch after a second identical finding');
+ assert.match(task.error!,new RegExp('blueprint_repair_no_progress.*'+category));
+ await advanceProductionTask(task,replay,store);
+ assert.equal(dispatches,2,'no dispatch on retrying the same blocked checkpoint');
+}
+const narrowing=fresh();narrowing.stage='blueprint';narrowing.input.humanBlueprintReview=true;narrowing.input.budget.maxRepairs=4;
+const progress=[
+ {targets:['L1','L2'],...missing},{targets:['L2'],...missing},{targets:['L2'],...missing},
+];
+let progressDispatches=0;
+await advanceProductionTask(narrowing,async()=>({artifact:{blueprint_structure_issue:issues(progress[progressDispatches++])},repair:'blueprint'}),store);
+assert.equal(progressDispatches,3,'actually filling L1 earns one further dispatch under the existing budget');
+assert.equal(narrowing.repairs,2);
+assert.match(narrowing.error!,/blueprint_repair_no_progress.*L2/);
+
+const {repeatedPictureRepair}=await import('./production-decisions');
+const many=Array.from({length:40},(_,index)=>({...missing,id:'Unit-'+index,targets:['line-'+index]}));
+assert(issues(...many).length>1600);
+assert(repeatedPictureRepair(issues(...many),issues(...many.toReversed())));
+assert(repeatedPictureRepair(issues(...many),issues(...many.slice(1))), 'fixing one group does not fix the remaining groups');
+const repairA=issues({...missing,id:'A'}),repairB=issues({code:'existing_partner_composition_pixels_mismatch',id:'delivery'});
+const {pictureRepairCoverage}=await import('./production-decisions');
+assert.equal(repeatedPictureRepair(repairA,repairB),undefined);
+assert(repeatedPictureRepair(repairB,repairA,pictureRepairCoverage(repairA)));
+assert(repeatedPictureRepair(repairB,repairB));
+assert.equal(repeatedPictureRepair(issues({...mismatched,targets:['revisit[0]','revisit[1]']}),
+ issues({...mismatched,targets:['revisit[1]']})),undefined);

@@ -128,6 +128,19 @@ try{
   assert(!('blocked' in projected)&&!('error' in projected)&&!('canContinue' in projected));
   assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).error,error);
  }
+ const stepsBeforePause=steps.length;
+ panelTask.stage='blueprint';
+ panelTask.error='Error: blueprint_repair_no_progress 同一回看缺口重复出现';
+ panelTask.repairContext={last_picture_repair_issue:'blueprint_stage_incomplete:'+JSON.stringify([
+  {id:'U-01',code:'picture_plan_group_explanation_missing'},{id:'U-02',code:'picture_plan_revisits_mismatch'},
+  {id:'U-03',code:'picture_plan_phase_board_unreadable'},
+ ])};
+ await productionTaskStore.save(panelTask);
+ assert.match((await panelGet()).task.stopDetail,/缺内容.*绑定错.*门禁问题/);
+ const paused=await post({action:'resume',projectId:panelTask.projectId,taskId:panelTask.taskId});
+ assert.equal(paused.status,409);assert.match((await paused.json()).error,/回看方案返修已暂停/);
+ assert.equal(steps.length,stepsBeforePause);
+ delete panelTask.repairContext;
  panelTask.status='awaiting_blueprint';panelTask.stage='copy_review';panelTask.projectRevision='fixture-r1';delete panelTask.error;
  await productionTaskStore.save(panelTask);
  const projected=(await panelGet()).task;
@@ -964,12 +977,20 @@ try{
   panelDoc.assets=assets;await setStoredEntry('project:'+projectId,panelDoc);
   const {setKeys}=await import('../keystore');
   await setKeys({MINIMAX_API_KEY:'local-fixture-only',LLM_OPENAI_MODEL:'fixture',LLM_OPENAI_API_KEY:'local-fixture-only'});
-  const response=await fetch(origin+'/api/clipmentor/production-task?view=panel&projectId='+projectId,{method:'POST',
-   headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'start'})});
+  const intake=(action:unknown)=>fetch(origin+'/api/clipmentor/production-task?view=panel&projectId='+projectId,{method:'POST',
+   headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify(action)});
+  const source={assetId:'earlier-source',sha256:assets[0].sourceContentHash};
+  const evidence={assetId:'earlier-sales',sha256:assets[2].sourceContentHash};
+  const criteria=[{kind:'source_performance',source,evidence,quote:'同款商品，这支怎么样？',results:{views:'10k',units:'42',revenue:'RM51'}}];
+  const detached=[{...criteria[0],evidence:{...evidence,sha256:'f'.repeat(64)}}];
+  assert.equal((await intake({action:'start',doneCriteria:detached})).status,409);
+  assert.equal((await intake({action:'start',doneCriteria:[]})).status,409);
+  const response=await intake({action:'start',doneCriteria:criteria});
   assert(response.ok,await response.text());
   const {latestPanelProductionTask,productionExecutionActive}=await import('../clipmentor/production-task');
   const started=await latestPanelProductionTask(projectId);
   assert.equal(started?.input.openingComparison?.kind,'opening_comparison');
+  assert.deepEqual(started.input.doneCriteria,[{...criteria[0],source:{...source,assetId:assets[0].id},evidence:{...evidence,assetId:assets[2].id}}]);
   assert(started.input.brief.includes(started.input.openingComparison.quote),'the author and reviewer get the same verbatim requirement');
   const {copyReviewDependencies}=await import('../clipmentor/copy-review');
   const bound=await copyReviewDependencies().requirements!(projectId);

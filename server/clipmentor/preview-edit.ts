@@ -15,7 +15,7 @@ interface PreviewEditIdentity {
   operationId:string; projectId:string; expiresAt:number; baseProjectSha256:string;
   baseline:{src:string;sha256:string;fps:number;totalFrames:number;width:number;height:number};
   source:{src:string;sha256:string;fps:number};
-  instruction:string;
+  instruction:string; revoked?:boolean;
 }
 interface OverlayPermit extends PreviewEditIdentity {
   kind?:'overlay';
@@ -90,7 +90,7 @@ function asset(id:string,src:string,name:string,kind:'video'|'image',p:PreviewEd
 }
 function validatePermit(p:PreviewEditPermit) {
   const n=p.baseline.totalFrames;
-  if(!uuid.test(p.operationId)||!Number.isFinite(p.expiresAt)||p.expiresAt<=Date.now()
+  if(p.revoked===true||!uuid.test(p.operationId)||!Number.isFinite(p.expiresAt)||p.expiresAt<=Date.now()
     ||!Number.isInteger(n)||n<=0||n>18000||p.baseline.fps!==30||p.source.fps!==30
     ||p.baseline.width!==720||p.baseline.height!==1280||!p.instruction.trim()) throw new Error('Invalid or expired bounded preview permit');
   if(p.kind==='native_comparison') {
@@ -108,7 +108,8 @@ function validatePermit(p:PreviewEditPermit) {
       ||p.captionFrames<=0||p.pictureFrames<p.captionFrames||a+p.pictureFrames>n-(b-a)) throw new Error('Invalid narration merge boundaries');
     return;
   }
-  if(p.relation.clearCaptionY!==960||p.label.text!=='Ulasan semula') throw new Error('Invalid approved overlay');
+  if(!Number.isInteger(p.relation.clearCaptionY)||p.relation.clearCaptionY<0||p.relation.clearCaptionY>=p.baseline.height
+    ||typeof p.label.text!=='string'||!p.label.text.trim()||p.label.text.length>32) throw new Error('Invalid approved overlay');
   for(const span of [p.relation,p.tail,p.label]) if(!Number.isInteger(span.startFrame)||!Number.isInteger(span.endFrame)
     ||span.startFrame<0||span.endFrame<=span.startFrame||span.endFrame>n) throw new Error('Invalid approved range');
   if(p.relation.endFrame>p.tail.startFrame||p.tail.endFrame>p.label.startFrame
@@ -138,7 +139,7 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
   const isApplied=stored?.preparedProjectSha256===hash;
   if(hash!==p.baseProjectSha256&&!isApplied) throw new Error('Project changed; new host authorization required');
   const receipt={allowed:true,scope:PREVIEW_EDIT_SCOPE,full_film_accepted:false,quality_status:'review_required',
-    operationId:p.operationId,projectId:p.projectId,baseProjectSha256:p.baseProjectSha256};
+    operationId:p.operationId,projectId:p.projectId,baseProjectSha256:p.baseProjectSha256,kind:p.kind??'overlay'};
   if(action==='read'||action==='check_read') return {...receipt,applied:isApplied,instruction:p.instruction,
     approved_changes:p.kind==='native_comparison'?{kind:p.kind,native:p.native}:p.kind==='sniff_merge'?{kind:p.kind,remove_frames:p.removeFrames,remove_audio_seconds:p.removeAudioSeconds,source_start_frame:p.sourceStartFrame,picture_frames:p.pictureFrames,caption_frames:p.captionFrames}:{relation:p.relation,tail:p.tail,label:p.label},render_reserved:!!await stat(join(dir,'render-reserved.json')).catch(()=>null)};
   if(action==='check_apply') {
@@ -170,12 +171,12 @@ export async function previewEditBridge(body:Record<string,unknown>,deps:Preview
   const generated=names.map(name=>join(staging,name));
   try {
   await deps.execute(['-hide_banner','-loglevel','error','-y','-i',baseline,'-vf',
-    `select=eq(n\\,${p.relation.referenceFrame}),drawbox=x=0:y=960:w=iw:h=320:color=0xf7f8fa:t=fill`,
+    `select=eq(n\\,${p.relation.referenceFrame}),drawbox=x=0:y=${p.relation.clearCaptionY}:w=iw:h=${p.baseline.height-p.relation.clearCaptionY}:color=0xf7f8fa:t=fill`,
     '-frames:v','1',generated[0]!]);
   await deps.execute(['-hide_banner','-loglevel','error','-y','-i',source,'-vf',
     `select=eq(n\\,${Number(body.tailFrame)}),scale=540:960,pad=720:1280:90:0:color=0xf7f8fa`,
     '-frames:v','1',generated[1]!]);
-  await writeFile(generated[2]!,`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><rect x="24" y="22" width="290" height="52" rx="12" fill="#ffd300"/><text x="40" y="58" font-family="Arial" font-size="30" fill="#1c2026">Ulasan semula</text></svg>`);
+  await writeFile(generated[2]!,`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><rect x="24" y="22" width="290" height="52" rx="12" fill="#ffd300"/><text x="40" y="58" font-family="Arial" font-size="30" fill="#1c2026">${p.label.text.replace(/[&<>]/g,c=>c==='&'?'&amp;':c==='<'?'&lt;':'&gt;')}</text></svg>`);
   for(const [index,path] of generated.entries())await publishStagedPreviewMaterial(path,output[index]!);
   const assets=await Promise.all(names.map(async(n,i)=>asset(`${prefix}-${i}`,`/media/uploads/${n}`,
     ['延续已批准关系画面','原声末端真实尾态','回看讲解短标'][i]!,'image',p,await sha256File(output[i]!))));

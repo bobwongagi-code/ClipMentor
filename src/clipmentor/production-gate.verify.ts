@@ -176,13 +176,29 @@ for (const [name, change, code] of [
   ['coerced phase mode', (v: any) => { v.execution_plan.content.phases[0].mode = ['original']; }, /picture_plan_phase_mode_invalid/],
   ['unknown line binding', (v: any) => { v.execution_plan.content.phases[1].line_id = 'missing-line'; }, /picture_plan_phase_line_invalid/],
   ['all modes coerced', (v: any) => { for (const p of v.execution_plan.content.phases) p.mode = [p.mode]; }, /picture_plan_phase_mode_invalid/],
-  ['missing group explanation', (v: any) => { v.execution_plan.content.phases.splice(1, 1); }, /picture_plan_group_explanation_missing/],
-  ['missing last explanation', (v: any) => { v.execution_plan.content.phases.pop(); }, /picture_plan_group_explanation_missing/],
+  ['omitted group explanation leaves a stale revisit', (v: any) => { v.execution_plan.content.phases.splice(1, 1); }, /picture_plan_revisits_mismatch/],
+  ['missing last explanation leaves a stale revisit', (v: any) => { v.execution_plan.content.phases.pop(); }, /picture_plan_revisits_mismatch/],
   ['wrong phase range type', (v: any) => { v.execution_plan.content.phases[0].source_range_seconds = ['0', 10]; }, /picture_plan_phase_range_invalid/],
 ] as const) {
   const bad = structuredClone(phasePacket); change(bad.units[0].picture_plan);
   assert.throws(() => buildCopyTeachingReviewRequest([{ case_id: name, packet: bad }]), code, name);
 }
+// Several originals can establish one teaching relation before the first explanation.
+const groupedOriginalRun=structuredClone(phasePacket);
+const combinedPlan=groupedOriginalRun.units[0].picture_plan!;
+combinedPlan.execution_plan!.content.phases=(combinedPlan.execution_plan!.content.phases as any[])
+  .filter((phase,index)=>phase.mode==='original'||index!==1);
+combinedPlan.registered_revisits=combinedPlan.registered_revisits.slice(1);
+assert.doesNotThrow(()=>buildCopyTeachingReviewRequest([{case_id:'two-originals-one-teaching-group',packet:groupedOriginalRun}]));
+
+const originalTail=structuredClone(groupedOriginalRun);
+const tailPlan=originalTail.units[0].picture_plan!;
+const tailPhases=tailPlan.execution_plan!.content.phases as Array<Record<string,unknown>>;
+const tail=tailPhases[0].source_range_seconds as [number,number];
+tailPhases.push(tailPhases.shift()!);
+tailPlan.original_source_ranges=[...tailPlan.original_source_ranges.slice(1),tail];
+assert.doesNotThrow(()=>buildCopyTeachingReviewRequest([{case_id:'original-only-tail-after-explanations',packet:originalTail}]));
+
 // Existing non-group layouts remain valid and do not acquire new timing obligations.
 assert.doesNotThrow(() => buildCopyTeachingReviewRequest([{case_id:'existing-control',packet:teaching.packet}]));
 

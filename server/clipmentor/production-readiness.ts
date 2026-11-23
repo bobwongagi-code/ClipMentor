@@ -1,8 +1,8 @@
-import {currentPicturePhases} from '../../src/clipmentor/blueprint-picture-notices';
+import {currentPicturePhases,picturePhaseIssueCode} from '../../src/clipmentor/blueprint-picture-notices';
 import {deliverySectionsFromDoc,deliveryAudio} from '../../src/clipmentor/delivery-sections';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
 import {copyTeachingPacketFromDoc,copyReviewSubject,buildCopyTeachingReviewRequest,checkCopyProduction} from '../../src/clipmentor/production-gate';
-import {checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
+import {checkSourceBreakdown,PicturePlanIssue} from '../../src/clipmentor/source-breakdown';
 import {diffDeliveryCheck} from '../../src/clipmentor/delivery-diff';
 import {digestValue} from '../agent-runs/store-values';
 import { stat } from 'node:fs/promises';
@@ -92,11 +92,16 @@ export async function verifyProductionEditing(doc:ProjectDoc,voice?:{provider:st
  * Keep the full executor packet separate from the independently filtered reviewer packet. */
 export async function createProductionPreparation(doc:ProjectDoc){
  const check=checkSourceBreakdown(doc);
- if(check.status!=='structurally_ready')throw new Error(`blueprint_stage_incomplete:${JSON.stringify(check.issues).slice(0,1600)}`);
+ if(check.status!=='structurally_ready')throw new Error(`blueprint_stage_incomplete:${JSON.stringify(check.issues)}`);
  const subject=await copyReviewSubject(doc),packet=await copyTeachingPacketFromDoc(doc);
  if(packet.units.some(u=>!u.picture_plan?.execution_plan))throw new Error('blueprint_execution_plan_missing');
  // Validate the exact reviewer projection BEFORE any review/model effect is reserved.
- const request=buildCopyTeachingReviewRequest([{case_id:'current',packet}]);
+ let request:ReturnType<typeof buildCopyTeachingReviewRequest>;
+ try{request=buildCopyTeachingReviewRequest([{case_id:'current',packet}]);}
+ catch(error){
+  if(!(error instanceof PicturePlanIssue))throw error;
+  throw Error(`blueprint_stage_incomplete:${JSON.stringify([{code:error.code,id:error.unitId,targets:error.targets}])}`);
+ }
  const reviewed={subject:{revision:subject.revision,digest:subject.digest},packet:request.input.cases[0].packet};
  let bindings:ReturnType<typeof registeredAudioBindings>|undefined;
  const audioBindings=()=>bindings??=registeredAudioBindings(doc);
@@ -182,12 +187,13 @@ export async function productionExecutionReport(before:ProjectDoc,saved:ProjectD
 /** Use the same phase reader as the human board before reserving a review. */
 export function productionBoardPhaseIssues(doc:ProjectDoc){
  const analysis=doc.clipMentorAnalysis;
- return analysis?.blueprint.flatMap(unit=>{
+ return analysis?.blueprint.flatMap<{code:string;id:string;targets:string[]}>(unit=>{
   const internal=(unit as unknown as {internal_review?:Record<string,unknown>}).internal_review;
   const plan=internal?.[String(internal.current_picture_plan)];
-  const valid=plan&&typeof plan==='object'&&!Array.isArray(plan)
-   &&currentPicturePhases(plan as Record<string,unknown>,(doc as unknown as Record<string,unknown>).estimated_picture_timeline,
-    unit.unit_id,analysis.source.fps,analysis.source.duration_seconds).issues.length===0;
-  return valid?[]:[{code:'picture_plan_phase_board_unreadable',id:unit.unit_id}];
+  if(!plan||typeof plan!=='object'||Array.isArray(plan))
+   return [{code:'blueprint_execution_plan_missing',id:unit.unit_id,targets:[]}];
+  const {issues}=currentPicturePhases(plan as Record<string,unknown>,(doc as unknown as Record<string,unknown>).estimated_picture_timeline,
+   unit.unit_id,analysis.source.fps,analysis.source.duration_seconds);
+  return issues.map(issue=>({code:picturePhaseIssueCode[issue.kind],id:unit.unit_id,targets:[issue.path]}));
  })??[];
 }

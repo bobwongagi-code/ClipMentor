@@ -4,7 +4,7 @@ import type { AgentContext } from '../context';
 import { canonicalProjectJson } from '../external-edit-session';
 import type { ProjectDoc } from '../../editor/types';
 import { checkAnalysisHandoff, invalidateChangedReviews, isAnalysisActor, isClipMentorAnalysis, pointDigest, pointReviewTargetDigest } from '../../clipmentor/analysis';
-import teashellHistorical from '../../clipmentor/fixtures/teashell-historical.json';
+import {historicalClipMentorImport} from '../../clipmentor/fixtures/historical-imports';
 import { importTeashellAnalysis } from '../../clipmentor/import-teashell';
 import {importNativeBlueprint,BlueprintImportError} from '../../clipmentor/import-blueprint';
 import { transcribeClipMentorAsset } from '../../clipmentor/transcribe-source';
@@ -231,9 +231,10 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     } else if (name === 'revise_clipmentor_analysis' && args.action === 'import') {
       if (a) return { error: 'Analysis already exists; use record revisions instead of overwriting it' };
       if (typeof args.assetId !== 'string') return { error: 'assetId required' };
-      if (args.fixture !== undefined && (args.fixture !== 'teashell_historical_v1' || args.input !== undefined)) return { error: 'Use either the bundled Teashell fixture or JSON input, not both' };
+      const historical=historicalClipMentorImport(args.fixture);
+      if(args.fixture!==undefined&&(!historical||args.input!==undefined))return {error:'Use either a registered historical fixture or JSON input, not both'};
       a = args.fixture===undefined?importNativeBlueprint(args.input,args.assetId,doc,args.actor,args.reason,now)??undefined:undefined;
-      if(!a){a=importTeashellAnalysis(args.fixture==='teashell_historical_v1'?teashellHistorical:args.input,args.assetId,args.actor,now);a.audit[0].reason=args.reason;}
+      if(!a){a=importTeashellAnalysis(historical??args.input,args.assetId,args.actor,now);a.audit[0].reason=args.reason;}
       const asset = doc.assets.find((s) => s.id === args.assetId);
       if (!asset?.sourceContentHash || asset.sourceContentHash !== a.source.sourceContentHash) return { error: 'Import source hash missing or mismatched' };
     } else {

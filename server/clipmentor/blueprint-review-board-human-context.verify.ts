@@ -224,6 +224,10 @@ try{
  const p=prepare(data),board=p.plans[0],page=humanReviewBoardPage(board,p.data,p.lint,materials);
  await test('Audience CTA routes are concise and both endings share the teaching body',()=>{
   const merged={...board,rows:[...board.rows.filter(r=>r.stage!=='closing'),...p.plans.flatMap(plan=>plan.rows.filter(r=>r.stage==='closing').map(r=>({...r,ending_variant:plan.variant})))]};
+  const legacy=humanReviewBoardPage(merged,p.data,p.lint,materials);
+  assert(legacy.includes('达人结尾1')&&!legacy.includes('上传的 CTA 素材'),'legacy IDs alone never assert the audience');
+  const ends=merged.rows.filter(row=>row.stage==='closing');
+  ends[0].unit_id='new_contact';ends[1].unit_id='existing_partner';
   const html=humanReviewBoardPage(merged,p.data,p.lint,materials);
   assert(html.includes('上传的 CTA 素材'));assert(html.includes('产品图＋Storyboard'));
   assert(html.includes('共用片头与教学主体，按达人阶段生成两个片尾版本。'));

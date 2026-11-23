@@ -13,7 +13,7 @@ import {createProductionPreparation,productionBlueprintReadiness,productionBoard
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
 import {upgradeContinuationBrief} from './production-continuation';
-import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,
+import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,productionRepairContext,structuralRepairPause,
  grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,type ProductionTask} from './production-task';
 
 export async function reconcileBlockedBlueprint(task:ProductionTask){
@@ -274,6 +274,12 @@ async function reconcileBlueprintAuthorCheckpoint(task:ProductionTask,failure:Au
 
  });
  if(bound.length!==1)throw new Error('blueprint_recovery_author_receipt_unverified');
+ const structuralIssue=failedStoryboardDraftRead?'blueprint_stage_incomplete:[{"code":"creator_storyboard_delivery_binding_missing","id":"delivery"}]':savedShapeIssue;
+ if(structuralIssue){
+  const pause=await structuralRepairPause(task,structuralIssue,savedAnalysis.source.sourceContentHash);
+  task.repairContext=productionRepairContext(task.repairContext,{revision:saved.revision,blueprint_structure_issue:structuralIssue});
+  if(pause){task.error='Error: '+pause;return;}
+ }
  if(failedStoryboardDraftRead){
   task.projectRevision=saved.revision;
   task.repairContext={...task.repairContext,revision:saved.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"creator_storyboard_delivery_binding_missing","id":"delivery"}]'};

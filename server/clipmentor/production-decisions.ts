@@ -21,6 +21,74 @@ export function repairableBlueprintIssue(issue:string){
   ||/^picture_plan_(?:shape_invalid|candidate_mismatch|phase_|group_explanation_missing|original_order_mismatch|revisits_mismatch|stage_cues_missing)/.test(issue)
   ||['copy_scope_incomplete','copy_candidate_missing','copy_candidate_incomplete'].includes(issue);
 }
+type BlueprintFinding={code:string;id:string;targets?:string[]};
+const incompleteBlueprint='blueprint_stage_incomplete:';
+
+export function blueprintFindings(issue:unknown):BlueprintFinding[]{
+ if(typeof issue!=='string')return [];
+ if(!issue.startsWith(incompleteBlueprint)){
+  const [code,id,...target]=issue.split(':');
+  return code?[{code,id:id??'',...(target.length?{targets:[target.join(':')]}:{})}]:[];
+ }
+ try{
+  const items:unknown=JSON.parse(issue.slice(incompleteBlueprint.length));
+  return Array.isArray(items)&&items.every((item):item is BlueprintFinding=>
+   !!item&&typeof item.id==='string'&&typeof item.code==='string'&&
+   (item.targets===undefined||Array.isArray(item.targets)&&item.targets.every((value:unknown)=>typeof value==='string')))?items:[];
+ }catch{return [];}
+}
+
+export const blueprintFindingKeys=({id,code,targets}:BlueprintFinding)=>targets?.length
+ ?[...new Set(targets)].sort().map(target=>JSON.stringify([id,code,target])):[`${id}:${code}`];
+
+export function pictureRepairFindings(issue:unknown){
+ const findings=blueprintFindings(issue).filter(({code})=>/^(picture_plan_|blueprint_execution_plan_missing$|existing_partner_|new_contact_|opening_|delivery_audience_scope_mismatch$|source_review_scope_missing$|storyboard_document_|storyboard_pdf_|storyboard_original_excerpt_changed$|handoff_visual_criterion_|delivery_sections_invalid$|creator_storyboard_delivery_binding_missing$)/.test(code));
+ return findings;
+}
+
+const repairStopped='blueprint_repair_no_progress';
+function pictureRepairCategory(code:string){
+ if(/unsupported|_verifier_unavailable$/.test(code))return '门禁问题（需维护侧排查）';
+ if(/^picture_plan_(group_explanation_missing|phase_content_missing|phase_original_missing|stage_cues_missing)$|^blueprint_execution_plan_missing$|_missing$|^storyboard_document_authoring_required$/.test(code))return '缺内容';
+ if(/^picture_plan_(candidate_mismatch|original_order_mismatch|revisits_mismatch|phase_binding_invalid|phase_line_invalid|phase_range_invalid)$|^existing_partner_|^new_contact_|^opening_|^delivery_audience_scope_mismatch$/.test(code))return '绑定错';
+ return '门禁问题（需核对校验与当前计划）';
+}
+export function pictureRepairCoverage(issue:unknown){
+ const byUnit=new Map<string,Set<string>>();
+ for(const finding of pictureRepairFindings(issue)){
+  const keys=byUnit.get(finding.id)??new Set<string>();
+  for(const key of blueprintFindingKeys(finding))keys.add(key);
+  byUnit.set(finding.id,keys);
+ }
+ return [...byUnit].map(([unit,keys])=>JSON.stringify([unit,[...keys].sort()]));
+}
+export function repeatedPictureRepair(previous:unknown,current:unknown,history:readonly string[]=[]){
+ const seen=new Set([...history,...pictureRepairCoverage(previous)]);
+ const next=pictureRepairCoverage(current);
+ const stalled=new Set(next.flatMap(signature=>{
+  const [unit,keys]=JSON.parse(signature) as [string,string[]];
+  const remaining=new Set(keys);
+  for(const prior of seen){
+   const [before,missing]=JSON.parse(prior) as [string,string[]];
+   if(unit===before&&missing.every(key=>remaining.has(key)))return [unit];
+  }
+  return [];
+ }));
+ if(!stalled.size)return;
+ const detail=pictureRepairFindings(current).filter(({id})=>stalled.has(id))
+  .map(({code,id,targets})=>[pictureRepairCategory(code),id,code,targets?.join(', ')].filter(Boolean).join(' ')).join('；');
+ return `${repairStopped} 同一回看或交付绑定缺口重复出现，自动返修已暂停。未解决：${detail}`;
+}
+export function pictureRepairStopped(task:Pick<ProductionTask,'status'|'error'>){
+ return task.status==='blocked'&&task.error?.startsWith('Error: '+repairStopped+' ');
+}
+export function pictureRepairNotice(task:Pick<ProductionTask,'status'|'error'|'repairContext'>){
+ if(!pictureRepairStopped(task))return;
+ if(task.error?.includes('suspected_gate_defect'))return '两份已认可的方案遇到同一门禁拒绝，待维护侧核对。';
+ const categories=[...new Set(pictureRepairFindings(task.repairContext?.last_picture_repair_issue).map(({code})=>pictureRepairCategory(code)))];
+ return categories.length?`回看方案返修已暂停。仍有${categories.join('、')}。`:'回看方案返修已暂停，同一缺口重复出现。';
+}
+
 export interface AuthorCheckpointFailure {
  failedObservation:boolean;gatewayObservationUnavailable:boolean;failedStoryboardDraftRead:boolean;failedSourceRead:boolean;failedDeliveryWrite:boolean;failedPlanWrite:boolean;savedShapeIssue?:string;
 }

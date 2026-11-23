@@ -16,6 +16,20 @@ export interface OpeningComparisonCriterion {
  kind:'opening_comparison';quote:string;
  results?:{views:string;units:string;revenue:string};
 }
+export type SourceWindow=[number,number];
+export type SourceAssetBinding={assetId:string;sha256:string};
+export type SourceClosingStatus='confirmed'|'weak_candidate'|'none';
+export interface SourceTeachingCriterion {
+ kind:'source_teaching';source:SourceAssetBinding;quote:string;main:string;background:string;
+ mainRanges:SourceWindow[];backgroundRanges:SourceWindow[];
+ closing:{status:SourceClosingStatus;note:string;evidenceRange:SourceWindow};
+}
+export interface SourcePerformanceCriterion extends Omit<OpeningComparisonCriterion,'kind'|'results'> {
+ kind:'source_performance';results:NonNullable<OpeningComparisonCriterion['results']>;
+ source:SourceAssetBinding;evidence:SourceAssetBinding;
+}
+export const sourceTeachingCriterion=(criteria:readonly unknown[])=>criteria.find(sourceTeachingShape);
+export const sourcePerformanceCriterion=(criteria:readonly unknown[])=>criteria.find(sourcePerformanceShape);
 export const visualDoneCriteria=(criteria:HandoffBrief['doneCriteria'])=>criteria.filter((entry):entry is VisualDoneCriterion=>typeof entry!=='string'&&'layout' in entry);
 export const openingComparisonCriterion=(criteria:HandoffBrief['doneCriteria'])=>criteria.find((entry):entry is OpeningComparisonCriterion=>typeof entry!=='string'&&'kind' in entry&&entry.kind==='opening_comparison');
 export interface HandoffBrief {
@@ -53,6 +67,28 @@ export const openingComparisonShape=(value:unknown):value is OpeningComparisonCr
  &&value.kind==='opening_comparison'&&boundedText(value.quote,1000)
  &&(keys(value,['kind','quote'])||keys(value,['kind','quote','results'])&&handoffRecord(value.results)&&keys(value.results,['views','units','revenue'])
   &&Object.values(value.results).length===3&&['views','units','revenue'].every(k=>boundedText((value.results as Record<string,unknown>)[k],40)));
+const sourceAssetBinding=(v:unknown):v is SourceAssetBinding=>handoffRecord(v)&&keys(v,['assetId','sha256'])
+ &&typeof v.assetId==='string'&&ID.test(v.assetId)&&typeof v.sha256==='string'&&SHA.test(v.sha256);
+const sourceWindow=(v:unknown):v is SourceWindow=>Array.isArray(v)&&v.length===2
+ &&v.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0)&&v[0]<v[1];
+const sourceWindows=(v:unknown):v is SourceWindow[]=>Array.isArray(v)&&v.length<=12&&v.every(sourceWindow);
+const sourceTeachingShape=(v:unknown):v is SourceTeachingCriterion=>handoffRecord(v)
+ &&keys(v,['kind','source','quote','main','background','mainRanges','backgroundRanges','closing'])&&v.kind==='source_teaching'
+ &&sourceAssetBinding(v.source)&&[v.quote,v.main,v.background].every(x=>boundedText(x,1000))
+ &&sourceWindows(v.mainRanges)&&v.mainRanges.length>0&&sourceWindows(v.backgroundRanges)
+ &&handoffRecord(v.closing)&&keys(v.closing,['status','note','evidenceRange'])
+ &&typeof v.closing.status==='string'&&['confirmed','weak_candidate','none'].includes(v.closing.status)
+ &&boundedText(v.closing.note,300)&&sourceWindow(v.closing.evidenceRange);
+const sourcePerformanceShape=(v:unknown):v is SourcePerformanceCriterion=>handoffRecord(v)
+ &&keys(v,['kind','source','evidence','quote','results'])&&v.kind==='source_performance'
+ &&sourceAssetBinding(v.source)&&sourceAssetBinding(v.evidence)&&v.source.assetId!==v.evidence.assetId
+ &&openingComparisonShape({kind:'opening_comparison',quote:v.quote,results:v.results});
+export function parseProductionSourceCriteria(value:unknown):Array<SourceTeachingCriterion|SourcePerformanceCriterion>{
+ if(!Array.isArray(value)||!value.every(x=>sourceTeachingShape(x)||sourcePerformanceShape(x))
+  ||value.filter(sourceTeachingShape).length>1||value.filter(sourcePerformanceShape).length>1)
+  throw Error('source_criteria_invalid');
+ return structuredClone(value);
+}
 export function parseHandoffBrief(v:unknown):HandoffBrief {
  if(!handoffRecord(v)||!keys(v,['version','briefId','revision','mode','phase','planner','executor','projectId','timelineId','objective','doneCriteria','blueprint','budget'])
   ||v.version!==1||typeof v.briefId!=='string'||!ID.test(v.briefId)||!integer(v.revision,1,1_000_000)

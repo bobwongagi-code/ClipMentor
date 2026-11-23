@@ -12,7 +12,7 @@ import type { AgentContext } from '../agent/context';
 import type { ProjectDoc } from '../editor/types';
 import regression from './fixtures/copy-review-blind-20261019.json';
 import teachingRegression from './fixtures/copy-teaching-blind-v2-20261019.json';
-import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations, registeredRevisitRanges, type SourceBreakdown } from './source-breakdown';
+import { checkSourceBreakdown, copyLineSourceBinding, breakdownPointEvidence, originalPlaybackRanges, groupedPlaybackRelations, PicturePlanIssue, registeredRevisitRanges, type SourceBreakdown } from './source-breakdown';
 
 export const COPY_REVIEW_PROTOCOL = 'creator-copy-v2';
 // Included in the subject digest: old approvals cannot silently certify changed review criteria.
@@ -116,7 +116,7 @@ function groupReviewShape(v: unknown): v is GroupReview {
 function playbackGroups(unit: TeachingPacket['units'][number]) {
   const content = unit.picture_plan?.execution_plan?.content;
   const grouped = groupedPlaybackRelations(content?.phases, unit.lines.map(l => l.line_id), unit.unit_id);
-  return grouped?.groups ?? [];
+  return grouped?.groups.filter(group=>group.explanations.length>0) ?? [];
 }
 function playbackGroupIds(unit: TeachingPacket['units'][number]) {
   return playbackGroups(unit).map((_, i) => `G${i + 1}`);
@@ -186,7 +186,7 @@ function groupL1EvidenceIssues(review: GroupReview, unit: TeachingPacket['units'
       if (ref.kind !== 'visual' || (ref.phase !== 'original' && ref.phase !== 'explanation') || typeof ref.source_seconds !== 'number') return false;
       const time = ref.source_seconds;
       if (ref.phase === 'original') {
-        const windows = window ? [window.original] : unit.picture_plan?.original_source_ranges;
+        const windows = window ? window.originals : unit.picture_plan?.original_source_ranges;
         if (!windows?.some(range => l1SourceAt(time,range))) return false;
       } else {
         const parts = window?.explanations ?? unit.picture_plan?.line_source_ranges.map(line => ({lineId:line.line_id,source:line.source_range_seconds}));
@@ -618,10 +618,11 @@ function checkGroupedReviewHandoff(unit: TeachingPacket['units'][number]) {
   if (canonical(revisits) !== canonical(plan.registered_revisits)) throw new Error(`picture_plan_revisits_mismatch:${unit.unit_id}`);
   const cues = content.viewer_stage_cues;
   const completeCue = (v: unknown) => row(v) && text(v.text) && text(v.enter) && text(v.exit);
-  if (!row(cues) || !completeCue(cues.original) || !Array.isArray(cues.revisit)
-    || !explanationLines.every(id => Array.isArray(cues.revisit) && cues.revisit.some(c => row(c) && completeCue(c) && stringList(c.line_ids) && c.line_ids.includes(id)))) {
-    throw new Error(`picture_plan_stage_cues_missing:${unit.unit_id}`);
-  }
+  const revisitCues=row(cues)&&Array.isArray(cues.revisit)?cues.revisit:[];
+  const missing=[...new Set(explanationLines)].filter(id=>!revisitCues.some(c=>
+    row(c)&&completeCue(c)&&stringList(c.line_ids)&&c.line_ids.includes(id)));
+  if(!row(cues)||!completeCue(cues.original))missing.push('original_cue');
+  if(missing.length)throw new PicturePlanIssue('picture_plan_stage_cues_missing',unit.unit_id,missing);
 }
 export interface TeachingJudgment {
   point_id: string;

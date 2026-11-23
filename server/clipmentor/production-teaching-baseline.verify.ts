@@ -69,7 +69,7 @@ const host=createServer(async(req,res)=>{
    const write={action:'set_copy_candidate',id:'fixture-group',record:firstDraft};
    let tool:{name:string;args:Record<string,unknown>}|undefined;
    if(!previous){
-    tool={name:'load_skill',args:{name:'clipmentor',file:'references/pre-edit-analysis.md'}};
+    tool={name:'load_skill',args:{name:'clipmentor',file:'references/pre-edit-analysis.md',limit:48001}};
    }else{
     if(returned.length===1)draftAttempt.skillText=previous.content;
     else draftAttempt.receipts.push(JSON.parse(previous.content));
@@ -618,6 +618,13 @@ try{
  assert.deepEqual(calls,[],'the actual revision-9 missing baseline is refused before spending on review or writing copy');
  assert.match(strictTask.error??'',/P-01.*P-05/);
 
+ const repeated=await taskFor('teaching-repeat-point-gaps',draft,3,'exemplar-v1');
+ const noEffect={signal:new AbortController().signal,async effect(){throw Error('Pre-copy point gaps must never invoke a model');}};
+ const firstGap=await productionStageWorker(repeated,noEffect);
+ assert.equal(firstGap.repair,'analysis');
+ repeated.repairContext=firstGap.artifact;
+ await assert.rejects(()=>productionStageWorker(repeated,noEffect),/teaching_baseline_repair_no_progress.*P-01/);
+
  const samples=[...exemplars.green_makes.map(sample=>({...sample,selling_point:sample.buying_concern})),...exemplars.reference_controls];
  const strictPositive:typeof strictSource={...strictSource,feedback:null,rebuilding:false,
   evidence:samples.map(p=>({...p.evidence,range:p.evidence.range as [number,number],kind:'visible_action',status:'agent_observed_candidate'}))};
@@ -759,9 +766,9 @@ try{
  }
  console.log('PASS Green Makes six archived excerpts, TeaShell and NIUMO controls, JUDYDOLL revision 9 and six draft excerpts, and explicit direction rejection');
 
- const fixed=panelOpeningComparison('567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49','4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24');
- assert.equal(panelOpeningComparison('other','4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24').results,undefined);
- assert.deepEqual(fixed.results,{views:'339.32k',units:'135',revenue:'RM5.31k'});
+ const fixed={kind:'opening_comparison' as const,quote:'同样是拍这款商品，为什么这支视频拿到这些成绩？',
+  results:{views:'339.32k',units:'135',revenue:'RM5.31k'}};
+ assert.equal(panelOpeningComparison().results,undefined);
  const hook=(copy:string)=>({section_id:'opening',kind:'performance_opening',line:{line_id:'open',narration_ms:copy,caption_lines:[copy]},evidence_ids:['sale']}) as DeliverySection;
  const premise='Produk yang sama';
  const question='Kenapa video ini capai 339.32k tontonan, 135 unit terjual dan Revenue RM5.31k?';
@@ -793,7 +800,7 @@ try{
  const cta={...opening,section_id:'new_contact',kind:'creator_invitation',picture:{asset_id:'cta',
   layout:{kind:'recruitment_card',poster:{asset_id:'cta',src:'/media/uploads/cta.png',sha256:'a'.repeat(64)}}}} as DeliverySection;
  const ctaResult={...reviewRow,section_id:'new_contact',ending_picture:{asset_id:'cta',view:'planned_composition',both_visible:'yes',observation:'The original poster shows both the palette and commission.'}};
- const genericOpening=panelOpeningComparison('unrelated-source','unrelated-sales');
+ const genericOpening=panelOpeningComparison();
  assert.equal(deliveryReview([opening,cta],[reviewRow,{...ctaResult,ending_picture:undefined}],genericOpening,true).verdict,'insufficient_evidence',
   'A new web task without fixed performance numbers still needs an ending-picture judgment');
  assert.equal(deliveryReview([opening,cta],[reviewRow,ctaResult],genericOpening,true).verdict,'pass');
@@ -855,8 +862,8 @@ try{
  assert.match(author.teachingSelection??'',/最短完整时段，再找逐句窗口/);
  assert.deepEqual(author.teachingReferences?.references,[{id:criteria.id,sectionId:criteria.sectionId,pictureStage:criteria.pictureStage,
   quote:criteria.quote,question:criteria.question,reference:{...criteria.reference,sha256:reference.sourceContentHash}}]);
- const frozenAuthor=await productionAuthorTaskData({...referencesTask,input:{...referencesTask.input,openingComparison:fixed}},referenceDoc);
- assert(frozenAuthor.doneCriteria?.includes('把原话、画面证据、达人能学什么和讲解怎么承载都做实'));
+ await assert.rejects(()=>productionAuthorTaskData({...referencesTask,input:{...referencesTask.input,openingComparison:fixed}},referenceDoc),
+  /source_performance_declaration_required/,'numeric legacy opening cannot silently identify another project');
  assert(!author.doneCriteria?.includes('把原话、画面证据、达人能学什么和讲解怎么承载都做实'),'product-specific user quote must not drift to another project');
  const changedReference=structuredClone(referenceDoc);
  changedReference.assets.at(-1)!.props={};

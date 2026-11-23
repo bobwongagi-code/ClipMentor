@@ -1,3 +1,4 @@
+import {pictureRepairNotice} from './production-decisions';
 import {panelProductionBudget} from './production-budget';
 import { open, readFile, stat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
@@ -11,15 +12,16 @@ import { getStoredEntry } from '../plugins/project-store';
 import { isProjectConnected } from '../external-agent/broker';
 import { loadOfflineStoredProject } from '../external-agent/offline-project-store';
 import { isSafeUploadName, resolveUploadFile, serveDiskFile } from '../media-dir';
+import {productionBlueprintReadiness} from './production-readiness';
 import { loadReviewBoardInput, renderReviewBoards } from './blueprint-review-board';
 import { reviewBoardArtifactRoot } from './blueprint-review-board-artifacts';
 import {representativeTeachingExcerpt,renderTeachingExcerpt,verifyTeachingExcerptAsset,TEACHING_EXCERPT_MAX_BYTES} from './blueprint-teaching-excerpt';
 import { productionFeedbackAnchor,blueprintFeedbackPoints,feedbackProjectDigest } from './production-feedback';
-import { panelDeliveryIssues,panelDeliveryFindings,panelOpeningComparison,panelSalesEvidence,verifyPanelPartnerCard } from './production-panel-delivery';
+import { panelDeliveryIssues,panelDeliveryFindings,declaredPanelOpening,panelSalesEvidence,panelPartnerCardIssue,assertPanelDeliveryReady } from './production-panel-delivery';
 import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
-import {handoffDigest,type HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {handoffDigest,sourcePerformanceCriterion,type HandoffPolicy} from '../../shared/clipmentor-handoff';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {handoffKey,readHandoffPolicy} from './handoff';
@@ -30,14 +32,30 @@ import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {deliveryFileName,attachmentDisposition} from './delivery-filename';
 import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
+import {bindPanelSourceCriteria,frozenTeachingTopics} from './production-source-policy';
 import {bindTeachingFeedbackUnits} from './production-teaching-baseline';
 import {
-  acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
+  acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,canRecordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
-  isPanelBlueprintDraft, panelAuthorCheckMatches,panelBlueprintRequirementsDigest,
+  isPanelBlueprintDraft, panelAuthorCheckMatches,panelBlueprintRequirementsDigest,saveProductionControl,
   latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,
   type ProductionTask,
 } from './production-task';
+
+function canBindSourceRequirements(task:ProductionTask){
+ const legacy=!!task.input.panelDelivery&&!!task.input.openingComparison?.results
+  &&!sourcePerformanceCriterion(task.input.doneCriteria??[]);
+ if(isPanelBlueprintDraft(task)){
+  return task.status==='blocked'&&['analysis','blueprint','copy_review'].includes(task.stage)&&!task.teachingAnalysisPublication
+   ||legacy&&task.status==='awaiting_blueprint'&&task.stage==='copy_review';
+ }
+ return legacy&&task.status==='blocked'&&task.stage==='copy_review'&&!!task.blueprintApproval;
+}
+const criteriaBound='source_criteria_bound_for_resume';
+function canResumeBoundRequirements(task:ProductionTask){
+ return task.status==='blocked'&&task.error===criteriaBound&&canRecordTechnicalRecovery(task)&&task.attempts.model<task.input.budget.model
+  &&Date.now()<task.createdAt+task.input.budget.maxElapsedMs;
+}
 
 type PanelSettings = { unavailable: string } | { provider:'openai'; model:string; apiMode:'chat'|'responses'; backend:'api'|'codex' };
 
@@ -220,6 +238,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const artifactIdentity=digestValue({version:1,projectId,taskId:currentTask?.taskId,revision,
         criteriaDigest:boundVisualCriteria(currentPolicy)?.digest,
         requirementsDigest:currentPolicy?panelBlueprintRequirementsDigest(currentPolicy):undefined,
+        sourceCriteriaDigest:currentTask?.input.doneCriteria?.length?digestValue(currentTask.input.doneCriteria):undefined,
         siblingProjectId:siblingEntry?.projectId,siblingRevision:sibling?.revision,siblingMissing:!!siblingEntry&&!sibling});
       const identity=digestValue({artifactIdentity,feedbackSequence:currentTask?.blueprintFeedback?currentTask.sequence:undefined});
       return {identity,artifactIdentity,siblingEntry,sibling,siblingRevision:sibling?.revision};
@@ -392,7 +411,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const uncheckedDraft=!!task&&!!draftRevision&&!draftChecked(task,draftRevision,policy);
       const blueprintRevision=uncheckedDraft?undefined:draftRevision;
       const checked=task?.completed.copy_review?.artifact;
-      const teachingBrief=blueprintRevision?productionTeachingBrief(task,policy):undefined;
+      const teachingBrief=blueprintRevision?productionTeachingBrief(task,policy,draft?.doc):undefined;
       const teachingDigest=teachingBrief?await handoffDigest(teachingBrief):undefined;
       const approvalUnavailable=blueprintRevision
         ? task?.status!=='awaiting_blueprint'||blueprintRevision!==task.projectRevision
@@ -407,7 +426,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const canConfirmBlueprint=!!blueprintRevision&&task?.status==='awaiting_blueprint'
         &&blueprintRevision===task.projectRevision&&!!task.input.panelDelivery&&!task.input.panelDelivery.audience
         &&!task.blueprintApproval&&!task.repairContext?.pending_blueprint_feedback&&!running
-        &&task.attempts.model<task.input.budget.model&&Date.now()<task.createdAt+task.input.budget.maxElapsedMs;
+        &&task.attempts.model<task.input.budget.model&&Date.now()<task.createdAt+task.input.budget.maxElapsedMs
+        &&!canBindSourceRequirements(task);
+      const stopDetail=stopped?pictureRepairNotice(task):undefined;
       const stopReason = stopped
         ? /^(?:Error: )?(?:Original video asset missing|Original upload unavailable|Original source changed)$/.test(task.error ?? '') ? 'materials'
           : /^(?:Error: )?(?:Production deadline exceeded|(?:model|review|observation|tts|render|preview_review) budget exhausted)$/.test(task.error ?? '')
@@ -430,11 +451,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }catch{deliveryUnavailable=true;}
       }
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
+      const requirementsRevision=task&&canBindSourceRequirements(task)&&!running&&!task.projectRevision?(await snapshot()).revision:undefined;
       send({ task:task ? {
         taskId:task.taskId,...(task.blueprintApproval?{sourceTaskId:task.blueprintApproval.sourceTaskId}:{}),
         status: outputUnavailable||!running&&uncheckedDraft?'blocked':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
-        stage: task.stage, revision: task.projectRevision, sequence: task.sequence,
-        active: running, stopReason:outputUnavailable?'service':stopReason??(uncheckedDraft
+        stage: task.stage, revision: task.projectRevision??requirementsRevision, sequence: task.sequence,
+        active: running,...(!running&&canBindSourceRequirements(task)?{canBindSourceRequirements:true}:{}),
+        ...(!running&&canResumeBoundRequirements(task)?{canResumeBoundRequirements:true}:{}),...(stopDetail?{stopDetail}:{}),stopReason:outputUnavailable?'service':stopReason??(uncheckedDraft
           ?Date.now()>=task.createdAt+task.input.budget.maxElapsedMs||task.attempts.model>=task.input.budget.model?'limit':'service'
           :undefined), feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
@@ -476,23 +499,76 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const api = { provider:config.provider, model:config.model, apiMode:config.apiMode, origin };
         const index = (await getStoredEntry('projects')).value;
         const name = Array.isArray(index) ? index.find(row => row?.id === projectId)?.name : undefined;
-        const openingComparison=panelOpeningComparison(source.sourceContentHash,sales.sourceContentHash);
+        const doneCriteria=body.doneCriteria===undefined?undefined:bindPanelSourceCriteria(body.doneCriteria,source,sales);
+        const openingComparison=declaredPanelOpening(saved.doc,sourcePerformanceCriterion(doneCriteria??[]),source.id,sales.id);
+        if(doneCriteria)frozenTeachingTopics(saved.doc,{input:{sourceAssetId:source.id,doneCriteria}});
         const salesFact=panelSalesEvidence(source.id,sales.id,openingComparison.results);
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
-          openingComparison,
+          openingComparison,...(doneCriteria?{doneCriteria}:{}),
           brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。教学主体说明原作者怎样让购买理由可见，让达人能借鉴拍法。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
           panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',editorialPolicy:'exemplar-v1',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
           voice:{provider:'minimax',voiceId:'Malay_female_1_v1'},
-          budget:panelProductionBudget(),humanBlueprintReview:true,
+          budget:panelProductionBudget(),humanBlueprintReview:true,sourceClosingRegistration:true,
         });
         launch(next);
       } else {
         if (!existing || active(existing.taskId,projectId)) throw new Error('制作任务尚未到达可操作阶段');
         await publishedProductionParent(existing);
-        if (body.action === 'continue_analysis') {
+        if(body.action==='bind_source_requirements'){
+          if(!canBindSourceRequirements(existing)||saved.revision!==body.revision
+            ||(existing.projectRevision&&existing.projectRevision!==saved.revision)||existing.sequence!==body.sequence)throw Error('source_criteria_checkpoint_changed');
+          const next=structuredClone(existing);
+          const scope=existing.input.panelDelivery!;
+          const source=saved.doc.assets.find(asset=>asset.id===existing.input.sourceAssetId);
+          const sales=saved.doc.assets.find(asset=>asset.id===scope.salesAssetId);
+          if(!source||!sales)throw Error('source_criteria_materials_missing');
+          const edited=bindPanelSourceCriteria(body.doneCriteria,source,sales);
+          next.input.doneCriteria=[...(existing.input.doneCriteria??[]).filter(prior=>!edited.some(declared=>declared.kind===prior.kind)),...edited];
+          if(existing.blueprintApproval&&digestValue(next.input.doneCriteria.filter(c=>c.kind==='source_teaching'))!==
+            digestValue((existing.input.doneCriteria??[]).filter(c=>c.kind==='source_teaching')))throw Error('confirmed_teaching_scope_cannot_change');
+          frozenTeachingTopics(saved.doc,next);
+          const opening=productionOpeningComparison(next,null,saved.doc);
+          if(existing.blueprintApproval&&opening?.quote!==existing.input.openingComparison?.quote)throw Error('confirmed_opening_scope_cannot_change');
+          if(digestValue([...(existing.input.doneCriteria??[])].sort((a,b)=>a.kind.localeCompare(b.kind)))===
+            digestValue([...next.input.doneCriteria].sort((a,b)=>a.kind.localeCompare(b.kind)))){
+            send({saved:true,sequence:existing.sequence,revision:saved.revision});
+            return;
+          }
+          const current=await getStoredEntry('project:'+projectId);
+          const currentDoc=current.found?runProjectMigrations(current.value)?.doc:undefined;
+          if(!currentDoc||revisionOf(currentDoc)!==saved.revision)throw Error('source_criteria_checkpoint_changed');
+          next.status='blocked';
+          next.error=criteriaBound;
+          next.projectRevision=saved.revision;
+          if(next.repairContext){
+            delete next.repairContext.last_picture_repair_issue;
+            delete next.repairContext.picture_repair_coverage;
+            delete next.repairContext.blueprint_structure_issue;
+          }
+          delete next.completed.copy_review;
+          // The existing candidate may be resumed at qualification. A structurally
+          // unreadable candidate remains in authoring. Neither path grants approval.
+          if(!existing.blueprintApproval&&existing.stage!=='analysis'){
+            delete next.completed.blueprint;
+            const readiness=await productionBlueprintReadiness(saved.doc);
+            next.stage=readiness.next==='blueprint'?'blueprint':'copy_review';
+            if(next.stage==='copy_review')next.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision}};
+          }
+          await saveProductionControl(existing,next,productionTaskStore,[{key:'project:'+projectId,digest:digestValue(current.value)}],undefined,existing.sequence);
+          send({saved:true,sequence:next.sequence,revision:saved.revision});
+          return;
+        }
+        if(body.action==='resume_source_requirements'){
+          if(!canResumeBoundRequirements(existing)||existing.sequence!==body.sequence||saved.revision!==body.revision
+            ||existing.projectRevision!==saved.revision||isProjectConnected(projectId))throw Error('source_criteria_checkpoint_changed');
+          productionOpeningComparison(existing,null,saved.doc);
+          frozenTeachingTopics(saved.doc,existing);
+          recordTechnicalRecovery(existing);
+          launch(existing);
+        } else if (body.action === 'continue_analysis') {
           const reuseAnalysis=canResumeSavedAnalysis(existing);
           if (!canResumeUndispatchedAnalysis(existing)&&!reuseAnalysis) throw new Error('这次暂停不能从分析入口继续');
           if (isProjectConnected(projectId)) throw new Error('请先关闭该工程的 OpenChatCut 编辑器');
@@ -545,6 +621,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             throw Error('蓝图版本已变化，请重新打开审片板');
           const guards=[{key:projectKey,digest:digestValue(projectEntry.value)},{key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null}];
           if(productionConfirmation){
+            productionOpeningComparison(existing,latestPolicy,latest.doc);
             const children=await createBlueprintContinuations(existing,latest,latestPolicy,origin,guards);
             for(const child of children)if(child.status==='queued')launch(child);
             send({accepted:true});return;
@@ -562,8 +639,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           }
           if(body.action==='approve_blueprint'){
             assertVisualCriteriaPlan(latestCriteria,deliverySectionsFromDoc(latest.doc),latest.doc.clipMentorAnalysis?.source_breakdown?.units.map(u=>u.unit_id),latest.doc.activeTimelineId);
-            const teachingBrief=productionTeachingBrief(existing,latestPolicy);
-            const gate=await checkCopyProduction(latest.doc,'clipmentor',undefined,productionOpeningComparison(existing,latestPolicy),
+            const teachingBrief=productionTeachingBrief(existing,latestPolicy,latest.doc);
+            const gate=await checkCopyProduction(latest.doc,'clipmentor',undefined,productionOpeningComparison(existing,latestPolicy,latest.doc),
               existing.input.panelDelivery?.editorialPolicy==='exemplar-v1',teachingBrief?await handoffDigest(teachingBrief):undefined);
             if(!gate.allowed||latestPolicy&&existing.completed.copy_review?.artifact.requirementsDigest!==latestRequirements
               ||latestCriteria&&!visualCriteriaPlanApproved(latestCriteria,latest.doc.clipMentorAnalysis?.production_copy_review))
@@ -571,9 +648,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           }
           if(body.action==='approve_blueprint'&&existing.input.panelDelivery){
             const content=await currentCreatorDocument(latest.doc);
-            if(panelDeliveryIssues(latest.doc,{...existing.input.panelDelivery,bookends:'layered-v1'},content).length
-              ||!await verifyPanelPartnerCard(latest.doc,existing.input.panelDelivery,content))
-              throw new Error('片头或片尾的画面安排尚未齐备，请提交修改意见');
+            const issues=panelDeliveryIssues(latest.doc,{...existing.input.panelDelivery,bookends:'layered-v1'},content);
+            assertPanelDeliveryReady(issues,issues.length?undefined:await panelPartnerCardIssue(latest.doc,existing.input.panelDelivery,content));
           }
           await resolveHumanBlueprint(existing,body.revision,saved.revision,feedback,productionTaskStore,guards,unitIds);
           launch(existing);

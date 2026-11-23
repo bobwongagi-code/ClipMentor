@@ -13,23 +13,8 @@ import type { ProductionTask, StageContext } from './production-task';
 
 export const panelTeachingPurpose = '给达人拆解原作者怎样用可观察的拍法呈现购买理由或推进理解，让达人能借鉴。不要把镜头动作清单当成教学，也不把拍法归因为成交。';
 
-// The confirmed selection for this exact original. Other videos keep their own teaching scope.
-const frozenJudydollTopics={
- main:'主线只讲盘内相对色差和刷头移开后的鼻侧色痕。保留原片双盘编号同框，鼻侧参照只说明当时的可见妆面。选色结论留空，不把上脸色痕归给某一盘。',
- background:'外颊和高光留作原片背景，不作为教学点或讲解依据。',
- closing:'无已确认促单组，仅有弱促单待核',
- mainRanges:[[7.6,9.8],[34,36.6]],
- backgroundRanges:[[43.6,45.2],[56,61.2]],
-} as const;
-
-export function frozenTeachingTopics(doc:ProjectDoc,task:ProductionTask){
- const source=doc.clipMentorAnalysis?.source;
- if(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'
-  &&source?.asset_id===task.input.sourceAssetId
-  &&source.sourceContentHash==='567e6312bd2024655eeee499ffb1358fa081341004d71436829d9ed846aebf49'
-  &&doc.assets.some(asset=>asset.id===source.asset_id&&asset.kind==='video'&&asset.sourceContentHash===source.sourceContentHash))
-  return frozenJudydollTopics;
-}
+import {frozenTeachingTopics,sourceClosingPolicy} from './production-source-policy';
+export {frozenTeachingTopics} from './production-source-policy';
 
 type Row = Record<string, unknown>;
 const row = (value: unknown): value is Row => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -112,13 +97,19 @@ export function teachingDraftPointersDigest(doc: ProjectDoc) {
 
 export function teachingDefinitionDigest(doc:ProjectDoc) {
  const baseline=doc.clipMentorAnalysis?.source_breakdown;
- return digestValue(baseline&&{scope:baseline.review_scope,units:baseline.units.map(unit=>unitDefinition(baseline,unit))});
+ const closing=baseline?.source_closing;
+ const segment=closing&&baseline.segments.find(item=>item.segment_id===closing.segment_id);
+ return digestValue(baseline&&{scope:baseline.review_scope,units:baseline.units.map(unit=>unitDefinition(baseline,unit)),
+  ...(closing?{closing,segment}:{})});
 }
 
 /** Bind the evidence chosen for the confirmed teaching, while allowing later unrelated evidence. */
 export function confirmedTeachingDigest(doc:ProjectDoc){
  const analysis=doc.clipMentorAnalysis;
- const pending=[...new Set(analysis?.source_breakdown?.points.flatMap(point=>point.teaching_basis?.evidence_ids??[]))];
+ const baseline=analysis?.source_breakdown;
+ const closing=baseline?.source_closing&&baseline.segments.find(segment=>segment.segment_id===baseline.source_closing?.segment_id);
+ const pending=[...new Set([...(baseline?.points.flatMap(point=>point.teaching_basis?.evidence_ids??[])??[]),
+  ...(closing?[...closing.visible_evidence_ids,...closing.claim_evidence_ids,...closing.interpretation_evidence_ids]:[])])];
  const linked=new Set(pending),byId=new Map(analysis?.evidence.map(item=>[item.evidence_id,item]));
  for(const id of pending)for(const support of byId.get(id)?.supporting_evidence_ids??[]){
   if(!linked.has(support)){linked.add(support);pending.push(support);}
@@ -165,11 +156,15 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
  // The review board renders the registered teaching groups in blueprint order.
  const closingBlueprint=topics&&analysis.blueprint.findLast(entry=>baseline.units.some(unit=>unit.unit_id===entry.unit_id));
  const closingUnit=closingBlueprint&&baseline.units.find(unit=>unit.unit_id===closingBlueprint.unit_id);
- const closingSegment=topics&&baseline.segments.find(segment=>frozenEndingRange(segment.source_range_seconds)
-  &&segment.unknowns.includes(topics.closing)&&closingUnit?.original_segment_ids.includes(segment.segment_id));
+ const closingPlayback=closingUnit&&originalPlaybackRanges(baseline,closingUnit).at(-1);
+ const closingTails=topics&&closingUnit&&closingPlayback&&coversClosingEvidence(closingPlayback,analysis.source,topics.closingEvidenceRange)
+  ?baseline.segments.filter(segment=>closingUnit.original_segment_ids.includes(segment.segment_id)
+    &&coversClosingEvidence(segment.source_range_seconds,analysis.source,topics.closingEvidenceRange)):[];
+ const closingSegment=topics&&closingTails.find(segment=>segment.unknowns.includes(topics.closing));
  return {
   source:analysis.source, evidence, transcripts, product:analysis.product,
-  purpose:panelTeachingPurpose, task:task.input.brief, objective, requirements,
+  purpose:panelTeachingPurpose, task:task.input.brief, objective, requirements, sourceClosing:sourceClosingPolicy(topics,doc),
+  ...(task.input.sourceClosingRegistration?{sourceClosingRegistration:true as const}:{}),
   scope:baseline.review_scope, units:baseline.units.map(unit => unitDefinition(baseline,unit)),
   ...(referenceBinding?{referenceBinding}:{}),
   feedback:task.blueprintFeedback ? {text:task.blueprintFeedback,revision:task.blueprintFeedbackRevision,
@@ -177,7 +172,9 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   } : null,
   rebuilding:!!task.repairContext?.teaching_rebuild,
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
-  ...(topics?{frozenTopics:{...topics,closingUnitId:closingUnit?.unit_id??null,closingSegmentId:closingSegment?.segment_id??null}}:{}),
+  ...(topics?{frozenTopics:{...topics,closingUnitId:closingUnit?.unit_id??null,closingSegmentId:closingSegment?.segment_id??null,
+   misplacedClosingNote:!closingSegment&&baseline.segments.some(segment=>segment.unknowns.includes(topics.closing)),
+   closingTailSegmentIds:closingTails.map(segment=>segment.segment_id)}}:{}),
  };
 }
 
@@ -186,8 +183,8 @@ type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takea
  source_evidence_id:string;source_quote:string;visual_check?:string;omission_loss?:string};
 type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string;point_checks?:PointDecision[]};
 type FrozenTopicChecks={main_scope:'pass'|'fail';closing_status:'pass'|'fail'};
-const mainScopeIssue='主线超出盘内色差和鼻侧上脸参照的确认范围';
-const closingStatusIssue='收尾未保持弱促单待核的判断';
+const mainScopeIssue='主线超出任务声明的教学范围';
+const closingStatusIssue='收尾处置与任务声明不符';
 type WholeFilmDecision = {
  status:Decision['status'];main_point_id:string|null;focus:string;alternative:string;reason:string;
  evidence_id:string|null;source_quote:string|null;affected_unit_ids:string[];
@@ -203,8 +200,9 @@ function withinTopicRange([start,end]:readonly [number,number],[from,to]:readonl
  return start>=from&&start<to&&end<=to;
 }
 
-function frozenEndingRange([start,end]:readonly [number,number]){
- return start>=63&&end>=67&&start<end;
+function coversClosingEvidence([start,end]:readonly [number,number],
+ {duration_seconds:duration,fps}:{duration_seconds:number;fps:number},[first,last]:readonly [number,number]){
+ return start>=0&&start<=first&&last<=end&&end<=duration&&duration-end<=1/fps+1e-6;
 }
 
 function frozenTopicReview(source:BaselineSource){
@@ -220,21 +218,25 @@ function frozenTopicReview(source:BaselineSource){
    const visible=selected.filter(entry=>entry.kind==='visible_action');
    if(selected.some(({range:[start,end]})=>topics.backgroundRanges.some(range=>
     withinTopicRange([start,end],range)||start<range[1]&&range[0]<end)))
-    issues.add(`${point.point_id} 外颊或高光只能作背景`);
+    issues.add(`${point.point_id} 该来源仅限任务声明的背景用途`);
    if(point.role==='primary'&&(treatment==='explain'||treatment==='visual_only')
-    &&topics.mainRanges.every(range=>visible.some(entry=>withinTopicRange(entry.range,range)))
-    &&selected.every(entry=>topics.mainRanges.some(range=>withinTopicRange(entry.range,range))))
+    &&topics.mainRanges.every(range=>visible.some(entry=>withinTopicRange(entry.range,range)))){
     mainPointIds.add(point.point_id);
+   }
   }
  }
- if(!mainPointIds.size)issues.add('主线须同时引用双盘盘内色差和鼻侧上脸参照');
- if(!topics.closingSegmentId)issues.add('收尾须登记：'+topics.closing);
+ if(!mainPointIds.size)issues.add('主线须覆盖任务声明的全部主要证据窗口');
+ if(!topics.closingTailSegmentIds.length)issues.add('最后一个教学组的原片回放须覆盖已登记的收尾证据并到达片尾');
+ else if(topics.misplacedClosingNote)issues.add('source_closing_note_binding_changed 收尾注记须绑定实际收尾段');
+ else if(!topics.closingSegmentId)issues.add('收尾须登记：'+topics.closing);
  return {mainPointIds,issues:[...issues]};
 }
 
 export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
  if(!source.pointReview)return [];
  const breakdown=doc.clipMentorAnalysis!.source_breakdown!;
+ if(source.sourceClosingRegistration&&!source.frozenTopics&&!source.sourceClosing.decision)
+  return ['原片收尾未登记。请在选题基线 source_closing 绑定实际片尾，分清已确认促单、待核线索和无促单。'];
  const evidenceById=new Map(source.evidence.map(entry=>[entry.id,entry]));
  const points=breakdown.points.flatMap(point=>{
   const basis=point.teaching_basis,linked=breakdownPointEvidence(breakdown,point.point_id);
@@ -348,13 +350,16 @@ function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDec
   if(!evidence||!exactExcerpt(source_quote,evidence.text))throw invalid();
   if(status==='ok'&&!main?.teaching_basis?.evidence_ids.includes(evidence.id))throw invalid();
  }
- const checks=frozen?readFrozenTopicChecks(value.frozen_topic_checks):undefined;
+ const checks=frozen||source.sourceClosingRegistration?readFrozenTopicChecks(value.frozen_topic_checks):undefined;
  const result:WholeFilmDecision={status,main_point_id:main?.point_id??null,focus,alternative,reason,evidence_id:evidence?.id??null,
   source_quote:typeof source_quote==='string'?source_quote:null,affected_unit_ids,...(checks?{frozen_topic_checks:checks}:{})};
  if(status!=='ok'||!checks)return result;
  const affected=new Set<string>();
  if(checks.main_scope==='fail'&&mainUnit)affected.add(mainUnit.unit_id);
- if(checks.closing_status==='fail'&&source.frozenTopics?.closingUnitId)affected.add(source.frozenTopics.closingUnitId);
+ if(checks.closing_status==='fail'){
+  const closingUnit=source.frozenTopics?.closingUnitId??source.units.at(-1)?.unit_id;
+  if(closingUnit)affected.add(closingUnit);
+ }
  return affected.size?{...result,status:'fix',affected_unit_ids:[...affected]}:result;
 }
 
@@ -437,9 +442,10 @@ function evidenceDigest(source:BaselineSource,unit:BaselineSource['units'][numbe
 
 function wholeTeachingMeaning(source:BaselineSource) {
  const selection=source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)]);
- if(!source.frozenTopics)return digestValue(selection);
- const closing=source.units.find(unit=>unit.unit_id===source.frozenTopics?.closingUnitId);
- const endingNotes=closing?.segments.filter(segment=>frozenEndingRange(segment.range)).map(segment=>({
+ const topics=source.frozenTopics;
+ if(!topics)return digestValue(selection);
+ const closing=source.units.find(unit=>unit.unit_id===topics.closingUnitId);
+ const endingNotes=closing?.segments.filter(segment=>topics.closingTailSegmentIds.includes(segment.id)).map(segment=>({
   range:segment.range,unknowns:[...new Set(segment.unknowns.map(normalized))].sort(),
  }));
  return digestValue({selection,closing:closing?.unit_id,endingNotes});
@@ -532,12 +538,14 @@ export function staleRebuiltTeaching(source:BaselineSource, doc:ProjectDoc, rebu
 }
 
 const instructions = `只读核验教学选题，不审稿。先从任务要求、按原片时间排列的动作与原话候选判断原作者在做什么，再看 units 的作者基线。逐组判：是否保留了该段承担的原片功能、观众想判断的具体问题、原作者让这个信息可见或可听的手法、拿掉本组后达人会少学的做法。动作顺序、泛泛形容或作者备注不够。开场与衔接可承担核心任务，按本片证据判断，不套固定顺序或组数。机器听写与画面只支持各自能确认的关系；不据此证明成交、配方功效或人群适用，也不要求把资料所有卖点写进片。未知不影响当前有依据的选题时，保留该边界。引用必须是本组可回读的 source evidence ID，不能把听写当人工听审。若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。
+按 sourceClosing 核对原片收尾与选题处置。
 仅输出 JSON {feedback_scope:"none"|"copy"|"baseline",units:[{unit_id,status:"ok"|"fix"|"unresolved",source_role,takeaway,evidence_ids:[...],reason}]}。每组恰好一条，ok 必须引用证据。禁止改稿或调用工具。`;
 
 const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。用本点原片证据核对作者的卖点、买家顾虑和拍法。connection 直接回答买家多了哪一项具体判断依据，选题或答案只复述动作时，即使换了词或问题带「为什么」，也判 fix。只列功能、混淆原片促单与达人CTA、照搬别片形式同样判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
-const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画面证据独立找最有解释力的教学主线及一个合理备选。比较两者会帮助买家做什么决定，前后哪些内容为主线服务，有没有一项漏掉会改变购买判断的内容。不要把多段相似演示当多个购买理由，也不要因为强证据更容易截图就让辅助点变主线。另在同一 JSON 增加 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。各项简洁具体。ok 时 main_point_id 是实际承载主线的主讲重点，evidence_id 属于该点，affected_unit_ids 为空。整片重点选错、排序影响理解或有重要遗漏，即使各组单独成立也标 fix，引用能说明问题的全片原证据，可来自未选中的段落。证据决定当前关键结论却无法核清，标 unresolved；仅当无可引用证据时 evidence_id 和 source_quote 均填 null。fix 或 unresolved 要列出受影响的现行组 ID，主线未成立时 main_point_id 可为 null。保留原片实际收尾促单作为独立教学，达人邀请属于交付。';
+const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画面证据独立找最有解释力的教学主线及一个合理备选。比较两者会帮助买家做什么决定，前后哪些内容为主线服务，有没有一项漏掉会改变购买判断的内容。不要把多段相似演示当多个购买理由，也不要因为强证据更容易截图就让辅助点变主线。另在同一 JSON 增加 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。各项简洁具体。ok 时 main_point_id 是实际承载主线的主讲重点，evidence_id 属于该点，affected_unit_ids 为空。整片重点选错、排序影响理解或有重要遗漏，即使各组单独成立也标 fix，引用能说明问题的全片原证据，可来自未选中的段落。证据决定当前关键结论却无法核清，标 unresolved；仅当无可引用证据时 evidence_id 和 source_quote 均填 null。fix 或 unresolved 要列出受影响的现行组 ID，主线未成立时 main_point_id 可为 null。收尾处置与 sourceClosing 不一致判 fix，证据决定结论且无法核清则判 unresolved。';
 const baselineInstructions=(source:BaselineSource)=>instructions+(source.pointReview?wholeFilmInstructions+pointInstructions:'')
- +(source.frozenTopics?' frozenTopics 是本片已确认的选题范围，优先于通用收尾要求。无论总评如何，whole_film 须填 frozen_topic_checks:{main_scope:"pass"|"fail",closing_status:"pass"|"fail"}。main_scope 核对实际提交的标题、问题、讲解任务和证据。将声称能选出具体色号、把色痕归给一盘、或把外颊和高光纳入教学判为 fail。closing_status 逐项对照观众行动指令、购买入口和与购买绑定的激励。末组源片段须有指定待核注记。把待核建议写成已确认促单或独立促单组时判 fail，即使另有待核注记。总评在 reason 中说明具体问题。':'');
+ +(source.frozenTopics?' frozenTopics 是本片已确认的选题范围。无论总评如何，whole_film 须填 frozen_topic_checks:{main_scope:"pass"|"fail",closing_status:"pass"|"fail"}。main_scope 核对实际提交的标题、问题、讲解任务和证据。超出 frozenTopics.main 或将 frozenTopics.background 当成教学依据时判 fail。closing_status 按 sourceClosing 核对已核定的档位、处置及注记位置。处置或注记不符时判 fail。总评在 reason 中说明具体问题。'
+ :source.sourceClosingRegistration?' whole_film 必须含 frozen_topic_checks:{main_scope:"pass",closing_status:"pass"|"fail"}。main_scope 由原有整片评审负责。closing_status 复核 sourceClosing 的档位、原片依据和实际处置。':'');
 
 export function teachingBaselineDigest(source:BaselineSource) {
  return digestValue({source,instructions:baselineInstructions(source)});
