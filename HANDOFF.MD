@@ -732,3 +732,11 @@ Set the isolated profile ID before importing the keystore in tests that change c
 Test uploads with real display rotation and test frame extraction with CPU-only FFmpeg. Bind MOV/WebM observation to native formats, original hashes and verified ranges. A local fake gateway can verify submitted bytes and dispatch count. Actual Rootify format admission requires a separate service trial. The portable project check reads restored LUT bytes and rendered pixels, including a same-ID installed definition. FCPXML preserves static clip and track gain for the replacement-mix workflow. Native Final Cut Pro and Resolve import and listening remain separate acceptance checks.
 
 Check the version of the FFmpeg executable itself. A checkout can link its packaged path to the system binary. WebM cue times use absolute packet timestamps. Older builds apply the Opus start offset to relative seeks, which can move the cut back a GOP and change packet timing. Keep the packet-clock check and use absolute seeks for later cues.
+
+### 2026-11-23 · Recheck the media-retention fixes at their consumers
+
+A saved template, pending proposal, recoverable agent draft and pending upload journal can own the last reference to media. Use the same owner set for browser, directory and SQLite cleanup. Preserve the local media cache when a delete has no confirmed disk removal. Releasing the last owner still allows confirmed cleanup.
+
+Recheck the registered hashes once when starting production. A pathname can survive a file replacement after the upload receipt was read. When restoring an existing slot, the browser can match the selected bytes directly even if the local browser lacks that codec. The server still verifies the bytes. Fresh uploads keep their media checks. Only a nonempty HTML board with the expected identity can enable review actions or authorize resubmission after a board-cache miss.
+
+In a stream-copied observation, either the audio or the video can uniquely identify the source clock. A static picture with distinct narration is a valid case. Verify both tracks and their alignment, and refuse ambiguous evidence. For FCPXML, an empty post-edit speech sequence has no placements and constant zero gain keyframes preserve silence. The native NLE import and real gateway admission remain separate checks.

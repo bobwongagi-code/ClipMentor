@@ -29,6 +29,15 @@ async function readApiJson<T>(response: Response): Promise<T | undefined> {
   return response.json().catch(() => undefined)
 }
 
+async function readBoardPage(response: Response, expectedIdentity?: string) {
+  const identity = response.headers.get('X-ClipMentor-Board-Identity') ?? undefined
+  if (!response.ok || response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase() !== 'text/html'
+    || (expectedIdentity && identity !== expectedIdentity)) throw new Error('Board unavailable')
+  const html = await response.text()
+  if (!html.trim()) throw new Error('Board unavailable')
+  return { identity, html }
+}
+
 export async function readPanelState(response: Response): Promise<State | undefined> {
   if (!response.ok) return
   const data = await readApiJson<State>(response)
@@ -134,11 +143,8 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     async function readBoard(revision: string, attempt: number) {
       try {
         const response = await requestApi(boardUrl(revision,boardIdentity), { signal: controller.signal })
-        if (!response.ok) throw new Error('Board unavailable')
-        const identity=response.headers.get('X-ClipMentor-Board-Identity')??undefined
-        if(boardIdentity&&identity!==boardIdentity)throw new Error('Board changed')
-        const html = await response.text()
-        if (!controller.signal.aborted) setBoard({ key:boardKey, revision, identity, html })
+        const page = await readBoardPage(response, boardIdentity)
+        if (!controller.signal.aborted) setBoard({ key:boardKey, revision, ...page })
       } catch {
         if (controller.signal.aborted) return
         if (attempt < 2) timer = setTimeout(() => void readBoard(revision, attempt + 1), 2000)
@@ -209,11 +215,9 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         if(!stillCurrent())return
         const refreshed = await requestApi(boardUrl(revision,identity),{signal})
         if (refreshed.ok) {
-          const refreshedIdentity=refreshed.headers.get('X-ClipMentor-Board-Identity')??undefined
-          const html=await refreshed.text()
+          const page = await readBoardPage(refreshed, identity)
           if(!stillCurrent())return
-          if(identity&&refreshedIdentity!==identity)throw new Error('Board changed')
-          setBoard({ key:subjectKey, revision, identity:refreshedIdentity, html })
+          setBoard({ key:subjectKey, revision, ...page })
           response = await submit()
           result = await readApiJson<ActionReceipt>(response)
         }

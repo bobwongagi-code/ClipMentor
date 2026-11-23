@@ -17,6 +17,17 @@ type IntakeRepair = IntakeReceipt & { missingSlots: Slot[] }
 type Message = { role: '你' | '系统'; text: string }
 const stages = ['上传素材', '审核蓝图', '预览与下载'] as const
 
+async function fileHash(file: File) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
+}
+
+async function inspectRepair(file: File, expectedHash?: string) {
+  if (file.size > 64 * 1024 * 1024) throw new Error('文件超过 64 MiB')
+  if (await fileHash(file) !== expectedHash) throw new Error('文件与工程登记的原文件不一致')
+  return { detail: '与原文件一致', frame: undefined }
+}
+
 function inspect(file: File, url: string, slot: Slot): Promise<{ detail: string; frame?: string }> {
   const formats: readonly string[] = slots.find(entry => entry.key === slot)!.formats
   if (!formats.some(extension => file.name.toLowerCase().endsWith(extension))) {
@@ -174,7 +185,10 @@ export default function ClipMentorPage() {
       if (urls.current[slot] === url) setMaterials(current => ({ ...current, [slot]: { file, url, status, detail, frame } }))
     }
     setMaterial('checking', '检查中…')
-    void inspect(file, url, slot).then(
+    const inspection = repair
+      ? inspectRepair(file, repair.assets[slots.findIndex(entry => entry.key === slot)]?.sourceContentHash)
+      : inspect(file, url, slot)
+    void inspection.then(
       ({ detail, frame }) => setMaterial('ready', detail, frame),
       error => setMaterial('error', error.message),
     )
@@ -199,6 +213,10 @@ export default function ClipMentorPage() {
     const files = requestedSlots.map(({ key }) => materials[key]!.file)
     requestedSlots.forEach(({ key },index) => body.append(key,files[index]))
     const finish = (saved: IntakeReceipt) => {
+      if (repair && !repair.assets.every((asset, index) => asset.id === saved.assets[index]?.id
+        && !!asset.sourceContentHash && asset.sourceContentHash === saved.assets[index]?.sourceContentHash)) {
+        throw new Error('工程登记的素材已变化，请刷新核对。')
+      }
       setReceipt(saved)
       if (repair) {
         setRepair(undefined)
@@ -231,8 +249,7 @@ export default function ClipMentorPage() {
       for (const [index,file] of files.entries()) {
         const position = slots.findIndex(slot => slot.key === requestedSlots[index].key)
         const asset = saved.assets[position]
-        const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
-        const hash = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2,'0')).join('')
+        const hash = await fileHash(file)
         if (asset?.sourceContentHash !== hash || (repair ? asset.id !== repair.assets[position].id : asset.name !== file.name)) {
           throw new Error('工程内保存的素材与本次上传不一致。')
         }

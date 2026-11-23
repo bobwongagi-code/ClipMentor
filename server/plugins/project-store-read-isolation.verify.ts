@@ -1,5 +1,6 @@
 // Real file-store read isolation; no production profile or provider calls.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -148,6 +149,38 @@ try {
     assert.equal((await remove(broken)).status, 500);
     assert.equal(await readFile(join(directory, broken), 'utf8'), broken);
     await deleteStoredEntry(checkpointKey);
+
+    // A portable template can outlive its originating project. Drafts,
+    // proposals and upload journals can own an asset before a project save.
+    const retainedName = 'retained-by-saved-work.mp4';
+    const retainedPath = join(directory, retainedName);
+    const src = '/media/uploads/' + retainedName;
+    const savedDoc = { ...ownership.doc, assets: [{ id: 'ref', kind: 'video', src, name: retainedName, durationInFrames: 30 }] };
+    const proposal = { options: [{ operations: [{ actions: [{ type: 'ADD_ASSET', asset: savedDoc.assets[0] }] }] }],
+      baseDoc: ownership.doc, resultState: savedDoc.timelines[0] };
+    const body = JSON.stringify({ version: 1, kind: 'base', baseDoc: savedDoc });
+    const artifact = { version: 1, artifactId: 'srd_base', projectId: 'survivor', runId: 'test', kind: 'server-run-draft',
+      body, bodySha256: createHash('sha256').update(body).digest('hex'), originalBytes: Buffer.byteLength(body),
+      originalChars: body.length, createdAt: 1, redacted: false, binaryOmitted: false };
+    const owners: [string, unknown][] = [
+      ['templates:all', [{ id: 'template', name: 'Reusable', createdAt: 1, doc: savedDoc, assetIds: ['ref'] }]],
+      ['external-proposal:survivor', { status: 'drafting', draftCheckpoint: { draftDoc: savedDoc } }],
+      ['proposal:survivor', proposal],
+      ['agent-session-proposal:survivor:session1', { version: 1, phase: 'prepared', proposal }],
+      ['upload-finalize:survivor:' + 'a'.repeat(64), { version: 1, status: 'prepared', mutation: { asset: savedDoc.assets[0] } }],
+      ['agent-artifact:survivor:srd_base', artifact],
+      ['agent-session-artifact:survivor:session1:srd_base', artifact],
+    ];
+    await writeFile(retainedPath, 'retained bytes');
+    for (const [ownerKey, row] of owners) {
+      await setStoredEntry(ownerKey, row);
+      assert.ok((await getStoredEntry(ownerKey)).found, ownerKey + ' must actually be persisted');
+      assert.equal((await remove(retainedName)).status, 409, ownerKey + ' keeps its unique media');
+      assert.equal(await readFile(retainedPath, 'utf8'), 'retained bytes');
+      await deleteStoredEntry(ownerKey);
+    }
+    assert.equal((await remove(retainedName)).status, 200, 'discarding the final owner releases media');
+    await assert.rejects(readFile(retainedPath), { code: 'ENOENT' });
 
     const { createGenerationJob } = await import('./generation-job-lifecycle');
     const { resolveCommittedExport } = await import('./export-delivery');

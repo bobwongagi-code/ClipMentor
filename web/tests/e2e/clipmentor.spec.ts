@@ -652,7 +652,9 @@ test('intake for another project uses the same neutral upload instructions', asy
 })
 
 test('a saved blueprint opens with a missing upload and restores only its registered slot', async ({ page }) => {
-  const assets = ['source.mp4', 'product.png', 'sales.png', 'cta.png'].map((name, index) => ({ id: String(index), name }))
+  const assets = ['source.mp4', 'product.png', 'sales.png', 'cta.png'].map((name, index) => ({
+    id: String(index), name, sourceContentHash: index === 3 ? createHash('sha256').update(image.buffer).digest('hex') : String(index).repeat(64),
+  }))
   const receipt = { projectId: 'saved-project', assets }
   let repaired = false, submissions = 0
   await page.route('**/api/clipmentor/intake', async route => {
@@ -698,7 +700,10 @@ test('a recovered board can be opened in place after the read retries stop', asy
   await page.route('**/api/clipmentor/production*', route => {
     if (new URL(route.request().url()).searchParams.get('view') === 'panel_board') {
       boardReads++
-      return healthy ? route.fulfill({ contentType: 'text/html', body: '<h2>恢复的原版审核板</h2>' }) : route.fulfill({ status: 503 })
+      if (healthy) return route.fulfill({ contentType: 'text/html', body: '<h2>恢复的原版审核板</h2>' })
+      if (boardReads === 1) return route.fulfill({ json: { error: 'temporary read failure' } })
+      if (boardReads === 2) return route.fulfill({ contentType: 'text/html', body: '  ' })
+      return route.fulfill({ status: 503 })
     }
     return route.fulfill({ json: { task: { taskId: 'existing-task', status: 'awaiting_blueprint', stage: 'copy_review', active: false, sequence: 1, blueprintRevision: 'r1' } } })
   })
@@ -718,4 +723,59 @@ test('a recovered board can be opened in place after the read retries stop', asy
   await expect(page.frameLocator('iframe').getByText('恢复的原版审核板')).toBeVisible()
   await expect(text).toHaveValue('保留当前意见')
   await expect(page.getByRole('button', { name: '提交修改' })).toBeEnabled()
+})
+
+test('restore a registered source by its bytes when the browser cannot decode its codec', async ({ page }) => {
+  const original = Buffer.from('opaque registered video bytes')
+  const hash = createHash('sha256').update(original).digest('hex')
+  const assets = ['camera.mov', 'product.png', 'sales.png', 'cta.png'].map((name, i) => ({
+    id: String(i), name, sourceContentHash: i === 0 ? hash : String(i).repeat(64),
+  }))
+  const receipt = { projectId: 'existing-project', assets }
+  let posts = 0
+  await page.route('**/api/clipmentor/intake', route => {
+    if (route.request().method() === 'POST') {
+      posts++
+      expect(route.request().postDataBuffer()?.includes(original)).toBe(true)
+      return route.fulfill({ json: receipt })
+    }
+    return route.fulfill({ json: { receipt: null, repair: { ...receipt, missingSlots: ['source'] } } })
+  })
+  await page.route('**/api/clipmentor/production', route => route.fulfill({ json: { task: null } }))
+  await page.goto('/')
+  const file = page.getByLabel('爆款原片', { exact: true })
+  const submit = page.getByRole('button', { name: '补传素材' })
+  await file.setInputFiles({ name: 'wrong.mov', mimeType: 'video/quicktime', buffer: Buffer.from('other bytes') })
+  await expect(page.getByText('文件与工程登记的原文件不一致')).toBeVisible()
+  await expect(submit).toBeDisabled()
+  await file.setInputFiles({ name: 'renamed.mov', mimeType: 'video/quicktime', buffer: original })
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(page.getByRole('heading', { name: '素材已上传' })).toBeVisible()
+  expect(posts).toBe(1)
+})
+
+test('a repair cannot adopt a different asset manifest from the same project', async ({ page }) => {
+  const hash = createHash('sha256').update(image.buffer).digest('hex')
+  const assets = ['source.mp4', 'product.png', 'sales.png', 'cta.png'].map((name, i) => ({
+    id: 'original-' + i, name, sourceContentHash: i === 3 ? hash : String(i).repeat(64),
+  }))
+  const receipt = { projectId: 'same-project', assets }
+  const changed = { ...receipt, assets: [{ ...assets[0], id: 'another-source' }, ...assets.slice(1)] }
+  let posts = 0
+  await page.route('**/api/clipmentor/intake', route => {
+    if (route.request().method() === 'POST') {
+      posts++
+      return route.fulfill({ json: changed })
+    }
+    return route.fulfill({ json: posts ? { receipt: changed } : { receipt: null, repair: { ...receipt, missingSlots: ['cta'] } } })
+  })
+  await page.route('**/api/clipmentor/production', route => route.fulfill({ json: { task: null } }))
+  await page.goto('/')
+  await page.getByLabel('CTA 行动号召图', { exact: true }).setInputFiles(image)
+  await page.getByRole('button', { name: '补传素材' }).click()
+  await expect(page.getByRole('alert')).toContainText('工程')
+  await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '素材已上传' })).toHaveCount(0)
+  expect(posts).toBe(1)
 })

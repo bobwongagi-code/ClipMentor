@@ -35,7 +35,7 @@ function localName(asset: MediaAsset): string | null {
   return isSafeUploadName(name) ? name : null;
 }
 
-function registeredAssets(entries: MediaAsset[]): MediaAsset[] | null {
+export function registeredAssets(entries: MediaAsset[]): MediaAsset[] | null {
   const assets = entries.slice(0, slots.length);
   return assets.length === slots.length && assets.every((asset, index) =>
     asset.kind === (index === 0 ? 'video' : 'image') && /^[a-f0-9]{64}$/.test(asset.sourceContentHash ?? '')
@@ -43,7 +43,7 @@ function registeredAssets(entries: MediaAsset[]): MediaAsset[] | null {
     && assets[1].sourceContentHash !== assets[3].sourceContentHash ? assets : null;
 }
 
-async function intactAsset(asset: MediaAsset, hashFile: typeof sha256File): Promise<boolean> {
+export async function intactAsset(asset: MediaAsset, hashFile: typeof sha256File = sha256File): Promise<boolean> {
   const name = localName(asset);
   if (!name || !/^[a-f0-9]{64}$/.test(asset.sourceContentHash ?? '')) return false;
   const file = resolveUploadFile(name);

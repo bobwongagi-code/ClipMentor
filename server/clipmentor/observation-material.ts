@@ -30,26 +30,44 @@ async function probe(file: string, signal: AbortSignal): Promise<Probe> {
   return result;
 }
 
+/** Two matches suffice to establish ambiguity. With an anchor, check the
+ * clock before comparing a potentially long sequence of identical packets. */
+function matchingPacketStarts(before: Packet[], after: Packet[], anchorOffset?: number): number[] {
+  const starts: number[] = [];
+  for (let i = 0; i <= before.length - after.length; i++) {
+    if (before[i].data_hash !== after[0].data_hash) continue;
+    const offset = Number(before[i].pts_time) - Number(after[0].pts_time);
+    if (!Number.isFinite(offset) || (anchorOffset !== undefined && Math.abs(offset - anchorOffset) > PACKET_CLOCK_TOLERANCE)) continue;
+    if (after.every((packet, j) => packet.data_hash === before[i + j].data_hash)) {
+      starts.push(i);
+      if (starts.length === 2) break;
+    }
+  }
+  return starts;
+}
+
 /** Verify every emitted AV packet against one contiguous parent subsequence, including source-time offset. */
 export function verifyCopiedPackets(parent: Probe, child: Probe, requested?: [number,number]) {
   for(const media of [parent,child])if(media.streams.length!==2
     ||media.streams.filter(s=>s.codec_type==='video').length!==1||media.streams.filter(s=>s.codec_type==='audio').length!==1)
     throw Error('Excerpt requires one video and one audio stream; do not silently drop tracks');
   const offsets: number[] = [], ranges: Array<[number,number]> = [];
-  for (const kind of ['video','audio']) {
+  const tracks = ['video','audio'].map(kind => {
     const sourceStream = parent.streams.find(s => s.codec_type === kind), outputStream = child.streams.find(s => s.codec_type === kind);
     if (!sourceStream || !outputStream || sourceStream.codec_name !== outputStream.codec_name) throw Error('Excerpt codec or audio changed');
     const before = parent.packets.filter(p => p.stream_index === sourceStream.index), after = child.packets.filter(p => p.stream_index === outputStream.index);
     if (!after.length || after.some(p => !p.data_hash || !Number.isFinite(Number(p.pts_time)))) throw Error('Excerpt packets unavailable');
-    const candidates: number[] = [];
-    for (let i = 0; i <= before.length - after.length; i++) if (before[i].data_hash === after[0].data_hash
-      && after.every((p,j) => p.data_hash === before[i+j].data_hash)) candidates.push(i);
-    // Silence or periodic PCM can repeat byte for byte. The uniquely matched
-    // video fixes the source clock, then the audio must align to that clock.
-    const matches = kind === 'audio' && candidates.length > 1 ? candidates.filter(index =>
-      Math.abs(Number(before[index].pts_time) - Number(after[0].pts_time) - offsets[0]) <= PACKET_CLOCK_TOLERANCE) : candidates;
-    if (matches.length !== 1) throw Error('Excerpt parent packet identity ambiguous or changed');
-    const copied = before.slice(matches[0], matches[0]+after.length);
+    return {before, after, matches: matchingPacketStarts(before, after)};
+  });
+  // Either track can anchor the source clock. For example, a fixed still may
+  // repeat across distinct narration, just as silence can repeat across shots.
+  const anchor = tracks.find(track => track.matches.length === 1);
+  if (!anchor) throw Error('Excerpt parent packet identity ambiguous or changed');
+  const anchorOffset = Number(anchor.before[anchor.matches[0]].pts_time) - Number(anchor.after[0].pts_time);
+  for (const {before, after, matches} of tracks) {
+    const indices = matches.length > 1 ? matchingPacketStarts(before, after, anchorOffset) : matches;
+    if (indices.length !== 1) throw Error('Excerpt parent packet identity ambiguous or changed');
+    const copied = before.slice(indices[0], indices[0]+after.length);
     const offset = Number(copied[0].pts_time)-Number(after[0].pts_time);
     if (!Number.isFinite(offset)||after.some((p,i) => !Number.isFinite(Number(copied[i].pts_time))
       ||Math.abs(Number(copied[i].pts_time)-Number(p.pts_time)-offset) > PACKET_CLOCK_TOLERANCE)) throw Error('Excerpt packet clock changed');
