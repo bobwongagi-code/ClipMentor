@@ -127,7 +127,10 @@ export async function prepareObservationMaterial(options: { file: string; parent
   const staging = await mkdtemp(join(directory,'.material-'));
   try {
     const output = join(staging,excerptName);
-    const seek = format.extension === '.webm' && start === 0 ? [] : ['-ss',String(start)];
+    // WebM keys use absolute packet time. A relative seek adds the container's
+    // negative Opus start time and can land in the preceding video GOP.
+    const seek = format.extension !== '.webm' ? ['-ss',String(start)]
+      : start > 0 ? ['-seek_timestamp','1','-ss',String(start)] : [];
     await exec(ffmpegBin(),['-v','error','-nostdin','-n',...seek,'-i',file,'-t',String(end-start),
       '-map','0:v:0','-map','0:a:0','-c','copy','-avoid_negative_ts','disabled',
       ...(format.extension === '.webm' ? [] : ['-movflags','+faststart']),output],
