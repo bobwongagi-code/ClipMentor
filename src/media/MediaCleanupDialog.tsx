@@ -1,10 +1,9 @@
-// "Clean Assets" panel: scan after opening - first clear the orphan project documents (smoke/old test residue),
-// Then list the uploaded files that are not referenced by all projects, check and delete them in batches (disk + IDB cache).
+// List unreferenced local uploads, then recheck references on explicit deletion.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { theme, themeAlpha } from '../theme';
 import { useT } from '../i18n/locale';
 import { Icon } from '../components/icons';
-import { scanUnreferenced, deleteUploadFile, type UploadFileInfo } from '../persist/mediaCleanup';
+import { scanUnreferenced, deleteUnreferencedUploads, type UploadFileInfo } from '../persist/mediaCleanup';
 
 interface MediaCleanupDialogProps {
   onClose: () => void;
@@ -27,17 +26,18 @@ export function MediaCleanupDialog({ onClose }: MediaCleanupDialogProps) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   const rescan = useCallback(async () => {
     setFiles(null);
+    setPicked(new Set());
+    setScanError(null);
     try {
       const scan = await scanUnreferenced();
       setFiles(scan.files);
       setPicked(new Set(scan.files.map((f) => f.name)));
-      if (scan.orphanDocsPurged > 0) setNote(t('已顺手清掉 {n} 份孤儿工程文档(测试残留)', { n: scan.orphanDocsPurged }));
     } catch (err) {
-      setFiles([]);
-      setNote(t('扫描失败:{msg}', { msg: err instanceof Error ? err.message : String(err) }));
+      setScanError(t('扫描失败:{msg}', { msg: err instanceof Error ? err.message : String(err) }));
     }
   }, [t]);
   useEffect(() => { void rescan(); }, [rescan]);
@@ -59,16 +59,17 @@ export function MediaCleanupDialog({ onClose }: MediaCleanupDialogProps) {
   const removePicked = async () => {
     if (!files || picked.size === 0) return;
     setBusy(true);
-    let ok = 0;
-    let fail = 0;
-    for (const f of files) {
-      if (!picked.has(f.name)) continue;
-      if (await deleteUploadFile(f.name).catch(() => false)) ok += 1;
-      else fail += 1;
+    const names = files.filter(f => picked.has(f.name)).map(f => f.name);
+    try {
+      const ok = await deleteUnreferencedUploads(names);
+      const fail = names.length - ok;
+      setNote(fail ? t('已删 {ok} 个,{fail} 个失败', { ok, fail }) : t('已删 {n} 个文件', { n: ok }));
+    } catch (err) {
+      setNote(t('扫描失败:{msg}', { msg: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      await rescan();
+      setBusy(false);
     }
-    setBusy(false);
-    setNote(fail ? t('已删 {ok} 个,{fail} 个失败', { ok, fail }) : t('已删 {n} 个文件', { n: ok }));
-    await rescan();
   };
 
   return (
@@ -82,7 +83,8 @@ export function MediaCleanupDialog({ onClose }: MediaCleanupDialogProps) {
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 8px' }}>
-          {files === null && <div style={hint}>{t('扫描中…(逐工程收集引用)')}</div>}
+          {scanError ? <div role="alert" style={hint}>{scanError}</div>
+            : files === null && <div style={hint}>{t('扫描中…(逐工程收集引用)')}</div>}
           {files !== null && files.length === 0 && <div style={hint}>{t('没有无主素材,盘上很干净 ✨')}</div>}
           {files?.map((f) => (
             <label key={f.name} style={row}>

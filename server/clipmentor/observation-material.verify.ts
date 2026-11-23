@@ -5,11 +5,12 @@ import { mkdtemp,readFile,writeFile,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID,createHash } from 'node:crypto';
-import { ffmpegBin } from '../media-binaries';
+import { ffmpegBin, ffprobeBin } from '../media-binaries';
+import { seedKeystore } from '../keystore';
 import { sha256File } from '../../shared/node-content-hash';
 import { videoInput } from './video-input';
 import { materialRange,prepareObservationMaterial,verifyCopiedPackets } from './observation-material';
-import { observeSourceVideo,sourceVideoInput,sourceObservationRange,readSourceVideoReceipt,buildSourceVideoRequest,recoverSourceVideoReceipt,sourceObservationToSourceClock } from './source-video';
+import { observeSourceVideo,sourceVideoDependencies,sourceVideoInput,sourceObservationRange,readSourceVideoReceipt,buildSourceVideoRequest,recoverSourceVideoReceipt,sourceObservationToSourceClock } from './source-video';
 import type { SourceVideoRequest } from '../../shared/clipmentor-source-video';
 import { isObservationMaterial } from '../../shared/clipmentor-source-video';
 import fixture from '../../src/clipmentor/fixtures/copy-teaching-blind-v2-20261019.json';
@@ -43,6 +44,86 @@ try {
   const request:SourceVideoRequest={operationId:randomUUID(),maxRequests:1,projectId:'p',authorRunId:'a',source:{src:'/media/uploads/parent.mp4',hash:parentHash,fps:30,duration:8},
     subject:{revision:1,digest:'a'.repeat(64),units:[{unit_id:unit.unit_id,candidate_id:'c'}]},packet,
     observationTask:{version:'source-boundaries-v1',contexts:[{context_id:'local',unit_id:unit.unit_id,source_range_seconds:[2.2,4.2],boundary_seconds:[],goals:['material_continuity']}]}};
+  seedKeystore({CLIPMENTOR_VIDEO_TRANSPORT:'inline'});
+  for (const [extension, mimeType, videoCodec, audioCodec] of [
+    ['mov', 'video/quicktime', 'libx264', 'aac'],
+    ['webm', 'video/webm', 'libvpx-vp9', 'libopus'],
+  ]) {
+    const alternate = join(root, `parent.${extension}`);
+    const webm = extension === 'webm';
+    await promisify(execFile)(ffmpegBin(), ['-v','error','-nostdin','-n','-f','lavfi','-i','testsrc2=size=96x128:rate=30',
+      '-f','lavfi','-i',`sine=frequency=600:sample_rate=${webm ? 48000 : 44100}`,
+      '-t','8','-c:v',videoCodec,'-g','30','-pix_fmt','yuv420p','-c:a',audioCodec,alternate]);
+    const source = await readFile(alternate), sourceHash = await sha256File(alternate);
+    const input = { ...request, operationId:randomUUID(), source: { ...request.source, src: `/media/uploads/parent.${extension}`, hash: sourceHash } };
+    const whole = buildSourceVideoRequest(source, { ...input, observationTask: undefined });
+    const part = JSON.parse(whole.body).contents[0].parts[0].inlineData;
+    assert.equal(part.mimeType, mimeType);
+    assert.deepEqual(Buffer.from(part.data, 'base64'), source);
+    const excerpt = await prepareObservationMaterial({ ...options, file: alternate, parentSha256: sourceHash });
+    assert(excerpt.file.endsWith(`.${extension}`));
+    assert.equal(excerpt.binding.packet_payloads_verified, true);
+    assert.equal(excerpt.binding.submitted_sha256, await sha256File(excerpt.file));
+    assert(excerpt.binding.actual_source_range_seconds[0] <= 2.2 && excerpt.binding.actual_source_range_seconds[1] >= 4.2);
+    const piece = JSON.parse(buildSourceVideoRequest(await readFile(excerpt.file), input, excerpt.binding).body);
+    assert.equal(piece.contents[0].parts[0].inlineData.mimeType, mimeType);
+    let dispatched = 0;
+    const adapter = {
+      ...sourceVideoDependencies(), directory:join(root,`receipts-${extension}`), key:'fixture-only',
+      resolve:(name:string)=>name===`parent.${extension}` ? alternate : null,
+      prepareObservation:(f:string,parentSha256:string,duration:number,range:[number,number]|null,s:AbortSignal)=>
+        prepareObservationMaterial({ ...options,file:f,parentSha256,duration,range,signal:s }),
+      post:async (body:string)=>{
+        dispatched++;
+        assert.deepEqual(JSON.parse(body),piece);
+        return {status:504,body:null};
+      },
+    };
+    await assert.rejects(observeSourceVideo(input,adapter),
+      (error:any)=>error.receipt?.upstream_http_status===504&&error.receipt?.requestsAttempted===1);
+    assert.deepEqual((await readSourceVideoReceipt(input.operationId,'p',adapter)).observation_material,excerpt.binding);
+    await assert.rejects(observeSourceVideo(input,adapter),/no retry/);
+    assert.equal(dispatched,1);
+    if (webm) {
+      const { stdout } = await promisify(execFile)(ffprobeBin(), ['-v','error','-show_entries','format=duration','-of','csv=p=0',alternate]);
+      const boundaryRange: [number,number] = [5,7.9];
+      const atKeyframe = await prepareObservationMaterial({ ...options,file:alternate,parentSha256:sourceHash,
+        duration:Number(stdout),range:boundaryRange });
+      assert.deepEqual(atKeyframe.binding.requested_range_seconds,boundaryRange);
+      assert(atKeyframe.binding.actual_source_range_seconds[0] < 5 && atKeyframe.binding.actual_source_range_seconds[1] >= 7.9);
+      assert.equal(atKeyframe.binding.packet_payloads_verified,true);
+      checks++;
+      const delayed = join(root,'video-after-audio.webm');
+      await promisify(execFile)(ffmpegBin(), ['-v','error','-nostdin','-n','-itsoffset','0.007','-i',alternate,'-i',alternate,
+        '-map','0:v:0','-map','1:a:0','-c','copy','-avoid_negative_ts','disabled',delayed]);
+      const prefixProbe = JSON.parse((await promisify(execFile)(ffprobeBin(), ['-v','error','-select_streams','v:0',
+        '-read_intervals','%+#1','-show_entries','packet=pts_time,flags:format=duration','-of','json',delayed])).stdout);
+      assert(Number(prefixProbe.packets[0].pts_time) > 0 && prefixProbe.packets[0].flags.includes('K'));
+      const prefix = await prepareObservationMaterial({ ...options,file:delayed,parentSha256:await sha256File(delayed),
+        duration:Number(prefixProbe.format.duration),range:[0,0.5] });
+      assert.equal(prefix.binding.actual_source_range_seconds[0],0);
+      assert(prefix.binding.actual_source_range_seconds[1] >= 0.5);
+      assert.equal(prefix.binding.packet_payloads_verified,true);
+      checks++;
+      const renamed = join(root,'renamed-matroska.webm');
+      await promisify(execFile)(ffmpegBin(), ['-v','error','-nostdin','-n','-i',alternate,'-c','copy','-f','matroska',renamed]);
+      const mislabeled = { ...options,file:renamed,parentSha256:await sha256File(renamed) };
+      await assert.rejects(prepareObservationMaterial(mislabeled),/not a native WebM/);
+      await assert.rejects(prepareObservationMaterial({...mislabeled,range:null}),/not a native WebM/);
+      checks++;
+    }
+    checks++;
+  }
+  const pcm = join(root,'repeating-audio.mov');
+  await promisify(execFile)(ffmpegBin(), ['-v','error','-nostdin','-n','-f','lavfi','-i','testsrc2=size=96x128:rate=25',
+    '-f','lavfi','-i','sine=frequency=600:sample_rate=44100','-t','8','-c:v','libx264','-g','30','-pix_fmt','yuv420p','-c:a','pcm_s16le',pcm]);
+  const pcmOptions = { ...options,file:pcm,parentSha256:await sha256File(pcm),range:[0.2,0.5] as [number,number] };
+  const pcmExcerpt = await prepareObservationMaterial(pcmOptions);
+  assert(pcmExcerpt.file.endsWith('.mov'));
+  assert.equal(pcmExcerpt.binding.source_seconds_at_submitted_zero,0);
+  assert.equal(pcmExcerpt.binding.packet_payloads_verified,true);
+  assert.deepEqual(await prepareObservationMaterial(pcmOptions),pcmExcerpt);
+  checks++;
   assert.deepEqual(sourceObservationRange(sourceVideoInput(request)),[2.2,4.2]);
   assert.equal(sourceObservationRange(sourceVideoInput({...request,observationTask:undefined})),null);checks++;
   let posts=0,lastResponse:any;
@@ -120,6 +201,9 @@ try {
   const child=structuredClone(parent);child.packets[0].pts_time='0';child.packets[1].pts_time='0';assert.equal(verifyCopiedPackets(parent,child).offset,2);
   child.packets[1].data_hash='changed';assert.throws(()=>verifyCopiedPackets(parent,child),/identity/);checks++;
   child.packets[1].data_hash='a';child.packets[1].pts_time='1';assert.throws(()=>verifyCopiedPackets(parent,child),/clock/);checks++;
+  const repeated=structuredClone(parent);
+  repeated.packets.push({...repeated.packets[1],pts_time:'6'});
+  assert.throws(()=>verifyCopiedPackets(repeated,child),/ambiguous/);checks++;
   assert.throws(()=>verifyCopiedPackets({...parent,streams:[...parent.streams,{index:2,codec_type:'audio',codec_name:'aac'}]},child),/drop tracks/);checks++;
   const missingVideo:any={streams:parent.streams,packets:[{stream_index:0,pts_time:'2',duration_time:'1',data_hash:'v2'},
     {stream_index:0,pts_time:'3',duration_time:'1',data_hash:'v3'},{stream_index:1,pts_time:'2',duration_time:'1',data_hash:'a2'},

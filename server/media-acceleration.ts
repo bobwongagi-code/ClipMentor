@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { ffmpegThreadArgs } from './media-process.ts';
 
@@ -139,10 +141,17 @@ export async function probeEncoderQualityMode(
   return promise;
 }
 
-/** 探测 ffmpeg 编译支持后返回解码硬加速参数；不支持时为空数组（软解）。 */
+/** Compiled VA-API support alone does not provide a usable Linux render device. */
 export async function resolveHwDecodeArgs(ffmpeg: string, encoder?: H264Encoder): Promise<string[]> {
   const candidate = hwDecodeArgs(encoder);
   if (!candidate.length) return [];
+  if (candidate[1] === 'vaapi' && process.platform === 'linux') {
+    const device = resolveVaapiDevice();
+    try { await access(device, constants.R_OK | constants.W_OK); }
+    catch { return []; }
+    const available = await availableHwAccels(ffmpeg);
+    return available.has('vaapi') ? [...candidate, '-hwaccel_device', device] : [];
+  }
   const available = await availableHwAccels(ffmpeg);
   return available.has(candidate[1]!) ? candidate : [];
 }

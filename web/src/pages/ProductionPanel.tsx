@@ -4,7 +4,7 @@ import { Check, Download, Play, Send } from 'lucide-react'
 import { ProgressNode } from '../components/processing/ProgressNode'
 import { productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
 
-const productionEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/production`
+export const productionEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/production`
 type Task = {
   taskId?:string;sourceTaskId?:string
   status: string; stage: string; revision?: string; active: boolean; sequence: number
@@ -29,7 +29,7 @@ async function readApiJson<T>(response: Response): Promise<T | undefined> {
   return response.json().catch(() => undefined)
 }
 
-async function readPanelState(response: Response): Promise<State | undefined> {
+export async function readPanelState(response: Response): Promise<State | undefined> {
   if (!response.ok) return
   const data = await readApiJson<State>(response)
   if (!data || typeof data !== 'object' || !('task' in data)) return
@@ -39,7 +39,7 @@ async function readPanelState(response: Response): Promise<State | undefined> {
   return data
 }
 
-export default function ProductionPanel({ assets, onRecheck, requestApi, outputAudience, sharedTask, onTask, unifiedBlueprint = false }: { assets: { id: string; title: string; name: string }[]; onRecheck: () => void; requestApi: (url: string, init?: RequestInit) => Promise<Response>; outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task)=>void; unifiedBlueprint?:boolean }) {
+export default function ProductionPanel({ assets, onRecheck, requestApi, outputAudience, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh }: { assets: { id: string; title: string; name: string }[]; onRecheck: () => void; requestApi: (url: string, init?: RequestInit) => Promise<Response>; outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task)=>void; unifiedBlueprint?:boolean; mediaRefresh?:number }) {
   const endpoint = outputAudience ? `${productionEndpoint}?audience=${outputAudience}` : productionEndpoint
   const assetUrl=(view:string,key:string,value:string)=>resourceUrl(view,key,value,outputAudience)
   const audienceTitle=outputAudience==="new_contact"?"新建联达人版":"已合作达人版"
@@ -49,6 +49,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const [pendingAction, setPendingAction] = useState<{key:string;controller:AbortController}>()
   const [board, setBoard] = useState<{ key:string; revision: string; identity?:string; html: string }>()
   const [boardError, setBoardError] = useState('')
+  const [boardReload, setBoardReload] = useState(0)
   const [feedbackDraft, setFeedbackDraft] = useState<{key:string;text:string}>()
   const [confirmation, setConfirmation] = useState<{key:string;checked:boolean;acknowledged?:boolean}>()
   const boardFrame = useRef<HTMLIFrameElement>(null)
@@ -146,7 +147,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     }
     void readBoard(revision, 0)
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [boardKey, requestApi])
+  }, [boardKey, requestApi, boardReload, mediaRefresh])
 
   useEffect(() => {
     if (!currentBoard?.identity) return
@@ -273,11 +274,12 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const canConfirm = !!task && (!!task.canConfirmBlueprint || !task.dualBlueprint && task.canApproveBlueprint !== false)
   const reviewTitle = boardRevision ? '审核蓝图' : awaitingPreview ? '预览与终审' : '成片已确认'
   const sharedBlueprint = showSharedBlueprint(sharedProgress)
-  if(state?.outputs)return <>
+  if(!state)return <p className="cm-caption" role="status">{readError || '正在读取制作状态…'}</p>
+  if(state.outputs)return <>
     <div className="cm-heading"><h1>{productionPageTitle(sharedProgress)}</h1><p>{sharedBlueprint?'共用片头与教学主体，片尾分别面向新建联和已合作达人。':'共用主体只制作一次，再生成两个片尾版本。'}</p></div>
     <div className="cm-output-list">
     {state.outputs.filter(output=>!sharedBlueprint || output.audience==='existing_partner').map(output=><section key={output.audience} aria-label={sharedBlueprint?'共用蓝图':output.audience==='new_contact'?'新建联达人版':'已合作达人版'}>
-      <ProductionPanel assets={assets} onRecheck={onRecheck} requestApi={requestApi} unifiedBlueprint={sharedBlueprint} outputAudience={output.audience} sharedTask={sharedProgress} onTask={output.audience==='existing_partner'?reportSharedProgress:undefined} />
+      <ProductionPanel assets={assets} onRecheck={onRecheck} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint} outputAudience={output.audience} sharedTask={sharedProgress} onTask={output.audience==='existing_partner'?reportSharedProgress:undefined} />
     </section>)}
     </div>
   </>
@@ -299,7 +301,9 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       <section className="cm-panel cm-work">
         {boardRevision && (currentBoard?.revision === boardRevision
           ? <iframe key={boardKey} ref={boardFrame} title="人审版蓝图" className="cm-review-board" sandbox="allow-scripts" srcDoc={currentBoard.html} />
-          : <p role="status">{boardError || '正在生成审片板…'}</p>)}
+          : boardError ? <div className="cm-footer"><p role="status">{boardError}</p>
+            <button className="cm-button secondary" onClick={() => setBoardReload(attempt => attempt + 1)}>重新加载审核板</button>
+          </div> : <p role="status">正在生成审片板…</p>)}
         {(awaitingPreview || completed) && (task.renderId
           ? <video className="cm-final-video" controls preload="metadata" src={assetUrl('panel_video', 'renderId', task.renderId)} />
           : <p role="alert">预览暂时无法播放。</p>)}

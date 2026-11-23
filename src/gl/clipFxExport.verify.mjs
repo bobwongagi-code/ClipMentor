@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import ffmpegPath from 'ffmpeg-static';
-import { renderTimeline, setUploadsDirProvider } from '../../remotion/render.mjs';
+import { renderTimeline, renderTimelineStills, setUploadsDirProvider } from '../../remotion/render.mjs';
 
 const run = promisify(execFile);
 const width = 160;
@@ -263,6 +263,46 @@ try {
     `transition start diverged from the filtered outgoing frame (inverse MSE ${transitionStartInverseDistance})`,
   );
   console.log(`clipFxExport.verify: transition start preserves the outgoing effect (MSE ${transitionStartDistance.toFixed(2)}, inverse MSE ${transitionStartInverseDistance.toFixed(2)})`);
+
+  // A parent timeline can already know a competing effect ID. Each exported
+  // child must still use the LUT supplied by its own project timeline.
+  const effectId = 'plugin:same-look';
+  const fragment = await readFile(new URL('./fx/lut.frag', import.meta.url), 'utf8');
+  const colorLut = async (name, rgb) => {
+    await writeFile(join(directory, `${name}.cube`), `LUT_3D_SIZE 2\n${Array(8).fill(rgb).join('\n')}\n`);
+    return { [effectId]: {
+      id: effectId, name, desc: '', frag: fragment, cube: `/media/uploads/${name}.cube`,
+      props: [{ key: 'intensity', label: 'Intensity', default: 1, min: 0, max: 1 }],
+    } };
+  };
+  const createChild = async (id, order, rgb) => ({
+    id, order, name: id, fps, width, height, selectedId: null, fxDefs: await colorLut(id, rgb),
+    items: [{
+      id: `${id}-clip`, name: 'source.mp4', kind: 'video', src: '/media/uploads/source.mp4',
+      track: 'V1', startFrame: 0, durationInFrames: 6, width, height,
+      effects: [{ id: 'look', assetId: effectId }],
+    }],
+  });
+  const children = await Promise.all([createChild('saved-red', 1, '1 0 0'), createChild('saved-green', 2, '0 1 0')]);
+  const parent = {
+    id: 'parent', order: 0, name: 'Parent', fps, width, height, selectedId: null,
+    fxDefs: await colorLut('competing-blue', '0 0 1'),
+    items: children.map((child, index) => ({
+      id: `sequence-${child.id}`, kind: 'sequence', name: child.name, timelineId: child.id,
+      track: 'V1', startFrame: index * 6, durationInFrames: 6,
+    })),
+  };
+  const project = { version: 3, assets: [], mediaFolders: [], activeTimelineId: parent.id, timelines: [parent, ...children] };
+  const stills = await renderTimelineStills({ state: parent, project, timelineId: parent.id, frames: [2, 8] });
+  for (const [index, frame] of stills.entries()) {
+    const jpg = join(directory, `scoped-lut-${index}.jpg`);
+    await writeFile(jpg, Buffer.from(frame.base64, 'base64'));
+    const { stdout } = await run(ffmpegPath, ['-v', 'error', '-i', jpg, '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer' });
+    assert.equal(stdout.length, 3);
+    assert.ok(stdout[index] > 220 && stdout[(index + 1) % 3] < 35 && stdout[(index + 2) % 3] < 35,
+      `timeline ${children[index].id} rendered competing LUT bytes (${[...stdout].join(',')})`);
+  }
+  console.log('clipFxExport.verify: nested timelines render their own saved same-ID LUTs');
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

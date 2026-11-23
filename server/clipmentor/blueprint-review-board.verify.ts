@@ -318,6 +318,8 @@ try{
   }finally{release();await new Promise<void>(r=>server.close(()=>r()));}
  });
  await test('Shared panel admits only the checked current blueprint across all browser actions',async()=>{
+  const {seedKeystore}=await import('../keystore');
+  seedKeystore({ROOTIFY_GATEWAY_API_KEY:'local-fixture-only'});
   const {withSerializedProjectStore}=await import('../plugins/project-store');
   const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
   const {clipMentorProductionPlugin}=await import('../plugins/clipmentor-production');

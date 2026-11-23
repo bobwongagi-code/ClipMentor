@@ -7,12 +7,14 @@ import { ffmpegBin, ffprobeBin } from '../media-binaries';
 import { sha256File } from '../../shared/node-content-hash';
 import type { ObservationMaterial } from '../../shared/clipmentor-source-video';
 import { isObservationMaterial } from '../../shared/clipmentor-source-video';
+import { hasWebmDocType, videoFileFormat } from './video-input';
 
 interface Packet { stream_index: number; pts_time: string; duration_time?: string; flags: string; data_hash: string }
 interface Probe { streams: Array<{ index: number; codec_type: string; codec_name: string }>; packets: Packet[]; format: { duration: string } }
 const exec = promisify(execFile);
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const PACKET_CLOCK_TOLERANCE = 0.00002;
 export function materialRange(ranges: number[][], duration: number): [number, number] {
   if (!finite(duration) || duration <= 0 || !ranges.length || ranges.some(r => !Array.isArray(r) || r.length !== 2
     || !r.every(finite) || r[0] < 0 || r[1] > duration || r[1] <= r[0])) throw Error('Invalid frozen observation range');
@@ -42,20 +44,24 @@ export function verifyCopiedPackets(parent: Probe, child: Probe, requested?: [nu
     const candidates: number[] = [];
     for (let i = 0; i <= before.length - after.length; i++) if (before[i].data_hash === after[0].data_hash
       && after.every((p,j) => p.data_hash === before[i+j].data_hash)) candidates.push(i);
-    if (candidates.length !== 1) throw Error('Excerpt parent packet identity ambiguous or changed');
-    const copied = before.slice(candidates[0], candidates[0]+after.length);
+    // Silence or periodic PCM can repeat byte for byte. The uniquely matched
+    // video fixes the source clock, then the audio must align to that clock.
+    const matches = kind === 'audio' && candidates.length > 1 ? candidates.filter(index =>
+      Math.abs(Number(before[index].pts_time) - Number(after[0].pts_time) - offsets[0]) <= PACKET_CLOCK_TOLERANCE) : candidates;
+    if (matches.length !== 1) throw Error('Excerpt parent packet identity ambiguous or changed');
+    const copied = before.slice(matches[0], matches[0]+after.length);
     const offset = Number(copied[0].pts_time)-Number(after[0].pts_time);
     if (!Number.isFinite(offset)||after.some((p,i) => !Number.isFinite(Number(copied[i].pts_time))
-      ||Math.abs(Number(copied[i].pts_time)-Number(p.pts_time)-offset) > 0.00002)) throw Error('Excerpt packet clock changed');
+      ||Math.abs(Number(copied[i].pts_time)-Number(p.pts_time)-offset) > PACKET_CLOCK_TOLERANCE)) throw Error('Excerpt packet clock changed');
     offsets.push(offset);
     const track:[number,number]=[Math.min(...copied.map(p => Number(p.pts_time))), Math.max(...copied.map(p => Number(p.pts_time)+Number(p.duration_time ?? 0)))];
     if(requested) {
       const first=Math.min(...before.map(p=>Number(p.pts_time))),last=Math.max(...before.map(p=>Number(p.pts_time)+Number(p.duration_time??0)));
-      if(track[0]>Math.max(requested[0],first)+0.00002||track[1]+0.00002<Math.min(requested[1],last))throw Error('Excerpt does not cover frozen question on both audio and video');
+      if(track[0]>Math.max(requested[0],first)+PACKET_CLOCK_TOLERANCE||track[1]+PACKET_CLOCK_TOLERANCE<Math.min(requested[1],last))throw Error('Excerpt does not cover frozen question on both audio and video');
     }
     ranges.push(track);
   }
-  if (Math.abs(offsets[0]-offsets[1]) > 0.00002) throw Error('Excerpt audio/video clock mismatch');
+  if (Math.abs(offsets[0]-offsets[1]) > PACKET_CLOCK_TOLERANCE) throw Error('Excerpt audio/video clock mismatch');
   return { offset: offsets[0], range: [Math.max(0,Math.min(...ranges.map(r => r[0]))),Math.max(...ranges.map(r => r[1]))] as [number,number],
     duration: Math.max(Number(child.format.duration), ...child.packets.map(p => Number(p.pts_time)+Number(p.duration_time ?? 0))) };
 }
@@ -65,6 +71,9 @@ export async function prepareObservationMaterial(options: { file: string; parent
   range: [number,number] | null; directory: string; signal: AbortSignal }): Promise<{ file: string; binding: ObservationMaterial }> {
   const { file, parentSha256, duration, directory, signal } = options;
   signal.throwIfAborted();
+  const format = videoFileFormat(file);
+  if (!format) throw Error('Unsupported observation video format');
+  if (format.extension === '.webm' && !await hasWebmDocType(file)) throw Error('Observation source is not a native WebM container');
   const range = options.range === null ? null : materialRange([options.range],duration);
   if (!/^[a-f0-9]{64}$/.test(parentSha256) || !finite(duration) || duration <= 0 || await sha256File(file) !== parentSha256) throw Error('Observation parent unavailable or changed');
   const parentBytes = (await stat(file)).size;
@@ -74,10 +83,12 @@ export async function prepareObservationMaterial(options: { file: string; parent
     submitted_duration_seconds:duration,source_seconds_at_submitted_zero:0,stream_copy:false,packet_payloads_verified:false,
     coverage:'submitted_range_only',complete_film_accepted:false } };
   await mkdir(directory,{recursive:true,mode:0o700});
-  const cache = join(directory,sha(JSON.stringify([parentSha256,range])));
+  // Preserve preexisting MP4 bindings; different containers cannot share excerpts.
+  const cache = join(directory,sha(JSON.stringify([parentSha256,range,...(format.extension === '.mp4' ? [] : [format.extension])])));
+  const excerptName = 'excerpt' + format.extension;
   const load = async () => {
     const binding = JSON.parse(await readFile(join(cache,'binding.json'),'utf8')) as ObservationMaterial;
-    const result = join(cache,'excerpt.mp4');
+    const result = join(cache,excerptName);
     if (!isObservationMaterial(binding) || binding.kind !== 'stream_copy_excerpt'
       || binding.parent_sha256 !== parentSha256 || binding.parent_bytes !== parentBytes || binding.parent_duration_seconds !== duration
       || JSON.stringify(binding.requested_range_seconds) !== JSON.stringify(range) || !binding.packet_payloads_verified
@@ -95,17 +106,37 @@ export async function prepareObservationMaterial(options: { file: string; parent
   if(parent.streams.length!==2||parent.streams.filter(s=>s.codec_type==='video').length!==1||parent.streams.filter(s=>s.codec_type==='audio').length!==1)
     throw Error('Excerpt requires one video and one audio stream; do not silently drop tracks');
   const keys = parent.packets.filter(p => p.stream_index === video.index && p.flags.includes('K')).map(p => Number(p.pts_time)).filter(finite).sort((a,b)=>a-b);
-  const starts = keys.filter(t => t <= range[0]);
-  if (!starts.length) throw Error('No decodable keyframe before observation');
-  const start = Math.max(0,starts.at(-1)!), end = keys.find(t => t >= range[1]) ?? duration;
+  let [startLimit, endLimit] = range;
+  if (format.extension === '.webm') {
+    // A WebM cue can start at the video keyframe and discard the preceding
+    // audio packet crossing that time. Choose the seek from both track clocks.
+    const audio = parent.streams.find(s => s.codec_type === 'audio')!;
+    const packets = parent.packets.filter(p => p.stream_index === audio.index);
+    const crossingStart = packets.findLast(p => Number(p.pts_time) <= range[0]);
+    const crossingEnd = packets.find(p => Number(p.pts_time) + Number(p.duration_time ?? 0) >= range[1]);
+    if (crossingStart) startLimit = Number(crossingStart.pts_time);
+    if (crossingEnd) endLimit = Number(crossingEnd.pts_time) + Number(crossingEnd.duration_time ?? 0);
+  }
+  const startKey = keys.findLast(t => t <= startLimit);
+  // Native WebM can start with Opus before its first video packet. The source
+  // has no earlier frames to preserve when that first packet is a keyframe.
+  const firstVideoPacket = parent.packets.find(p => p.stream_index === video.index);
+  const fromStart = format.extension === '.webm' && firstVideoPacket?.flags.includes('K');
+  if (startKey === undefined && !fromStart) throw Error('No decodable keyframe before observation');
+  const start = Math.max(0,startKey ?? 0), end = keys.find(t => t >= endLimit) ?? duration;
   const staging = await mkdtemp(join(directory,'.material-'));
   try {
-    const output = join(staging,'excerpt.mp4');
-    await exec(ffmpegBin(),['-v','error','-nostdin','-n','-ss',String(start),'-i',file,'-t',String(end-start),
-      '-map','0:v:0','-map','0:a:0','-c','copy','-avoid_negative_ts','disabled','-movflags','+faststart',output],
+    const output = join(staging,excerptName);
+    // WebM keys use absolute packet time. A relative seek adds the container's
+    // negative Opus start time and can land in the preceding video GOP.
+    const seek = format.extension !== '.webm' ? ['-ss',String(start)]
+      : start > 0 ? ['-seek_timestamp','1','-ss',String(start)] : [];
+    await exec(ffmpegBin(),['-v','error','-nostdin','-n',...seek,'-i',file,'-t',String(end-start),
+      '-map','0:v:0','-map','0:a:0','-c','copy','-avoid_negative_ts','disabled',
+      ...(format.extension === '.webm' ? [] : ['-movflags','+faststart']),output],
     {signal,timeout:60_000,maxBuffer:65536});
     const copied = verifyCopiedPackets(parent,await probe(output,signal),range);
-    if (copied.range[0] > range[0] || copied.range[1]+0.00002 < range[1]) throw Error('Excerpt does not cover frozen question range');
+    if (copied.range[0] > range[0] || copied.range[1]+PACKET_CLOCK_TOLERANCE < range[1]) throw Error('Excerpt does not cover frozen question range');
     if (await sha256File(file) !== parentSha256) throw Error('Observation parent changed during extraction');
     const binding: ObservationMaterial = {version:'observation-material-v1',kind:'stream_copy_excerpt',parent_sha256:parentSha256,parent_bytes:parentBytes,
       parent_duration_seconds:duration,requested_range_seconds:range,actual_source_range_seconds:copied.range,

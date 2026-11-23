@@ -1,5 +1,5 @@
 import {externalCall,readSavedExternalResponse} from './external-call';
-import { echoesMediaSecret, videoRequestDigest, videoInput, type VideoInput, type PreparedVideo } from './video-input';
+import { echoesMediaSecret, videoFileFormat, videoRequestDigest, videoInput, type VideoInput, type PreparedVideo } from './video-input';
 import { prepareVideoMedia, VideoMediaError } from './video-media';
 import { materialRange, prepareObservationMaterial } from './observation-material';
 import { createHash } from 'node:crypto';
@@ -30,7 +30,8 @@ export function sourceVideoInput(request: SourceVideoRequest, legacyAllUnits = f
   if (!object(request) || Object.keys(request).some(k => !['operationId','maxRequests','projectId','authorRunId','source','subject','packet','observationTask'].includes(k))
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(request.operationId)
     || request.maxRequests !== 1 || !text(request.projectId) || !text(request.authorRunId) || !object(request.source)
-    || !/^\/media\/uploads\/[^/?#]+\.mp4$/.test(request.source.src) || !/^[a-f0-9]{64}$/.test(request.source.hash)
+    || typeof request.source.src !== 'string' || !/^\/media\/uploads\/[^/?#]+$/.test(request.source.src)
+    || !videoFileFormat(request.source.src) || !/^[a-f0-9]{64}$/.test(request.source.hash)
     || !Number.isFinite(request.source.duration) || request.source.duration <= 0 || !Number.isFinite(request.source.fps) || request.source.fps <= 0
     || !object(request.subject) || !Number.isSafeInteger(request.subject.revision) || request.subject.revision < 1
     || !/^[a-f0-9]{64}$/.test(request.subject.digest) || !Array.isArray(request.subject.units)) throw new Error('Invalid source observation input');
@@ -116,8 +117,10 @@ export function sourceObservationToSourceClock(value: unknown, material?: Observ
   return convert(value);
 }
 export function buildSourceVideoRequest(video: VideoInput, request: SourceVideoRequest, material?: ObservationMaterial, legacyAllUnits = false) {
-  const media = videoInput(video);
   const input = sourceVideoInput(request,legacyAllUnits);
+  const mimeType = videoFileFormat(request.source.src)!.mimeType;
+  const media = videoInput(video,mimeType);
+  if (('inlineData' in media.part ? media.part.inlineData : media.part.fileData).mimeType !== mimeType) throw Error('Observation video format mismatch');
   if(material && (!isObservationMaterial(material)||material.parent_sha256!==request.source.hash || material.submitted_sha256!==media.sha256 || material.submitted_bytes!==media.bytes
     ||material.parent_duration_seconds!==request.source.duration || material.coverage!=='submitted_range_only'||material.complete_film_accepted!==false)) throw Error('Observation media binding mismatch');
   if(material?.kind==='stream_copy_excerpt') {
@@ -146,7 +149,7 @@ export function buildSourceVideoRequest(video: VideoInput, request: SourceVideoR
   const body = {contents:[{role:'user',parts:[media.part,{text:instruction+taskInstruction}]}],
     generationConfig:{maxOutputTokens:PREVIEW_REVIEW_MAX_OUTPUT_TOKENS,temperature:0,responseMimeType:'application/json'}};
   if (Buffer.byteLength(JSON.stringify(body)) > INLINE_REQUEST_MAX_BYTES) throw new Error('Source exceeds inline bound; no implicit encoding or split');
-  return {body:JSON.stringify(body), input, input_sha256:hash(JSON.stringify(input)), logical_request_sha256:videoRequestDigest(body,media), media_transfer:media.receipt};
+  return {body:JSON.stringify(body), input, input_sha256:hash(JSON.stringify(input)), logical_request_sha256:videoRequestDigest(body,media,mimeType), media_transfer:media.receipt};
 }
 export interface SourceVideoDependencies {
   directory:string; key:string; resolve(name:string):string|null; hash(file:string):Promise<string>;
@@ -202,7 +205,8 @@ async function runSourceObservation(request:SourceVideoRequest,deps:SourceVideoD
     const selected=deps.prepareObservation?await deps.prepareObservation(file,request.source.hash,request.source.duration,sourceObservationRange(input),signal):undefined;
     observationMaterial=selected?.binding;
     const submittedFile=selected?.file??file,submittedHash=selected?.binding.submitted_sha256??request.source.hash;
-    const media = deps.prepareMedia ? await deps.prepareMedia(submittedFile,submittedHash,signal) : videoInput(await deps.read(submittedFile));
+    const media = deps.prepareMedia ? await deps.prepareMedia(submittedFile,submittedHash,signal)
+      : videoInput(await deps.read(submittedFile),videoFileFormat(request.source.src)!.mimeType);
     if (media.sha256 !== submittedHash) throw new Error('Source changed');
     const prepared = buildSourceVideoRequest(media,request,observationMaterial);
     mediaTransfer=media.receipt;logicalRequestHash=prepared.logical_request_sha256;

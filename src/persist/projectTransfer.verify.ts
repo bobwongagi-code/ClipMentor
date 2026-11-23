@@ -16,6 +16,7 @@ import {
   type ProjectEnvelope,
 } from './projectTransfer';
 import './agentRuntimeTransfer.verify';
+import { parseCube } from '../gl/fx/cube';
 import {
   transferVerifyDoc as doc,
   transferVerifyHashSrc as hashSrc,
@@ -122,6 +123,60 @@ try {
     assert.equal(await (await getMediaBlob(isolatedSrc))?.blob.text(), 'abc');
     assert.equal(serverMedia.get(isolatedSrc), 'abc');
     assert.deepEqual(imported.mediaMissing, []);
+  }
+
+  // The package must carry custom LUT bytes even when the LUT is referenced
+  // only by a saved effect definition. A built-in LUT ships with the app.
+  {
+    resetProjectStoreMemory();
+    resetMediaBlobMemory();
+    resetServerState();
+    const cubeSrc = '/media/uploads/studio-look.cube';
+    const missingSrc = '/media/uploads/unavailable-look.cube';
+    const builtinSrc = '/luts/Sony_Slog3_s709.cube';
+    const sourceSrc = '/media/uploads/source.mp4';
+    const cube = 'TITLE "Studio"\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n';
+    const styledDoc = structuredClone(doc);
+    const timeline = styledDoc.timelines[0]!;
+    styledDoc.assets = [{ ...doc.assets[0]!, kind: 'video', src: sourceSrc, name: 'source.mp4' }];
+    timeline.tracks = { V1: { kind: 'video' } };
+    timeline.trackOrder = ['V1'];
+    timeline.items = [{ ...timeline.items[0]!, kind: 'video', track: 'V1', src: sourceSrc, denoisedSrc: undefined }];
+    const effect = { id: 'plugin:studio-look', name: 'Studio', desc: '', frag: '', props: [] };
+    timeline.fxDefs = {
+      'plugin:studio-look': { ...effect, cube: cubeSrc },
+      'plugin:unavailable-look': { ...effect, id: 'plugin:unavailable-look', cube: missingSrc },
+      'builtin:slog3-s709': { ...effect, id: 'builtin:slog3-s709', cube: builtinSrc },
+    };
+    timeline.items[0]!.effects = [{ id: 'look', assetId: effect.id, overrides: {} }];
+    serverMedia.set(cubeSrc, cube);
+    serverMedia.set(sourceSrc, 'source bytes');
+    const project = await createProject('Custom LUT transfer', styledDoc);
+    const exported = await buildProjectExport(project.id, project.name);
+    assert.equal(exported.mediaTotal, 3);
+    assert.deepEqual(exported.mediaMissing, [missingSrc]);
+    const rows = (await exported.blob.text()).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(rows[0].doc.timelines[0].fxDefs[effect.id].cube, cubeSrc);
+    assert.deepEqual(rows.filter(row => row.type === 'media-start').map(row => row.src), [sourceSrc, cubeSrc]);
+
+    // A fresh destination has neither the old upload path nor local cache.
+    resetMediaBlobMemory();
+    resetServerState();
+    let published: ProjectDoc | undefined;
+    const imported = await importProjectPackage(exported.blob, {
+      publish: async ({ doc: staged }) => {
+        published = staged;
+        return importedMeta;
+      },
+    });
+    const restored = await hashSrc(cube, '.cube');
+    assert.equal(published?.timelines[0]?.fxDefs?.[effect.id]?.cube, restored);
+    assert.equal(published?.timelines[0]?.items[0]?.effects?.[0]?.assetId, effect.id);
+    assert.equal(published?.timelines[0]?.fxDefs?.['builtin:slog3-s709']?.cube, builtinSrc);
+    assert.equal(await (await getMediaBlob(restored))?.blob.text(), cube);
+    assert.equal(parseCube(await (await fetch(restored)).text()).title, 'Studio');
+    assert.deepEqual(imported.mediaMissing, [missingSrc]);
+    assert.equal(imported.mediaRestored, 2);
   }
 
   // A corrupt tail after decoded media discards the isolated staging namespace

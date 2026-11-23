@@ -57,8 +57,7 @@ export interface TimelineState {
   captions?: CaptionsData | null;
   /** text watermark overlay (updateWatermark), rendered on top + burned into export */
   watermark?: Watermark;
-  /** Serializable def of non-built-in fx (plugin/submit_shader), stored by assetId. Snapshot when applying effects,
-   * TimelineComposition is registered in ALL_FX before rendering - refresh and headless export are therefore self-contained.*/
+  /** Serializable effect definitions saved on application and preferred over the installed catalog during rendering. */
   fxDefs?: Record<string, SerializableFxDef>;
 }
 

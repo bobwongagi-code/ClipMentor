@@ -9,7 +9,7 @@ import {
 } from './previewAdapter';
 import { buildEffectShaderFrame, buildTransitionShaderFrame, GL_COLOR_PIPELINE, transitionProgress } from './shaderFrame';
 import { disposeRuntimeSlot, ensureRuntimeSlot } from './runtimeSlot';
-import type { FxDef } from './fx/uniforms';
+import { timelineFxDefinition, type FxDef } from './fx/uniforms';
 
 const selectedPlayer = selectTransitionPreviewAdapter({
   mode: 'player', selected: true, type: 'page-curl', texturable: true, hasShader: true,
@@ -151,6 +151,18 @@ const effectDefinition: FxDef = {
   frag: 'effect-frag',
   props: [{ key: 'strength', label: 'Strength', default: 0.5, min: 0, max: 1 }],
 };
+const catalogLook = { ...effectDefinition, cube: '/media/uploads/installed.cube' };
+const portableLook = { ...effectDefinition, cube: '/media/uploads/imported.cube' };
+const siblingLook = { ...effectDefinition, cube: '/media/uploads/sibling.cube' };
+const catalog = { [catalogLook.id]: catalogLook };
+assert.equal(timelineFxDefinition(catalogLook.id, { [portableLook.id]: portableLook }, catalog), portableLook);
+assert.equal(timelineFxDefinition(catalogLook.id, { [siblingLook.id]: siblingLook }, catalog), siblingLook);
+assert.equal(timelineFxDefinition(catalogLook.id, undefined, catalog), catalogLook);
+assert.equal(timelineFxDefinition('constructor', { }, catalog), undefined, 'lookup never reads inherited fields');
+assert.equal(staticEffectPreviewStatus({
+  targetId: 'portable-look', effects: [{ assetId: portableLook.id }], registeredEffects: {},
+  timelineEffects: { [portableLook.id]: portableLook }, texturable: true,
+}), null, 'a saved definition can drive preview on a clean machine');
 const effectFrame = buildEffectShaderFrame([
   { def: effectDefinition, overrides: { strength: 4 } },
 ], 15, 30);

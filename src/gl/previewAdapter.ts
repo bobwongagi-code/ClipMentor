@@ -99,11 +99,13 @@ export function staticEffectPreviewStatus(input: {
   targetId: string;
   effects: readonly { assetId: string }[];
   registeredEffects: Readonly<Record<string, unknown>>;
+  timelineEffects?: Readonly<Record<string, unknown>>;
   texturable: boolean;
 }): SelectedPreviewStatus | null {
   if (input.effects.length === 0) return null;
   const adapter = selectEffectPreviewAdapter({
-    declared: input.effects.every(({ assetId }) => Object.prototype.hasOwnProperty.call(input.registeredEffects, assetId)),
+    declared: input.effects.every(({ assetId }) => Object.hasOwn(input.timelineEffects ?? {}, assetId)
+      || Object.hasOwn(input.registeredEffects, assetId)),
     texturable: input.texturable,
   });
   return staticPreviewFallbackStatus({

@@ -7,13 +7,11 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { Plugin } from 'vite';
 import { uploadDir } from '../media-dir.ts';
+import { EXPORT_STAGE_PREFIX, isExportStageFilename } from '../../shared/export-media-names.ts';
 
-const STAGE_PREFIX = 'openchatcut-export-stage-';
 const STAGE_EXTENSIONS = new Set(['.mp4', '.webm']);
 const MAX_STAGE_BYTES = 64 * 1024 ** 3;
 export const EXPORT_STAGE_RETENTION_MS = 30 * 60_000;
-const STAGE_FILENAME = /^openchatcut-export-stage-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:mp4|webm)$/i;
-const STAGE_PARTIAL_FILENAME = /^openchatcut-export-stage-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:mp4|webm)\.part$/i;
 
 interface CleanupStageOptions {
   now?: number;
@@ -38,8 +36,7 @@ export async function cleanupStaleExportStages(
   });
   let removed = 0;
   for (const entry of entries) {
-    const matched = STAGE_FILENAME.test(entry.name) || STAGE_PARTIAL_FILENAME.test(entry.name);
-    if (!entry.isFile() || !matched) continue;
+    if (!entry.isFile() || !isExportStageFilename(entry.name, true)) continue;
     const path = join(directory, entry.name);
     try {
       if (now - (await stat(path)).mtimeMs < retentionMs) continue;
@@ -76,7 +73,7 @@ function byteLimiter(onBytes: (value: number) => void): Transform {
 }
 
 async function stageRequest(req: IncomingMessage, extension: string) {
-  const filename = `${STAGE_PREFIX}${randomUUID()}${extension}`;
+  const filename = `${EXPORT_STAGE_PREFIX}${randomUUID()}${extension}`;
   const finalPath = join(uploadDir(), filename);
   const partialPath = `${finalPath}.part`;
   let sizeBytes = 0;
@@ -93,7 +90,7 @@ async function stageRequest(req: IncomingMessage, extension: string) {
 
 function stageNameFromPath(req: IncomingMessage): string | null {
   const name = decodeURIComponent((req.url ?? '/').split('?')[0].replace(/^\/+|\/+$/g, ''));
-  return STAGE_FILENAME.test(name) ? name : null;
+  return isExportStageFilename(name) ? name : null;
 }
 
 async function handleStage(req: IncomingMessage, res: ServerResponse): Promise<void> {

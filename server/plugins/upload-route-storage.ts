@@ -16,6 +16,8 @@ import {
 import { deleteMediaReference } from '../media-references.ts';
 import { deleteMediaPreviewDerivatives } from './media-preview.ts';
 import { contentLengthOf, sendError, sendJson } from './upload-route-http.ts';
+import { withUploadCleanupReferences } from './project-store.ts';
+import { isCleanupProtectedUpload } from '../../shared/upload-cleanup-references.ts';
 
 type Logger = ViteDevServer['config']['logger'];
 type CloudState = 'ok' | 'off' | 'failed' | 'exists';
@@ -52,11 +54,20 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
     const name = url.searchParams.get('name') ?? '';
     if (!isSafeUploadName(name)) { sendError(res, 400, 'unsafe or missing name'); return; }
     const rollbackToken = url.searchParams.get('rollbackToken') ?? undefined;
+    const cleanup = url.searchParams.get('cleanup') === '1';
+    if (cleanup && url.searchParams.has('rollbackToken')) {
+      sendError(res, 400, 'cleanup and rollback cannot be combined');
+      return;
+    }
+    if (cleanup && isCleanupProtectedUpload(name)) {
+      sendError(res, 409, 'media is managed by a separate service');
+      return;
+    }
     if (url.searchParams.has('rollbackToken') && !/^[A-Za-z0-9-]{1,128}$/.test(rollbackToken ?? '')) {
       sendError(res, 400, 'invalid rollback token');
       return;
     }
-    const result = await enqueueUploadMutation(name, async () => {
+    const remove = async () => {
       let removed = 0;
       let derivativesRemoved = 0;
       let r2Removed = false;
@@ -79,10 +90,12 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
           failures.push(error);
         }
       }
-      try {
-        r2Removed = await deleteUploadObject(name, rollbackToken);
-      } catch (error) {
-        failures.push(error);
+      if (!cleanup) {
+        try {
+          r2Removed = await deleteUploadObject(name, rollbackToken);
+        } catch (error) {
+          failures.push(error);
+        }
       }
       if (!rollbackToken || removed > 0 || r2Removed) {
         try {
@@ -102,7 +115,11 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
         derivativesRemoved,
         ownershipMatched: !rollbackToken || removed > 0 || r2Removed,
       };
-    });
+    };
+    const result = await enqueueUploadMutation(name, () => cleanup
+      ? withUploadCleanupReferences(refs => refs.has(`/media/uploads/${name}`) ? Promise.resolve(null) : remove())
+      : remove());
+    if (!result) { sendError(res, 409, 'upload is still referenced'); return; }
     sendJson(res, 200, result);
   } catch (error) {
     sendError(res, 500, error instanceof Error ? error.message : String(error));

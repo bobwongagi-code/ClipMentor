@@ -9,6 +9,7 @@ import {
   projectIdFromProjectStoreKey,
 } from '../../shared/project-store-validation.ts';
 import type { ProjectStoreMutationResponse } from '../../shared/project-store-transport.ts';
+import { collectStoredUploadReferences, isUploadCleanupEntry } from '../../shared/upload-cleanup-references.ts';
 import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
 import { assertDataDirRelocationReady } from '../data-dir.ts';
 import { legacyProjectBulkPendingPath } from '../project-store-paths.ts';
@@ -193,26 +194,31 @@ async function writeEntries(entries: Record<string, unknown>): Promise<void> {
   for (const [key, value] of ordered) await writeStoredEntry(key, value);
 }
 
-async function readDirectoryEntries(): Promise<Record<string, unknown>> {
-  if (sqliteStoreEnabled()) return sqliteReadAll();
+async function readDirectoryEntries(mediaCleanupOnly = false): Promise<Record<string, unknown>> {
+  if (sqliteStoreEnabled()) return sqliteReadAll(mediaCleanupOnly);
   const entries: Record<string, unknown> = {};
   for (const file of await readdir(STORE_DIR)) {
     if (!file.endsWith('.json')) continue;
+    if (mediaCleanupOnly && file !== 'projects.json' && !/^(?:project|versions|offline-edit-session)%3a/i.test(file)) continue;
     let key: string;
     try {
       key = decodeURIComponent(file.slice(0, -'.json'.length));
     } catch {
+      if (mediaCleanupOnly) throw new Error('Project media references could not be verified');
       await quarantineUnknownEntryFile(file);
       continue;
     }
     if (!isProjectStoreKey(key)) {
+      if (mediaCleanupOnly) throw new Error('Project media references could not be verified');
       await quarantineUnknownEntryFile(file);
       continue;
     }
+    if (mediaCleanupOnly && !isUploadCleanupEntry(key)) continue;
     const raw = await readFile(join(STORE_DIR, file), 'utf8');
     try {
       entries[key] = JSON.parse(raw);
     } catch {
+      if (mediaCleanupOnly) throw new Error('Project media references could not be verified');
       entries[key] = await quarantineEntryFile(file, key);
     }
   }
@@ -260,6 +266,20 @@ export async function readStore(): Promise<StoreFile> {
     const entries = withoutDeletedProjects(await readDirectoryEntries(), deletedIds);
     if (!isProjectStoreEntries(entries)) throw new Error('invalid project store entries');
     return { version: 1, entries };
+  });
+}
+
+/** Verify stable, persisted references under the same lock as project edits
+ * and version writes. Keep it held through the local unlink callback. */
+export async function withUploadCleanupReferences<T>(work: (refs: ReadonlySet<string>) => Promise<T>): Promise<T> {
+  return serializeProjectStore(async () => {
+    await ensureStoreReady();
+    const deletedIds = new Set(Object.keys(await readDeletedProjects()));
+    const entries = await readDirectoryEntries(true);
+    if (entries.projects !== undefined && !Array.isArray(entries.projects)) {
+      throw new Error('Project index references could not be verified');
+    }
+    return work(collectStoredUploadReferences(withoutDeletedProjects(entries, deletedIds)));
   });
 }
 

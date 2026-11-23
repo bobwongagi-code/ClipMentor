@@ -4,8 +4,10 @@
 // ② The assets are converted to the absolute file:// path under mediaDir, otherwise the NLE is full of offline assets.
 import assert from 'node:assert/strict';
 import { resolveAssetSrc, timelineToFcpxml } from './fcpxml';
+import { buildPreviewRevision } from '../clipmentor/preview-edit';
 import { keptSegments } from '../transcript/edit';
-import type { TimelineState } from '../editor/types';
+import type { ProjectDoc, TimelineState } from '../editor/types';
+import { CURRENT_PROJECT_VERSION } from '../../shared/project-version';
 
 const clipsOf = (xml: string): string[] => xml.match(/<asset-clip[^>]*\/>/g) ?? [];
 const attr = (el: string, name: string): string => el.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? '';
@@ -47,6 +49,51 @@ const attr = (el: string, name: string): string => el.match(new RegExp(`${name}=
   assert.equal(attr(clipsOf(xml)[0]!, 'lane'), '-1', '音频挂负 lane');
 }
 
+// The production preview builder switches the same baseline between original
+// audio and a replacement mix. Both XML outputs must retain that distinction.
+{
+  const doc: ProjectDoc = { version: CURRENT_PROJECT_VERSION, assets: [], mediaFolders: [], timelines: [], activeTimelineId: '' };
+  const plan = {
+    operationId: 'audio-replacement', projectId: 'fixture', patches: [], fps: 30, totalFrames: 30,
+    baseline: { id: 'baseline', name: 'Baseline', kind: 'video' as const, src: '/media/uploads/av.mp4', durationInFrames: 30, width: 1080, height: 1920 },
+  };
+  const original = buildPreviewRevision(doc, plan).timelines[0]!;
+  const replacement = buildPreviewRevision(doc, {
+    ...plan, audio: { id: 'mix', name: 'Replacement audio', kind: 'audio', src: '/media/uploads/mix.wav', durationInFrames: 30 },
+  }).timelines[0]!;
+  for (const nleFormat of ['fcp_xml', 'fcp_xml_resolve'] as const) {
+    assert.doesNotMatch(timelineToFcpxml(original, { nleFormat }), /<adjust-volume/);
+    const xml = timelineToFcpxml(replacement, { nleFormat });
+    assert.match(xml, /<asset-clip [^>]*name="锁定预览基线（保留现有字幕）">\s*<adjust-volume amount="-96dB"\/>\s*<\/asset-clip>/);
+    assert.match(xml, /<asset-clip [^>]*name="Replacement audio"\/>/);
+  }
+}
+
+// A replacement mix keeps the source picture, mutes the source audio at clip
+// level and leaves an unmuted use of the same file alone.
+{
+  const state: TimelineState = {
+    fps: 30, width: 1920, height: 1080, selectedId: null,
+    tracks: { V1: { kind: 'video' }, A1: { kind: 'audio' }, A2: { kind: 'audio', muted: true } },
+    items: [
+      { id: 'silent', track: 'V1', startFrame: 0, durationInFrames: 30, name: 'Original muted', kind: 'video', src: '/media/uploads/av.mp4', volume: 0, playbackRate: 2 },
+      { id: 'unity', track: 'V1', startFrame: 30, durationInFrames: 30, name: 'Original audible', kind: 'video', src: '/media/uploads/av.mp4', volume: 1 },
+      { id: 'mixed', track: 'A1', startFrame: 0, durationInFrames: 30, name: 'Replacement mix', kind: 'audio', src: '/media/uploads/mix.wav', volume: 0.5 },
+      { id: 'track-muted', track: 'A2', startFrame: 0, durationInFrames: 30, name: 'Muted track', kind: 'audio', src: '/media/uploads/mix.wav', volume: 1 },
+      { id: 'animated', track: 'A1', startFrame: 30, durationInFrames: 30, name: 'Animated gain', kind: 'audio', src: '/media/uploads/mix.wav', volume: 0, keyframes: { volume: [{ frame: 0, value: 1 }] } },
+    ],
+  };
+  for (const nleFormat of ['fcp_xml', 'fcp_xml_resolve'] as const) {
+    const xml = timelineToFcpxml(state, { nleFormat });
+    assert.match(xml, /<asset-clip [^>]*name="Original muted">[\s\S]*?<timeMap>[\s\S]*?<\/timeMap>\s*<adjust-volume amount="-96dB"\/>\s*<\/asset-clip>/);
+    assert.match(xml, /<asset-clip [^>]*name="Original audible"\/>/);
+    assert.match(xml, /<asset-clip [^>]*name="Replacement mix">\s*<adjust-volume amount="-6\.02dB"\/>\s*<\/asset-clip>/);
+    assert.match(xml, /<asset-clip [^>]*name="Muted track">\s*<adjust-volume amount="-96dB"\/>\s*<\/asset-clip>/);
+    assert.match(xml, /<asset-clip [^>]*name="Animated gain"\/>/);
+    assert.equal((xml.match(/<asset id=/g) ?? []).length, 2, 'the two uses of each file retain one shared resource');
+  }
+}
+
 // ── P0-①: Audio transcript editing → multiple paragraphs, aligned with keptSegments one by one ──
 {
   // hello 0–1s | ummmm 1–3s(delete) | world 3–4s, timestamp is milliseconds
@@ -82,6 +129,10 @@ const attr = (el: string, name: string): string => el.match(new RegExp(`${name}=
   // The asset duration should cover the farthest source frame actually used (duration after editing 60 < used 120)
   const assetDur = timelineToFcpxml(state).match(/<asset [^>]*duration="([^"]*)"/)?.[1];
   assert.equal(assetDur, '120/30s', 'asset 时长按真实用到的源区间');
+
+  const muted = timelineToFcpxml({ ...state, items: [{ ...state.items[0]!, volume: 0 }] });
+  assert.equal((muted.match(/<adjust-volume amount="-96dB"\/>/g) ?? []).length, segs.length,
+    'every exported transcript segment inherits the static mute');
 }
 
 // ── The deletion of words in the video file does not change the picture → it is still a single segment (same semantics as the rendering layer) ──

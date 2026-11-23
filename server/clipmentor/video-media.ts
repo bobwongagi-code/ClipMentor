@@ -13,7 +13,7 @@ import { getKey } from '../keystore';
 import { runtimeProfile } from '../runtime-profile';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import { sha256File } from '../../shared/node-content-hash';
-import { sealVideo, videoInput, VIDEO_URL_MAX_BYTES, VIDEO_REQUEST_MAX_BYTES, type PreparedVideo, type MediaTransferReceipt } from './video-input';
+import { sealVideo, videoFileFormat, videoInput, VIDEO_URL_MAX_BYTES, VIDEO_REQUEST_MAX_BYTES, type PreparedVideo, type MediaTransferReceipt, type VideoMimeType } from './video-input';
 import { tryLocalOperationLock } from './local-operation-lock';
 
 const PART_BYTES = 8 * 1024 * 1024;
@@ -33,7 +33,7 @@ export interface VideoObjectStore {
   identity: string;
   head(key: string, signal: AbortSignal): Promise<Head | null>;
   pending(key: string, signal: AbortSignal): Promise<string[]>;
-  create(key: string, signal: AbortSignal): Promise<string>;
+  create(key: string, signal: AbortSignal, mimeType: VideoMimeType): Promise<string>;
   list(key: string, upload: string, signal: AbortSignal): Promise<Part[]>;
   part(key: string, upload: string, number: number, body: Readable, bytes: number, signal: AbortSignal): Promise<string>;
   complete(key: string, upload: string, parts: Part[], signal: AbortSignal): Promise<void>;
@@ -72,6 +72,8 @@ async function lock(path: string, signal: AbortSignal) {
 export async function prepareR2Video(options: MediaOptions): Promise<PreparedVideo> {
   const {file,sha256,directory,namespace,store,signal}=options;
   if(!SHA.test(sha256)||!namespace||namespace.length>200||!store.identity)throw new VideoMediaError('local_read','invalid_identity');
+  const format=videoFileFormat(file);
+  if(!format)throw new VideoMediaError('local_read','unsupported_video_format');
   let stage:Stage='local_read'; const started=Date.now();
   let transferReceipt: MediaTransferReceipt | undefined;
   const handle=await open(file,'r');
@@ -93,7 +95,7 @@ export async function prepareR2Video(options: MediaOptions): Promise<PreparedVid
     };
     if(await fileHash()!==sha256)throw new VideoMediaError(stage,'source_hash_mismatch');
     const scope=createHash('sha256').update(namespace).digest('hex');
-    const key=`clipmentor-video-v1/${scope}/${sha256}.mp4`;
+    const key=`clipmentor-video-v1/${scope}/${sha256}${format.extension}`;
     const identity=createHash('sha256').update(JSON.stringify([store.identity,key])).digest('hex');
     await mkdir(directory,{recursive:true,mode:0o700});
     release=await lock(join(directory,`${identity}.lock`),signal);
@@ -132,7 +134,7 @@ export async function prepareR2Video(options: MediaOptions): Promise<PreparedVid
         // Recover a lost CreateMultipart acknowledgement before creating another upload of the same bytes.
         const pending=await call(()=>store.pending(key,signal));
         if(pending.length>1||pending.some(id=>typeof id!=='string'||!id||id.length>4096))throw new VideoMediaError('r2_upload','pending_upload_ambiguous');
-        state.upload=pending[0]??await call(()=>store.create(key,signal));await save();
+        state.upload=pending[0]??await call(()=>store.create(key,signal,format.mimeType));await save();
     };
     if(!head) {
       if(state.verified){
@@ -207,7 +209,7 @@ export async function prepareR2Video(options: MediaOptions): Promise<PreparedVid
     const uri=await store.sign(key),url=new URL(uri);
     if(url.protocol!=='https:'||url.username||url.password||url.hash)throw new VideoMediaError(stage,'invalid_signed_url');
     signal.throwIfAborted();receipt.elapsed_ms=Date.now()-started;
-    return sealVideo({sha256,bytes:size,part:{fileData:{mimeType:'video/mp4',fileUri:uri},videoMetadata:{fps:5}},receipt});
+    return sealVideo({sha256,bytes:size,part:{fileData:{mimeType:format.mimeType,fileUri:uri},videoMetadata:{fps:5}},receipt});
   } catch(e) {
     const error=e instanceof VideoMediaError?e:new VideoMediaError(stage,signal.aborted?'aborted':'transfer_failed');
     if(transferReceipt)error.metrics={storage_requests:transferReceipt.storage_requests,attempted_part_bytes:transferReceipt.attempted_part_bytes,
@@ -279,7 +281,7 @@ async function configuredStore(signal:AbortSignal):Promise<VideoObjectStore> {
     identity:JSON.stringify([account,bucket]),
     head:async(key,signal)=>{try {const h=await send(new HeadObjectCommand({Bucket:bucket,Key:key}),signal);return {bytes:h.ContentLength,etag:h.ETag};}catch(e){if(missing(e))return null;throw e;}},
     pending:async(key,signal)=>{const r=await send(new ListMultipartUploadsCommand({Bucket:bucket,Prefix:key}),signal);if(r.IsTruncated)throw Error('Pending uploads ambiguous');return (r.Uploads??[]).filter((u:any)=>u.Key===key).map((u:any)=>u.UploadId);},
-    create:async(key,signal)=>{const r=await send(new CreateMultipartUploadCommand({Bucket:bucket,Key:key,ContentType:'video/mp4'}),signal);if(!r.UploadId)throw Error('Upload ID missing');return r.UploadId;},
+    create:async(key,signal,mimeType)=>{const r=await send(new CreateMultipartUploadCommand({Bucket:bucket,Key:key,ContentType:mimeType}),signal);if(!r.UploadId)throw Error('Upload ID missing');return r.UploadId;},
     list:async(key,upload,signal)=>{const r=await send(new ListPartsCommand({Bucket:bucket,Key:key,UploadId:upload}),signal);if(r.IsTruncated)throw Error('Unexpected part pagination');return (r.Parts??[]).map((p:any)=>({number:p.PartNumber,etag:p.ETag,bytes:p.Size}));},
     part:async(key,upload,number,body,bytes,signal)=>{const r=await send(new UploadPartCommand({Bucket:bucket,Key:key,UploadId:upload,PartNumber:number,Body:body,ContentLength:bytes}),signal);return r.ETag;},
     complete:async(key,upload,parts,signal)=>{await send(new CompleteMultipartUploadCommand({Bucket:bucket,Key:key,UploadId:upload,MultipartUpload:{Parts:parts.map(p=>({PartNumber:p.number,ETag:p.etag}))}}),signal);},
@@ -291,6 +293,8 @@ async function configuredStore(signal:AbortSignal):Promise<VideoObjectStore> {
 /** Default pre-dispatch R2 selection within the tested admission; no fallback after failure. */
 export async function prepareVideoMedia(file:string,sha256:string,signal:AbortSignal):Promise<PreparedVideo> {
   signal.throwIfAborted();
+  const format=videoFileFormat(file);
+  if(!format)throw new VideoMediaError('local_read','unsupported_video_format');
   const mode=getKey('CLIPMENTOR_VIDEO_TRANSPORT')||'r2-small';
   if(mode!=='inline'&&mode!=='r2-small')throw new VideoMediaError('local_read','invalid_transport_configuration');
   // Select before dispatch: large files retain the already bounded inline route. This is not a failure fallback.
@@ -298,7 +302,7 @@ export async function prepareVideoMedia(file:string,sha256:string,signal:AbortSi
   if(bytesInFile<=0||4*Math.ceil(bytesInFile/3)>VIDEO_REQUEST_MAX_BYTES)throw new VideoMediaError('local_read','inline_size_limit');
   if(mode==='r2-small'&&bytesInFile<=VIDEO_URL_MAX_BYTES)return prepareR2Video({file,sha256,signal,store:await configuredStore(signal),
     directory:join(runtimeProfile().rootDir,'clipmentor-video-media'),namespace:runtimeProfile().id});
-  const bytes=await readFile(file);signal.throwIfAborted();const media=videoInput(bytes);
+  const bytes=await readFile(file);signal.throwIfAborted();const media=videoInput(bytes,format.mimeType);
   if(media.sha256!==sha256)throw new VideoMediaError('local_read','source_hash_mismatch');
   return media;
 }

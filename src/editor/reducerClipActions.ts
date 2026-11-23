@@ -190,8 +190,11 @@ export function applyClipAction(s: TimelineState, a: Action): TimelineState | un
       if (lockedItem(s, a.id)) return s;
       // The def of non-built-in fx (plugin/submit_shader) is snapshotted into state.fxDefs with the action —
       // Refresh and headless export (no memory registry) can be parsed. Not cleaning: def is small, the project can only have dozens of items at most.
-      const fxDefs = a.defs?.length
-        ? { ...s.fxDefs, ...Object.fromEntries(a.defs.map((d) => [d.id, d])) }
+      // Reordering effects or changing parameters must keep the LUT that was
+      // applied and saved, even if the installed catalog now has that ID.
+      const newDefs = a.defs?.filter(def => !s.fxDefs?.[def.id]?.cube);
+      const fxDefs = newDefs?.length
+        ? { ...s.fxDefs, ...Object.fromEntries(newDefs.map((d) => [d.id, d])) }
         : s.fxDefs;
       return {
         ...s,

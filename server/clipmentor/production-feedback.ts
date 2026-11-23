@@ -37,6 +37,10 @@ export interface ProductionFeedbackInput {
 export function feedbackProjectDigest(doc:ProjectDoc){
  return previewFactsDigest({...doc,timelines:doc.timelines.map(t=>({...t,selectedId:null,selectedIds:[]}))});
 }
+export function matchesExportedPreviewProject(exported:Record<string,unknown>|undefined,saved:{revision:string;doc:ProjectDoc}){
+ return !!exported && (typeof exported.feedback_project_digest==='string'
+  ? feedbackProjectDigest(saved.doc)===exported.feedback_project_digest : saved.revision===exported.revision);
+}
 export async function productionFeedbackAnchor(task:ProductionTask,doc:ProjectDoc){
  const t=doc.timelines.find(t=>t.id===doc.activeTimelineId);if(!t)throw new Error('feedback_timeline_missing');
  const exported=task.completed.export?.artifact;

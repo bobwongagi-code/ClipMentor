@@ -3,6 +3,7 @@ import { AbsoluteFill, Img, continueRender, delayRender, getRemotionEnvironment,
 import { Video as MediaVideo } from '@remotion/media';
 import { createGlRuntime, type GlRuntime } from './runtime';
 import { cubeSettled, ensureCube } from './fx/cube';
+import type { TimelineFxDefinitions } from './fx/uniforms';
 import { disposeRuntimeSlot, ensureRuntimeSlot } from './runtimeSlot';
 import { buildEffectShaderFrame } from './shaderFrame';
 import { glPreviewFailureReason } from './previewAdapter';
@@ -25,6 +26,7 @@ interface ClipFxProps {
   width: number;
   height: number;
   frameOffset?: number;
+  effectDefinitions?: TimelineFxDefinitions;
   onPreviewStatus?: SelectedPreviewStatusListener;
 }
 
@@ -61,7 +63,7 @@ function drawFit(ctx: CanvasRenderingContext2D, source: CanvasImageSource, fit: 
   ctx.drawImage(source, (W - dw) / 2, (H - dh) / 2, dw, dh);
 }
 
-export function ClipFx({ item, fit, width, height, frameOffset = 0, onPreviewStatus }: ClipFxProps) {
+export function ClipFx({ item, fit, width, height, frameOffset = 0, effectDefinitions, onPreviewStatus }: ClipFxProps) {
   const frame = useCurrentFrame() + frameOffset;
   const { fps } = useVideoConfig();
   const isRendering = getRemotionEnvironment().isRendering;
@@ -82,9 +84,9 @@ export function ClipFx({ item, fit, width, height, frameOffset = 0, onPreviewSta
     return c;
   }, [width, height]);
 
-  const active = useMemo(() => glEffects(item), [item]);
+  const active = useMemo(() => glEffects(item, effectDefinitions), [item, effectDefinitions]);
   const definitionKey = useMemo(
-    () => active.map(({ def }) => `${def.id}:${def.frag}`).join('\u0000'),
+    () => JSON.stringify(active.map(({ def }) => [def.id, def.frag, def.cube])),
     [active],
   );
   const renderKey = useMemo(

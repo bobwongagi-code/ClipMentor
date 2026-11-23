@@ -121,11 +121,10 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
   const setGlWindowReady = useCallback((key: string, ready: boolean) => {
     setReadyGlWindows((current) => updateReadyGlWindows(current, key, ready));
   }, []);
-  // Non-built-in fx (plugin/submit_shader)def is self-contained with state: synchronously registered into ALL_FX before rendering,
-  // The first frame of the subcomponent (MediaFill's firstGlEffect route) is parsed - a fresh browser with headless export
-  // There is no memory registry, it all depends on this. Idempotism is guarded; rendering external registries is the only deliberate exception here.
+  // Legacy inspector and agent controls discover definitions here. Rendering
+  // reads each timeline's persisted definitions ahead of the installed catalog.
   if (state.fxDefs) {
-    for (const def of Object.values(state.fxDefs)) if (!(def.id in ALL_FX)) registerCustomFx(def);
+    for (const def of Object.values(state.fxDefs)) if (def && !Object.hasOwn(ALL_FX, def.id)) registerCustomFx(def);
   }
   const isHidden = (t: TimelineItem['track']) => state.tracks?.[t]?.hidden ?? false;
   const isMuted = (t: TimelineItem['track']) => forceMuted || (state.tracks?.[t]?.muted ?? false);
@@ -180,6 +179,7 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
         targetId: selectedEffectItem.id,
         effects: selectedEffectItem.effects ?? [],
         registeredEffects: ALL_FX,
+        timelineEffects: state.fxDefs,
         texturable: texturable(selectedEffectItem),
       })
     : null;
@@ -262,7 +262,7 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
     for (const item of group) {
       const shareable = shareableVisualItem({
         item,
-        hasGlEffect: !!firstGlEffect(item),
+        hasGlEffect: !!firstGlEffect(item, state.fxDefs),
         hasBackgroundFill: isBackgroundFillActive(state, item),
         hasExtendBefore: !!extendBefore.get(item.id),
         hasExtendAfter: !!extendAfter.get(item.id),
@@ -324,6 +324,7 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
               : item.kind === 'solid'
               ? <SolidLayer item={item} canvasW={state.width} canvasH={state.height} borderRadius={borderRadius} />
               : <MediaFill item={item} frameOffset={-eb} fit={fillBackground ? 'contain' : fit}
+                  effectDefinitions={state.fxDefs}
                   muted={isMuted(item.track)} groupedAudio={groupedVideoIds.has(item.id)}
                   gainAt={(frame) => duckGain(item.track, frame)} canvasW={state.width} canvasH={state.height}
                   borderRadius={borderRadius} browserRenderer={browserRenderer}
@@ -334,7 +335,7 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
         const content = (
           <>
             {fillBackground && <BackgroundFillLayer item={item} frameOffset={-eb} canvasW={state.width}
-              canvasH={state.height} browserRenderer={browserRenderer} />}
+              canvasH={state.height} browserRenderer={browserRenderer} effectDefinitions={state.fxDefs} />}
             {foreground}
           </>
         );
@@ -354,6 +355,7 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
         <Sequence key={w.key} from={w.from} durationInFrames={w.L} premountFor={premountFrames} name={`tr:${w.type}`}>
           <GlTransition
             type={w.type} direction={w.direction} L={w.L} windowStart={w.from}
+            effectDefinitions={state.fxDefs}
             outgoing={w.outgoing} incoming={w.incoming} trimOut={w.trimOut} trimIn={w.trimIn}
             width={state.width} height={state.height} fit={fit}
             outgoingBackgroundFill={isBackgroundFillActive(state, w.outgoing)}

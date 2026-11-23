@@ -16,11 +16,14 @@ import {resetAgentRuntimeStoreMemory} from '../../src/persist/agentRuntimeStore'
 
 const directory=await mkdtemp(join(tmpdir(),'production-task-http-'));
 const previousData=process.env.OPENCHATCUT_DATA_DIR;process.env.OPENCHATCUT_DATA_DIR=directory;
+process.env.OPENCHATCUT_DEV_PROFILE_ID='11111111-1111-4111-8111-111111111111';
 const {createProductionTask,productionTaskStore}=await import('../clipmentor/production-task');
 const {resetServerRunStoreForTest,flushServerRunPersistence}=await import('../agent-runs/store');
 const {clipMentorProductionPlugin}=await import('./clipmentor-production');
 assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,directory,'test storage must be resolved after isolation');
 const {activateOfflineAgentRuntimeBackend}=await import('../external-agent/agent-runtime-persistence');
+const {setKeys}=await import('../keystore');
+await setKeys({ROOTIFY_GATEWAY_API_KEY:'local-fixture-only'});
 resetSharedKvMemory();resetAgentRuntimeStoreMemory();resetServerRunStoreForTest();activateOfflineAgentRuntimeBackend();
 let release!:()=>void,started!:()=>void;
 const blocked=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{started=r;});
@@ -323,14 +326,25 @@ try{
  }
  await setStoredEntry('project:'+panelTask.projectId,deliveryDoc);panelTask.projectRevision=(await loadOfflineStoredProject(panelTask.projectId))!.revision;
  panelTask.completed.export!.artifact.revision=panelTask.projectRevision;
+ const {feedbackProjectDigest:selectionNeutralDigest}=await import('../clipmentor/production-feedback');
+ panelTask.completed.export!.artifact.feedback_project_digest=selectionNeutralDigest((await loadOfflineStoredProject(panelTask.projectId))!.doc);
  panelTask.input.panelDelivery={productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:pngHash};await productionTaskStore.save(panelTask);
  const acceptFixture=()=>post({action:'accept',projectId:panelTask.projectId,taskId:panelTask.taskId,malayDeliveryConfirmed:true});
  assert.equal((await acceptFixture()).status,409,'export alone and a checked language box cannot certify actual inspection');
  const videoSha=createHash('sha256').update(await readFile(join(media,'fixture-preview.mp4'))).digest('hex');
  panelTask.completed.self_check!.artifact.receipt={projectId:panelTask.projectId,videoSha256:videoSha,status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}};
  await productionTaskStore.save(panelTask);
+ const reviewedDoc=(await loadOfflineStoredProject(panelTask.projectId))!.doc;
+ const altered=structuredClone(reviewedDoc);altered.timelines[0].width+=2;
+ await setStoredEntry('project:'+panelTask.projectId,altered);
+ assert.equal((await acceptFixture()).status,409,'an actual canvas edit invalidates the old rendered preview');
+ const selection=structuredClone(reviewedDoc);selection.timelines[0].selectedId='fixture-selected-item';
+ await setStoredEntry('project:'+panelTask.projectId,selection);
+ const selectedSaved=(await loadOfflineStoredProject(panelTask.projectId))!;
+ assert.notEqual(selectedSaved.revision,panelTask.projectRevision);
+ assert.equal(selectionNeutralDigest(selectedSaved.doc),panelTask.completed.export!.artifact.feedback_project_digest);
  await rm(join(media,'fixture-attachment.png'));assert.equal((await acceptFixture()).status,409,'review success cannot replace the missing promised attachment');
- await writeFile(join(media,'fixture-attachment.png'),png);assert.equal((await acceptFixture()).status,200,'fully bound local positive control remains deliverable');
+ await writeFile(join(media,'fixture-attachment.png'),png);assert.equal((await acceptFixture()).status,200,'selection-only edits preserve full final acceptance');
  assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).status,'completed');
  const finalVideo=await fetch(`${origin}/api/clipmentor/production-task?${new URLSearchParams({view:'panel_download',projectId:panelTask.projectId,renderId:'delivery-fixture'})}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}});
  assert.equal(finalVideo.status,200);assert.match(finalVideo.headers.get('content-disposition')!,/filename\*=UTF-8''/);assert.deepEqual(Buffer.from(await finalVideo.arrayBuffer()),await readFile(join(media,'fixture-preview.mp4')),'confirmed download contains actual saved MP4 bytes');
@@ -942,6 +956,14 @@ try{
  const previouslyViewed=(await panelGet()).task;
  assert.match(previouslyViewed.boardIdentity,/^[a-f0-9]{64}$/,'the HTTP board has an opaque binding');
  assert.equal(previouslyViewed.canApproveBlueprint,true,'matching original requirements retain the ordinary confirmation path');
+ await setKeys({ROOTIFY_GATEWAY_API_KEY:''});
+ const unavailableReview=(await panelGet()).task;
+ assert.equal(unavailableReview.boardIdentity,previouslyViewed.boardIdentity,'the current board stays readable without the review credential');
+ assert.equal(unavailableReview.canApproveBlueprint,false);
+ assert.equal(unavailableReview.canConfirmBlueprint,false);
+ assert.equal((await boardAction(currentDraft.revision,previouslyViewed.boardIdentity)).status,409,'a stale browser cannot launch after the credential is removed');
+ assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).sequence,panelTask.sequence);
+ await setKeys({ROOTIFY_GATEWAY_API_KEY:'local-fixture-only'});
  await registerHandoff({projectId:panelTask.projectId,expectedProjectRevision:currentDraft.revision,previousDigest:bound.digest,
   brief:{...brief,revision:2,doneCriteria:['Use original CTA and retain the comparison hook']}});
  const changedRequirements=(await panelGet()).task;
@@ -977,8 +999,7 @@ try{
     sourceContentHash:createHash('sha256').update(bytes).digest('hex')});
   }
   panelDoc.assets=assets;await setStoredEntry('project:'+projectId,panelDoc);
-  const {setKeys}=await import('../keystore');
-  await setKeys({MINIMAX_API_KEY:'local-fixture-only',LLM_OPENAI_MODEL:'fixture',LLM_OPENAI_API_KEY:'local-fixture-only'});
+  await setKeys({MINIMAX_API_KEY:'local-fixture-only',LLM_OPENAI_MODEL:'fixture',LLM_OPENAI_API_KEY:'local-fixture-only',ROOTIFY_GATEWAY_API_KEY:''});
   const intake=(action:unknown)=>fetch(origin+'/api/clipmentor/production-task?view=panel&projectId='+projectId,{method:'POST',
    headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify(action)});
   const source={assetId:'earlier-source',sha256:assets[0].sourceContentHash};
@@ -986,6 +1007,10 @@ try{
   const criteria=[{kind:'source_performance',source,evidence,quote:'同款商品，这支怎么样？',results:{views:'10k',units:'42',revenue:'RM51'}}];
   const detached=[{...criteria[0],evidence:{...evidence,sha256:'f'.repeat(64)}}];
   const {registerPanelSourceCriteria,readPanelSourceCriteria}=await import('../clipmentor/production-panel-source-requirements');
+  const {latestPanelProductionTask,productionExecutionActive}=await import('../clipmentor/production-task');
+  assert.equal((await intake({action:'start'})).status,409,'an unavailable preview reviewer must stop before task creation');
+  assert.equal(await latestPanelProductionTask(projectId),undefined);
+  await setKeys({ROOTIFY_GATEWAY_API_KEY:'local-fixture-only'});
   await assert.rejects(registerPanelSourceCriteria(projectId,detached,assets[0],assets[2]),/source_criteria_sales_changed/);
   assert.equal((await intake({action:'start',doneCriteria:criteria})).status,409);
   await registerPanelSourceCriteria(projectId,criteria,assets[0],assets[2]);
@@ -993,7 +1018,6 @@ try{
   assert.equal((await intake({action:'bind_source_requirements',doneCriteria:criteria})).status,409);
   const response=await intake({action:'start'});
   assert(response.ok,await response.text());
-  const {latestPanelProductionTask,productionExecutionActive}=await import('../clipmentor/production-task');
   const started=await latestPanelProductionTask(projectId);
   assert.equal(started?.input.openingComparison?.kind,'opening_comparison');
   assert.deepEqual(started.input.doneCriteria,[{...criteria[0],source:{...source,assetId:assets[0].id},evidence:{...evidence,assetId:assets[2].id}}]);

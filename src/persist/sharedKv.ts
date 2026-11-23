@@ -13,6 +13,7 @@ import type {
   ProjectStoreRequest,
 } from '../../shared/project-store-transport';
 import { classifyAgentRuntimeStoreValue,isNextAgentRuntimeRevision,projectIdFromProjectStoreKey } from '../../shared/project-store-validation';
+import { isUploadCleanupEntry } from '../../shared/upload-cleanup-references';
 import type { ProjectSaveContext } from './projectStoreCoordinators';
 type AgentRuntimeWriteRequest = Extract<ProjectStoreRequest, { operation: 'agent-runtime-write' }>;
 type AgentRunLeaseRequest = Extract<ProjectStoreRequest, { operation: 'agent-run-lease' }>;
@@ -147,10 +148,10 @@ async function clearPendingKey(key: string): Promise<void> {
   if (locallyPendingKeys.size) await localSet(PENDING_KEYS_KEY, [...locallyPendingKeys]);
   else await localDel(PENDING_KEYS_KEY);
 }
-async function localEntries(): Promise<Record<string, unknown>> {
+async function localEntries(include: (key: string) => boolean = () => true): Promise<Record<string, unknown>> {
   const entries: Record<string, unknown> = {};
   for (const key of await localKeys()) {
-    if (key !== MIGRATION_KEY && key !== PENDING_KEYS_KEY) entries[key] = await localGet(key);
+    if (key !== MIGRATION_KEY && key !== PENDING_KEYS_KEY && include(key)) entries[key] = await localGet(key);
   }
   return entries;
 }
@@ -161,6 +162,18 @@ async function requestSnapshot(): Promise<StoreSnapshot> {
   const value = await requestProjectStore({ operation: 'snapshot' });
   if (!validSnapshot(value)) throw new Error('invalid project store response');
   return value;
+}
+
+/** Preserve offline drafts and read the server afresh. A failed authority
+ * read must never fall back to stale local data when authorizing deletion. */
+export async function kvUploadCleanupSnapshots(): Promise<ReadonlyArray<Record<string, unknown>>> {
+  const local = await localEntries(isUploadCleanupEntry);
+  if (!canSync()) return [local];
+  const remote = (await requestSnapshot()).entries;
+  // Most server documents need not have a local cache row yet. Overlay the
+  // cached drafts for the index check, then include the unmodified server view
+  // too so local and server versions of a document both retain their sources.
+  return [{ ...remote, ...local }, remote];
 }
 async function requestMerge(entries: Record<string, unknown>): Promise<StoreSnapshot> {
   const value = await requestProjectStore({ operation: 'merge', entries });
