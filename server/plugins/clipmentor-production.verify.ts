@@ -1016,6 +1016,14 @@ try{
   await registerPanelSourceCriteria(projectId,criteria,assets[0],assets[2]);
   assert.equal(await readPanelSourceCriteria('unrelated-intake',assets[0],assets[2]),undefined);
   assert.equal((await intake({action:'bind_source_requirements',doneCriteria:criteria})).status,409);
+  const ctaPath=join(media,'opening-fixture-3.png');
+  const originalCta=await readFile(ctaPath);
+  await writeFile(ctaPath,await readFile(join(media,'opening-fixture-2.png')));
+  const stale=await intake({action:'start'});
+  assert.equal(stale.status,409,'changed bytes at the registered CTA path must stop before dispatch');
+  assert.equal((await stale.json()).reason,'materials');
+  assert.equal(await latestPanelProductionTask(projectId),undefined);
+  await writeFile(ctaPath,originalCta);
   const response=await intake({action:'start'});
   assert(response.ok,await response.text());
   const started=await latestPanelProductionTask(projectId);

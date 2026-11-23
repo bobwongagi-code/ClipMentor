@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { uploadCleanupKeyPatterns } from '../../shared/upload-cleanup-references.ts';
 import { projectIdFromProjectStoreKey } from '../../shared/project-store-validation.ts';
 import { assertCurrentStorageProfile, runtimeProfile } from '../runtime-profile.ts';
 import {
@@ -386,9 +387,9 @@ export function sqliteProfileWrite<T>(db: DatabaseSync, work: () => T): T {
 
 /** Full snapshot (equivalent of readDirectoryEntries). */
 export async function sqliteReadAll(mediaCleanupOnly = false): Promise<Record<string, unknown>> {
-  const rows = openDatabase().prepare(mediaCleanupOnly
-    ? "SELECT k, v FROM kv WHERE k = 'projects' OR k GLOB 'project:*' OR k GLOB 'versions:*' OR k GLOB 'offline-edit-session:*'"
-    : 'SELECT k, v FROM kv').all() as Array<{
+  const patterns = mediaCleanupOnly ? uploadCleanupKeyPatterns : [];
+  const filter = patterns.length ? ' WHERE ' + patterns.map(() => 'k GLOB ?').join(' OR ') : '';
+  const rows = openDatabase().prepare('SELECT k, v FROM kv' + filter).all(...patterns) as Array<{
     k: string;
     v: string;
   }>;

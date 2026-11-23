@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { collectAllUploadRefs, deleteUnreferencedUploads, purgeProjectCascade, scanUnreferenced, unreferencedOf } from './mediaCleanup';
 import { createProject, listProjectDocIds, purgeProject } from './projectStore';
 import { configureSharedKvBackend, resetSharedKvMemory, type SharedKvBackend } from './sharedKv';
+import { getMediaBlob, putMediaBlob } from './mediaBlobStore';
+import { deleteTemplate, saveTemplate } from './templateStore';
 import type { ProjectDoc } from '../editor/types';
 
 // ── unreferencedOf:盘面 − 引用 ──────────────────────────────────────────
@@ -105,6 +107,43 @@ const fixtureDoc = (src?: string): ProjectDoc => ({
     assert.equal(await deleteUnreferencedUploads(['candidate.mp4']), 0);
     assert.equal(deletes, 0, 'offline draft references are also rechecked in the client');
   } finally { globalThis.fetch = originalFetch; resetSharedKvMemory(); }
+}
+
+// A template is an independent owner even after its original project is purged.
+{
+  resetSharedKvMemory();
+  const src = '/media/uploads/template-only.mp4';
+  const original = await createProject('Original', fixtureDoc(src));
+  const template = await saveTemplate('Reusable', fixtureDoc(src));
+  const previousFetch = globalThis.fetch;
+  let deleteCalls = 0;
+  let reply = () => Response.json({ ok: true, removed: 1, localFileRemoved: true, r2Removed: false });
+  globalThis.fetch = async (_input, options) => {
+    if (options?.method === 'DELETE') { deleteCalls++; return reply(); }
+    return new Response(null, {status: 404});
+  };
+  try {
+    const ambiguous = await createProject('Encoded source', fixtureDoc('/media/uploads/old%20name.mp4?revision=1'));
+    assert.deepEqual(await purgeProjectCascade(ambiguous.id), { filesDeleted: 0 },
+      'a project purge cannot infer which physical filename to delete from URL aliases');
+    assert.deepEqual(await purgeProjectCascade(original.id), { filesDeleted: 0 });
+    assert.equal(deleteCalls, 0, 'a surviving template retains its own source after project purge');
+    await deleteTemplate(template.id);
+    await putMediaBlob(src, new Blob(['only cached copy']));
+    for (const response of [
+      () => new Response('<html>proxy fallback</html>'),
+      () => Response.json({ ok: true, removed: 0, r2Removed: false }),
+      () => Response.json({ ok: true, removed: 1, localFileRemoved: false, r2Removed: false }),
+      () => Response.json({ ok: true, removed: 1, r2Removed: false }),
+    ]) {
+      reply = response;
+      assert.equal(await deleteUnreferencedUploads(['template-only.mp4']), 0);
+      assert.equal(await (await getMediaBlob(src))?.blob.text(), 'only cached copy');
+    }
+    reply = () => Response.json({ ok: true, removed: 1, localFileRemoved: true, r2Removed: false });
+    assert.equal(await deleteUnreferencedUploads(['template-only.mp4']), 1);
+    assert.equal(await getMediaBlob(src), undefined);
+  } finally { globalThis.fetch = previousFetch; resetSharedKvMemory(); }
 }
 
 // An unreadable surviving history must not be interpreted as empty even

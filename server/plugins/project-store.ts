@@ -199,10 +199,12 @@ async function readDirectoryEntries(mediaCleanupOnly = false): Promise<Record<st
   const entries: Record<string, unknown> = {};
   for (const file of await readdir(STORE_DIR)) {
     if (!file.endsWith('.json')) continue;
-    if (mediaCleanupOnly && file !== 'projects.json' && !/^(?:project|versions|offline-edit-session)%3a/i.test(file)) continue;
+    const encodedKey = file.slice(0, -'.json'.length);
+    // Store keys contain only ASCII identifiers and colons; avoid parsing unrelated rows.
+    if (mediaCleanupOnly && !isUploadCleanupEntry(encodedKey.replace(/%3a/ig, ':'))) continue;
     let key: string;
     try {
-      key = decodeURIComponent(file.slice(0, -'.json'.length));
+      key = decodeURIComponent(encodedKey);
     } catch {
       if (mediaCleanupOnly) throw new Error('Project media references could not be verified');
       await quarantineUnknownEntryFile(file);

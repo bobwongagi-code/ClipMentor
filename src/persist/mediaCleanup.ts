@@ -2,7 +2,7 @@
 // history remain references even when absent from the dashboard index.
 import { collectStoredUploadReferences, isCleanupProtectedUpload } from '../../shared/upload-cleanup-references';
 import { deleteMediaBlob } from './mediaBlobStore';
-import { purgeProject } from './projectStore';
+import { migrateProjectDoc, purgeProject } from './projectStore';
 import { kvGetAuthoritative, kvUploadCleanupSnapshots } from './sharedKv';
 
 const MEDIA_PREFIX = '/media/uploads/';
@@ -38,11 +38,15 @@ export function unreferencedOf(files: UploadFileInfo[], refs: Set<string>): Uplo
 }
 
 async function deleteUploadFile(name: string): Promise<boolean> {
-  const res = await fetch(`/upload?name=${encodeURIComponent(name)}&cleanup=1`, { method: 'DELETE' });
+  const res = await fetch(`/upload?name=${encodeURIComponent(name)}&cleanup=1`, { method: 'DELETE', redirect: 'error' });
   // Only drop the browser cache after the authoritative reference check and
   // disk deletion succeed. Cloud originals remain available for recovery.
-  if (res.ok) await deleteMediaBlob(MEDIA_PREFIX + name).catch(() => {});
-  return res.ok;
+  if (!res.ok) return false;
+  const result = await res.json();
+  if (result?.ok !== true || result.r2Removed !== false || result.localFileRemoved !== true
+    || !Number.isSafeInteger(result.removed) || result.removed <= 0) return false;
+  await deleteMediaBlob(MEDIA_PREFIX + name);
+  return true;
 }
 
 export async function deleteUnreferencedUploads(names: readonly string[]): Promise<number> {
@@ -76,15 +80,18 @@ export async function scanUnreferenced(): Promise<CleanupScan> {
 
 /** An explicit project purge is independent of optional local media cleanup. */
 export async function purgeProjectCascade(id: string): Promise<{ filesDeleted: number }> {
-  let own = new Set<string>();
+  let names: string[] = [];
   try {
-    const doc = await kvGetAuthoritative<unknown>(`project:${id}`);
-    if (doc !== undefined) own = collectStoredUploadReferences({ [`project:${id}`]: doc });
+    const doc = migrateProjectDoc(await kvGetAuthoritative<unknown>(`project:${id}`));
+    // A saved URL can have multiple protective aliases. Only a direct asset
+    // filename authorizes cascade removal; the inventory handles other orphans.
+    names = (doc?.assets ?? []).map(asset => asset.src).filter(src => src.startsWith(MEDIA_PREFIX))
+      .map(src => src.slice(MEDIA_PREFIX.length))
+      .filter(name => name.length > 0 && !/[?#%/\\]/.test(name));
   } catch { /* unreadable project data cannot authorize a cascade */ }
   await purgeProject(id);
-  if (!own.size) return { filesDeleted: 0 };
+  if (!names.length) return { filesDeleted: 0 };
   try {
-    const names = [...own].map(src => src.slice(MEDIA_PREFIX.length));
     return { filesDeleted: await deleteUnreferencedUploads(names) };
   } catch {
     // A failed history or project read retains the media. The user confirmed

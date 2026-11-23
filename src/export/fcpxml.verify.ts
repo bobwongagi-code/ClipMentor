@@ -5,6 +5,8 @@
 import assert from 'node:assert/strict';
 import { resolveAssetSrc, timelineToFcpxml } from './fcpxml';
 import { buildPreviewRevision } from '../clipmentor/preview-edit';
+import { applyClipAction } from '../editor/reducerClipActions';
+import { applyTranscriptAction } from '../editor/reducerTranscriptActions';
 import { keptSegments } from '../transcript/edit';
 import type { ProjectDoc, TimelineState } from '../editor/types';
 import { CURRENT_PROJECT_VERSION } from '../../shared/project-version';
@@ -91,6 +93,34 @@ const attr = (el: string, name: string): string => el.match(new RegExp(`${name}=
     assert.match(xml, /<asset-clip [^>]*name="Muted track">\s*<adjust-volume amount="-96dB"\/>\s*<\/asset-clip>/);
     assert.match(xml, /<asset-clip [^>]*name="Animated gain"\/>/);
     assert.equal((xml.match(/<asset id=/g) ?? []).length, 2, 'the two uses of each file retain one shared resource');
+  }
+}
+
+// Editor actions can make an item silent without setting item.volume to zero.
+{
+  const state: TimelineState = {
+    fps: 30, width: 1280, height: 720, selectedId: null,
+    items: [
+      { id: 'music', track: 'A1', startFrame: 0, durationInFrames: 30, kind: 'audio', name: 'Music', src: '/media/uploads/m.wav' },
+      { id: 'speech', track: 'A2', startFrame: 0, durationInFrames: 30, kind: 'audio', name: 'Speech', src: '/media/uploads/s.wav',
+        transcript: [{ text: 'hello', start: 0, end: 1000 }] },
+    ],
+  };
+  const muted = applyClipAction(state, { type: 'setKeyframe', id: 'music', prop: 'volume', frame: 10, value: 0 })!;
+  const edited = applyTranscriptAction(muted, { type: 'deleteWords', id: 'speech', idxs: [0] })!;
+  const faded = applyClipAction(edited, { type: 'setKeyframe', id: 'music', prop: 'volume', frame: 20, value: 1 })!;
+  for (const nleFormat of ['fcp_xml', 'fcp_xml_resolve'] as const) {
+    const before = timelineToFcpxml(state, { nleFormat });
+    assert.match(before, /<asset-clip [^>]*name="Music"\/>/);
+    assert.match(before, /<asset-clip [^>]*name="Speech"\/>/);
+    const after = timelineToFcpxml(edited, { nleFormat });
+    assert.deepEqual({
+      musicMuted: /<asset-clip [^>]*name="Music">\s*<adjust-volume amount="-96dB"\/>/.test(after),
+      speechPlaced: /<asset-clip [^>]*name="Speech"/.test(after),
+      speechResource: after.includes('/s.wav'),
+    }, { musicMuted: true, speechPlaced: false, speechResource: false }, nleFormat);
+    assert.doesNotMatch(timelineToFcpxml(faded, { nleFormat }), /<adjust-volume amount="-96dB"/,
+      'a changing envelope must not become a full-placement mute');
   }
 }
 

@@ -124,6 +124,16 @@ try {
   assert.equal(pcmExcerpt.binding.packet_payloads_verified,true);
   assert.deepEqual(await prepareObservationMaterial(pcmOptions),pcmExcerpt);
   checks++;
+  // Static intra-coded frames can repeat byte for byte over distinct narration.
+  const still = join(root,'repeating-video.mov');
+  await promisify(execFile)(ffmpegBin(), ['-v','error','-nostdin','-n','-f','lavfi','-i','color=color=navy:size=96x128:rate=10',
+    '-f','lavfi','-i','aevalsrc=0.2*sin(2*PI*(400*t+20*t*t)):s=44100','-t','8','-c:v','libx264','-g','1','-qp','24','-pix_fmt','yuv420p','-c:a','aac',still]);
+  const stillOptions = { ...options,file:still,parentSha256:await sha256File(still),range:[2.2,3.2] as [number,number] };
+  const stillExcerpt = await prepareObservationMaterial(stillOptions);
+  assert.equal(stillExcerpt.binding.packet_payloads_verified,true);
+  assert(stillExcerpt.binding.actual_source_range_seconds[0]<=2.2 && stillExcerpt.binding.actual_source_range_seconds[1]>=3.2);
+  assert.deepEqual(await prepareObservationMaterial(stillOptions),stillExcerpt);
+  checks++;
   assert.deepEqual(sourceObservationRange(sourceVideoInput(request)),[2.2,4.2]);
   assert.equal(sourceObservationRange(sourceVideoInput({...request,observationTask:undefined})),null);checks++;
   let posts=0,lastResponse:any;
@@ -204,6 +214,11 @@ try {
   const repeated=structuredClone(parent);
   repeated.packets.push({...repeated.packets[1],pts_time:'6'});
   assert.throws(()=>verifyCopiedPackets(repeated,child),/ambiguous/);checks++;
+  const repeatedBoth=structuredClone(repeated);
+  repeatedBoth.packets.push({...repeatedBoth.packets[0],pts_time:'6'});
+  const ambiguousCut=structuredClone(child);
+  ambiguousCut.packets[1].pts_time='0';
+  assert.throws(()=>verifyCopiedPackets(repeatedBoth,ambiguousCut),/ambiguous/);checks++;
   assert.throws(()=>verifyCopiedPackets({...parent,streams:[...parent.streams,{index:2,codec_type:'audio',codec_name:'aac'}]},child),/drop tracks/);checks++;
   const missingVideo:any={streams:parent.streams,packets:[{stream_index:0,pts_time:'2',duration_time:'1',data_hash:'v2'},
     {stream_index:0,pts_time:'3',duration_time:'1',data_hash:'v3'},{stream_index:1,pts_time:'2',duration_time:'1',data_hash:'a2'},

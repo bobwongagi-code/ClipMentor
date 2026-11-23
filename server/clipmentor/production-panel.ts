@@ -5,6 +5,7 @@ import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
+import { registeredAssets, intactAsset } from './material-intake';
 import { getKey, previewReviewCredential } from '../keystore';
 import { codexModels, codexStatus } from '../plugins/codex-agent';
 import { getStoredEntry } from '../plugins/project-store';
@@ -487,14 +488,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const config = await settings(true);
         if ('unavailable' in config) throw new Error(config.unavailable);
         if (isProjectConnected(projectId)) throw new Error('请先关闭该工程的 OpenChatCut 编辑器');
-        const [source, product, sales, cta] = saved.doc.assets;
-        if (source?.kind !== 'video' || [product,sales,cta].some(asset => asset?.kind !== 'image')
-          || [source,product,sales,cta].some(asset => !asset?.sourceContentHash || !asset.src.startsWith('/media/uploads/')
-            || !resolveUploadFile(asset.src.slice('/media/uploads/'.length)))) {
+        const materials = registeredAssets(saved.doc.assets);
+        if (!materials || !(await Promise.all(materials.map(asset => intactAsset(asset)))).every(Boolean)) {
           res.statusCode = 409;
           send({ error:panelMaterialsUnavailable, reason:'materials' });
           return;
         }
+        const [source, product, sales, cta] = materials;
         if (saved.doc.clipMentorAnalysis || saved.doc.timelines.some(t => t.items.length)) throw new Error('该工程已有制作记录');
         const api = { provider:config.provider, model:config.model, apiMode:config.apiMode, origin };
         const index = (await getStoredEntry('projects')).value;

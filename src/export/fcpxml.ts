@@ -11,6 +11,7 @@ import {
   type TrackId,
 } from '../editor/types';
 import { itemEditOpts, itemWindow, keptSegments } from '../transcript/edit';
+import { volumeAtFrame } from '../editor/keyframes';
 import { hasOperationalTranscript } from '../transcript/types';
 import { sourceWindowForTimelineRange, timelineFramesToSourceFrames } from '../editor/sourceLimit';
 import { motionGraphicRenderFilename, motionGraphicRenderKey } from './motionGraphicRefs';
@@ -189,7 +190,8 @@ function collectAssets(state: TimelineState): Map<string, AssetInfo> {
     if (!item.src) continue;
     // The source interval used in segmented parts is determined by the last paragraph, which may far exceed the duration after editing (word deletion removes the middle)
     const segs = transcriptSegments(item, state.fps);
-    const usedTo = segs?.length
+    if (segs?.length === 0) continue;
+    const usedTo = segs
       ? Math.max(...segs.map((seg) => seg.srcEndFrame))
       : sourceWindowForTimelineRange(item, 0, item.durationInFrames).endFrame;
     const libraryAsset = state.assets?.find((asset) => asset.src === item.src);
@@ -354,9 +356,11 @@ function retimeXml(item: TimelineItem, fps: number): string {
 
 function volumeAdjustmentXml(item: TimelineItem, trackMuted: boolean): string {
   if (item.kind !== 'video' && item.kind !== 'audio') return '';
-  // Animated gain supersedes the item's base volume in the editor.
-  if (!trackMuted && item.keyframes?.volume?.length) return '';
-  const volume = trackMuted ? 0 : item.volume ?? 1;
+  // Identical keyframes hold the same gain before, during and after their span.
+  // A genuinely changing envelope cannot be represented by a single adjustment.
+  const keys = item.keyframes?.volume;
+  if (!trackMuted && keys?.some(key => key.value !== keys[0]!.value)) return '';
+  const volume = trackMuted ? 0 : volumeAtFrame(item, 0);
   if (!Number.isFinite(volume) || volume < 0 || volume === 1) return '';
   // Final Cut writes muted audio as -96 dB. Keep this per placement because
   // other clips can use the same source with their original audio enabled.
@@ -387,7 +391,7 @@ function itemToSpineElement(
     const ref = assets.get(item.src)?.id ?? '';
     const volumeAdjustment = volumeAdjustmentXml(item, trackMuted);
     const segs = transcriptSegments(item, fps);
-    if (segs?.length) {
+    if (segs) {
       // One clip for each reserved segment:offset is already the absolute frame of the timeline (keptSegments passed in startFrame)
       return segs
         .map((seg) => assetClipXml(

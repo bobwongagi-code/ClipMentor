@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ViteDevServer } from 'vite';
 import { constants as fsConstants, createReadStream, type Stats } from 'node:fs';
 import {
-  copyFile, link, open, readFile, rename, stat, unlink, writeFile, type FileHandle,
+  copyFile, link, lstat, open, readFile, rename, stat, unlink, writeFile, type FileHandle,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -69,6 +69,7 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
     }
     const remove = async () => {
       let removed = 0;
+      let localFileRemoved = false;
       let derivativesRemoved = 0;
       let r2Removed = false;
       const failures: unknown[] = [];
@@ -78,8 +79,11 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
             if (await deleteLocalUploadIfOwned(directory, name, rollbackToken)) removed += 1;
           } else {
             try {
-              await unlink(join(directory, name));
+              const path = join(directory, name);
+              const entry = cleanup ? await lstat(path) : undefined;
+              await unlink(path);
               removed += 1;
+              if (entry?.isFile() && entry.size > 0) localFileRemoved = true;
             } catch (error) {
               if (fileErrorCode(error) !== 'ENOENT') throw error;
             }
@@ -113,6 +117,7 @@ async function handleDeleteUpload(req: IncomingMessage, res: ServerResponse): Pr
         removed,
         r2Removed,
         derivativesRemoved,
+        ...(cleanup && { localFileRemoved }),
         ownershipMatched: !rollbackToken || removed > 0 || r2Removed,
       };
     };

@@ -4,8 +4,17 @@ import { isProjectStoreRecord, projectIdFromProjectStoreKey } from './project-st
 const UPLOAD_PREFIX = '/media/uploads/';
 const OFFLINE_DRAFT_PREFIX = 'offline-edit-session:';
 
+// SQLite GLOB and the browser/file stores share exactly the same ownership set.
+// Only a trailing '*' is supported. Removing the owner releases its references.
+export const uploadCleanupKeyPatterns = [
+  'projects', 'project:*', 'versions:*', OFFLINE_DRAFT_PREFIX + '*', 'templates:all',
+  'proposal:*', 'agent-session-proposal:*', 'external-proposal:*', 'upload-finalize:*',
+  'agent-artifact:*', 'agent-session-artifact:*',
+] as const;
+
 export function isUploadCleanupEntry(key: string): boolean {
-  return key === 'projects' || key.startsWith('project:') || key.startsWith('versions:') || key.startsWith(OFFLINE_DRAFT_PREFIX);
+  return uploadCleanupKeyPatterns.some(pattern => pattern.endsWith('*')
+    ? key.startsWith(pattern.slice(0, -1)) : key === pattern);
 }
 
 /** LUTs can belong to installed extensions. Export staging and job outputs
@@ -39,12 +48,31 @@ export function collectStoredUploadReferences(
   for (const [key, value] of Object.entries(entries)) {
     if (excludeId !== undefined && isUploadCleanupEntry(key) && projectIdFromProjectStoreKey(key) === excludeId) continue;
     if (key.startsWith('project:')) addDocument(value);
-    if (key.startsWith('versions:')) {
-      if (!Array.isArray(value)) throw new Error('Project version media references could not be verified');
+    if (key.startsWith('versions:') || key === 'templates:all') {
+      if (!Array.isArray(value)) throw new Error('Saved document media references could not be verified');
       for (const snapshot of value) {
-        if (!isProjectStoreRecord(snapshot)) throw new Error('Project version media references could not be verified');
+        if (!isProjectStoreRecord(snapshot)) throw new Error('Saved document media references could not be verified');
         addDocument(snapshot.doc);
       }
+    }
+    if (key.startsWith('agent-artifact:') || key.startsWith('agent-session-artifact:')) {
+      if (!isProjectStoreRecord(value) || typeof value.kind !== 'string' || value.kind === 'quarantined-project-store-entry') {
+        throw new Error('Agent artifact could not be verified');
+      }
+      if (value.kind === 'server-run-draft') {
+        if (typeof value.body !== 'string') throw new Error('Saved runtime draft could not be verified');
+        // Runtime draft base documents and replayable tool actions are serialized JSON.
+        const body: unknown = JSON.parse(value.body);
+        if (!isProjectStoreRecord(body)) throw new Error('Saved runtime draft could not be verified');
+        documents.push(body);
+      }
+    }
+    if (key.startsWith('proposal:') || key.startsWith('agent-session-proposal:')
+      || key.startsWith('external-proposal:') || key.startsWith('upload-finalize:')) {
+      if (!isProjectStoreRecord(value) || value.kind === 'quarantined-project-store-entry') {
+        throw new Error('Saved proposal or upload references could not be verified');
+      }
+      documents.push(value);
     }
     if (key.startsWith(OFFLINE_DRAFT_PREFIX)) {
       if (!isProjectStoreRecord(value) || value.version !== 1
