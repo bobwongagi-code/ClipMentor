@@ -1,0 +1,4 @@
+dist/
+.tmp-tests/
+playwright-report/
+test-results/

@@ -6,6 +6,8 @@
 
 ClipMentor helps creators and content teams understand **what makes a product demonstration work and how to film it**. It combines original video, explanation, captions and visual emphasis into an annotated breakdown, with a written storyboard to use while shooting.
 
+The standalone business app lives in [`web/`](web/README.md). It connects to the editor and production backend in this repository.
+
 ## What You Get
 
 | Your goal | Output |
