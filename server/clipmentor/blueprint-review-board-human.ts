@@ -93,8 +93,11 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   const lines=new Set(rows.flatMap(row=>row.line_ids));
   const decisions=narrationDecisions.filter(answer=>answer.unit_id===id&&answer.status==='ok'
    &&answer.line_id&&lines.has(answer.line_id)&&answer.decision&&answer.viewer_basis&&answer.quote);
-  const check=decisions.length?`<details class="picture-note" data-narration-review><summary>独立口播审核</summary>${decisions.map(answer=>
-   `<p>${esc(answer.decision)}。${esc(answer.viewer_basis)}</p><blockquote lang="ms" data-quote-line-id="${esc(answer.line_id)}">${esc(answer.quote)}</blockquote>${answer.source_quote?`<p data-source-evidence-id="${esc(answer.source_evidence_id)}">原片依据 ${esc(answer.source_quote)}</p>`: ''}`).join('')}</details>`:'';
+  const check=decisions.length?`<details class="picture-note" data-narration-review><summary>独立口播审核</summary>${decisions.map(answer=>{
+   const decision=(answer.decision??'').trimEnd();
+   const separator=/[。！？.!?]$/u.test(decision)?'':'。';
+   return `<p>${esc(decision)}${separator}${esc(answer.viewer_basis)}</p><blockquote lang="ms" data-quote-line-id="${esc(answer.line_id)}">${esc(answer.quote)}</blockquote>${answer.source_quote?`<p data-source-evidence-id="${esc(answer.source_evidence_id)}">原片依据 ${esc(answer.source_quote)}</p>`: ''}`;
+  }).join('')}</details>`:'';
   const observation=originalDescription(id),originalDuration=originals.reduce((sum,row)=>sum+(row.range?row.range[1]-row.range[0]:0),0);
   const excerpt=observation?`<div class="source-description"><h3>原片观察摘录 <span>· ${esc(observation.range.join('–'))}秒</span></h3><p>${esc(observation.text)}</p>${observation.range[1]-observation.range[0]<originalDuration?`<p class="observation-scope">只描述其中${esc(observation.range.join('–'))}秒。</p>`:''}</div>`:'';
   const runs:ReviewBoardRow[][]=[];

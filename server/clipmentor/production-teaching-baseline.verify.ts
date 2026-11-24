@@ -141,7 +141,7 @@ const host=createServer(async(req,res)=>{
     reason:'基线有、口播没有：'+(counterexample?.learner_gap??'未登记实际口播。')};
    const palette=line.narration.includes('kod masing-masing');
    return {unit_id:target.unit_id,point_id:target.point_id,status:'ok',
-    decision:palette?'达人在同一镜头摆两盘供看差别':'达人把刷头退开后的结果留在镜头中',
+    decision:palette?'达人在同一镜头摆两盘供看差别':'达人把刷头退开后的结果留在镜头中。',
     ...(narrationAction==='missing-basis'?{}:{viewer_basis:palette
      ?'观众可以把色差对回两个编号。':'观众能判断无遮挡时鼻侧色痕有多明显。'}),
     line_id:line.line_id,
@@ -524,7 +524,7 @@ try{
   assert.equal(board.status,200,board.ok?'':html);
   assert.equal(board.headers.get('x-clipmentor-board-identity'),boardIdentity);
   assert(html.includes(teachingPurpose.audience)&&html.includes(teachingPurpose.review_question));
-  assert.match(html,/<section class="group"[^>]*data-unit-id="fixture-group".*达人把刷头退开后的结果留在镜头中.*观众能判断无遮挡时鼻侧色痕有多明显。.*data-quote-line-id="fixture-line"/su);
+  assert.match(html,/<section class="group"[^>]*data-unit-id="fixture-group".*达人把刷头退开后的结果留在镜头中。观众能判断无遮挡时鼻侧色痕有多明显。.*data-quote-line-id="fixture-line"/su);
   assert.match(html,/data-source-evidence-id="fixture-visual">原片依据 刷子与鼻侧同框。/u);
   assert(html.includes(actionable));
   assert(!html.includes('Ignored worker claim'));
