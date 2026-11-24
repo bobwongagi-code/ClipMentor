@@ -44,10 +44,13 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  assert.equal(authorScope.sourceClosing?.decision,'weak_candidate');
  assert.equal(sourceClosingDecision({...topics,closingStatus:'confirmed'}),'confirmed');
  assert.equal(sourceClosingDecision({...topics,closingStatus:'none'}),'none');
- assert.match(authorScope.sourceClosing?.noteLocation??'',/segments\[\]\.unknowns/);
+ assert.equal(authorScope.sourceClosing?.factOnly,true);
+ assert.equal(authorScope.sourceClosing?.factualNote,topics.closing);
+ assert.equal(authorScope.sourceClosing?.requiredNote,undefined);
  const otherAuthor=await productionAuthorTaskData({...strictTask,stage:'analysis'},draft);
  assert.equal(otherAuthor.sourceClosing?.decision,null);
  assert.deepEqual(otherAuthor.sourceClosing?.rules,authorScope.sourceClosing.rules);
+ assert.equal(otherAuthor.sourceClosing?.factOnly,undefined);
  const salesHash='4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24',saleId='fixture-sales-image';
  const performance:SourcePerformanceCriterion={kind:'source_performance',source,evidence:{assetId:saleId,sha256:salesHash},
   quote:'等义改写的片头',results:{views:'339.32k',units:'135',revenue:'RM5.31k'}};
@@ -94,6 +97,16 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  scopedSource.frozenTopics={...topics,closingUnitId:mainUnit.unit_id,closingSegmentId:'ending',misplacedClosingNote:false,closingTailSegmentIds:['ending']};
  const scopedReceipt={...structuredClone(positiveReceipt),units:structuredClone(positiveReceipt.units.slice(0,1)),
   whole_film:{...positiveReceipt.whole_film,frozen_topic_checks:{main_scope:'pass',closing_status:'pass'}}};
+ const weakSource={...scopedSource,sourceClosing:authorScope.sourceClosing!};
+ const weakReview={...scopedReceipt,whole_film:{...scopedReceipt.whole_film,frozen_topic_checks:{main_scope:'pass'}}};
+ assert.equal(validateTeachingBaselineReview(weakReview,weakSource).whole_film?.status,'ok');
+ const staleClosingCheck={...weakReview,whole_film:{...weakReview.whole_film,frozen_topic_checks:{main_scope:'pass',closing_status:'fail'}}};
+ assert.equal(wholeFilmIssue(validateTeachingBaselineReview(staleClosingCheck,weakSource).whole_film),undefined);
+ const scopeFailure={...weakReview,whole_film:{...weakReview.whole_film,frozen_topic_checks:{main_scope:'fail'}}};
+ assert.equal(validateTeachingBaselineReview(scopeFailure,weakSource).whole_film?.status,'fix');
+ const actualRejection={...weakReview,whole_film:{...weakReview.whole_film,status:'fix',affected_unit_ids:[mainUnit.unit_id],
+  reason:'实际讲解把原片弱建议写成确定推荐。'}};
+ assert.equal(wholeFilmIssue(validateTeachingBaselineReview(actualRejection,weakSource).whole_film),'实际讲解把原片弱建议写成确定推荐。');
  assert.equal(validateTeachingBaselineReview(scopedReceipt,scopedSource).whole_film?.status,'ok');
  for(const field of ['main_scope','closing_status'] as const){
   const bad=structuredClone(scopedReceipt);
@@ -152,14 +165,17 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  scopedSource.units.pop();
  scopedSource.frozenTopics.closingSegmentId=null;
  assert.throws(()=>validateTeachingBaselineReview(scopedReceipt,scopedSource),/teaching_frozen_topic_scope_invalid/);
+ assert.equal(validateTeachingBaselineReview(weakReview,weakSource).whole_film?.status,'ok');
+ const confirmedNote='原片结尾提出已确认的购买行动';
+ const confirmedTask={...scopeTask,input:{...scopeTask.input,doneCriteria:[{...declaration,closing:{...declaration.closing,status:'confirmed',note:confirmedNote}}]}};
  const tail=frozenDoc.clipMentorAnalysis!.source_breakdown!.segments.at(-1)!;
  frozenDoc.clipMentorAnalysis!.source.duration_seconds=67.33333333333333;
  tail.source_range_seconds=[61.2,67.33333333333333];
- tail.unknowns=[topics.closing];
+ tail.unknowns=[confirmedNote];
  const recipient=frozenDoc.clipMentorAnalysis!.source_breakdown!.units;
  const closingUnit=recipient.at(-1)!;
  closingUnit.original_source_ranges=[tail.source_range_seconds];
- const declared=teachingBaselineSource(frozenDoc,scopeTask,[]);
+ const declared=teachingBaselineSource(frozenDoc,confirmedTask,[]);
  assert.equal(declared.frozenTopics?.closingSegmentId,tail.segment_id);
  // The note cites the evidence. A separately registered adjacent segment supplies the tail.
  const ledger=frozenDoc.clipMentorAnalysis!.source_breakdown!;
@@ -168,7 +184,7 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  tail.source_range_seconds=[61.2,66.9];
  ledger.segments.push(endCap);
  closingUnit.original_segment_ids.push(endCap.segment_id);
- const split=()=>teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics!;
+ const split=()=>teachingBaselineSource(frozenDoc,confirmedTask,[]).frozenTopics!;
  for(const playback of [[[61.2,end]],[[61.2,66.9],[66.9,end]]] as [number,number][][]){
   closingUnit.original_source_ranges=playback;
   assert.equal(split().closingSegmentId,tail.segment_id);
@@ -185,7 +201,7 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  const originals=closingUnit.original_source_ranges.map(source_range_seconds=>({mode:'original',source_range_seconds}));
  const plan={phases:[...originals,copy]};
  authored.internal_review={current_picture_plan:'closing-plan','closing-plan':plan};
- const closingSource=teachingBaselineSource(frozenDoc,scopeTask,[]);
+ const closingSource=teachingBaselineSource(frozenDoc,confirmedTask,[]);
  assert.equal(interruptedClosingPlanUnit(frozenDoc,closingSource),undefined);
  plan.phases=[originals[0],copy,...originals.slice(1)];
  assert.equal(interruptedClosingPlanUnit(frozenDoc,closingSource),closingUnit.unit_id,'an explanation can break continuous playback despite adjacent source times');
@@ -194,18 +210,18 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  ledger.segments.pop();
  tail.source_range_seconds=[61.2,66.9];
  closingUnit.original_source_ranges=[tail.source_range_seconds,endCap.source_range_seconds];
- tail.unknowns=[topics.closing+'；仅见手背色块，原声未核。'];
+ tail.unknowns=[confirmedNote+'；仅见手背色块，原声未核。'];
  assert.equal(split().closingSegmentId,tail.segment_id);
- for(const note of ['请补写：'+topics.closing,topics.closing+'并不成立']){
+ for(const note of ['请补写：'+confirmedNote,confirmedNote+'并不成立']){
   tail.unknowns=[note];
   assert.equal(split().closingSegmentId,null);
  }
- tail.unknowns=[topics.closing];
-  endCap.unknowns=[topics.closing+'；原声未核。'];
-  assert(teachingPointGaps(teachingBaselineSource(frozenDoc,scopeTask,[]),frozenDoc)
+ tail.unknowns=[confirmedNote];
+  endCap.unknowns=[confirmedNote+'；原声未核。'];
+  assert(teachingPointGaps(teachingBaselineSource(frozenDoc,confirmedTask,[]),frozenDoc)
    .some(issue=>issue.startsWith('source_closing_note_duplicate')));
   endCap.unknowns=[];
-  assert(!teachingPointGaps(teachingBaselineSource(frozenDoc,scopeTask,[]),frozenDoc)
+  assert(!teachingPointGaps(teachingBaselineSource(frozenDoc,confirmedTask,[]),frozenDoc)
    .some(issue=>issue.startsWith('source_closing_note_duplicate')));
  endCap.source_range_seconds[0]+=0.1;
  assert.equal(split().closingSegmentId,null,'a registration gap cannot be covered by the playback envelope');
@@ -213,7 +229,7 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  closingUnit.original_source_ranges=[[61.2,66.8],[66.9,end]];
  assert.equal(split().closingSegmentId,null,'the original playback itself must also be continuous');
  closingUnit.original_source_ranges=[[61.2,end]];
- tail.unknowns=[];endCap.unknowns=[topics.closing];
+ tail.unknowns=[];endCap.unknowns=[confirmedNote];
  assert(split().misplacedClosingNote,'an EOF-only annotation cannot support the earlier evidence');
  endCap.unknowns=[];
  assert.equal(split().closingSegmentId,null);
@@ -221,40 +237,40 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  ledger.segments.pop();
  tail.source_range_seconds=[61.2,end];
  tail.unknowns=[];
- const omitted=teachingBaselineSource(frozenDoc,scopeTask,[]);
+ const omitted=teachingBaselineSource(frozenDoc,confirmedTask,[]);
  assert.equal(omitted.frozenTopics?.closingSegmentId,null);
- assert(teachingPointGaps(omitted,frozenDoc).includes('收尾须登记：'+topics.closing));
+ assert(teachingPointGaps(omitted,frozenDoc).includes('收尾须登记：'+confirmedNote));
  const wrongNote=frozenDoc.clipMentorAnalysis!.source_breakdown!.segments[0].unknowns;
- wrongNote.push(topics.closing);
- assert(teachingPointGaps(teachingBaselineSource(frozenDoc,scopeTask,[]),frozenDoc).some(f=>f.startsWith('source_closing_note_binding_changed')));
+ wrongNote.push(confirmedNote);
+ assert(teachingPointGaps(teachingBaselineSource(frozenDoc,confirmedTask,[]),frozenDoc).some(f=>f.startsWith('source_closing_note_binding_changed')));
  wrongNote.pop();
- tail.unknowns=[topics.closing,'已确认原片促单'];
- const contradictory=teachingBaselineSource(frozenDoc,scopeTask,[]);
+ tail.unknowns=[confirmedNote,'另称片尾无促单'];
+ const contradictory=teachingBaselineSource(frozenDoc,confirmedTask,[]);
  const rebuild=teachingRebuild(contradictory,frozenDoc,{feedback_scope:'none',units:[],whole_film:{...scopedReceipt.whole_film,
   status:'fix',frozen_topic_checks:{main_scope:'pass',closing_status:'fail'}}});
  assert(unchangedWholeFilmTeaching(contradictory,rebuild));
  assert.equal(unchangedWholeFilmTeaching(declared,rebuild),false,'correcting the closing note counts as repair progress');
- tail.unknowns=[topics.closing];
+ tail.unknowns=[confirmedNote];
  frozenDoc.clipMentorAnalysis!.source.duration_seconds=80;
- const early=teachingBaselineSource(frozenDoc,scopeTask,[]);
+ const early=teachingBaselineSource(frozenDoc,confirmedTask,[]);
  assert(teachingPointGaps(early,frozenDoc).includes('最后一个教学组的原片回放须覆盖已登记的收尾证据并到达片尾'));
  tail.source_range_seconds=[79.97,80];
  closingUnit.original_source_ranges=[tail.source_range_seconds];
- assert.equal(teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics?.closingSegmentId,null,'the last frame does not cover the cited tail');
+ assert.equal(split().closingSegmentId,null,'the last frame does not cover the cited tail');
  tail.source_range_seconds=[61.2,80];
  closingUnit.original_source_ranges=[tail.source_range_seconds];
- assert.equal(teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics?.closingSegmentId,tail.segment_id);
+ assert.equal(split().closingSegmentId,tail.segment_id);
  frozenDoc.clipMentorAnalysis!.blueprint.reverse();
- assert.equal(teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics?.closingSegmentId,null,'board order controls the ending');
+ assert.equal(split().closingSegmentId,null,'board order controls the ending');
  frozenDoc.clipMentorAnalysis!.blueprint.reverse();
  for(const unit of recipient){
   unit.original_segment_ids=unit.original_segment_ids.filter(id=>id!==tail.segment_id);
   unit.explanation_segment_ids=unit.explanation_segment_ids.filter(id=>id!==tail.segment_id);
  }
  recipient[0].original_segment_ids.push(tail.segment_id);
- assert.equal(teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics?.closingSegmentId,null);
+ assert.equal(split().closingSegmentId,null);
  recipient.at(-1)!.explanation_segment_ids.push(tail.segment_id);
- assert.equal(teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics?.closingSegmentId,null,'explanation-only attachment cannot serve as the original ending');
+ assert.equal(split().closingSegmentId,null,'explanation-only attachment cannot serve as the original ending');
  const probe=structuredClone(draft);
  const firstUnit=probe.clipMentorAnalysis!.blueprint[0];
  const sourceHash=probe.clipMentorAnalysis!.source.sourceContentHash!;
