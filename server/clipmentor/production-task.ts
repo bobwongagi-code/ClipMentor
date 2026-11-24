@@ -1,3 +1,4 @@
+import type {BlueprintReviewRecord} from './production-panel-review';
 import {compactProductionTaskHistory,newestProductionCheckpoints,orderedProductionCheckpointRecords,decodePublishedProductionCheckpoint,loadPublishedProductionCheckpoint} from './production-task-history';
 import {blueprintFindingKeys,blueprintFindings,pictureRepairCoverage,pictureRepairFindings,blueprintRepairStopped,repeatedPictureRepair,productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -90,9 +91,12 @@ export interface ProductionTask {
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
  sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
  blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;confirmedAt:number};
+ blueprintReview?:BlueprintReviewRecord;
+ finalAcceptance?:{renderId:string;watched:true;malayReviewed:true;confirmedAt:number};
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
+ blueprintFeedbackEpoch?:number;
  blueprintFeedbackRevision?:string;
  blueprintFeedbackUnitIds?:string[];
  blueprintFeedbackRepair?:number;
@@ -787,6 +791,7 @@ function blueprintFeedbackBudgetExhausted(task:ProductionTask){
 async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:string,dispatch:boolean,store:TaskStore,guards?:EntryPreconditions,unitIds?:string[]){
  const next=structuredClone(task);
  next.blueprintFeedback=text;
+ next.blueprintFeedbackEpoch=(task.blueprintFeedbackEpoch??0)+1;
  // Clear optional fields explicitly so the live task matches the saved checkpoint on launch.
  next.blueprintFeedbackSummary=undefined;
  if(next.repairContext&&(dispatch||task.blueprintFeedback!==text||task.blueprintFeedbackRevision!==revision)){
@@ -827,7 +832,7 @@ async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:st
 }
 
 export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,
- store=productionTaskStore,guards?:EntryPreconditions,unitIds?:string[]){
+ store=productionTaskStore,guards?:EntryPreconditions,unitIds?:string[],review?:BlueprintReviewRecord){
  if(!task.input.humanBlueprintReview||task.status!=='awaiting_blueprint'||task.stage!=='copy_review')throw new Error('蓝图当前不在待确认状态');
  if(typeof displayedRevision!=='string'||displayedRevision!==task.projectRevision||displayedRevision!==savedRevision
   ||task.completed.copy_review?.artifact.revision!==displayedRevision
@@ -846,6 +851,7 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
  next.blueprintFeedbackUnitIds=undefined;
  next.blueprintFeedbackRepair=undefined;
  next.blueprintFeedbackSummary=undefined;
+ if(review)next.blueprintReview=review;
  next.stage='audio';
  next.status='queued';
  if(guards)await saveProductionControl(task,next,store,guards);else await saveProductionCheckpoint(store,next);
@@ -864,7 +870,8 @@ export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:s
   ||typeof revision!=='string'||!revision.trim()
   ||typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw Error('蓝图当前不能接收修改意见');
  const text=feedback.trim(),pending=task.repairContext?.pending_blueprint_feedback;
- if(task.blueprintFeedbackRevision===revision&&task.blueprintFeedback===text&&!pending)return 'already_dispatched';
+ if(task.blueprintFeedbackRevision===revision&&task.blueprintFeedback===text
+  &&digestValue(task.blueprintFeedbackUnitIds??[])===digestValue(unitIds??[])&&!pending)return 'already_dispatched';
  const exhausted=blueprintFeedbackBudgetExhausted(task);
  const savedOnly=exhausted||!!task.blueprintApproval;
  await saveBlueprintFeedback(task,revision,text,!savedOnly,store,guards,unitIds);
@@ -933,10 +940,13 @@ export async function productionFeedback(task:ProductionTask,feedback:unknown,st
  await saveProductionControl(task,next,store,undefined,doc);Object.assign(task,next);return task;
 }
 export async function acceptProductionTask(task:ProductionTask,languageConfirmed:boolean,store=productionTaskStore,
- visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown;wholePreviewConfirmed?:unknown}){
+ visual?:{digest?:unknown;confirmed?:unknown;renderId?:unknown;wholePreviewConfirmed?:unknown;watched?:unknown}){
  if(task.status!=='awaiting_review'||languageConfirmed!==true)throw new Error('Final reviewer must confirm Malay delivery suitability');
  const next=structuredClone(task);let entryPreconditions:EntryPreconditions;
  if(task.input.panelDelivery){
+  const renderId=task.completed.export?.artifact.renderId;
+  if(visual?.watched!==true||typeof renderId!=='string'||visual.renderId!==renderId)throw Error('preview_acceptance_binding_required');
+  next.finalAcceptance={renderId,watched:true,malayReviewed:true,confirmedAt:Date.now()};
   const saved=await loadOfflineStoredProject(task.projectId),src=task.completed.self_check?.artifact.preview;
   const name=typeof src==='string'&&src.startsWith('/media/uploads/')?src.slice('/media/uploads/'.length):'';
   const file=isSafeUploadName(name)?resolveUploadFile(name):null;

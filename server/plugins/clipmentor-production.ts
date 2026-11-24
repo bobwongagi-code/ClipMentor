@@ -1,3 +1,4 @@
+import {panelReviewIssue} from '../clipmentor/production-panel-review';
 import {blueprintRepairNotice} from '../clipmentor/production-decisions';
 import {createProductionPanel,currentPanelTask,panelServiceUnavailable} from '../clipmentor/production-panel';
 import {setTimeout as sleep} from 'node:timers/promises';
@@ -197,12 +198,13 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     }
     if(body.action==='feedback'){const snapshot=await loadOfflineStoredProject(task.projectId);if(!snapshot)throw new Error('feedback_project_missing');await productionFeedback(task,body.feedback,productionTaskStore,snapshot.doc);launch(task);send(202,{taskId:task.taskId,status:'queued'});return;}
     if(body.action==='accept'){send(200,await acceptProductionTask(task,body.malayDeliveryConfirmed,undefined,
-      {digest:body.visualCriteriaDigest,confirmed:body.confirmedVisualCriteria,renderId:body.renderId}));return;}
+      {digest:body.visualCriteriaDigest,confirmed:body.confirmedVisualCriteria,renderId:body.renderId,watched:body.previewWatched}));return;}
     throw new Error('Unknown production action');
    }catch(error){
     if(panelRequest)console.error('ClipMentor panel request failed',error);
     const code=error instanceof Error?error.message:'';
-    send(409,{error:panelRequest?panelServiceUnavailable:code||'Production request failed',production_approved:false});
+    const issue=panelRequest?panelReviewIssue(error):undefined;
+    send(409,{error:issue?.message??(panelRequest?panelServiceUnavailable:code||'Production request failed'),...(issue?{issue}:{}),production_approved:false});
    }finally{if(controlId)controls.delete(controlId);}
   });
  }};

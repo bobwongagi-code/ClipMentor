@@ -1,3 +1,4 @@
+import {acceptGroups,acknowledgeOverallFeedback,checkFinalReview} from '../review-controls'
 import { test, expect } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
@@ -110,6 +111,9 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await page.reload()
     await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
     await page.getByRole('textbox', { name: '修改意见' }).fill('把标题改成修订后测试')
+    await page.getByLabel('反馈位置').selectOption('whole')
+    await expect(page.getByRole('button', { name: '提交修改' })).toBeDisabled()
+    await acknowledgeOverallFeedback(page)
     await page.getByRole('button', { name: '提交修改' }).click()
     await expect.poll(async () => { const task=(await state()).task; return task?.status==='awaiting_blueprint'&&typeof task.blueprintRevision==='string'&&task.blueprintRevision!==firstRevision }, { timeout:30000 }).toBe(true)
     await page.reload()
@@ -119,7 +123,23 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     // Deliberately replaying the old revision must remain rejected by the real handler.
     const stale = await page.evaluate(async revision => (await fetch('/api/clipmentor/production', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({action:'approve_blueprint',revision}) })).status, firstRevision)
     expect(stale).toBe(409)
+    const approve = page.getByRole('button', { name: '确认蓝图，开始制作' })
+    await expect(approve).toBeDisabled()
+    const withheld=await fetch(origin+'/api/clipmentor/production',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({action:'approve_blueprint',revision:revised.blueprintRevision,boardIdentity:revised.boardIdentity})})
+    expect(withheld.status).toBe(409)
+    expect((await withheld.json()).issue).toMatchObject({kind:'content',message:expect.stringContaining('第 1 组')})
+    const groups=page.getByRole('region',{name:'逐组人审'})
+    await groups.getByRole('textbox').first().fill('把对照放进同一画面')
+    await groups.getByRole('combobox').first().selectOption('pending')
+    await page.getByRole('button',{name:'保存表态'}).click()
+    await expect(page.getByText('表态已保存。')).toBeVisible()
+    await page.reload()
+    await expect(groups.getByRole('textbox').first()).toHaveValue('把对照放进同一画面')
+    await expect(groups.getByRole('combobox').first()).toHaveValue('pending')
+    await expect(approve).toBeDisabled()
     await page.screenshot({ path: join(proof, '01-revised-board.png'), fullPage: true })
+    await acceptGroups(page)
     await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
     await expect.poll(async () => (await state()).outputs?.length).toBe(2)
     await page.reload()
@@ -132,19 +152,32 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await expect(prospect.locator('video')).toBeVisible()
     await page.screenshot({ path: join(proof, '02-two-synthetic-previews.png'), fullPage: true })
     const old = await (await fetch(origin + '/api/clipmentor/production?audience=existing_partner')).json()
-    await partner.getByRole('checkbox').check()
+    await partner.getByLabel('看过成片',{exact:true}).check()
+    await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
+    const previewEndpoint=origin+'/api/clipmentor/production?audience=existing_partner'
+    for(const [previewWatched,languageConfirmed] of [[true,false],[false,true]]){
+      const response=await fetch(previewEndpoint,{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({action:'accept',renderId:old.task.renderId,previewWatched,languageConfirmed})})
+      expect(response.status).toBe(409)
+      expect((await response.json()).issue.kind).toBe('content')
+    }
+    expect((await fetch(previewEndpoint+'&view=panel_download&renderId='+encodeURIComponent(old.task.renderId))).status).toBe(409)
+    await checkFinalReview(partner)
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeEnabled()
-    await partner.getByRole('textbox', { name: '修改意见' }).fill('只调整片尾留白')
+    await partner.getByRole('textbox', { name: '修改意见' }).fill('调整本组短标')
+    await partner.getByLabel('反馈位置').selectOption({label:'第 1 组'})
+    await partner.getByLabel('修改内容').selectOption('execution')
     await partner.getByRole('button', { name: '提交修改' }).click()
     await expect.poll(async () => { const task=(await (await fetch(origin + '/api/clipmentor/production?audience=existing_partner')).json()).task; return task?.status==='awaiting_review'&&typeof task.renderId==='string'&&task.renderId!==old.task.renderId }).toBe(true)
     // Stay in the same page: a prior checkbox must not approve a new render.
-    await expect(partner.getByRole('checkbox')).not.toBeChecked()
+    await expect(partner.getByLabel('看过成片',{exact:true})).not.toBeChecked()
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
+    await expect(partner.getByText('本次成片的集中返修已提交。', {exact:false})).toBeVisible()
     const staleRender = await page.evaluate(async renderId => (await fetch('/api/clipmentor/production?audience=existing_partner', { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'accept',renderId,languageConfirmed:true}) })).status, old.task.renderId)
     expect(staleRender).toBe(409)
     for (const [region,audience] of [[partner,'existing_partner'],[prospect,'new_contact']] as const) {
       await expect(region.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
-      await region.getByRole('checkbox').check()
+      await checkFinalReview(region)
       const download = page.waitForEvent('download')
       await region.getByRole('button', { name: '确认并下载成片' }).click()
       const file = await download
@@ -160,7 +193,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     expect(result.cancelledState).toBe('cancelled')
     expect(result.recoveredEffects).toBe(1)
     expect(forwarded.filter(route => route === 'POST /api/clipmentor/intake')).toHaveLength(2)
-    expect(result.actions.map((action:{status:number}) => action.status)).toEqual([409,200,409,200,200,409,200,200])
+    expect(result.actions.map((action:{status:number}) => action.status)).toEqual([409,200,409,409,200,200,409,409,200,409,200,200])
     expect(result.actions.every((action:{project:string,taskId:string}) => action.project.startsWith('web-loop-fixture')&&!!action.taskId)).toBe(true)
     expect(result.workerEvents.every((event: {project:string}) => event.project.startsWith('web-loop-fixture'))).toBe(true)
     expect(result.actions.filter((action:{action:string,status:number}) => action.action === 'revise_blueprint' && action.status===200)).toHaveLength(1)

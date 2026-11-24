@@ -1,3 +1,4 @@
+import {approvedFixtureReview} from '../review-controls'
 import { createServer } from 'node:http'
 import { expect, test } from '@playwright/test'
 
@@ -15,7 +16,7 @@ test('the local dev proxy preserves the board identity in both directions', asyn
         return
       case 'panel':
         res.writeHead(200, { 'content-type':'application/json' }).end(JSON.stringify({task:{
-          taskId:'current', status:'awaiting_blueprint', stage:'copy_review', blueprintRevision:'r1', boardIdentity:identity, active:false, sequence:1,
+          ...approvedFixtureReview,taskId:'current', status:'awaiting_blueprint', stage:'copy_review', blueprintRevision:'r1', boardIdentity:identity, active:false, sequence:1,
         }}))
         return
     }

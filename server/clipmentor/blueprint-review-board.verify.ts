@@ -326,18 +326,37 @@ try{
   const {createProductionTask,productionTaskStore,requeuePanelAuthorCheck}=await import('./production-task');
   const {digestValue}=await import('../agent-runs/store-values');
   const projectId='checked-panel-board',doc=clone(bindings[0]);
+  const planOf=(value:ProjectDoc)=>{
+   const ir=value.clipMentorAnalysis!.blueprint[0].internal_review as Record<string,any>;
+   return ir[ir.current_picture_plan];
+  };
+  const firstEnding=planOf(doc).delivery_sections.find((section:{kind:string})=>section.kind==='creator_invitation');
+  firstEnding.section_id='new_contact';
+  const secondEnding=clone(planOf(bindings[1]).delivery_sections.find((section:{kind:string})=>section.kind==='creator_invitation'));
+  secondEnding.section_id='existing_partner';
+  planOf(doc).delivery_sections.push(secondEnding);
+  const sibling=bindings[1];
+  for(const asset of sibling.assets)if(!doc.assets.some(candidate=>candidate.id===asset.id))doc.assets.push(clone(asset));
+  for(const evidence of sibling.clipMentorAnalysis!.evidence){
+   const prior=doc.clipMentorAnalysis!.evidence.find(candidate=>candidate.evidence_id===evidence.evidence_id);
+   if(prior)prior.source_ids=[...new Set([...prior.source_ids,...evidence.source_ids])];
+   else doc.clipMentorAnalysis!.evidence.push(clone(evidence));
+  }
   await withSerializedProjectStore(s=>s.writeEntry('project:'+projectId,doc));
   const snapshot=(await loadOfflineStoredProject(projectId))!;
   const app=createMiniConnect(e=>{throw e;}),server=createServer((req,res)=>app.handle(req,res));
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const origin='http://127.0.0.1:'+(server.address() as {port:number}).port;
   let launched=0;
-  (clipMentorProductionPlugin(async()=>{launched++;throw Error('No worker expected');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
+  const dispatched=Promise.withResolvers<void>();
+  (clipMentorProductionPlugin(async()=>{launched++;dispatched.resolve();throw Error('Fixture stops before review');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
   const api={provider:'openai' as const,model:'fixture',apiMode:'responses' as const,origin};
   try{
    const task=await createProductionTask({projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:{name:'Fixture',category:'test'},
     author:api,reviewer:api,brief:'Fixture',humanBlueprintReview:true,
     budget:{model:10,observation:0,review:0,tts:0,render:0,preview_review:0,maxElapsedMs:120_000,maxRepairs:2}});
+   task.input.voice={provider:'minimax',voiceId:'fixture-voice'};
+   const originalCreatedAt=task.createdAt;
    task.input.panelDelivery={productAssetId:'product',productAssetHash:'a'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'b'.repeat(64)};
    task.status='awaiting_blueprint';task.stage='copy_review';task.projectRevision=snapshot.revision;
    task.completed.blueprint={at:Date.now(),artifact:{revision:snapshot.revision}};
@@ -346,8 +365,8 @@ try{
    const status=async()=>(await (await realFetch(panel,{headers})).json()).task;
    const board=(identity?:string)=>realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({
     view:'panel_board',projectId,revision:snapshot.revision,...(identity?{boardIdentity:identity}:{})}),{headers});
-   const action=(action:string,boardIdentity:string,text='核对本组卖点')=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
-    action,revision:snapshot.revision,boardIdentity,text})});
+   const action=(action:string,boardIdentity:string,text='核对本组卖点',blueprintReview?:unknown)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
+    action,revision:snapshot.revision,boardIdentity,text,feedbackTarget:{scope:'whole',confirmed:true},blueprintReview})});
    await productionTaskStore.save(task);
    assert.equal((await status()).blueprintRevision,undefined,'legacy structure-only checkpoint is not presented for review');
    assert.equal((await board()).status,409,'direct HTML access cannot bypass the check');
@@ -369,6 +388,12 @@ try{
    const opened=await board(checked.boardIdentity);
    assert.equal(opened.status,200,await (opened.ok?Promise.resolve(''):opened.text()));
    assert.match(await opened.text(),/data-card="group-1"/);
+   assert.deepEqual(checked.reviewEndings.map((ending:{id:string})=>ending.id).sort(),['existing_partner','new_contact']);
+   const suppliedReview={groups:checked.reviewGroups.map((group:{id:string})=>({id:group.id,decision:'先展示上嘴效果',stance:'accepted'})),endingIds:['new_contact']};
+   const partialEnding=await action('produce_versions',checked.boardIdentity,undefined,suppliedReview);
+   assert.equal(partialEnding.status,409);
+   assert.match((await partialEnding.json()).issue.message,/两个片尾/);
+   assert.equal((await productionTaskStore.load(projectId,task.taskId)).productionChildren,undefined);
    const pass=structuredClone(task.completed.blueprint.artifact);
    task.completed.blueprint.artifact={...pass,authorSelfCheck:'needs_human_review',
     authorSelfCheckNotice:'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对'};
@@ -414,6 +439,21 @@ try{
    assert.equal(savedFeedback.productionChildren,undefined);
    assert.deepEqual(savedFeedback.attempts,originalAttempts);
    assert.equal(launched,0);
+   savedFeedback.createdAt=originalCreatedAt;
+   savedFeedback.completed.blueprint!.artifact=pass;
+   delete savedFeedback.repairContext;
+   await productionTaskStore.save(savedFeedback);
+   const ready=await status();
+   const readyBoard=await board(ready.boardIdentity);
+   assert.equal(readyBoard.status,200);await readyBoard.arrayBuffer();
+   const approved=await action('produce_versions',ready.boardIdentity,undefined,{...suppliedReview,endingIds:['new_contact','existing_partner']});
+   assert.equal(approved.status,200,await approved.clone().text());
+   const {setTimeout:timeout}=await import('node:timers/promises');
+   assert.equal(await Promise.race([dispatched.promise.then(()=>true),timeout(5000,false,{ref:false})]),true,'the approved batch reaches the worker');
+   const published=await productionTaskStore.load(projectId,task.taskId);
+   assert.deepEqual(published.blueprintReview?.endings,ready.reviewEndings);
+   assert.deepEqual(published.productionChildren?.map(child=>child.audience),['existing_partner','new_contact']);
+   assert.equal(launched,1,'common body starts once and the second ending waits');
   }finally{await new Promise<void>(r=>server.close(()=>r()));}
  });
  await test('Blocked panel blueprint feedback starts the saved revision without a resume request',async()=>{
@@ -465,7 +505,7 @@ try{
    assert(!panelHtml.includes('id="candidate-file"')&&!panelHtml.includes('id="freshness"')&&!panelHtml.includes('class="version-note"'));
    assert(panelHtml.includes('data-card="group-1"')&&panelHtml.includes("querySelectorAll('[data-zoom]')")&&!panelHtml.includes("getElementById('candidate-file')"));
    const text='片头保留本片成绩。已合作片尾同屏展示产品和本片 Storyboard。';
-   const submit=(boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:snapshot.revision,boardIdentity,text})});
+   const submit=(boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:snapshot.revision,boardIdentity,text,feedbackTarget:{scope:'whole',confirmed:true}})});
    const stale=await submit('wrong');assert.equal(stale.status,409);assert.equal(received.length,0);
    assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintFeedback,undefined);
    const action=await submit(visible.boardIdentity);
@@ -505,7 +545,7 @@ try{
     const response=await realFetch(link,{headers});assert.equal(response.status,200);await response.arrayBuffer();
     return current.boardIdentity as string;
    };
-   const reviseCurrent=(boardIdentity:string,text:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:revised.revision,boardIdentity,text})});
+   const reviseCurrent=(boardIdentity:string,text:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:revised.revision,boardIdentity,text,feedbackTarget:{scope:'whole',confirmed:true}})});
    const first=await currentBoard();
    assert.deepEqual(await (await reviseCurrent(first,'旧意见')).json(),{accepted:true,saved:true,dispatched:false,reason:'limit'});
   const checkedBeforeOtherWrites=await productionTaskStore.load(projectId,task.taskId);

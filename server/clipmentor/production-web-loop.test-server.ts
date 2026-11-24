@@ -80,8 +80,7 @@ async function prepareUploadedFixture(){
  const master=uploaded[0];
  assert.equal(master.sourceContentHash,original.sourceContentHash);
  assert.equal(master.sourceContentHash,hash(await readFile(inputs.source)));
- doc=JSON.parse(JSON.stringify(doc).replaceAll(JSON.stringify(original.id),JSON.stringify(master.id))
-  .replaceAll(JSON.stringify(original.src),JSON.stringify(master.src)));
+ doc=JSON.parse(JSON.stringify(doc).replaceAll(original.id,master.id).replaceAll(original.src,master.src));
  doc.assets=[...uploaded,...doc.assets.filter((asset:any)=>asset.id!==master.id)];
  original=master;input.sourceAssetId=master.id;
  const cancelled=await createProductionTask(input as any);
@@ -140,7 +139,16 @@ function launch(task:any){activeIds.add(task.taskId);void(async()=>{
   task.productionChildren=children;task.status='awaiting_review';await productionTaskStore.save(task);
   await new Promise(resolve=>setTimeout(resolve,800));
   for(const entry of children){const child=await productionTaskStore.load(entry.projectId,entry.taskId);await readyPreview(child);activeIds.delete(child.taskId);}
- }else{assert.equal(task.feedback,'只调整片尾留白');await readyPreview(task);}
+ }else{
+  assert(['只调整片尾留白','调整本组短标'].includes(task.feedback));
+  if(task.feedback==='调整本组短标'){
+   const feedback=task.repairContext?.final_feedback;
+   assert.equal(feedback?.kind,'execution');
+   assert.deepEqual(feedback?.unit_ids,[doc.clipMentorAnalysis.source_breakdown.units[0].unit_id]);
+   assert(feedback?.output_frames.length&&feedback?.item_ids.length);
+  }
+  await readyPreview(task);
+ }
  })().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>activeIds.delete(task.taskId));}
 const panel=createProductionPanel(launch,id=>activeIds.has(id));
 let origin='';

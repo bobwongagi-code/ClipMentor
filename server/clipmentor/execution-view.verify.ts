@@ -119,6 +119,29 @@ await productionFeedback(finished,feedback,{save:async t=>{persisted=structuredC
 assert.equal(persisted!.stage,'edit');assert(persisted!.completed.export===undefined);assert.equal(finished.repairContext!.final_feedback!==undefined,true);
 const local=structuredClone(project);local.timelines[0].items[0].transform={x:2};assert.doesNotThrow(()=>assertLocalFeedbackPreservation(project,local,bound));
 local.timelines[0].items[1].transform={x:3};assert.throws(()=>assertLocalFeedbackPreservation(project,local,bound),/unaffected/);
+const finishForRange=structuredClone(finished);
+finishForRange.status='awaiting_review';finishForRange.completed.export={at:1,artifact:{renderId:anchor.preview.renderId,revision:anchor.preview.revision,
+ facts_digest:anchor.preview.facts_digest,feedback_project_digest:feedbackProjectDigest(project)}};
+const selectedItem=t.items[0];
+const selectedOutput=[selectedItem.startFrame/t.fps,(selectedItem.startFrame+selectedItem.durationInFrames)/t.fps];
+const boundedRange=await bindProductionFeedback(finishForRange,project,{...feedback,item_ids:[],output_range_seconds:selectedOutput});
+assert(boundedRange.item_ids.includes(target),'output-time feedback binds items in the actual preview timeline');
+await assert.rejects(bindProductionFeedback(finishForRange,project,{...feedback,item_ids:[],output_range_seconds:[0,999999]}),/range_binding/);
+const escapedRange=structuredClone(project);escapedRange.timelines[0].items[0].startFrame=selectedItem.startFrame+1;
+assert.throws(()=>assertLocalFeedbackPreservation(project,escapedRange,boundedRange),/feedback_scope_item_moved_outside/);
+const {panelReviewIssue,panelFeedbackTarget,blueprintReviewGroups,bindBlueprintReview}=await import('./production-panel-review');
+for(const [reason,kind] of [['suspected_gate_defect','gate'],['feedback_unit_placement_missing','binding'],['teaching_final_narration_repair_no_progress','content']])
+ assert.equal(panelReviewIssue(reason)?.kind,kind);
+const fixtureGroup={id:'fixture-group',label:'第 1 组'};
+const weakClosing=structuredClone(project);
+const breakdown=weakClosing.clipMentorAnalysis!.source_breakdown!;
+breakdown.source_closing={status:'weak_candidate',segment_id:breakdown.segments.at(-1)!.segment_id,note:'无已确认促单组，仅有弱促单待核'};
+assert.deepEqual(blueprintReviewGroups(weakClosing),blueprintReviewGroups(project),'a weak closing note adds no review obligation');
+assert.throws(()=>bindBlueprintReview({groups:[{id:fixtureGroup.id,decision:'同时展示两个编号',stance:'changes'}],endingIds:[]},
+ {revision:'fixture',boardIdentity:'fixture-board',groups:[fixtureGroup],endings:[]},true),/第 1 组/);
+assert.deepEqual(panelFeedbackTarget({scope:'group',unitId:fixtureGroup.id},[fixtureGroup],false).unitIds,[fixtureGroup.id]);
+assert.throws(()=>panelFeedbackTarget({scope:'group',unitId:'wrong-group'},[fixtureGroup],true),/反馈位置/);
+assert.throws(()=>panelFeedbackTarget({scope:'whole'},[fixtureGroup],true),/确认/);
 const unchanged=structuredClone(finished);unchanged.status='awaiting_review';unchanged.feedbackUsed=false;const snapshot=JSON.stringify(unchanged);
 await assert.rejects(productionFeedback(unchanged,feedback,{save:async()=>{throw Error('write failed');},load:async()=>unchanged},project));
 assert.equal(JSON.stringify(unchanged),snapshot,'failed feedback persistence cannot mutate the task');

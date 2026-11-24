@@ -77,3 +77,10 @@
  .cm-output-heading { flex-direction: column; align-items: flex-start; gap: 6px; }
  .cm-production-track { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 24px 12px; justify-items: center; }
 }
+
+.cm-feedback h2 { font-size: 16px; font-weight: 750; }
+.cm-review-field { min-width: 0; display: grid; gap: 8px; margin: 0 0 12px; padding: 8px 12px 12px; border: 1px solid #eae6e0; border-radius: 10px; }
+.cm-review-field legend { padding-inline: 4px; font-weight: 700; }
+.cm-review-field p { margin: 0; }
+.cm-review-field label, .cm-feedback > label { display: block; overflow-wrap: anywhere; margin-bottom: 6px; }
+.cm-review-field input:not([type=checkbox]), .cm-feedback select { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid #d4cfc7; border-radius: 10px; font: inherit; }
