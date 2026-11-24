@@ -539,7 +539,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
           openingComparison,...(doneCriteria?{doneCriteria}:{}),
           brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。教学主体说明原作者怎样让购买理由可见，让达人能借鉴拍法。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
-          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',editorialPolicy:'exemplar-v1',
+          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',editorialPolicy:'exemplar-v1',selectionPolicy:'v1',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
           voice:{provider:'minimax',voiceId:'Malay_female_1_v1'},
