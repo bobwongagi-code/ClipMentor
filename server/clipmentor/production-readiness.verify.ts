@@ -1,3 +1,4 @@
+import {productionPreviewFacts,productionPreviewReviewInput} from './production-preview-facts';
 import assert from 'node:assert/strict';
 import {matchMeasuredNarration,prepareProductionBlueprint,productionBlueprintReadiness,productionExecutionReport} from './production-readiness';
 import groupedProject from '../../src/clipmentor/fixtures/grouped-registration-v1.json';
@@ -55,6 +56,12 @@ for(const entry of savedProjects.cases){
  assert.equal(report.actual_source_bindings.length,10);assert.equal(report.narration.length,6);
  assert.equal(report.captions.status,'matches');assert.equal(report.complete_film_accepted,false);
  assert.equal(report.differences.changes.length,0);
+ const timeline=doc.timelines.find(t=>t.id===doc.activeTimelineId)!;
+ const preview=productionPreviewFacts(doc,timeline,prepared.packet);
+ const aligned=productionPreviewReviewInput(doc,preview.input,prepared.packet);
+ const cueText=aligned.units.flatMap(unit=>unit.approved_cues?.map(cue=>cue.text)??[]);
+ assert(cueText.includes('Ulasan semula · Kain'),entry.case_id+' retains the exact reviewed legacy stage label');
+ assert(!cueText.includes('Ulasan semula'),entry.case_id+' does not additionally require the generic label');
  assert.equal(JSON.stringify(doc),before,'readiness/report must never modify saved case or judgments');
  const draft=structuredClone(doc);delete draft.clipMentorAnalysis!.production_copy_review;
  draft.assets=draft.assets.filter(a=>a.kind!=='audio');draft.timelines[0].items=[];

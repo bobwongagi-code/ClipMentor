@@ -10,6 +10,42 @@ const fresh=():ProductionTask=>({version:1,taskId:'test',projectId:'test',input:
  completed:{},effects:{},attempts:{model:0,review:0,observation:0,tts:0,render:0},repairs:0,feedbackUsed:false});
 let saved:ProductionTask;
 const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){return structuredClone(saved);}};
+{
+ const task=fresh();task.stage='edit';task.input.budget.maxRepairs=3;
+ let edits=0;
+ await advanceProductionTask(task,async current=>{
+  assert.equal(current.stage,'edit');edits++;
+  return {artifact:{execution_validation_error:'Actual sequence mapping incomplete: missing direct evidence L1:P1'},repair:'edit'};
+ },store);
+ assert.equal(edits,2);
+ assert.equal(task.status,'blocked');
+ assert.match(saved.error??'',/execution_mapping_repair_no_progress/);
+}
+for(const mode of ['missing-evidence','same-finding','same-group-finding','intervening-edit-error','changed-finding'] as const){
+ const task=fresh();task.stage='self_check';task.input.budget.maxRepairs=3;
+ let checks=0,edits=0;
+ await advanceProductionTask(task,async current=>{
+  if(current.stage==='edit'){
+   edits++;
+   if(mode==='intervening-edit-error'&&edits===1)return {artifact:{execution_validation_error:'Actual sequence mapping incomplete: wrong window'},repair:'edit'};
+  }
+  if(current.stage!=='self_check'||++checks===3)return {artifact:{saved:true}};
+  const missing=mode==='missing-evidence',changed=mode==='changed-finding'&&checks===2;
+  const finding={status:'not_supported',reasoning:changed?'Extra graphic':'Extra narration',
+   evidence:[{channel:'visual_organization',observed:changed?'Graphic at the end':'New narration',start_seconds:checks}]};
+  const perGroup=mode==='same-group-finding';
+  const receipt={effective_review:{blueprint_alignment_input_sha256:'a'.repeat(64),
+   blockers:[missing?'missing_blueprint_alignment':perGroup?'group:teaching:not_supported':'blueprint_alignment:not_supported']},
+   result:{judgment:perGroup?{continuity:[{unit_id:'group',teaching:finding}]}:{blueprint_alignment:finding}}};
+  return {artifact:{receipt},repair:'edit'};
+ },store);
+ assert.equal(task.status,mode==='changed-finding'?'awaiting_review':'blocked');
+ assert.equal(edits,mode==='missing-evidence'?0:mode==='changed-finding'||mode==='intervening-edit-error'?2:1);
+ if(mode!=='changed-finding'){
+  assert.match(saved.error??'',mode==='missing-evidence'?/alignment_evidence_missing/:/alignment_no_progress/);
+  assert(saved.repairContext?.receipt,'latest independent receipt remains available on pause');
+ }
+}
 for(const committed of [false,true]){
  const checkpointTask=fresh();
  let dispatched=0, lostReservationAck=false, lostReviewAck=false;

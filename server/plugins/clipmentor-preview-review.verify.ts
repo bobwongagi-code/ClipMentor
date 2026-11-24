@@ -18,6 +18,7 @@ import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261
 import type {ProjectDoc} from '../../src/editor/types';
 import {reviewBoardArtifactRoot} from '../clipmentor/blueprint-review-board-artifacts';
 import {collectSavedPreviewVisualEvidence} from '../clipmentor/preview-visual-evidence';
+import {buildPreviewReviewRequest,previewBlueprintAlignmentDigest,type PreviewReviewInput} from '../clipmentor/preview-review';
 
 const directory = await mkdtemp(join(tmpdir(),'preview-bridge-verify-'));
 const video = join(directory,'preview.mp4');
@@ -194,6 +195,59 @@ try {
   const good=await previewBridge(approved,passDeps);
   assert.equal(good.effective_review.status,'pass','accurate complete control is not universally blocked');
   assert.equal(good.effective_review.can_use_as_pass,true);assert.equal(good.full_film_accepted,false);
+  const alignedInput:PreviewReviewInput={...cleanInput,check_blueprint_alignment:true,
+    reference_text:[{channel:'narration',start_seconds:7,end_seconds:9,text:'Rakaman dekat.'}],
+    points:[{...cleanInput.points[0],approved_connection:'同时保留两个参照物，买家可自己核对差别',filming_conditions:['参照物没有遮挡']}],
+    units:[{unit_id:'group',point_ids:['P'],output_range_seconds:[2.2,10],approved_teaching_ranges:[[3,5],[7,9]],
+      approved_narration:['Rakaman dekat.'],approved_cues:[
+        {phase:'original',text:'Video asal',output_ranges:[[3,5]]},
+        {phase:'explanation',narration:['Rakaman dekat.'],text:'Lihat semula',output_ranges:[[7,9]]},
+        {phase:'explanation',narration:['Rakaman dekat.'],text:'1.5x',output_ranges:[[7,9]]},
+      ]}]};
+  const localVisual={...evidence(7,9,'本组回看，两个参照物无遮挡并显示阶段提示'),quote:'Lihat semula'};
+  const originCue={...evidence(3,4,'原声阶段短标'),quote:'Video asal'};
+  const amountCue={...localVisual,quote:'1.5x'};
+  const otherGroup=evidence(5.1,6.5,'范围中间但属于邻组');
+  const spoken={...localVisual,channel:'narration',quote:'Rakaman dekat.'};
+  const alignedJudgment=()=>({
+    coverage:[{point_id:'P',depiction:[localVisual],teaching:finding([localVisual])}],
+    continuity:[{...judgment.continuity[0],unit_id:'group',current:[localVisual,originCue],teaching:finding([localVisual,originCue,amountCue])}],
+    blueprint_alignment:finding([localVisual]),
+  });
+  const alignmentDigest=previewBlueprintAlignmentDigest(alignedInput);
+  const emitted=JSON.parse(buildPreviewReviewRequest(bytes,alignedInput).body).contents[0].parts[1].text;
+  assert(emitted.includes('顶层另必填 blueprint_alignment')&&emitted.includes('参照物没有遮挡')&&emitted.includes('Lihat semula'),
+    'the request itself carries approved content and requires the whole-film answer');
+  assert(!JSON.parse(buildPreviewReviewRequest(bytes,cleanInput).body).contents[0].parts[1].text.includes('顶层另必填 blueprint_alignment'),
+    'the previously frozen prompt remains available for reading old operations');
+  for(const [name,change,blocker] of [
+    ['aligned',()=>{},undefined],
+    ['omitted answer',(j:ReturnType<typeof alignedJudgment>)=>{Object.assign(j,{blueprint_alignment:undefined});},'missing_blueprint_alignment'],
+    ['unreviewed addition',(j:ReturnType<typeof alignedJudgment>)=>{j.blueprint_alignment=finding([otherGroup],'not_supported');},'blueprint_alignment:not_supported'],
+    ['neighbor borrowed',(j:ReturnType<typeof alignedJudgment>)=>{j.coverage[0].teaching=finding([otherGroup]);j.continuity[0].current=[otherGroup];j.continuity[0].teaching=finding([otherGroup]);},'P:teaching_evidence_outside_approved_unit'],
+    ['blanket time span',(j:ReturnType<typeof alignedJudgment>)=>{j.coverage[0].teaching=finding([evidence(2.2,10,'全部都对')]);},'P:teaching_evidence_outside_approved_unit'],
+    ['cue unverified',(j:ReturnType<typeof alignedJudgment>)=>{j.continuity[0].teaching=finding([spoken]);},'group:approved_cue_visual_evidence_missing'],
+    ['wrong cue quoted',(j:ReturnType<typeof alignedJudgment>)=>{j.continuity[0].teaching=finding([{...localVisual,quote:'Another label'},originCue,amountCue]);},'group:approved_cue_visual_evidence_missing'],
+    ['swapped phases',(j:ReturnType<typeof alignedJudgment>)=>{j.continuity[0].teaching=finding([{...localVisual,quote:originCue.quote},{...originCue,quote:localVisual.quote},amountCue]);},'group:approved_cue_visual_evidence_missing'],
+    ['changed numeric cue',(j:ReturnType<typeof alignedJudgment>)=>{j.continuity[0].teaching=finding([localVisual,originCue,{...amountCue,quote:'15x'}]);},'group:approved_cue_visual_evidence_missing'],
+  ] as const){
+    const candidate=alignedJudgment();change(candidate);
+    let submissions=0;
+    const fake={...deps,run:async(args:string[])=>{
+      submissions++;
+      const clean=JSON.parse(await readFile(args[args.indexOf('--input')+1],'utf8'));
+      assert.equal(previewBlueprintAlignmentDigest(clean),alignmentDigest);
+      const r={...makeResult(candidate),input_sha256:createHash('sha256').update(JSON.stringify(clean)).digest('hex')};
+      await writeFile(args[args.indexOf('--out')+1],JSON.stringify(r));
+    }};
+    const op={...body(),input:alignedInput,executionManifest:manifest};
+    const receipt=await previewBridge(op,fake);
+    assert.equal(receipt.effective_review.can_use_as_pass,!blocker,name);
+    if(blocker)assert(receipt.effective_review.blockers.includes(blocker),name+': '+JSON.stringify(receipt.effective_review.blockers));
+    assert.equal(receipt.effective_review.blueprint_alignment_input_sha256,alignmentDigest);
+    const again=await previewBridge({action:'read',operationId:op.operationId,projectId:op.projectId},fake);
+    assert.equal(submissions,1);assert.equal(again.requestsSent,0);assert.deepEqual(again.result,receipt.result);
+  }
   const ref=join(directory,'reference.jpg');
   await sharp({create:{width:40,height:60,channels:3,background:'#976349'}}).jpeg().toFile(ref);
   const refHash=createHash('sha256').update(await readFile(ref)).digest('hex'),criteriaDigest='a'.repeat(64);

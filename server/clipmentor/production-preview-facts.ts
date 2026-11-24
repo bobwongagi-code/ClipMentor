@@ -5,7 +5,8 @@ import type {ProjectDoc,TimelineState,TimelineItem} from '../../src/editor/types
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
 import {NATIVE_TEXT_STYLE_VERSION} from '../../shared/native-text-style';
 import {deliveryAudio} from '../../src/clipmentor/delivery-bindings';
-import {nativeExecutionMapping} from '../../src/clipmentor/source-breakdown';
+import {contiguousPlaybackRuns,nativeExecutionMapping} from '../../src/clipmentor/source-breakdown';
+import {validatePreviewReviewInput,type PreviewReviewInput} from './preview-review';
 
 function canonical(value:unknown):string {
  if(value===null||typeof value!=='object')return JSON.stringify(value)??'null';
@@ -14,6 +15,8 @@ function canonical(value:unknown):string {
 }
 export const previewFactsDigest=(value:unknown)=>createHash('sha256').update(canonical(value)).digest('hex');
 const renderKeys=['srcInFrame','playbackRate','props','templateId','width','height','transform','keyframes','filters','backgroundFill','backgroundFillStrength','zoom','effects','fadeInFrames','fadeOutFrames'] as const;
+const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
+const nonblank=(v:unknown):v is string=>typeof v==='string'&&!!v.trim();
 const hashCode=(i:TimelineItem)=>i.code?previewFactsDigest(i.code):undefined;
 /** Snapshot actual native rendering inputs. Names, local paths and author evaluations are excluded. */
 function renderState(i:TimelineItem) {
@@ -26,7 +29,7 @@ function assertLinear(i:TimelineItem) {
   throw new Error(`preview_source_timing_invalid:${i.id}`);
 }
 /** Extend the existing scenes/audios contract from native items; no second handwritten Shot table. */
-export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:TeachingPacket){
+export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:TeachingPacket,options?:{legacyExport?:true}){
  if(!Number.isFinite(t.fps)||t.fps<=0||!t.items.length)throw new Error('preview_timeline_invalid');
  if(t.transitions?.length)throw new Error('preview_composition_unsupported:transitions');
  const ids=new Set<string>();
@@ -85,7 +88,8 @@ export function productionPreviewFacts(doc:ProjectDoc,t:TimelineState,packet:Tea
  });
  const nativePlacement=packet.units.some(u=>!doc.clipMentorAnalysis?.source_breakdown?.units.find(v=>v.unit_id===u.unit_id)?.placement)
   ?nativeExecutionMapping(doc):null;
- if(nativePlacement?.issues.length)throw Error('preview_native_mapping_invalid:'+JSON.stringify(nativePlacement.issues));
+ const mappingIssues=nativePlacement?.issues.filter(issue=>!options?.legacyExport||issue.code!=='native_mapping_point_evidence_missing');
+ if(mappingIssues?.length)throw Error('preview_native_mapping_invalid:'+JSON.stringify(mappingIssues));
  const input={duration_seconds:total_frames/t.fps,
   points:packet.units.flatMap(u=>u.points.map(p=>({point_id:p.point_id,teaching_goal_zh:p.question,product_relevance:p.buying_concern}))),
   units:packet.units.map(u=>{
@@ -134,6 +138,62 @@ export function assertPreviewExportBinding(exported:Record<string,unknown>|undef
  if(exported?.revision!==revision||exported?.facts_digest!==previewFactsDigest(facts))throw new Error('preview_export_binding_missing_or_stale');
 }
 
+/** Project approved content into the existing independent preview request.
+ * Keep the original export facts shape so older bound reviews remain readable. */
+export function productionPreviewReviewInput(doc:ProjectDoc,rawInput:unknown,packet:TeachingPacket):PreviewReviewInput{
+ const input=validatePreviewReviewInput(rawInput);
+ const approval=new Map(packet.units.flatMap(unit=>unit.points.map(point=>[point.point_id,point] as const)));
+ const points=input.points.filter(point=>approval.get(point.point_id)?.treatment!=='omit').map(point=>{
+  const approved=approval.get(point.point_id);
+  return approved?{...point,approved_connection:approved.teaching_basis?.connection,filming_conditions:approved.filming_conditions}:point;
+ });
+ const kept=new Set(points.map(point=>point.point_id));
+ const placements=new Map(doc.clipMentorAnalysis?.source_breakdown?.units.map(unit=>[unit.unit_id,unit.placement]));
+ const native=packet.units.some(unit=>!placements.get(unit.unit_id))?nativeExecutionMapping(doc):undefined;
+ const fps=doc.timelines.find(t=>t.id===doc.activeTimelineId)!.fps;
+ const units=input.units.flatMap(unit=>{
+  const point_ids=unit.point_ids.filter(id=>kept.has(id));
+  if(!point_ids.length)return [];
+  const approved=packet.units.find(u=>u.unit_id===unit.unit_id);
+  if(!approved){
+   const section=packet.delivery_sections?.find(section=>'delivery/'+section.section_id===unit.unit_id);
+   return [{...unit,point_ids,...(section?{approved_narration:[section.line.narration_ms]}:{})}];
+  }
+  const placement=placements.get(unit.unit_id);
+  const phases=placement?{original:[placement.original_frames],explanation:[placement.explanation_frames]}:native?.teachingPhases[unit.unit_id];
+  const toSeconds=(windows:Array<[number,number]>)=>windows.map(([start,end]):[number,number]=>[start/fps,end/fps]);
+  const plan=approved.picture_plan?.execution_plan?.content;
+  const cues=plan?.viewer_stage_cues;
+  type Cue=NonNullable<typeof unit.approved_cues>[number];
+  const makeCue=(text:string,phase:Cue['phase'],narration?:string[]):Cue=>({
+   text,phase,narration,...(phases?.[phase].length?{output_ranges:toSeconds(phases[phase])}:{})
+  });
+  const original=record(cues)&&record(cues.original)&&nonblank(cues.original.text)?[makeCue(cues.original.text,'original')]:[];
+  const revisit=record(cues)&&Array.isArray(cues.revisit)?cues.revisit.flatMap(cue=>{
+   if(!record(cue)||!nonblank(cue.text)||!Array.isArray(cue.line_ids)||!cue.line_ids.every(nonblank))return [];
+   const ids=cue.line_ids;
+   const narration=approved.lines.filter(line=>ids.includes(line.line_id)).map(line=>line.narration_ms);
+   return narration.length?[makeCue(cue.text,'explanation',narration)]:[];
+  }):[];
+  const labels=approved.lines.flatMap(line=>line.labels.map(text=>makeCue(text,'explanation',[line.narration_ms])));
+  // Exact reviewed rows can expand a generic stage cue into different visible labels.
+  const composition=plan?.composition;
+  let exactCues:Cue[]=[];
+  if(record(composition)&&typeof composition.detail==='string')try{
+   const detail:unknown=JSON.parse(composition.detail);
+   if(record(detail)&&Array.isArray(detail.production_rows))exactCues=detail.production_rows.flatMap(r=>
+    record(r)&&r.unit_id===unit.unit_id&&nonblank(r.stage_label)&&(r.kind==='original'||r.kind==='explanation')
+     ?[makeCue(r.stage_label,r.kind)]:[]);
+  }catch(error){if(!(error instanceof SyntaxError))throw error;}
+  const approved_cues=[...[...original,...revisit].filter(cue=>!exactCues.some(exact=>exact.phase===cue.phase)),...exactCues,...labels];
+  const windows=phases?contiguousPlaybackRuns([...phases.original,...phases.explanation].sort((a,b)=>a[0]-b[0]),0):undefined;
+  return [{...unit,point_ids,approved_narration:approved.lines.map(line=>line.narration_ms),
+   ...(windows?{approved_teaching_ranges:toSeconds(windows)}:{}),
+   ...(approved_cues.length?{approved_cues:Object.values(Object.fromEntries(approved_cues.map(cue=>[JSON.stringify(cue),cue])))}:{})}];
+ });
+ return validatePreviewReviewInput({...input,points,units,check_blueprint_alignment:true});
+}
+
 /** A successful plan/export is not evidence that this current file was inspected. */
 export function assertFinalPreviewEvidence(task:Pick<import('./production-task').ProductionTask,'projectId'|'projectRevision'|'completed'>,revision:string,videoSha256:string){
  const row=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
@@ -144,5 +204,6 @@ export function assertFinalPreviewEvidence(task:Pick<import('./production-task')
   ||r.projectId!==task.projectId||r.videoSha256!==videoSha256||r.status!=='completed'
   ||r.scope!=='rendered_preview_continuous_review'||r.full_film_accepted!==false
   ||gate.can_use_as_pass!==true||gate.status!=='pass'||!Array.isArray(gate.blockers)||gate.blockers.length!==0
+  ||(exported.blueprint_alignment_input_sha256!==undefined&&gate.blueprint_alignment_input_sha256!==exported.blueprint_alignment_input_sha256)
   ||gate.manifest_binding!=='frozen_at_request'||timeline.status!=='no_detected_conflict')throw Error('final_output_evidence_missing_or_stale');
 }
