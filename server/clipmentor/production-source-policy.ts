@@ -42,9 +42,22 @@ export function sourceClosingDecision(topics:ReturnType<typeof frozenTeachingTop
  return topics?.closingStatus??doc?.clipMentorAnalysis?.source_breakdown?.source_closing?.status??null;
 }
 
-export function sourceClosingPolicy(topics:ReturnType<typeof frozenTeachingTopics>,doc?:ProjectDoc){
+type SourceClosingPolicy={
+ decision:SourceClosingStatus|null;
+ rules:Record<SourceClosingStatus,string>;
+ instruction:string;
+ factOnly?:true;
+ factualNote?:string;
+ requiredNote?:string;
+ sourceEvidenceRange?:readonly [number,number];
+ noteLocation?:string;
+ evidenceSegmentId?:string;
+};
+
+export function sourceClosingPolicy(topics:ReturnType<typeof frozenTeachingTopics>,doc?:ProjectDoc):SourceClosingPolicy{
  const closing=doc?.clipMentorAnalysis?.source_breakdown?.source_closing;
  const bound=closing&&doc?.clipMentorAnalysis?.source_breakdown?.segments.find(s=>s.segment_id===closing.segment_id);
+ const factOnly=topics?.closingStatus==='weak_candidate';
  return {
   decision:sourceClosingDecision(topics,doc),
   rules:{
@@ -53,7 +66,9 @@ export function sourceClosingPolicy(topics:ReturnType<typeof frozenTeachingTopic
    none:'已核对实际收尾，未见促单或疑似线索。记录无促单，禁止补建促单组。收尾尚未核清时不能判无促单。',
   },
   instruction:'有任务声明时按其处置。普通任务先在选题基线 source_closing 登记同一档位，附实际片尾 segment_id 和 note。未核清时暂留待核。作者和审核读取同一登记，审核仍须核对原片是否支持。达人邀请属于独立交付。',
-  ...(topics?{requiredNote:topics.closing,sourceEvidenceRange:topics.closingEvidenceRange,noteLocation:'蓝图最后一个教学组的原片收尾回放段 segments[].unknowns'}
+  ...(factOnly?{factOnly:true as const,factualNote:topics.closing,sourceEvidenceRange:topics.closingEvidenceRange,
+   instruction:'任务声明已登记弱促单事实。直接保留这份记录，不要求另写注记、插入回放或讲解。若把它改判为已确认促单、无促单或新增推荐，按实际内容和引用核对。'}
+   :topics?{requiredNote:topics.closing,sourceEvidenceRange:topics.closingEvidenceRange,noteLocation:'蓝图最后一个教学组的原片收尾回放段 segments[].unknowns'}
    :bound&&closing?{requiredNote:closing.note,sourceEvidenceRange:bound.source_range_seconds,evidenceSegmentId:bound.segment_id}:{}),
  };
 }
