@@ -813,3 +813,15 @@ Two review cases exposed cross-stage issues. Selection by output interval also h
 Local verification passed 26 browser tests, 18 integration tests and 34 blueprint-board checks. The final real-handler browser loop also passed after the panel reused its verified preview snapshot. The execution view, production task and plugin regressions used temporary projects with zero live providers. The existing JUDYDOLL project, media, review decisions and budget were left untouched. Native Malay listening, human judgment of the actual film and the two editor-approved calibration samples remain unverified. The separate Flayr trial remains outside this change.
 
 The isolated branch starts from main after PR #47. The legacy output regression supplies the watched confirmation and current render ID before testing the downstream format and receipt checks. This keeps those checks reachable under the new final acceptance contract.
+
+### 2026-11-24 · Carry spoken Malay drafting into the ClipMentor Skill
+
+The reusable writing lessons are recorded in [the blueprint review guide](docs/clipmentor-blueprint-review.md#讲解打磨的经验与教训). Keep the filming decision, buyer's evidence, actual source window and the reason for the edit together. The case is an editorial calibration example pending independent review, native listening and a separate transfer check.
+
+The user requested Skill adoption for the reusable method. The bundled ClipMentor Skill now routes drafting to the decision and evidence handoff in `references/planning.md`. The existing author loader supplies it for the blueprint stage. The skill-loading regression keeps the held-out JUDYDOLL source out of bundled author guidance, so its concrete wording, facts and timing stay in the blueprint review guide. No new review call or production state change is required to use the method.
+
+### 2026-11-24 · Estimate narration against the selected pictures
+
+The offline third draft is `output/docs/JUDYDOLL-v3-两组讲解离线第三稿.md`. The palette group has a 1.4 s evidence window, a 2.2 s replay envelope and a 1.3 s line selection. The nose group's replay is 2.6 s and its usable result evidence is about 0.5 s. Read the saved bindings before comparing speech length. Shorter drafts and two genuine storytelling angles are available, with a project glossary pending native listening. The estimates still exceed the registered moving footage and require measured voice and a meaningful picture allocation. Do not derive a universal syllable cap or plan a loop to fill the gap. No project changes, review or audio generation were made.
+
+The user noted that the third draft still sounds mechanical. Reuse the existing ClipMentor drafting section to work from what a local creator would say over the shot, check pauses and emphasis against the picture and rewrite stiff clauses as a whole. Compare variants with distinct spoken angles. The glossary records phrasing in context and listening status. Follow the text-only teaching check with the existing independent and audio checks. The author guidance contains the general method. The actual project example stays in the blueprint review guide.
