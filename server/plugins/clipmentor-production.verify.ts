@@ -329,7 +329,7 @@ try{
  const {feedbackProjectDigest:selectionNeutralDigest}=await import('../clipmentor/production-feedback');
  panelTask.completed.export!.artifact.feedback_project_digest=selectionNeutralDigest((await loadOfflineStoredProject(panelTask.projectId))!.doc);
  panelTask.input.panelDelivery={productAssetId:'fixture-product',productAssetHash:pngHash,salesAssetId:'fixture-sales',ctaAssetId:'fixture-cta',ctaAssetHash:pngHash};await productionTaskStore.save(panelTask);
- const acceptFixture=()=>post({action:'accept',projectId:panelTask.projectId,taskId:panelTask.taskId,malayDeliveryConfirmed:true});
+ const acceptFixture=()=>post({action:'accept',projectId:panelTask.projectId,taskId:panelTask.taskId,malayDeliveryConfirmed:true,previewWatched:true,renderId:'delivery-fixture'});
  assert.equal((await acceptFixture()).status,409,'export alone and a checked language box cannot certify actual inspection');
  const videoSha=createHash('sha256').update(await readFile(join(media,'fixture-preview.mp4'))).digest('hex');
  panelTask.completed.self_check!.artifact.receipt={projectId:panelTask.projectId,videoSha256:videoSha,status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}};
@@ -383,18 +383,18 @@ try{
  const changedBrief={...requirementBrief,revision:2,doneCriteria:['Original requirement','先导出代表视频并连续观看，不可用截图替代']};
  await requirementApi.registerHandoff({projectId:requirementProject,expectedProjectRevision:required.projectRevision,previousDigest:registered.digest,brief:changedBrief});
  const {acceptProductionTask}=await import('../clipmentor/production-task');
- await assert.rejects(acceptProductionTask(required,true),/final_requirements_changed/,'new text requirements cannot inherit old visual approval');
+ await assert.rejects(acceptProductionTask(required,true,undefined,{watched:true,renderId:'delivery-fixture'}),/final_requirements_changed/,'new text requirements cannot inherit old visual approval');
  assert.equal(required.status,'awaiting_review');
  required.completed.copy_review!.artifact.requirementsDigest=requirementHash(changedBrief.doneCriteria);required.completed.self_check!.artifact.requirementsDigest=requirementHash(changedBrief.doneCriteria);await productionTaskStore.save(required);
  const {loadAgentRuntimeSidecar}=await import('../../src/persist/agentRuntimeStore');const beforeRace=(await loadAgentRuntimeSidecar(requirementProject)).artifacts.length;
  const racingStore={...productionTaskStore,save:async(next:typeof required,conditions?:Parameters<typeof productionTaskStore.save>[1])=>{await setStoredEntry('project:'+requirementProject,newer);await productionTaskStore.save(next,conditions);}};
- await assert.rejects(acceptProductionTask(required,true,racingStore),/precondition_changed/,'a commit during evidence inspection cannot publish completed');
+ await assert.rejects(acceptProductionTask(required,true,racingStore,{watched:true,renderId:'delivery-fixture'}),/precondition_changed/,'a commit during evidence inspection cannot publish completed');
  assert.equal(required.status,'awaiting_review','failed acceptance does not mutate caller state');assert.equal((await productionTaskStore.load(requirementProject,required.taskId)).status,'awaiting_review');assert.equal((await loadAgentRuntimeSidecar(requirementProject)).artifacts.length,beforeRace,'failed completion body is not indexed');
  await setStoredEntry('project:'+requirementProject,deliveryDoc);
  const originalControlLoad=productionTaskStore.load;let controlEntered!:()=>void,controlRelease!:()=>void,holdControl=true;
  const enteredControl=new Promise<void>(r=>{controlEntered=r;}),releaseControl=new Promise<void>(r=>{controlRelease=r;});
  productionTaskStore.load=async(project,id)=>{if(project===requirementProject&&holdControl){holdControl=false;controlEntered();await releaseControl;}return originalControlLoad(project,id);};
- const pendingAccept=post({action:'accept',projectId:requirementProject,taskId:required.taskId,malayDeliveryConfirmed:true});await enteredControl;
+ const pendingAccept=post({action:'accept',projectId:requirementProject,taskId:required.taskId,malayDeliveryConfirmed:true,previewWatched:true,renderId:'delivery-fixture'});await enteredControl;
  const errorLog=console.error;const controlErrors:string[]=[];console.error=(...args)=>{controlErrors.push(args.map(String).join(' '));};
  try{
   const competing=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${requirementProject}`,{method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'accept',renderId:'delivery-fixture',languageConfirmed:true})});
@@ -477,6 +477,20 @@ try{
  const outputDoc=(await loadOfflineStoredProject(output.projectId))!.doc;
  assert.equal((await checkCopyProduction(outputDoc,'clipmentor')).allowed,false,'a user confirmation never manufactures production approval');
  assert.equal((await loadOfflineStoredProject(panelTask.projectId))!.revision,sourceSnapshot.revision,'source project remains unchanged');
+ const {bindBlueprintReview,blueprintReviewGroups,blueprintReviewEndings}=await import('../clipmentor/production-panel-review');
+ const reviewScope={revision:sourceSnapshot.revision,boardIdentity:'dual-fixture-board',
+  groups:blueprintReviewGroups(full),endings:blueprintReviewEndings(full)};
+ const reviewInput={groups:reviewScope.groups.map(({id})=>({id,decision:'把两种商品的实际大小并置',stance:'accepted'})),
+  endingIds:['existing_partner','new_contact']};
+ assert.throws(()=>bindBlueprintReview({...reviewInput,endingIds:['existing_partner']},reviewScope,true),/两个片尾/);
+ assert.throws(()=>bindBlueprintReview({...reviewInput,endingIds:['existing_partner','old_project_ending']},reviewScope,true),/当前蓝图不符/);
+ const confirmationReview=bindBlueprintReview(reviewInput,reviewScope,true);
+ assert.equal(confirmationReview.endings.length,2);
+ for(const ending of confirmationReview.endings){
+  assert(ending.materials.length>0);
+  const scoped=selectProductionAudience(full,ending.id as 'existing_partner'|'new_contact');
+  assert.deepEqual(blueprintReviewEndings(scoped),[ending],'the observed ending and its own production output use the same material IDs');
+ }
  {
   await productionTaskStore.save(confirmationParent);
   const {getStoredEntry}=await import('./project-store');
@@ -491,17 +505,19 @@ try{
   };
   try{
    await assert.rejects(createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin,
-    [{key,digest:hashValue(guarded.value)}]),/precondition_changed/);
+    [{key,digest:hashValue(guarded.value)}],confirmationReview),/precondition_changed/);
    assert(interrupted);
    assert.equal((await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId)).productionChildren,undefined);
+   assert.equal((await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId)).blueprintReview,undefined);
    const prepared=await createBlueprintContinuation(confirmationParent,sourceSnapshot,'new_contact',variantRequirements,origin);
    assert.equal(prepared.status,'awaiting_blueprint','stale confirmation may prepare but cannot release a child');
   }finally{productionTaskStore.save=save;await setStoredEntry(key,guarded.value);}
  }
- const batch=await createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin);
- const replayedBatch=await createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin);
+ const batch=await createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin,undefined,confirmationReview);
+ const replayedBatch=await createBlueprintContinuations(confirmationParent,sourceSnapshot,variantRequirements,origin,undefined,confirmationReview);
  assert.deepEqual(batch.map(t=>t.taskId),replayedBatch.map(t=>t.taskId),'one confirmation always creates the same two outputs');
  assert.deepEqual(confirmationParent.productionChildren!.map(t=>t.audience),['existing_partner','new_contact']);
+ assert.deepEqual((await productionTaskStore.load(confirmationParent.projectId,confirmationParent.taskId)).blueprintReview,confirmationReview);
  assert.equal(batch[1].sharedProduction!.taskId,batch[0].taskId);
  const reversedLabels=structuredClone(confirmationParent);
  reversedLabels.productionChildren!.forEach(entry=>{entry.audience=entry.audience==='new_contact'?'existing_partner':'new_contact';});
@@ -722,7 +738,7 @@ try{
    assert.equal(orphanFeedback.status,409,'direct feedback cannot rewrite a detached output even when its preview is valid');
    const orphanPanelFeedback=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${reverseBeforeProducer.projectId}`,{
     method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
-    body:JSON.stringify({action:'revise_preview',renderId:reverseAnchor.preview.renderId,text:'只核片尾说明'}),
+    body:JSON.stringify({action:'revise_preview',renderId:reverseAnchor.preview.renderId,text:'只核片尾说明',feedbackTarget:{scope:'whole',confirmed:true}}),
    });
    assert.equal(orphanPanelFeedback.status,409,'the standalone child panel cannot write feedback either');
    assert.deepEqual(await productionTaskStore.load(reverseBeforeProducer.projectId,reverseBeforeProducer.taskId),reverseBeforeProducer);

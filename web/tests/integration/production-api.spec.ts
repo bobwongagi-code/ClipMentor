@@ -1,3 +1,4 @@
+import {acknowledgeOverallFeedback,checkFinalReview} from '../review-controls'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -185,6 +186,7 @@ test.describe('production gateway responses', () => {
       const feedback = page.getByRole('textbox', { name: '修改意见' })
       const submit = page.getByRole('button', { name: '提交修改' })
       await feedback.fill('保留这条意见')
+      await acknowledgeOverallFeedback(page)
       await submit.click()
       await expect(submit).toBeEnabled()
       await expect(feedback).toHaveValue('保留这条意见')
@@ -229,7 +231,7 @@ test.describe('production gateway responses', () => {
         } } })
       })
       await page.goto(origin)
-      await page.getByRole('checkbox').check()
+      await checkFinalReview(page)
       await page.getByRole('button', { name: '确认并下载成片' }).click()
       await expect.poll(() => readFailed).toBe(true)
       await expect(page.getByText('操作已收到，正在核对最新状态。')).toBeVisible()
@@ -274,7 +276,8 @@ test.describe('production gateway responses', () => {
       await page.goto(origin)
       const feedback = page.getByRole('textbox', { name: '修改意见' })
       await feedback.fill('保留本版修改意见')
-      await page.getByRole('button', { name: '提交修改' }).click()
+      await acknowledgeOverallFeedback(page)
+      await page.getByRole('button', {name:'提交修改'}).click()
       await expect.poll(() => posts).toBe(1)
       await expect(feedback).toBeDisabled()
       previewAvailable = false

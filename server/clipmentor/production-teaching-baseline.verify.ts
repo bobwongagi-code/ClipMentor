@@ -598,7 +598,7 @@ try{
    assert.match(boardHtml,/data-card="group-1"/);
    assert(!boardHtml.includes('data-narration-review'),'a historical board without a matching independent answer may not show one');
    const submit=()=>realFetch(url+'?'+query,{method:'POST',headers,
-    body:JSON.stringify({action:'revise_blueprint',revision,boardIdentity,text:feedback})});
+    body:JSON.stringify({action:'revise_blueprint',revision,boardIdentity,text:feedback,feedbackTarget:reviewed?{scope:'whole',confirmed:true}:{scope:'group',unitId:'fixture-group'}})});
    const results=await Promise.all([submit(),submit()]);
    assert.deepEqual(results.map(response=>response.status).sort(),[200,409],await results[0].clone().text());
    await Promise.all(results.map(response=>response.arrayBuffer()));

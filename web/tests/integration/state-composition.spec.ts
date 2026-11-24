@@ -1,3 +1,4 @@
+import {acceptGroups,acknowledgeOverallFeedback,checkFinalReview} from '../review-controls'
 import { test, expect, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
@@ -83,7 +84,8 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       for (const [label, key] of [['爆款原片', 'source'], ['商品图', 'product'], ['销量截图', 'sales'], ['CTA 行动号召图', 'cta']]) await page.getByLabel(label, { exact: true }).setInputFiles(inputs[key])
       await page.getByRole('button', { name: '上传素材' }).click()
       await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
-      await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
+      await acceptGroups(page)
+    await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
       await expect.poll(async () => (await state()).task?.status, { timeout: 20_000 }).toBe('awaiting_review')
       await page.reload()
       const other = await context.newPage()
@@ -109,16 +111,18 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
         }
       })
       if (action === 'accept') {
-        await partner(page).getByRole('checkbox').check()
+        await checkFinalReview(partner(page))
         await partner(page).getByRole('button', { name: '确认并下载成片' }).click()
       } else {
         await partner(page).getByRole('textbox', { name: '修改意见' }).fill('只调整片尾留白')
+        await acknowledgeOverallFeedback(partner(page))
         await partner(page).getByRole('button', { name: '提交修改' }).click()
       }
       await bounded(entered.promise, 'old action entered route')
       await checkpoint('01-old-action-held')
       if (replacement === 'render') {
         await partner(other).getByRole('textbox', { name: '修改意见' }).fill('只调整片尾留白')
+        await acknowledgeOverallFeedback(partner(other))
         await partner(other).getByRole('button', { name: '提交修改' }).click()
       } else {
         // Independent tab triggers only the explicitly private fixture mutation.
@@ -133,7 +137,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       const releasedResponse = page.waitForResponse(r => r.request().method() === 'POST' && r.request().postDataJSON()?.action === action && r.request().postDataJSON()?.renderId === old.renderId && r.url().includes('audience=existing_partner'), { timeout: 10_000 })
       gate.release()
       await releasedResponse
-      if (timing === 'request') await expect(partner(page).getByText('操作暂未完成，请稍后查看。')).toBeVisible()
+      if (timing === 'request') await expect(partner(page).getByText(/绑定或格式问题/)).toBeVisible()
       else await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)))
       await expect.poll(async () => (await audit()).actions.filter((a: { action: string; renderId?: string }) => a.action === action && a.renderId === old.renderId).length).toBe(action === 'revise_preview' && replacement === 'render' ? 2 : 1)
       await expect.poll(async () => (await audit()).actions.at(-1)?.status).toBe(timing === 'request' ? 409 : 200)
@@ -145,7 +149,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       // Positive control: current render is independently accepted and the download
       // bytes match isolated synthetic media, rather than only a visible UI label.
       await other.reload()
-      await partner(other).getByRole('checkbox').check()
+      await checkFinalReview(partner(other))
       const accepted = other.waitForResponse(r => r.request().method() === 'POST' && r.request().postDataJSON()?.action === 'accept' && r.request().postDataJSON()?.renderId === fresh.renderId && r.url().includes('audience=existing_partner'), { timeout: 10_000 })
       const downloaded = other.waitForEvent('download', { timeout: 10_000 })
       // Attach rejection immediately so a failed HTTP assertion cannot leave an

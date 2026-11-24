@@ -33,12 +33,13 @@ import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
 import {frozenTeachingTopics} from './production-source-policy';
 import {readPanelSourceCriteria} from './production-panel-source-requirements';
-import {bindTeachingFeedbackUnits,type PublishedNarrationDecision} from './production-teaching-baseline';
+import type {PublishedNarrationDecision} from './production-teaching-baseline';
+import {bindBlueprintReview,blueprintReviewEndings,blueprintReviewGroups,panelFeedbackTarget,panelReviewIssue,PanelReviewIssue} from './production-panel-review';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
   isPanelBlueprintDraft, panelAuthorCheckMatches,panelAuthorNeedsHumanReview,panelBlueprintRequirementsDigest,
-  latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,
+  latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,saveProductionControl,
   type ProductionTask,
 } from './production-task';
 
@@ -239,7 +240,10 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         sourceCriteriaDigest:currentTask?.input.doneCriteria?.length?digestValue(currentTask.input.doneCriteria):undefined,
         ...(narrationDecisions?.length?{narrationReview:digestValue(narrationDecisions)}:{}),
         siblingProjectId:siblingEntry?.projectId,siblingRevision:sibling?.revision,siblingMissing:!!siblingEntry&&!sibling});
-      const identity=digestValue({artifactIdentity,feedbackSequence:currentTask?.blueprintFeedback?currentTask.sequence:undefined});
+      // Saving review notes does not change what the reviewer saw.
+      const identity=digestValue({artifactIdentity,feedback:currentTask?.blueprintFeedback,feedbackRepair:currentTask?.blueprintFeedbackRepair,
+        feedbackUnits:currentTask?.blueprintFeedbackUnitIds,pending:currentTask?.repairContext?.pending_blueprint_feedback,
+        feedbackEpoch:currentTask?.blueprintFeedbackEpoch});
       return {identity,artifactIdentity,siblingEntry,sibling,siblingRevision:sibling?.revision,narrationDecisions};
     };
     if (req.method === 'GET') {
@@ -415,14 +419,26 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const teachingDigest=teachingBrief?await handoffDigest(teachingBrief):undefined;
       const needsHuman=!!blueprintRevision&&!!task&&panelAuthorNeedsHumanReview(task,blueprintRevision,panelBlueprintRequirementsDigest(policy));
       const previewReviewAvailable=!blueprintRevision||!!previewReviewCredential();
+      const dualBlueprint=!!task?.input.panelDelivery&&!task.input.panelDelivery.audience;
+      const subject=blueprintRevision?await boardSubject(blueprintRevision):undefined;
+      const groups=draft?blueprintReviewGroups(draft.doc):[];
+      let endings:ReturnType<typeof blueprintReviewEndings>=[];
+      let reviewIssue=task?.status==='blocked'?panelReviewIssue(task.error):undefined;
+      if(dualBlueprint&&draft&&blueprintRevision){
+        try{endings=blueprintReviewEndings(draft.doc);}catch{
+          reviewIssue={kind:'binding',message:'两个片尾的素材绑定需要维护侧核对。'};
+        }
+        if(endings.length!==2)reviewIssue??={kind:'binding',message:'两个片尾的素材绑定还未齐备。'};
+      }
+      const savedReview=subject&&task?.blueprintReview?.boardIdentity===subject.identity?task.blueprintReview:undefined;
       const canApproveBlueprint=!!blueprintRevision&&!needsHuman&&previewReviewAvailable
-        &&task?.status==='awaiting_blueprint'&&blueprintRevision===task.projectRevision
+        &&task?.status==='awaiting_blueprint'&&task.stage==='copy_review'&&blueprintRevision===task.projectRevision
         &&checked?.revision===blueprintRevision&&checked.authorSelfCheck==='passed'
         &&(checked.gate as {allowed?:boolean}|undefined)?.allowed===true
         &&(!policy||checked.requirementsDigest===requirementsDigest)
         &&(!teachingDigest||draft?.doc.clipMentorAnalysis?.production_copy_review?.teaching_brief_digest===teachingDigest)
         &&(!criteria||visualCriteriaPlanApproved(criteria,draft?.doc.clipMentorAnalysis?.production_copy_review));
-      const canConfirmBlueprint=!!blueprintRevision&&previewReviewAvailable&&task?.status==='awaiting_blueprint'
+      const canConfirmBlueprint=!!blueprintRevision&&endings.length===2&&previewReviewAvailable&&task?.status==='awaiting_blueprint'&&task.stage==='copy_review'
         &&blueprintRevision===task.projectRevision&&!!task.input.panelDelivery&&!task.input.panelDelivery.audience
         &&!task.blueprintApproval&&!task.repairContext?.pending_blueprint_feedback&&!running
         &&task.attempts.model<task.input.budget.model&&Date.now()<task.createdAt+task.input.budget.maxElapsedMs
@@ -437,7 +453,6 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ? /^(?:Error: )?(?:Original video asset missing|Original upload unavailable|Original source changed)$/.test(task?.error??'')?'materials'
           :atLimit?'limit':'maintenance'
         :undefined;
-      const dualBlueprint=!!task?.input.panelDelivery&&!task.input.panelDelivery.audience;
       const blueprintMessage=!blueprintRevision||canConfirmBlueprint||!dualBlueprint&&canApproveBlueprint?undefined
         :task?.repairContext?.pending_blueprint_feedback?'修改意见已保存，当前蓝图暂不能确认。'
         :needsHuman?'请核对计划上屏的承诺。如需补充事实或删改内容，请提交修改意见。'
@@ -451,16 +466,22 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       let verifiedProject:Awaited<ReturnType<typeof verifyPreview>>;
       const needPreview=!!task?.input.panelDelivery&&['awaiting_review','completed'].includes(task.status);
       if(needPreview)try{verifiedProject=await verifyPreview();}catch{playablePreview=null;}
+      let previewProject=verifiedProject;
       if(task&&playablePreview){
         try{
-          const saved=verifiedProject??await snapshot();
+          const saved=previewProject??await snapshot();
           if((!verifiedProject||!task.completed.self_check?.artifact.receipt)
             &&(saved.revision!==task.projectRevision||saved.revision!==task.completed.export?.artifact.revision))
             throw Error('Preview changed');
+          previewProject=saved;
           attachments=(await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at,task.input.panelDelivery)).map(({assetId,fileName})=>({assetId,fileName}));
         }catch{deliveryUnavailable=true;}
       }
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
+      const canAcceptPreview=task?.status==='awaiting_review'&&!!playablePreview&&!deliveryUnavailable
+        &&(!task.input.panelDelivery||!!task.completed.self_check?.artifact.receipt);
+      if(needPreview&&task?.status==='awaiting_review'&&!canAcceptPreview)
+        reviewIssue??={kind:'binding',message:'当前成片或交付材料的回执需维护侧核对。'};
       send({ task:task ? {
         taskId:task.taskId,...(task.blueprintApproval?{sourceTaskId:task.blueprintApproval.sourceTaskId}:{}),
         status: outputUnavailable||!running&&uncheckedDraft?'blocked':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
@@ -468,12 +489,15 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         active: running,stopReason:outputUnavailable?'service':stopReason,feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
-        ...(blueprintRevision?{blueprintRevision,boardIdentity:(await boardSubject(blueprintRevision)).identity,canApproveBlueprint,
+        ...(blueprintRevision?{blueprintRevision,boardIdentity:subject?.identity,canApproveBlueprint,reviewGroups:groups,
+          reviewEndings:endings,...(savedReview?{savedReview}:{}),
           ...(task.completed.blueprint?.artifact.revision===blueprintRevision&&typeof task.completed.blueprint.artifact.teachingDecisionChange==='string'
             ?{teachingDecisionChange:task.completed.blueprint.artifact.teachingDecisionChange}:{}),
           canConfirmBlueprint,...(blueprintMessage?{blueprintMessage}:{})}:{}),
         ...(task.input.panelDelivery?{dualBlueprint,
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),
+        ...(reviewIssue?{reviewIssue}:{}),
+        ...(task.status==='awaiting_review'?{canAcceptPreview,reviewGroups:previewProject?blueprintReviewGroups(previewProject.doc):[]} :{}),
         ...(task.status==='awaiting_review'&&criteria?{visualCriteria:{digest:criteria.digest}}:{}),
         ...(playablePreview&&!outputUnavailable?{downloadName:deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at),
           renderId:task.completed.export?.artifact.renderId}:{}),
@@ -541,9 +565,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             recordTechnicalRecovery(existing);
           }
           launch(existing);
-        } else if (body.action === 'approve_blueprint' || body.action === 'revise_blueprint' || body.action==='produce_versions') {
+        } else if (['save_blueprint_review','approve_blueprint','revise_blueprint','produce_versions'].includes(String(body.action))) {
+          const recording=body.action==='save_blueprint_review';
+          const approving=body.action==='approve_blueprint'||body.action==='produce_versions';
           if (body.action === 'revise_blueprint' && typeof body.text !== 'string') throw new Error('请填写修改意见');
-          if (body.action !== 'revise_blueprint' && !previewReviewCredential()) throw Error(missingPreviewReviewCredential);
+          if (approving && !previewReviewCredential()) throw Error(missingPreviewReviewCredential);
           const draftFeedback=body.action==='revise_blueprint'&&acceptsDraftBlueprintFeedback(existing,saved.revision)
             &&!!saved.doc.clipMentorAnalysis?.blueprint.length;
           const productionConfirmation=body.action==='produce_versions'&&!!existing.input.panelDelivery&&!existing.input.panelDelivery.audience
@@ -551,10 +577,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             &&saved.revision===existing.projectRevision;
           if(body.action==='produce_versions'&&(!productionConfirmation||existing.attempts.model>=existing.input.budget.model
             ||Date.now()>=existing.createdAt+existing.input.budget.maxElapsedMs))throw Error('当前版本尚不能开始制作');
-          if ((!draftFeedback&&!productionConfirmation&&(existing.status !== 'awaiting_blueprint'||body.revision !== existing.projectRevision)) || body.revision !== saved.revision) throw new Error('蓝图版本已变化，请重新打开审片板');
+          if(recording&&!['awaiting_blueprint','blocked'].includes(existing.status))throw new PanelReviewIssue('binding','蓝图正在更新，请刷新后再保存表态。');
+          if ((!recording&&!draftFeedback&&!productionConfirmation&&(existing.status !== 'awaiting_blueprint'||body.revision !== existing.projectRevision)) || body.revision !== saved.revision) throw new Error('蓝图版本已变化，请重新打开审片板');
           const actionPolicy=await readRequirements();
           if(!draftChecked(existing,saved.revision,actionPolicy)
-            ||body.action!=='revise_blueprint'&&panelAuthorNeedsHumanReview(existing,saved.revision,panelBlueprintRequirementsDigest(actionPolicy))
+            ||approving&&panelAuthorNeedsHumanReview(existing,saved.revision,panelBlueprintRequirementsDigest(actionPolicy))
             ||productionConfirmation&&existing.repairContext?.pending_blueprint_feedback)
             throw Error('蓝图尚未完成教学自检');
           const subject=await boardSubject(saved.revision,existing,actionPolicy);
@@ -580,15 +607,28 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             ||(await readRequirements())?.digest!==latestPolicy?.digest)
             throw Error('蓝图版本已变化，请重新打开审片板');
           const guards=[{key:projectKey,digest:digestValue(projectEntry.value)},{key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null}];
+          const reviewDoc=subject.sibling?combinePanelBlueprintEndings(latest.doc,subject.sibling.doc):latest.doc;
+          const reviewGroups=blueprintReviewGroups(reviewDoc);
+          const dual=!!existing.input.panelDelivery&&!existing.input.panelDelivery.audience;
+          const reviewEndings=dual&&(recording||approving)?blueprintReviewEndings(reviewDoc):[];
+          if(approving&&dual&&reviewEndings.length!==2)
+            throw new PanelReviewIssue('binding','两个片尾的素材绑定还未齐备。');
+          const review=recording||approving?bindBlueprintReview(body.blueprintReview,{
+            revision:latest.revision,boardIdentity:subject.identity,groups:reviewGroups,endings:reviewEndings,
+          },approving):undefined;
+          if(recording){
+            const next={...structuredClone(existing),blueprintReview:review};
+            await saveProductionControl(existing,next,productionTaskStore,guards,undefined,existing.sequence);
+            send({accepted:true});return;
+          }
           if(productionConfirmation){
             productionOpeningComparison(existing,latestPolicy,latest.doc);
-            const children=await createBlueprintContinuations(existing,latest,latestPolicy,origin,guards);
+            const children=await createBlueprintContinuations(existing,latest,latestPolicy,origin,guards,review);
             for(const child of children)if(child.status==='queued')launch(child);
             send({accepted:true});return;
           }
           const feedback=body.action==='revise_blueprint'&&typeof body.text==='string'?body.text:undefined;
-          const unitIds=feedback&&feedback.length<=8000&&existing.input.panelDelivery?.editorialPolicy==='exemplar-v1'
-            ?bindTeachingFeedbackUnits(latest.doc,feedback):undefined;
+          const unitIds=feedback!==undefined?panelFeedbackTarget(body.feedbackTarget,reviewGroups,false).unitIds:undefined;
           if(draftFeedback){
             if(latest.doc.clipMentorAnalysis?.source.asset_id!==existing.input.sourceAssetId)
               throw Error('蓝图对应的原片已变化，请重新打开审片板');
@@ -611,23 +651,33 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             const issues=panelDeliveryIssues(latest.doc,{...existing.input.panelDelivery,bookends:'layered-v1'},content);
             assertPanelDeliveryReady(issues,issues.length?undefined:await panelPartnerCardIssue(latest.doc,existing.input.panelDelivery,content));
           }
-          await resolveHumanBlueprint(existing,body.revision,saved.revision,feedback,productionTaskStore,guards,unitIds);
+          await resolveHumanBlueprint(existing,body.revision,saved.revision,feedback,productionTaskStore,guards,unitIds,review);
           launch(existing);
         } else if (body.action === 'revise_preview' || body.action === 'accept') {
           if (existing.status !== 'awaiting_review' || body.renderId !== existing.completed.export?.artifact.renderId) throw new Error('预览已变化，请重新核对');
-          const anchor = await productionFeedbackAnchor(existing,saved.doc);
           if (body.action === 'accept') {
-            await acceptProductionTask(existing,body.languageConfirmed === true,productionTaskStore,
-              {digest:body.visualCriteriaDigest,confirmed:body.confirmedVisualCriteria,renderId:body.renderId,wholePreviewConfirmed:body.wholePreviewConfirmed});
+            if(body.previewWatched!==true||body.languageConfirmed!==true)
+              throw new PanelReviewIssue('content','请分别确认已看过成片和已核过马来语。');
+            await acceptProductionTask(existing,true,productionTaskStore,
+              {digest:body.visualCriteriaDigest,renderId:body.renderId,wholePreviewConfirmed:body.previewWatched,watched:body.previewWatched});
           }
           else {
+            if(existing.feedbackUsed)throw new PanelReviewIssue('content','本版的一轮集中返修已用完。请核对当前预览，仍需修改时联系维护侧。');
             if (!previewReviewCredential()) throw Error(missingPreviewReviewCredential);
-            await productionFeedback(existing,{kind:'content',text:body.text,preview:anchor.preview,unit_ids:[],item_ids:[]},productionTaskStore,saved.doc);
+            const target=panelFeedbackTarget(body.feedbackTarget,blueprintReviewGroups(saved.doc),true);
+            const anchor=await productionFeedbackAnchor(existing,saved.doc);
+            await productionFeedback(existing,{kind:target.kind,text:body.text,preview:anchor.preview,unit_ids:target.unitIds??[],item_ids:[],
+              ...(target.range?{output_range_seconds:target.range}:{})},productionTaskStore,saved.doc);
             launch(existing);
           }
         } else throw new Error('不支持的制作操作');
       }
       send({ accepted:true });
+    } catch(error){
+      const issue=panelReviewIssue(error);
+      if(!issue)throw error;
+      res.statusCode=409;
+      send({error:issue.message,issue});
     } finally {
       controls.delete(projectId);
     }

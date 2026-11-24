@@ -354,7 +354,8 @@ function checkPlannedRows(
   issue: (code: string, id: string) => void,
   bindings: Array<{unit_id:string;phase:string;item_id:string;source_range_seconds:[number,number];segment_ids:string[]}>,
   outputOffset=0,
-): void {
+  collectOutputWindows=false,
+) {
   const a = doc.clipMentorAnalysis!;
   const tl = doc.timelines.find(t => t.id === doc.activeTimelineId);
   if (!tl || tl.fps !== a.source.fps) { issue('source_frame_clock_unverified',u.unit_id); return; }
@@ -476,6 +477,7 @@ function checkPlannedRows(
     if(item.startFrame>=bounds[1]||item.startFrame+item.durationInFrames<=bounds[0]||tl.tracks?.[item.track]?.hidden||item.transform?.opacity===0)continue;
     if(item.kind==='sequence')issue('nested_source_not_inspected',item.id);
   }
+  if(collectOutputWindows)return sorted.map(({output})=>output);
 }
 
 /** Read actual native placements against the frozen phase selections. Never
@@ -599,7 +601,7 @@ export function nativeExecutionMapping(doc:ProjectDoc){
   return {issues,bindings,placements,teachingPhases};
 }
 
-export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
+export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, checkedOutputWindows?:Map<string,Array<[number,number]>>) {
   const issues: Array<{ code: string; id: string; targets?: string[] }> = [];
   let deliveryOffset=0;
   const native=checkTimeline?nativeExecutionMapping(doc):undefined;
@@ -730,7 +732,9 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {
     const activePlan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
     const executable = executableRows(activePlan);
     if (executable !== undefined) {
-      checkPlannedRows(doc,b,u,candidate,activePlan,executable,issue,bindings,deliveryOffset);
+      const before=issues.length;
+      const windows=checkPlannedRows(doc,b,u,candidate,activePlan,executable,issue,bindings,deliveryOffset,!!checkedOutputWindows);
+      if(windows&&issues.length===before)checkedOutputWindows?.set(u.unit_id,windows);
       continue;
     }
     if(native?.placements[u.unit_id]||native?.issues.some(i=>i.id===u.unit_id||row(candidate)&&Array.isArray(candidate.lines)&&candidate.lines.some(l=>row(l)&&String(i.id).startsWith(String(l.id))))){

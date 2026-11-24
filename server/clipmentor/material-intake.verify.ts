@@ -348,8 +348,9 @@ try {
   const pa=panelServer.address();assert(pa&&typeof pa!=='string');const panelOrigin=`http://127.0.0.1:${pa.port}`;
   try{
     const leaks:string[]=[];let acceptedWrites=0;
+    const watchedLegacyPreview={watched:true,renderId:'legacy-render'};
     const accepting=structuredClone(legacy),beforeAccept=JSON.stringify(accepting);
-    try{await acceptProductionTask(accepting,true,{save:async()=>{acceptedWrites++;}} as never);leaks.push('legacy acceptance');}
+    try{await acceptProductionTask(accepting,true,{save:async()=>{acceptedWrites++;}} as never,watchedLegacyPreview);leaks.push('legacy acceptance');}
     catch(error){assert.match(String(error),/clipmentor_output_canvas_mismatch/);}
     assert.equal(JSON.stringify(accepting),beforeAccept,'failed acceptance must not mutate state or confirmations');
     for(const status of ['awaiting_review','completed'] as const){
@@ -377,7 +378,7 @@ try {
     const range=await fetch(`${panelOrigin}/?view=panel_video&renderId=legacy-render`,{headers:{Range:'bytes=0-31'}});
     assert.equal(range.status,206);assert.equal((await range.arrayBuffer()).byteLength,32);
     console.log(`legacy preview guard: valid status/video/Range in ${(performance.now()-requestStart).toFixed(1)}ms total; zero model/render effects`);
-    await assert.rejects(acceptProductionTask(legacy,true,{save:async()=>{acceptedWrites++;}} as never),
+    await assert.rejects(acceptProductionTask(legacy,true,{save:async()=>{acceptedWrites++;}} as never,watchedLegacyPreview),
       /final_output_evidence_missing_or_stale/,'valid portrait pixels alone cannot replace a bound continuous-review receipt');
     const {sha256File}=await import('../../shared/node-content-hash');
     const preview='/media/uploads/legacy-portrait.mp4';
@@ -387,7 +388,8 @@ try {
       status:'completed',scope:'rendered_preview_continuous_review',full_film_accepted:false,
       effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},
       timeline_check:{status:'no_detected_conflict'}};
-    await acceptProductionTask(legacy,true,{save:async()=>{acceptedWrites++;}} as never);
+    await acceptProductionTask(legacy,true,{save:async()=>{acceptedWrites++;}} as never,watchedLegacyPreview);
+    assert.equal(legacy.finalAcceptance?.renderId,watchedLegacyPreview.renderId);
     assert.equal(legacy.status,'completed');assert.equal(acceptedWrites,1);await productionTaskStore.save(legacy);
     const downloadable=await fetch(`${panelOrigin}/?view=panel_download&renderId=legacy-render`);
     assert.equal(downloadable.status,200);assert((await downloadable.arrayBuffer()).byteLength>0);

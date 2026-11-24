@@ -699,12 +699,18 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const authorDecision=productionAuthorDecision(task,!!reflowBaseline,operatorRevision);
   const {pictureOnly:pictureOnlyRepair,independent:repairingIndependent,selfCheck:fixingSelfCheck}=authorDecision;
   await recordProductionDecision(task,{scope:'author',action:'select',reason:authorDecision.mode});
-  const goal=operatorRevision?'按网页提交的现行原话逐项返修，并复核整套仍适用的交付要求。使用原片和当前中马稿、实际画面找对应缺口。既有审核指出的问题仍需保留及核对。用户明确要求修改的片头、片尾和教学组纳入本轮，保留其余已通过内容。先保存再回读新候选，按现有自检和审核继续。不能补写未确认事实或覆盖原审核回执。':reflowBaseline?'修复现存横版误用：先只读现有工程和已审蓝图，再用原set_aspect_ratio将活动画布设为9:16；第一笔保存起就必须满足竖版。随后逐段重新安排原生实例，不能仅裁横片或只改画布尺寸交差。保持全部现有实例ID、源窗、时间位置、原声/旁白音量、稿件、字幕原文、短标及9条音频；只调整视觉几何和排版。原片完整竖版主体、讲解参照关系、原片/讲解标识与下方实底字幕区均须在竖版清楚可读。片头仍为压暗原片铺底+成绩前景，片尾完整使用已审商品+Storyboard整卡。图片裁切参数必须在改成竖版后从现行原入口回读，不沿用横版像素换算；不修改蓝图或素材。不要新增配音/审核/观察，不自行导出。用实际组合帧检查片头、每组、片尾后保存，由宿主使用剩余渲染额度导出。':pictureOnlyRepair?'仅修复任务 audio_picture_repair 中的画面承载问题。读取现行稿、原片证据和实测音频，按整组而不是锁死单句短窗安排画面。只用 set_picture_plan 给受影响组登记新画面计划（必须沿用 current_script_candidate），保留原有交付段、结构、口播、字幕与短标文字。可读取或保存原片证据帧，不新增配音或观察。每段必须有实际信息任务，不循环、慢放或空长定格凑秒数。现行稿、音频和实测锚点随任务附带。保存后交现有审核，不自签通过。':repairingIndependent
+  const localizedFinal=task.repairContext?.final_feedback as {kind?:string;unit_ids?:string[];item_ids?:string[]}|undefined;
+  const finalScope=task.stage==='blueprint'&&localizedFinal?.kind==='content'&&localizedFinal.unit_ids?.length
+   ?'只修改终审意见所列教学组的口播、字幕和回看方案。保留原有选题、其他组、已审片头片尾和现有素材。若无法局部满足，报告缺口。'
+   :task.stage==='edit'&&localizedFinal?.item_ids?.length
+    ?'根据终审意见只修改所选成片区间。保留区间外的实际实例、音轨、画面和字幕；不能通过扩大范围来凑足时长。'
+    :undefined;
+  const goal=finalScope??(operatorRevision?'按网页提交的现行原话逐项返修，并复核整套仍适用的交付要求。使用原片和当前中马稿、实际画面找对应缺口。既有审核指出的问题仍需保留及核对。用户明确要求修改的片头、片尾和教学组纳入本轮，保留其余已通过内容。先保存再回读新候选，按现有自检和审核继续。不能补写未确认事实或覆盖原审核回执。':reflowBaseline?'修复现存横版误用：先只读现有工程和已审蓝图，再用原set_aspect_ratio将活动画布设为9:16；第一笔保存起就必须满足竖版。随后逐段重新安排原生实例，不能仅裁横片或只改画布尺寸交差。保持全部现有实例ID、源窗、时间位置、原声/旁白音量、稿件、字幕原文、短标及9条音频；只调整视觉几何和排版。原片完整竖版主体、讲解参照关系、原片/讲解标识与下方实底字幕区均须在竖版清楚可读。片头仍为压暗原片铺底+成绩前景，片尾完整使用已审商品+Storyboard整卡。图片裁切参数必须在改成竖版后从现行原入口回读，不沿用横版像素换算；不修改蓝图或素材。不要新增配音/审核/观察，不自行导出。用实际组合帧检查片头、每组、片尾后保存，由宿主使用剩余渲染额度导出。':pictureOnlyRepair?'仅修复任务 audio_picture_repair 中的画面承载问题。读取现行稿、原片证据和实测音频，按整组而不是锁死单句短窗安排画面。只用 set_picture_plan 给受影响组登记新画面计划（必须沿用 current_script_candidate），保留原有交付段、结构、口播、字幕与短标文字。可读取或保存原片证据帧，不新增配音或观察。每段必须有实际信息任务，不循环、慢放或空长定格凑秒数。现行稿、音频和实测锚点随任务附带。保存后交现有审核，不自签通过。':repairingIndependent
    ? '只修独立审核回执列出的未通过项；逐项同步口播、字幕、教学重点、画面计划和证据边界。仅换候选版本、改说明或收窄口播却保留旧教学断言不算完成；补证则登记实际来源与支持关系，不把观察等同审核批准。保留原判、已通过单元、片头片尾及实际素材。旁白若在原片和明确登记的短标或关系卡之外没有独立教学损失，撤掉重复旁白和其同文字幕，保留画面承载及教学重点，回读对应计划。当前稿件和画面安排保存后交重新自检及审核。'
    : fixingSelfCheck
    ? '修订已保存的蓝图，逐项回应任务附带的作者自检。根据已有原片证据核实混色、色号、晕染及促单，证据不足就收窄或标未知；保留未受影响的教学。只修实际缺项。凡同一对象、色号或动作无法从已登记证据确认，就收窄口播和短标，避免反复补证。口播指到的动作必须在当句选材范围实际可见。字幕分卡按意群拆分且保持同文。正文 phases 使用 {mode:"original",source_range_seconds:[起,止],picture:"画面"} 或 {mode:"explanation",line_id:"单句ID",source_range_seconds:[起,止],picture:"画面"}；不用 kind、line_ids 或 source_ranges。每条讲解跟对应原声，先逐个点名现行稿件里的所有 line_id，每句均覆盖，匹配 source_breakdown 已登记的播放窗和回看。viewer_stage_cues.original 用 text/enter/exit，revisit 为逐句关联的 {line_ids,text,enter,exit} 数组。片头片尾留在各自交付段，不塞进正文 phases。字幕分卡不改口播文字。保存后用 read_clipmentor_analysis 的 current_copy/单元 ID 回读。保留现有版本和失败回执，不配音、不剪辑。'
    : task.stage==='analysis'&&rebuild?'按原始反馈及需重选的教学组，先修原片购买关注、手法、作用、证据及前后承接。用 set_source_breakdown 保存基线并逐点填写 change_reason。可重划教学组；合并时沿用已有片头或片尾绑定的组ID。现行稿件和旧回执留作历史，本阶段不得改字幕、口播或画面方案。对未影响教学的版式意见留到蓝图阶段。'
-   : goals[task.stage];
+   : goals[task.stage]);
   const beforeExecution=task.stage==='edit'?structuredClone(doc):undefined;
 
   if(task.stage==='edit'){

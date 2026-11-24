@@ -1,3 +1,4 @@
+import type {BlueprintReviewRecord} from './production-panel-review';
 import {outputProductionBudget} from './production-budget';
 import {panelDeliveryIssues,partnerStoryboardRequired,panelPartnerCardIssue,assertPanelDeliveryReady} from './production-panel-delivery';
 import {currentCreatorDocument} from './creator-storyboard-document';
@@ -109,7 +110,7 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
 }
 
 /** Persist both outputs before dispatch. A duplicate click or restart reuses the same children. */
-export async function createBlueprintContinuations(parent:ProductionTask,source:{doc:ProjectDoc;revision:string},requirements:HandoffPolicy|null,origin:string,guards?:EntryPreconditions){
+export async function createBlueprintContinuations(parent:ProductionTask,source:{doc:ProjectDoc;revision:string},requirements:HandoffPolicy|null,origin:string,guards?:EntryPreconditions,review?:BlueprintReviewRecord){
  // Validate BOTH scopes before creating either output.
  const scope=parent.input.panelDelivery;
  if(scope&&partnerStoryboardRequired(scope)){
@@ -126,6 +127,7 @@ export async function createBlueprintContinuations(parent:ProductionTask,source:
   await productionTaskStore.save(second);
  }
  const next=structuredClone(parent);
+ if(review)next.blueprintReview=review;
  next.productionChildren=[first,second].map(task=>({projectId:task.projectId,taskId:task.taskId,audience:task.input.panelDelivery!.audience!}));
  delete next.productionChild;
  if(guards)await saveProductionControl(parent,next,productionTaskStore,guards);
