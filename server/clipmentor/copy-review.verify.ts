@@ -1,3 +1,4 @@
+import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { verifyIsolatedCopyReviewRunner } from './copy-review-runner.verify-suite';
 import {verifyGroupedReviewReceipts} from './copy-review-groups.verify-suite';
 import assert from 'node:assert/strict';
@@ -19,6 +20,7 @@ import { copyReviewSubject, copyTeachingPacketFromDoc, checkCopyProduction, norm
 import groupedProject from '../../src/clipmentor/fixtures/grouped-registration-v1.json';
 import groupedRawResponse from '../../src/clipmentor/fixtures/four-group-raw-review-20261028.json';
 import { CopyReviewError, reviewClipMentorCopy, revalidateStoredCopyReview, type CopyReviewDependencies } from './copy-review';
+import { externalCall } from './external-call';
 import { clipMentorCopyReviewPlugin } from '../plugins/clipmentor-copy-review';
 import type { ViteDevServer } from 'vite';
 import regression from '../../src/clipmentor/fixtures/copy-teaching-blind-v2-20261019.json';
@@ -151,6 +153,7 @@ try {
   let currentTeachingBrief=teachingBrief;
   const teachingRequest=await request();
   let teachingRequests=0;
+  let currentPrompt='';
   const teachingAnswer=()=>{
     const raw=goodRaw();
     Object.assign(raw.copy_units[0].group_checks.L1,{evidence:[{kind:'copy',channel:'narration',line_id:line.line_id,quote:line.narration_ms}]});
@@ -158,7 +161,11 @@ try {
   };
   const teachingDeps={...deps,requirements:async()=>({policy:null,teachingBrief:currentTeachingBrief}),frame:async()=> 'aGVsbG8=',async run(prompt:string){
     teachingRequests++;
+    currentPrompt=prompt;
     assert(prompt.includes(JSON.stringify(teachingBrief)));
+    assert(prompt.includes(teachingPurpose.review_question)&&prompt.includes(teachingPurpose.audience));
+    for(const boundary of teachingPurpose.boundaries)assert(prompt.includes(boundary));
+    assert(prompt.includes('有口播的主讲先读现行口播并逐字引用承担这个决定的句子'));
     assert(!prompt.includes('AUTHOR_REVISIT_REASON_MUST_NOT_LEAK'));
     return teachingAnswer();
   }};
@@ -166,6 +173,31 @@ try {
   assert.equal(rawTeaching.receipt.verdict,'pass');
   assert.equal((await reviewClipMentorCopy(teachingRequest,teachingDeps)).receipt.verdict,rawTeaching.receipt.verdict);
   assert.equal(teachingRequests,1,'reopening the original review does not ask an independent reviewer again');
+  {
+    // Preserve the earlier prompt bytes for an interrupted old operation. An
+    // authenticated old response should settle without starting a new review.
+    const operationId=teachingRequest.operationId;
+    const completed=JSON.parse(await readFile(join(root,operationId+'.json'),'utf8'));
+    const legacyPrompt=currentPrompt.replace(/教学目标（[^\n]+\n/u,'').replace(/\n核对具体拍摄决定：[^\n]+\n/u,'');
+    assert.notEqual(legacyPrompt,currentPrompt);
+    const promptSha=createHash('sha256').update(legacyPrompt).digest('hex');
+    const directory=join(root,'archived-before-teaching-purpose');
+    const identity={fingerprint:completed.fingerprint,prompt_sha256:promptSha,inspection:rawTeaching.inspection};
+    await externalCall({directory,kind:'review',purpose:'independent-copy-review-v1',requestId:operationId,identity,
+     execute:async()=>({version:'copy-review-response-v1',...identity,raw_review:completed.raw_review})});
+    const ledgerPath=join(directory,operationId+'.json');
+    const reserved={fingerprint:identity.fingerprint,status:'reserved',requests_attempted:1,source_hash:teachingRequest.source.hash,
+     prompt_sha256:promptSha,review_contract:completed.review_contract,image_inspection:identity.inspection};
+    const archivedDeps={...teachingDeps,directory,run:async()=>{throw Error('historical review attempted a new dispatch');}};
+    const bytes=JSON.stringify(reserved);
+    await writeFile(ledgerPath,bytes);
+    const recovered=await reviewClipMentorCopy(teachingRequest,archivedDeps,undefined,true);
+    assert.equal(recovered.receipt.verdict,'pass');
+    assert.equal(recovered.cached,true);
+    assert.equal(await readFile(ledgerPath,'utf8'),bytes);
+    await writeFile(ledgerPath,JSON.stringify({...reserved,prompt_sha256:'f'.repeat(64)}));
+    await assert.rejects(reviewClipMentorCopy(teachingRequest,archivedDeps,undefined,true),/legacy_failure_details_missing/);
+  }
   const newerTeachingBrief={...teachingBrief,feedback:'补写薄涂怎样回应怕显色太深。'};
   const reviewed=structuredClone(base);
   reviewed.clipMentorAnalysis!.production_copy_review=rawTeaching.receipt;

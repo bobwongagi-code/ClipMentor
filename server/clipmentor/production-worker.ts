@@ -8,7 +8,8 @@ import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFe
 import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
-import {checkTeachingBaseline,confirmedTeachingDigest,newlyChangedTeaching,panelTeachingPurpose,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
+import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
+import {checkTeachingBaseline,confirmedTeachingDigest,interruptedClosingPlanUnit,newlyChangedTeaching,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
  teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,wholeFilmIssue,type TeachingRebuild} from './production-teaching-baseline';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
@@ -33,7 +34,7 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {readSourceVideoReceipt,recoverSourceVideoReceipt,sourceVideoDependencies} from './source-video';
 import {productionLocalSpeech,registerProductionLocalSpeech} from './production-local-speech';
 import {recoverProductionGateway,type GatewayRecoveryDecision} from './production-recovery';
-import {checkProductionAuthorBlueprint} from './production-author-self-check';
+import {blockingAuthorBlueprintChecks,checkProductionAuthorBlueprint} from './production-author-self-check';
 import {preparePanelStoryboardForAuthor,panelDeliveryIssues,panelStoryboardAsset,panelSalesEvidence,panelEndingEvidence,preparePanelPartnerCard,panelPartnerPicture,partnerStoryboardRequired,panelPartnerCardIssue} from './production-panel-delivery';
 import {creatorStoryboard} from './creator-storyboard';
 import {assertCreatorDocumentEdit,currentCreatorDocument} from './creator-storyboard-document';
@@ -80,7 +81,7 @@ export async function persistProductionGatewayDecision(record:ReturnType<typeof 
  const saved=await deps.load(record.projectId,record.artifactId)??await deps.archived?.(record);
  if(!matches(saved??null))throw Error('gateway_recovery_decision_not_saved');
 }
-import {recordProductionDecision,isPanelBlueprintDraft,panelBlueprintRequirementsDigest,type StageWorker,type StageContext,type StageResult,type ProductionTask} from './production-task';
+import {recordProductionDecision,isPanelBlueprintDraft,panelBlueprintRequirementsDigest,productionRepairContext,type StageWorker,type StageContext,type StageResult,type ProductionTask} from './production-task';
 
 const hostNames=new Set(['load_skill','edit_item','edit_asset','read_clipmentor_analysis','revise_clipmentor_analysis','observe_clipmentor_source',
  'observe_clipmentor_source_video','read_clipmentor_source_video','view_asset_frames','view_timeline_frames','save_clipmentor_source_frame','submit_voice']);
@@ -190,7 +191,7 @@ async function runProductionCopyReview({
   }
   const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence,panelDraft);
   if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
-  const issues=check.checks.filter(entry=>entry.status!=='ok');
+  const issues=blockingAuthorBlueprintChecks(check.checks,panelDraft&&strictEditorial);
   const pendingBusinessClaim=panelDraft&&issues.length===1&&issues[0].id==='S7'&&issues[0].status==='unresolved'?issues[0]:undefined;
   if(issues.length&&!pendingBusinessClaim)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
   if(panelDraft){
@@ -202,6 +203,7 @@ async function runProductionCopyReview({
     authorSelfCheck:pendingBusinessClaim?'needs_human_review':'passed',
     ...(pendingBusinessClaim?{authorSelfCheckNotice:pendingBusinessClaim.reason,authorSelfCheckFinding:pendingBusinessClaim}:{}),
     teaching_baseline_digest:teachingDigest,
+    ...(strictEditorial?{authorNarrationAnswers:check.checks.find(entry=>entry.id==='S1')?.teaching_units??[]}:{}),
     author_self_check_source_digest:check.sourceDigest,requirementsDigest:panelBlueprintRequirementsDigest(currentPolicy),
     ...(task.input.doneCriteria?.length?{sourceCriteriaDigest:digestValue(task.input.doneCriteria)}:{})},awaitBlueprintFeedback:true};
   }
@@ -567,18 +569,51 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     if(task.repairContext?.teaching_baseline_issue===issue)throw Error('teaching_baseline_repair_no_progress: '+issue);
     return repairBaseline(issue);
    }
+   const interrupted=task.stage==='copy_review'?interruptedClosingPlanUnit(doc,source):undefined;
+   if(interrupted)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify([{
+    code:'picture_plan_closing_playback_interrupted',id:interrupted}])}`},repair:'blueprint'};
    teachingDefinition=qualifiedTeaching(doc);
    const unchanged=rebuild?unchangedRejectedTeaching(source,rebuild):[];
    if(unchanged.length)throw Error('teaching_baseline_repair_no_progress: '+unchanged.map(unit=>unit.unitId+' '+unit.reason).join('；'));
    if(rebuild?.wholeFilm&&unchangedWholeFilmTeaching(source,rebuild))
     throw Error('teaching_baseline_repair_no_progress: 整片选题 '+rebuild.wholeFilm.reason);
-   const checked=await checkTeachingBaseline(task,stage,source);
+   type NarrationReview=Awaited<ReturnType<typeof checkTeachingBaseline>>['review']['narration_checks'];
+   const rejectedNarrationDigest=(findings:NarrationReview)=>findings?.length&&source.narrationTargets
+    ?digestValue({requirements:baselinePolicyDigest,criteria:task.input.doneCriteria,feedback:task.blueprintFeedback,
+     targets:source.narrationTargets.filter(target=>findings.some(finding=>finding.unit_id===target.unit_id&&finding.point_id===target.point_id))
+      .map(target=>[target.unit_id,target.point_id,target.lines.map(line=>line.narration.normalize('NFKC').trim().replace(/\s+/gu,' '))])})
+    :undefined;
+   const priorNarration=task.repairContext?.narration_repair_findings as NarrationReview;
+   const priorNarrationDigest=rejectedNarrationDigest(priorNarration);
+   const narrationScope=digestValue({purpose:source.purpose,evidence:source.evidenceBinding,requirements:baselinePolicyDigest,
+    criteria:task.input.doneCriteria,brief:source.task,feedback:source.feedback});
+   const sameNarrationScope=task.repairContext?.narration_repair_scope===narrationScope;
+   if(priorNarrationDigest&&task.repairContext?.narration_repair_digest===priorNarrationDigest
+    &&(sameNarrationScope||!task.repairContext.narration_repair_scope))
+    throw Error('teaching_final_narration_repair_no_progress: 现行口播未变');
+   const checked=await checkTeachingBaseline(task,stage,source,baselinePolicyDigest);
    if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
     return {artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:task.stage as 'blueprint'|'copy_review'};
    const topicIssue=wholeFilmIssue(checked.review.whole_film);
    const unitIssues=checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason);
    const issues=topicIssue?['整片选题 '+topicIssue,...unitIssues]:unitIssues;
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
+   const narrationIssues=checked.review.narration_checks?.filter(answer=>answer.status!=='ok');
+   if(narrationIssues?.length){
+    const normalizedReason=(reason:string)=>reason.normalize('NFKC').replace(/\s+/gu,' ').trim().replace(/[。.!！]+$/u,'');
+    const repeated=sameNarrationScope&&narrationIssues.find(answer=>priorNarration?.some(old=>
+     old.unit_id===answer.unit_id&&old.point_id===answer.point_id&&old.status===answer.status
+     &&normalizedReason(old.reason)===normalizedReason(answer.reason)));
+    const artifact={revision:editor.revision,narration_repair_digest:rejectedNarrationDigest(narrationIssues),
+     narration_repair_scope:narrationScope,narration_repair_findings:narrationIssues,
+     teaching_baseline_issue:narrationIssues.map(answer=>answer.unit_id+' '+answer.reason).join('；'),
+     instruction:'保留已成立的选题。按独立核验逐条把具体拍摄决定和买家多得到的判断依据写进现行口播，核对字幕和回看。'};
+    if(repeated){
+     task.repairContext=productionRepairContext(task.repairContext,artifact);
+     throw Error('teaching_final_narration_repair_no_progress: 同一讲解缺口重复出现，已保留候选和回执，待维护侧核对。'+repeated.unit_id+' '+repeated.reason);
+    }
+    return {artifact,repair:'blueprint'};
+   }
    teachingDigest=checked.digest;
    if(task.stage==='blueprint'&&panelScope){
     let qualifiedCopy=teachingDraftPointersDigest(doc);
@@ -734,7 +769,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }):[];
   const taskData={...await productionAuthorTaskData(task,editor.getDoc(),{policy,references}),goal,
    ...(panelDraft?{objective:policy?.brief.objective??null,doneCriteria:baselineRequirements}:{}),
-   ...(panelDraft&&task.stage==='analysis'?{teachingPurpose:panelTeachingPurpose,teachingFeedback:task.blueprintFeedback??null,
+   ...(panelDraft&&task.stage==='analysis'?{teachingFeedback:task.blueprintFeedback??null,
     ...(rebuild?{teachingFindings:rebuild.rejected.map(({unitId,reason})=>({unitId,reason})),
      ...(rebuild.wholeFilm?{wholeFilmFinding:{reason:rebuild.wholeFilm.reason,evidenceId:rebuild.wholeFilm.evidenceId,unitIds:rebuild.wholeFilm.unitIds}}:{}),
      beforeCopy:'分析只改基线；先证明整片主线和每组的证据能回答任务，再写稿。'}:{})}:{}),
@@ -938,7 +973,10 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
  const doneCriteria=productionAuthorCriteria(task,policy,doc);
  const openingResults=productionOpeningComparison(task,policy,doc)?.results;
  return {evidenceInspection:productionEvidenceInspection(doc,task),task:task.input.brief,stage:task.stage,goal,feedback:task.stage==='blueprint'?task.blueprintFeedback??task.feedback??null:task.feedback??null,repairContext:task.repairContext?.repair?{repair:task.repairContext.repair,revision:task.repairContext.revision,final_feedback:task.repairContext.final_feedback??null}:task.repairContext??null,
-  ...(['analysis','blueprint'].includes(task.stage)?{sourceClosing:sourceClosingPolicy(frozenTopics,doc)}:{}),
+  ...(task.stage==='blueprint'&&task.repairContext?.narration_repair_findings?{narrationRepair:{
+   findings:task.repairContext.narration_repair_findings,
+   instruction:'对照现行口播和独立审核，逐项修正列出的口播及其同文字幕，核对当句回看是否仍匹配。保留已核选题、未点名的教学组和片头片尾。版本号、标题和短标的改动不能代替口播修订。'} }:{}),
+  ...(['analysis','blueprint'].includes(task.stage)?{teachingPurpose,sourceClosing:sourceClosingPolicy(frozenTopics,doc)}:{}),
   ...(frozenTopics?{frozenTopics,
    frozenTopicInstruction:'在主线重点的 teaching_basis.evidence_ids 中分别登记已声明窗口内的可见依据。背景只能保留在原片或作为引入上下文。收尾按 sourceClosing 处置。'}:{}),
   ...(task.sharedProduction?.prepared?{sharedBody:{end_frame:task.sharedProduction.endFrame,
@@ -948,9 +986,12 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    instruction:'按 sectionId 定位教学组（时间线 ID 表示全部组）。用 view_asset_frames 按 reference.assetId 和 seconds 查看指定参照，再回看本片证据。先确定它改变了本组哪项选材或讲解安排，把该取舍写进现行计划和实际稿；参照只供比较。组尚未建立时按原始要求建立该组，不能改指其他组。'} }:{}),
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&['analysis','blueprint'].includes(task.stage)?{
    teachingSelection:task.stage==='analysis'
-    ?'先按证据盘点完整原片的表达选择和对应的买家顾虑，再从有出处的卖点里选值得达人学的单元。比较最强的另一个讲法：为什么选这条主线，保留哪些独立顾虑，哪些动作只作支持，漏哪一段会改变判断。根据选中的单元概括本片可学的价值，写进现有主讲点 coverage.reason，具体作用写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；按 sourceClosing 处理收尾。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
+    ?'先按证据盘点完整原片的表达选择和对应的买家顾虑，再从有出处的卖点里选值得达人学的单元。比较最强的另一个讲法：如果选它，达人会少学或多学哪个决定？选中这条主线后，他拍同类内容时具体会改哪一步？各组怎样一起解释这个决定，哪些只作支持？根据选中的单元概括本片可学的价值，把决定、可回读的取舍及放弃备选的损失写进现有主讲点 coverage.reason，买家多得到的具体判断依据写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；按 sourceClosing 处理收尾。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
     :'先按核验通过的选题说明每组需要保住的证据：静态细节、完整动作及结果、共同参照或套装与价格。先估保留这些信息所需的最短完整时段，再找逐句窗口。设想换成最接近的另一段会少哪一项判断；实际解释画面保住这个关系。原声给事实和反应，讲解说明拍法为什么有用，短标指向判断对象。优先合理回看；仍无足够画面就说明具体缺口，别靠缩讲解或合组填平。普通做法与她的差异、声画配合、同框比较、先后承接可按实际证据组织。',
    teachingExemplars:'每个 source_breakdown.points 的 teaching_question 说明为什么这个拍法帮助买家判断。teaching_basis={selling_point,evidence_ids,method,connection,must_capture,claim_limit,exemplar,difference}；证据来自本点关联的原话候选或可见动作，范例资料只供思考。exemplar 登记本片证据适用的 principle ID，difference 说明本片成立条件与范例的差异，或说明为何本片不宜套用范例做法。清楚的听写候选可以支持原话转述，但注明未听审。纯画面例外须在 coverage.reason 说明为什么成立。',
+   exemplarApplication:task.stage==='analysis'
+    ?'在现有 difference 里写明借用的推理、本片的原片依据和它改变的具体教学取舍。无法迁移时交代本片缺少的成立条件。'
+    :'逐主讲点回读已保存的 connection 和 difference。实际马来语口播须教出改变的拍摄决定及其作用；借用范例的推理时，用本片证据来讲。同组 S1 只从现行口播引出这个决定。纯画面教学沿用它的专用承载检查。',
    ...(openingResults?{openingResultsInstruction:
     `马来语口播及同文字幕按同款前提、成绩提问、一次邀请的顺序。成绩用 ${openingResults.views} tontonan、${openingResults.units} unit terjual、Revenue ${openingResults.revenue}。不上创作者人数前提。收入不写佣金或商品 GMV。`}:{})
   }:{}),

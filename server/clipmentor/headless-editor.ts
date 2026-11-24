@@ -1,6 +1,7 @@
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
 import {voiceAssetProvenance} from '../../shared/voice-word-timing';
 import {assertFrozenParameterChanges} from '../../src/clipmentor/execution-parameters';
+import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import {assertLocalFeedbackPreservation} from './production-feedback';
 import {reusableVoiceForRequest} from './audio-reuse';
 import {assertProductionAudioFile} from './production-readiness';
@@ -322,6 +323,7 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
   }catch(error){engine=makeDraft(options.stageEditWrites?before:committed);sync();throw error;}
  }
  async function loadSkill(name:string,file='SKILL.md'){
+  if(name==='clipmentor'&&file==='references/teaching-purpose.json')return JSON.stringify(teachingPurpose,null,2)+'\n';
   if(!/^[a-z0-9_-]+$/.test(name)||!/^([a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_.-]+\.md$/.test(file)||file.includes('..'))throw new Error('Unsupported skill file');
   return readFile(new URL(`../../src/agent/skills/${name}/${file}`,import.meta.url),'utf8');
  }

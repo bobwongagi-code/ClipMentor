@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import type {ProjectDoc} from '../../src/editor/types';
-import {checkTeachingBaseline,frozenTeachingTopics,teachingBaselineDigest,teachingBaselineSource,teachingRebuild,
+import {checkTeachingBaseline,frozenTeachingTopics,interruptedClosingPlanUnit,teachingBaselineDigest,teachingBaselineSource,teachingRebuild,
  teachingPointGaps,unchangedWholeFilmTeaching,validateTeachingBaselineReview,wholeFilmIssue} from './production-teaching-baseline';
 import {productionAuthorTaskData} from './production-worker';
 import {productionOpeningComparison,productionTeachingBrief,type ProductionTask} from './production-task';
@@ -121,6 +121,25 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id,supplementary.id];
  assert.equal(validateTeachingBaselineReview(scopedReceipt,scopedSource).whole_film?.status,'ok');
  mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id];
+ // Two primary judgments carry different evidence from the same declared topic.
+ const secondUnit=structuredClone(strictPositive.units[1]);
+ secondUnit.source_ranges=[nose.range];
+ const [secondPoint]=secondUnit.points;
+ secondPoint.teaching_basis!.evidence_ids=[nose.id,supplementary.id];
+ mainPoint.teaching_basis!.evidence_ids=[palette.id];
+ scopedSource.units.push(secondUnit);
+ const splitReceipt={...scopedReceipt,units:[...scopedReceipt.units,positiveReceipt.units[1]]};
+ const missingWindow='主线须覆盖任务声明的全部主要证据窗口';
+ assert(!teachingPointGaps(scopedSource,frozenDoc).includes(missingWindow));
+ assert.equal(validateTeachingBaselineReview(splitReceipt,scopedSource).whole_film?.status,'ok');
+ secondPoint.role='supporting';
+ assert(teachingPointGaps(scopedSource,frozenDoc).includes(missingWindow));
+ assert.throws(()=>validateTeachingBaselineReview(splitReceipt,scopedSource),/teaching_frozen_topic_scope_invalid/);
+ secondPoint.role='primary';
+ secondUnit.coverage[0].treatment='omit';
+ assert(teachingPointGaps(scopedSource,frozenDoc).includes(missingWindow));
+ scopedSource.units.pop();
+ mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id];
  const backgroundGroup=structuredClone(strictPositive.units[2]);
  backgroundGroup.source_ranges=[[47,60]];
  background.range=[47,60];
@@ -142,6 +161,65 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  closingUnit.original_source_ranges=[tail.source_range_seconds];
  const declared=teachingBaselineSource(frozenDoc,scopeTask,[]);
  assert.equal(declared.frozenTopics?.closingSegmentId,tail.segment_id);
+ // The note cites the evidence. A separately registered adjacent segment supplies the tail.
+ const ledger=frozenDoc.clipMentorAnalysis!.source_breakdown!;
+ const end=tail.source_range_seconds[1];
+ const endCap={...tail,segment_id:'end-cap',source_range_seconds:[66.9,end] as [number,number],unknowns:[] as string[]};
+ tail.source_range_seconds=[61.2,66.9];
+ ledger.segments.push(endCap);
+ closingUnit.original_segment_ids.push(endCap.segment_id);
+ const split=()=>teachingBaselineSource(frozenDoc,scopeTask,[]).frozenTopics!;
+ for(const playback of [[[61.2,end]],[[61.2,66.9],[66.9,end]]] as [number,number][][]){
+  closingUnit.original_source_ranges=playback;
+  assert.equal(split().closingSegmentId,tail.segment_id);
+ }
+ const mid={...tail,segment_id:'closing-evidence-part',source_range_seconds:[65.2,66.9] as [number,number],unknowns:[]};
+ tail.source_range_seconds=[61.2,65.2];
+ ledger.segments.push(mid);
+ closingUnit.original_segment_ids.splice(-1,0,mid.segment_id);
+ closingUnit.original_source_ranges=[tail.source_range_seconds,mid.source_range_seconds,endCap.source_range_seconds];
+ assert.equal(split().closingSegmentId,tail.segment_id,'the declared evidence can span two adjacent registered segments');
+ const authored=frozenDoc.clipMentorAnalysis!.blueprint.find(unit=>unit.unit_id===closingUnit.unit_id) as {internal_review?:Record<string,unknown>};
+ const priorReview=authored.internal_review;
+ const copy={mode:'explanation',line_id:'closing-explanation',source_range_seconds:[64,65]};
+ const originals=closingUnit.original_source_ranges.map(source_range_seconds=>({mode:'original',source_range_seconds}));
+ const plan={phases:[...originals,copy]};
+ authored.internal_review={current_picture_plan:'closing-plan','closing-plan':plan};
+ const closingSource=teachingBaselineSource(frozenDoc,scopeTask,[]);
+ assert.equal(interruptedClosingPlanUnit(frozenDoc,closingSource),undefined);
+ plan.phases=[originals[0],copy,...originals.slice(1)];
+ assert.equal(interruptedClosingPlanUnit(frozenDoc,closingSource),closingUnit.unit_id,'an explanation can break continuous playback despite adjacent source times');
+ if(priorReview)authored.internal_review=priorReview;else delete authored.internal_review;
+ closingUnit.original_segment_ids.splice(-2,1);
+ ledger.segments.pop();
+ tail.source_range_seconds=[61.2,66.9];
+ closingUnit.original_source_ranges=[tail.source_range_seconds,endCap.source_range_seconds];
+ tail.unknowns=[topics.closing+'；仅见手背色块，原声未核。'];
+ assert.equal(split().closingSegmentId,tail.segment_id);
+ for(const note of ['请补写：'+topics.closing,topics.closing+'并不成立']){
+  tail.unknowns=[note];
+  assert.equal(split().closingSegmentId,null);
+ }
+ tail.unknowns=[topics.closing];
+  endCap.unknowns=[topics.closing+'；原声未核。'];
+  assert(teachingPointGaps(teachingBaselineSource(frozenDoc,scopeTask,[]),frozenDoc)
+   .some(issue=>issue.startsWith('source_closing_note_duplicate')));
+  endCap.unknowns=[];
+  assert(!teachingPointGaps(teachingBaselineSource(frozenDoc,scopeTask,[]),frozenDoc)
+   .some(issue=>issue.startsWith('source_closing_note_duplicate')));
+ endCap.source_range_seconds[0]+=0.1;
+ assert.equal(split().closingSegmentId,null,'a registration gap cannot be covered by the playback envelope');
+ endCap.source_range_seconds[0]=66.9;
+ closingUnit.original_source_ranges=[[61.2,66.8],[66.9,end]];
+ assert.equal(split().closingSegmentId,null,'the original playback itself must also be continuous');
+ closingUnit.original_source_ranges=[[61.2,end]];
+ tail.unknowns=[];endCap.unknowns=[topics.closing];
+ assert(split().misplacedClosingNote,'an EOF-only annotation cannot support the earlier evidence');
+ endCap.unknowns=[];
+ assert.equal(split().closingSegmentId,null);
+ closingUnit.original_segment_ids.pop();
+ ledger.segments.pop();
+ tail.source_range_seconds=[61.2,end];
  tail.unknowns=[];
  const omitted=teachingBaselineSource(frozenDoc,scopeTask,[]);
  assert.equal(omitted.frozenTopics?.closingSegmentId,null);

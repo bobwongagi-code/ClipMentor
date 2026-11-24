@@ -19,6 +19,7 @@ import {blueprintReviewBoardPage} from './blueprint-review-board-page';
 import {humanReviewBoardPage} from './blueprint-review-board-human';
 import {deliveryLayoutStages,renderDeliveryLayoutFrames} from './delivery-layout-frames';
 import type {VisualReferenceFrame} from './visual-done-criteria';
+import type {PublishedNarrationDecision} from './production-teaching-baseline';
 export type ReviewBoardView='human'|'planner';
 
 type Row=Record<string,unknown>;
@@ -53,6 +54,7 @@ export interface BoardInput {
  deliveryFindings?:ReturnType<typeof lintBlueprint>['findings'];
  embedded?:boolean;
  teachingExcerptUnit?:string;
+ narrationDecisions?:readonly PublishedNarrationDecision[];
 }
 export async function loadReviewBoardInput(input:string,options:{bindings?:string[];mediaDir?:string}={}):Promise<BoardInput>{
  let value:unknown,sha256:string,hashMode:'file'|'project',assertUnchanged:()=>Promise<void>;
@@ -212,7 +214,7 @@ export async function renderReviewBoards(input:BoardInput,outDir:string,variant?
    const signature=hash(row.frames.map(f=>f.key).join(','));if(!sheets.has(signature)){const asset=assets.get(row.asset_id)!;const ratio=(asset.height??1024)*(1-(row.crop?.top??0)-(row.crop?.bottom??0))/((asset.width??576)*(1-(row.crop?.left??0)-(row.crop?.right??0)));sheets.set(signature,(await tileContactSheet(row.frames.map(f=>({jpeg:cache.get(f.key)!,label:f.label})),{cellWidth:320,cols:3,cellHeight:Math.round(320*ratio)})).toString('base64'));}row.sheet=sheets.get(signature);
   }plan.elapsed_ms=performance.now()-begun;}
   await input.assertUnchanged();for(const [file,expected]of checked)if(await sha256File(file)!==expected)fail('生成中素材已变化');
-  const artifacts=plans.map(plan=>{const began=performance.now(),html=view==='human'?humanReviewBoardPage(plan,data,lint,input.bindings??[prepared.doc],input.visualReferences,input.embedded,input.teachingExcerptUnit):blueprintReviewBoardPage(plan);plan.elapsed_ms+=performance.now()-began;if(Buffer.byteLength(html)>32_000_000)fail('单文件HTML超限');const safe=(s:string)=>s.replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);return{plan,html,path:join(resolve(outDir),`审片板-${safe(plan.candidate_id)}-${safe(plan.variant)}.html`)};});
+  const artifacts=plans.map(plan=>{const began=performance.now(),html=view==='human'?humanReviewBoardPage(plan,data,lint,input.bindings??[prepared.doc],input.visualReferences,input.embedded,input.teachingExcerptUnit,input.narrationDecisions):blueprintReviewBoardPage(plan);plan.elapsed_ms+=performance.now()-began;if(Buffer.byteLength(html)>32_000_000)fail('单文件HTML超限');const safe=(s:string)=>s.replace(/[^\p{L}\p{N}_-]/gu,'_').slice(0,100);return{plan,html,path:join(resolve(outDir),`审片板-${safe(plan.candidate_id)}-${safe(plan.variant)}.html`)};});
   if(new Set(artifacts.map(a=>a.path)).size!==artifacts.length)fail('输出文件名冲突');
   await mkdir(outDir,{recursive:true});const staged:string[]=[];try{for(const a of artifacts){const began=performance.now();const path=a.path+'.'+hash(String(Math.random())).slice(0,12)+'.tmp';staged.push(path);await writeFile(path,a.html,{flag:'wx'});a.plan.elapsed_ms+=performance.now()-began;}await input.assertUnchanged();for(const [i,a]of artifacts.entries())await rename(staged[i],a.path);}finally{for(const path of staged)await rm(path,{force:true});}
   return{artifacts:artifacts.map(({plan,path})=>({path,candidate_id:plan.candidate_id,variant:plan.variant,candidate_sha256:plan.candidate_sha256,frame_count:plan.frame_count,unique_frame_count:plan.unique_frame_count,elapsed_ms:Math.round(plan.elapsed_ms)})),total_elapsed_ms:Math.round(performance.now()-start),provider_calls:0,network_calls:0,internal_review_only:true};

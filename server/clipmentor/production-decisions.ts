@@ -50,7 +50,7 @@ const repairStopped='blueprint_repair_no_progress';
 function pictureRepairCategory(code:string){
  if(/unsupported|_verifier_unavailable$/.test(code))return '门禁问题（需维护侧排查）';
  if(/^picture_plan_(group_explanation_missing|phase_content_missing|phase_original_missing|stage_cues_missing)$|^blueprint_execution_plan_missing$|_missing$|^storyboard_document_authoring_required$/.test(code))return '缺内容';
- if(/^picture_plan_(candidate_mismatch|original_order_mismatch|revisits_mismatch|phase_binding_invalid|phase_line_invalid|phase_range_invalid)$|^existing_partner_|^new_contact_|^opening_|^delivery_audience_scope_mismatch$/.test(code))return '绑定错';
+ if(/^picture_plan_(candidate_mismatch|original_order_mismatch|revisits_mismatch|phase_binding_invalid|phase_line_invalid|phase_range_invalid|closing_playback_interrupted)$|^existing_partner_|^new_contact_|^opening_|^delivery_audience_scope_mismatch$/.test(code))return '绑定错';
  return '门禁问题（需核对校验与当前计划）';
 }
 export function pictureRepairCoverage(issue:unknown){
@@ -81,6 +81,15 @@ export function repeatedPictureRepair(previous:unknown,current:unknown,history:r
 }
 export function pictureRepairStopped(task:Pick<ProductionTask,'status'|'error'>){
  return task.status==='blocked'&&task.error?.startsWith('Error: '+repairStopped+' ');
+}
+const narrationRepairStopped=(task:Pick<ProductionTask,'status'|'error'>)=>
+ task.status==='blocked'&&task.error?.startsWith('Error: teaching_final_narration_repair_no_progress:');
+
+export function blueprintRepairStopped(task:Pick<ProductionTask,'status'|'error'>){
+ return pictureRepairStopped(task)||narrationRepairStopped(task);
+}
+export function blueprintRepairNotice(task:Pick<ProductionTask,'status'|'error'|'repairContext'>){
+ return narrationRepairStopped(task)?'讲解返修已暂停。候选与审核记录已保存，待核对同一缺口。':pictureRepairNotice(task);
 }
 export function pictureRepairNotice(task:Pick<ProductionTask,'status'|'error'|'repairContext'>){
  if(!pictureRepairStopped(task))return;
