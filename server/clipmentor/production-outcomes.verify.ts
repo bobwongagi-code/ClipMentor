@@ -22,6 +22,14 @@ assert.equal(plannedVisualCriteria(bound),undefined,'native screen acceptance be
 assert.equal(visualCriteriaPlanApproved(bound,{verdict:'pass'}),true,'ordinary teaching approval still allows execution; it is not final acceptance');
 const task={projectId:'fixture',projectRevision:'saved',completed:{export:{at:1,artifact:{revision:'saved',path:'/media/uploads/preview.mp4'}},self_check:{at:2,artifact:{preview:'/media/uploads/preview.mp4',receipt:{projectId:'fixture',videoSha256:'b'.repeat(64),scope:'rendered_preview_continuous_review',status:'completed',full_film_accepted:false,effective_review:{status:'pass',can_use_as_pass:true,blockers:[],manifest_binding:'frozen_at_request'},timeline_check:{status:'no_detected_conflict'}}}}}}as ProductionTask;
 assert.doesNotThrow(()=>assertFinalPreviewEvidence(task,'saved','b'.repeat(64)));
+const alignedTask=structuredClone(task),alignment='a'.repeat(64);
+alignedTask.completed.export!.artifact.blueprint_alignment_input_sha256=alignment;
+assert.throws(()=>assertFinalPreviewEvidence(alignedTask,'saved','b'.repeat(64)),/missing_or_stale/,'old passes cannot release a new export');
+const alignedGate=(alignedTask.completed.self_check!.artifact.receipt as any).effective_review;
+alignedGate.blueprint_alignment_input_sha256='c'.repeat(64);
+assert.throws(()=>assertFinalPreviewEvidence(alignedTask,'saved','b'.repeat(64)),/missing_or_stale/);
+alignedGate.blueprint_alignment_input_sha256=alignment;
+assert.doesNotThrow(()=>assertFinalPreviewEvidence(alignedTask,'saved','b'.repeat(64)));
 for(const mutate of [
  (t:ProductionTask)=>{delete t.completed.self_check!.artifact.receipt;},
  (t:ProductionTask)=>{(t.completed.self_check!.artifact.receipt as any).scope='copy_and_planned_picture_only';},

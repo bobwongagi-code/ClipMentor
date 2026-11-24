@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {nativeExecutionMapping,checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {deliveryTimeline,deliverySectionsFromDoc} from '../../src/clipmentor/delivery-sections';
-import {productionPreviewFacts} from './production-preview-facts';
+import {productionPreviewFacts,productionPreviewReviewInput} from './production-preview-facts';
 import {makeDraft} from '../../src/editor/store';
 import type {ProjectDoc} from '../../src/editor/types';
 import bookends from '../../src/agent/tools/fixtures/barely-there-bookend-replacement-20261029.json';
@@ -73,10 +73,58 @@ for(const item of emptyGaps.timelines[0].items.filter(i=>i.kind==='video'))item.
 assert.deepEqual(nativeExecutionMapping(emptyGaps).issues,[],'empty editor gap maps preserve native mapping');
 assert.deepEqual(nativeExecutionMapping(emptyGaps).placements,good.placements);
 assert.equal(checkSourceBreakdown(emptyGaps,true).status,'structurally_ready','empty gap maps do not block export');
-const packet={units:[1,2].map(n=>({unit_id:'U'+n,points:[{point_id:'P'+n,question:'Synthetic teaching',buying_concern:'Concern'}]}))} as any;
+const packet={units:[1,2].map(n=>({unit_id:'U'+n,
+ points:[{point_id:'P'+n,question:'Synthetic teaching',buying_concern:'Concern',filming_conditions:['Object visible'],
+  teaching_basis:{connection:'Buyer can judge the actual contrast'}}],
+ lines:[{line_id:'L'+n,narration_ms:'Line '+n,labels:['Cue '+n]}],
+ picture_plan:{execution_plan:{content:(project.clipMentorAnalysis!.blueprint[n-1] as any).internal_review.plan}},
+}))} as any;
 const preview=productionPreviewFacts(project,makeDraft(project).getState(),packet);
 assert.deepEqual(preview.input.units.map(u=>u.output_range_seconds),[[0,7],[2,9]]);
 assert(preview.executionManifest.review_window_basis.every(r=>r.basis==='actual_native_source_and_audio'));
+const reviewInput=productionPreviewReviewInput(project,preview.input,packet);
+assert.deepEqual(reviewInput.units.map(u=>u.approved_teaching_ranges),[[[0,2],[4,7]],[[2,4],[7,9]]],
+ 'overlapping unit envelopes must not authorize evidence from a neighboring group');
+assert.equal(reviewInput.points[0].approved_connection,'Buyer can judge the actual contrast');
+assert.deepEqual(reviewInput.points[0].filming_conditions,['Object visible']);
+assert.deepEqual(reviewInput.units[0].approved_cues,[
+ {text:'Video asal',phase:'original',output_ranges:[[0,2]]},
+ {text:'Lihat semula',phase:'explanation',narration:['Line 1'],output_ranges:[[4,7]]},
+ {text:'Cue 1',phase:'explanation',narration:['Line 1'],output_ranges:[[4,7]]},
+]);
+const oddCue=structuredClone(packet);
+oddCue.units[0].picture_plan.execution_plan.content.viewer_stage_cues.revisit.push({line_ids:42,text:'Legacy extra cue'});
+assert.deepEqual(productionPreviewReviewInput(project,preview.input,oddCue),reviewInput,'malformed optional rows cannot invalidate the approved cue');
+const exactCue=structuredClone(packet);
+exactCue.units[0].picture_plan.execution_plan.content.composition.detail=JSON.stringify({production_rows:[
+ {unit_id:'U1',kind:'explanation',stage_label:'Lihat semula · Kain'},
+]});
+assert.deepEqual(productionPreviewReviewInput(project,preview.input,exactCue).units[0].approved_cues?.map(c=>c.text),
+ ['Video asal','Lihat semula · Kain','Cue 1'],'exact reviewed labels are authoritative over generic cues');
+assert.equal('approved_connection' in preview.input.points[0],false,'old export facts stay stable');
+
+const withContext=structuredClone(project),contextAnalysis=withContext.clipMentorAnalysis!;
+contextAnalysis.source_breakdown!.units[0].explanation_segment_ids.push('S2');
+const contextReview=(contextAnalysis.blueprint[0] as any).internal_review;
+contextReview.copy.lines[0].source_seconds=[0,4];
+contextReview.plan.phases[1].context_source_ranges=[{segment_id:'S2',source_range_seconds:[2,4],purpose:'Extra picture context'}];
+withContext.timelines[0].items.find(item=>item.id==='revisit1')!.srcInFrame=60;
+assert.deepEqual(checkSourceBreakdown(withContext,true).issues,[],'approved context plus a source-bound evidence still is valid');
+const contextOnly=structuredClone(withContext);
+contextOnly.assets.find(asset=>asset.id==='reference')!.props!.sourceSeconds=3;
+assert.deepEqual(checkSourceBreakdown(contextOnly,true).issues,[{code:'native_mapping_point_evidence_missing',id:'L1:P1'}],
+ 'continuous approved context cannot stand in for direct point evidence');
+const contextState=makeDraft(contextOnly).getState();
+assert.throws(()=>productionPreviewFacts(contextOnly,contextState,packet),/native_mapping_point_evidence_missing/);
+assert.deepEqual(productionPreviewFacts(contextOnly,contextState,packet,{legacyExport:true}).input.units,
+ preview.input.units,'readback of a legacy export retains its earlier time ranges');
+const twoPoints=structuredClone(withContext),twoBreakdown=twoPoints.clipMentorAnalysis!.source_breakdown!;
+twoBreakdown.points.push({...twoBreakdown.points[1],point_id:'P3'});
+(twoPoints.clipMentorAnalysis!.blueprint[0] as any).internal_review.copy.lines[0].point_ids.push('P3');
+assert.deepEqual(nativeExecutionMapping(twoPoints).issues,[],'one line can use a source-bound frame and a second moving evidence window');
+twoPoints.timelines[0].items.find(item=>item.id==='revisit1')!.srcInFrame=0;
+assert.deepEqual(nativeExecutionMapping(twoPoints).issues,[{code:'native_mapping_point_evidence_missing',id:'L1:P3'}],
+ 'enough footage for one linked point cannot stand in for the second one');
 const reject=(name:string,change:(d:ProjectDoc)=>void,code:RegExp)=>{const d=structuredClone(project);change(d);assert(nativeExecutionMapping(d).issues.some(i=>code.test(i.code)),name);assert.notEqual(checkSourceBreakdown(d,true).status,'structurally_ready',name+' still blocks export');};
 reject('missing narration',d=>{d.timelines[0].items=d.timelines[0].items.filter(i=>i.id!=='line1');},/narration_missing/);
 reject('duplicate narration',d=>{d.timelines[0].items.push({...d.timelines[0].items.find(i=>i.id==='line1')!,id:'duplicate'});},/narration_missing_or_ambiguous/);
@@ -92,6 +140,7 @@ for(const id of ['original','revisit2'])reject('actual source gap edit '+id,d=>{
 reject('cross-unit narration swapped',d=>{d.timelines[0].items.find(i=>i.id==='line1')!.startFrame=210;d.timelines[0].items.find(i=>i.id==='line2')!.startFrame=120;},/narration_order/);
 reject('original repeated',d=>{d.timelines[0].items.push({...d.timelines[0].items.find(i=>i.id==='original')!,id:'duplicate-original',startFrame:300});},/original_incomplete_or_repeated/);
 reject('reference hidden',d=>{d.timelines[0].items.find(i=>i.id==='ref')!.transform={opacity:0};},/picture_missing/);
+reject('source on non-picture track',d=>{d.timelines[0].items.find(i=>i.id==='revisit2')!.track='A1';},/picture_missing/);
 
 reject('narration wrong order',d=>{d.timelines[0].items.find(i=>i.id==='line1')!.startFrame=0;},/unit_output_order/);
 // Existing strict reviewed display ranges still take priority. Without exact

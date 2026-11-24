@@ -17,6 +17,7 @@ import {loadOfflineStoredProject} from '../external-agent/offline-project-store'
 import type {ReviewApiConfig} from './copy-review-api';
 import {openingComparisonCriterion,openingComparisonShape,parseProductionSourceCriteria,sourcePerformanceCriterion,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
+import {previewAlignmentFindingKeys,previewAlignmentRepairPause} from './preview-review';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest,matchesExportedPreviewProject} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
@@ -32,7 +33,9 @@ export function productionRepairContext(previous:Record<string,unknown>|undefine
  const history=Array.isArray(previous?.picture_repair_coverage)?previous.picture_repair_coverage as string[]:[];
  const coverage=[...new Set([...history,...pictureRepairCoverage(previous?.last_picture_repair_issue),...pictureRepairCoverage(artifact.blueprint_structure_issue)])];
  const pictureIssue=pictureRepairFindings(artifact.blueprint_structure_issue).length?artifact.blueprint_structure_issue:previous?.last_picture_repair_issue;
- return {...artifact,...(coverage.length?{picture_repair_coverage:coverage}:{}),...(pictureIssue?{last_picture_repair_issue:pictureIssue}:{}),...(previous?.audio_picture_repair?{audio_picture_repair:previous.audio_picture_repair}:{}),...(pending?{pending_review_repair:pending}:{}),
+ const previewFindings=previewAlignmentFindingKeys(artifact.receipt);
+ const priorPreviewFindings=previewFindings.length?previewFindings:previous?.preview_alignment_findings;
+ return {...artifact,...(priorPreviewFindings?{preview_alignment_findings:priorPreviewFindings}:{}),...(coverage.length?{picture_repair_coverage:coverage}:{}),...(pictureIssue?{last_picture_repair_issue:pictureIssue}:{}),...(previous?.audio_picture_repair?{audio_picture_repair:previous.audio_picture_repair}:{}),...(pending?{pending_review_repair:pending}:{}),
   ...(artifact.teaching_rebuild??previous?.teaching_rebuild?{teaching_rebuild:artifact.teaching_rebuild??previous?.teaching_rebuild}:{}),
   ...(artifact.narration_repair_digest??previous?.narration_repair_digest?{
    narration_repair_digest:artifact.narration_repair_digest??previous?.narration_repair_digest,
@@ -616,6 +619,10 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      pause=await structuralRepairPause(task,issue,source?.asset_id===task.input.sourceAssetId&&saved?.revision===task.projectRevision
       ?source.sourceContentHash:undefined);
     }
+    if(task.stage==='self_check')pause=previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt);
+    const executionError=result.artifact.execution_validation_error;
+    if(task.stage==='edit'&&typeof executionError==='string'&&executionError===task.repairContext?.execution_validation_error)
+     pause='execution_mapping_repair_no_progress 待维护侧核对 '+executionError;
     task.repairContext=productionRepairContext(task.repairContext,result.artifact);
     if(pause)throw new Error(pause);
     if(task.input.budget.routine){

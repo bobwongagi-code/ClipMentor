@@ -17,7 +17,7 @@ import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { readJson } from '../agent-runs/request';
-import { PREVIEW_REVIEW_ENDPOINT, previewBoundaryRevalidation, interpretPreviewResponse, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput } from '../clipmentor/preview-review';
+import { PREVIEW_REVIEW_ENDPOINT, previewBoundaryRevalidation, interpretPreviewResponse, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput, previewBlueprintAlignmentDigest } from '../clipmentor/preview-review';
 import { checkPreviewTimelineObservations, previewReviewWindows } from '../clipmentor/preview-timeline-check';
 import { boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria } from '../clipmentor/visual-done-criteria';
 import { productionReviewRequirements } from '../clipmentor/production-task';
@@ -109,6 +109,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     let manifestSha256: string | null = null;
     let evaluated: ReturnType<typeof evaluatePreviewTeachingJudgment> | null = null;
     let roundingRevalidation:ReturnType<typeof previewBoundaryRevalidation>=null;
+    let alignmentDigest:string|undefined;
     if (!result) blockers.push('review_not_completed');
     else {
       // A frozen locator lets current reads reject changed bytes without starting image work.
@@ -124,6 +125,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
         if (typeof result.raw_public_judgment !== 'string'
           || JSON.stringify(parsePreviewTeachingJudgment(result.raw_public_judgment)) !== JSON.stringify(result.judgment)) throw new Error('Raw receipt binding');
         evaluated = evaluatePreviewTeachingJudgment(result.judgment, input);
+        alignmentDigest=previewBlueprintAlignmentDigest(input);
         blockers.push(...evaluated.issues);
         roundingRevalidation=previewBoundaryRevalidation(result,input);
         if (result.status !== 'pass'&&!roundingRevalidation) blockers.push('saved_review_not_passed');
@@ -152,6 +154,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
       && manifestBinding === 'frozen_at_request' && blockers.length === 0;
     const rawUnits = object(result?.judgment) && Array.isArray(result.judgment.continuity) ? result.judgment.continuity : [];
     const effectiveReview = { status: canUse ? 'pass' : 'review_required', can_use_as_pass: canUse,
+      ...(alignmentDigest?{blueprint_alignment_input_sha256:alignmentDigest}:{}),
       blockers: [...new Set(blockers)], ...(roundingRevalidation?{contract_revalidation:roundingRevalidation}:{}), manifest_binding: manifestBinding, manifest_sha256: manifestSha256,
       unit_results: (evaluated?.unit_results ?? []).map(u => {
         const original = rawUnits.find((r: unknown) => object(r) && r.unit_id === u.unit_id);
@@ -214,7 +217,7 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
   if (Object.keys(body).some(k => !['action','projectId','operationId','maxRequests','src','videoSha256','input','executionManifest'].includes(k))
     || body.maxRequests !== 1 || typeof body.src !== 'string' || !/^\/media\/uploads\/[^/?#]+\.mp4$/.test(body.src)
     || typeof body.videoSha256 !== 'string' || !SHA.test(body.videoSha256) || !object(body.input)
-    || Object.keys(body.input).some(k => !['duration_seconds','points','units','reference_text'].includes(k))) throw new Error('One authorized immutable preview required');
+    || Object.keys(body.input).some(k => !['duration_seconds','points','units','reference_text','check_blueprint_alignment'].includes(k))) throw new Error('One authorized immutable preview required');
   const input = validatePreviewReviewInput(body.input);
   const criteria=await deps.visualCriteria?.(body.projectId);
   if(criteria){

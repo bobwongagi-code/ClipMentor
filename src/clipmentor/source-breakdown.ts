@@ -3,6 +3,7 @@ import { isSourceReviewScope, type SourceReviewScope } from './source-alignment'
 import type { SourceClosingStatus } from '../../shared/clipmentor-handoff';
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
+import {trackKind} from '../editor/timelineTypes';
 
 export const teachingPrinciples=['buyer-first','complete-demo','same-frame','purchase-invitation'] as const;
 
@@ -282,6 +283,17 @@ export interface CopySourceBinding {
   context_source_ranges: Array<{ segment_id: string; source_range_seconds: [number, number]; purpose: string }>;
 }
 
+/** Native clips can split a reviewed choice and use extra context. Each
+ * point attached to a line still needs some of that line's direct evidence. */
+function missingLinePointEvidence(b:SourceBreakdown,line:Row,bound:CopySourceBinding|null,used:Array<[number,number]>){
+  const ids=strings(line.point_ids)?line.point_ids:text(line.point)?[line.point]:[];
+  const present=new Set(bound?.evidence_source_ranges.filter(selected=>{
+    const [start,end]=selected.source_range_seconds;
+    return used.some(([from,to])=>from===to?from>=start&&from<end:from<end&&to>start);
+  }).map(selected=>selected.segment_id));
+  return ids.filter(id=>!b.points.find(point=>point.point_id===id)?.segment_ids.some(segment=>present.has(segment)));
+}
+
 /** source_seconds is an envelope. Only these bound ranges are evidence/context, never the gaps. */
 export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown['units'][number], line: Row, plan: unknown): CopySourceBinding | null {
   if (!range(line.source_seconds)) return null;
@@ -438,7 +450,7 @@ function checkPlannedRows(
     || u.placement.explanation_frames[0]!==Math.min(...explanations.map(r=>r.output[0]))
     || u.placement.explanation_frames[1]!==Math.max(...explanations.map(r=>r.output[1])))) issue('unit_placement_plan_mismatch',u.unit_id);
   const sourceAsset=doc.assets.find(v=>v.id===a.source.asset_id);
-  const items=tl.items.filter(item=>item.kind==='video' && !tl.tracks?.[item.track]?.hidden && item.transform?.opacity!==0
+  const items=tl.items.filter(item=>item.kind==='video' && trackKind(tl,item.track)==='video' && !tl.tracks?.[item.track]?.hidden && item.transform?.opacity!==0
     && (item.sourceAssetId ? item.sourceAssetId===a.source.asset_id : item.src===sourceAsset?.src));
   for(const r of accepted) {
     const spans: Array<[number,number]> = [];
@@ -472,9 +484,10 @@ function checkPlannedRows(
 export function nativeExecutionMapping(doc:ProjectDoc){
   const issues:Array<{code:string;id:string}>=[],bindings:Array<{unit_id:string;phase:string;item_id:string;source_range_seconds:[number,number];segment_ids:string[]}>=[];
   const placements:Record<string,NonNullable<SourceBreakdown['units'][number]['placement']>>={};
+  const teachingPhases:Record<string,{original:Array<[number,number]>;explanation:Array<[number,number]>}>={};
   const a=doc.clipMentorAnalysis,b=a?.source_breakdown,t=doc.timelines.find(t=>t.id===doc.activeTimelineId);
   const fail=(code:string,id:string)=>issues.push({code,id});
-  if(!a||!b||!Array.isArray(a.blueprint)||!isSourceBreakdown(b)||!t||t.fps!==a.source.fps)return {issues,bindings,placements};
+  if(!a||!b||!Array.isArray(a.blueprint)||!isSourceBreakdown(b)||!t||t.fps!==a.source.fps)return {issues,bindings,placements,teachingPhases};
   const visible=(i:typeof t.items[number])=>!t.tracks?.[i.track]?.hidden&&i.transform?.opacity!==0;
   const source=doc.assets.find(v=>v.id===a.source.asset_id);
   let offset=0;
@@ -508,7 +521,7 @@ export function nativeExecutionMapping(doc:ProjectDoc){
     for(const range of originalPlaybackRanges(b,u)){
       const wanted:[number,number]=[Math.round(range[0]*t.fps),Math.round(range[1]*t.fps)],found:Array<{source:[number,number];output:[number,number]}>=[];
       for(const item of t.items){
-        if(item.kind!=='video'||!visible(item)||item.sourceAssetId!==a.source.asset_id||item.src!==source?.src
+        if(item.kind!=='video'||trackKind(t,item.track)!=='video'||!visible(item)||item.sourceAssetId!==a.source.asset_id||item.src!==source?.src
           ||item.startFrame<offset||allVoices.some(v=>overlaps(v,[item.startFrame,item.startFrame+item.durationInFrames])))continue;
         if((item.playbackRate??1)!==1||item.deletedWordIdx?.length||item.transcriptPlayOrder?.length||item.silenceFrames!==undefined||Object.keys(item.gapCapsMs??{}).length){fail('nonlinear_source_not_inspected',item.id);continue;}
         const start=Math.max(wanted[0],item.srcInFrame??0),end=Math.min(wanted[1],(item.srcInFrame??0)+item.durationInFrames);
@@ -530,25 +543,30 @@ export function nativeExecutionMapping(doc:ProjectDoc){
       const raw=(candidate.lines as Row[]).find(v=>v.id===line.id)!,bound=copyLineSourceBinding(b,u,raw,plan);
       const ranges=bound?[...bound.evidence_source_ranges,...bound.context_source_ranges].map(r=>r.source_range_seconds):[];
       const spans:Array<[number,number]>=[];
+      const usedEvidence:Array<[number,number]>=[];
       for(const item of t.items){
         const output:[number,number]=[Math.max(window[0],item.startFrame),Math.min(window[1],item.startFrame+item.durationInFrames)];
-        if(!visible(item)||output[1]<=output[0])continue;
+        if(!visible(item)||output[1]<=output[0]||trackKind(t,item.track)!=='video')continue;
         const asset=doc.assets.find(v=>v.id===item.sourceAssetId);
         if(item.kind==='video'&&item.sourceAssetId===a.source.asset_id){
           if(item.src!==source?.src||(item.playbackRate??1)!==1||item.deletedWordIdx?.length||item.transcriptPlayOrder?.length||item.silenceFrames!==undefined||Object.keys(item.gapCapsMs??{}).length){fail('nonlinear_source_not_inspected',item.id);continue;}
           const used=sourceWindowForTimelineRange(item,output[0]-item.startFrame,output[1]-output[0]);
           const r:[number,number]=[used.startFrame/t.fps,used.endFrame/t.fps];
           if(!rangesCover(ranges.filter(r=>r[1]>r[0]),r,1/t.fps+1e-6))fail('native_mapping_picture_outside_frozen_selection',line.id+':'+item.id);
+          else usedEvidence.push(r);
           if(item.sourceContentHash&&item.sourceContentHash!==a.source.sourceContentHash)fail('item_source_hash_mismatch',item.id);
           spans.push(output);bindings.push({unit_id:u.unit_id,phase:'explanation',item_id:item.id,source_range_seconds:r,segment_ids:u.explanation_segment_ids});
         }else if(item.kind==='image'&&asset?.props?.sourceAssetId===a.source.asset_id){
           const seconds=asset.props.sourceSeconds;
           if(item.src!==asset.src||!asset.sourceContentHash||asset.props.sourceHash!==a.source.sourceContentHash
             ||typeof seconds!=='number'||!ranges.some(r=>seconds>=r[0]&&seconds<r[1]+(r[0]===r[1]?1e-7:0))){fail('native_mapping_reference_unbound',line.id+':'+item.id);continue;}
+          usedEvidence.push([seconds,seconds]);
           spans.push(output);bindings.push({unit_id:u.unit_id,phase:'explanation',item_id:item.id,source_range_seconds:[seconds,seconds],segment_ids:u.explanation_segment_ids});
         }
       }
       if(!rangesCover(spans,window,0))fail('native_mapping_picture_missing',line.id);
+      else for(const pointId of missingLinePointEvidence(b,raw,bound,usedEvidence))
+        fail('native_mapping_point_evidence_missing',line.id+':'+pointId);
     }
     const groupOrderValid=()=>{
       try{
@@ -572,9 +590,13 @@ export function nativeExecutionMapping(doc:ProjectDoc){
       }catch{return false;}
     };
     if(!groupOrderValid())fail('unit_output_order_invalid',u.unit_id);
-    if(originals.length&&lines.length)placements[u.unit_id]={timeline_id:t.id,original_frames:[originals[0][0],originals.at(-1)![1]],explanation_frames:[lines[0].item.startFrame,lines.at(-1)!.item.startFrame+lines.at(-1)!.item.durationInFrames]};
+    if(originals.length&&lines.length){
+      placements[u.unit_id]={timeline_id:t.id,original_frames:[originals[0][0],originals.at(-1)![1]],explanation_frames:[lines[0].item.startFrame,lines.at(-1)!.item.startFrame+lines.at(-1)!.item.durationInFrames]};
+      teachingPhases[u.unit_id]={original:contiguousPlaybackRuns(originals,0),
+        explanation:contiguousPlaybackRuns(lines.map(({item})=>[item.startFrame,item.startFrame+item.durationInFrames]),0)};
+    }
   }
-  return {issues,bindings,placements};
+  return {issues,bindings,placements,teachingPhases};
 }
 
 export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false) {

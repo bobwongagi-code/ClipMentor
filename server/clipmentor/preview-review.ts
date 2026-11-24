@@ -15,6 +15,14 @@ export interface PreviewFocus {
   point_id: string;
   teaching_goal_zh: string;
   product_relevance: string;
+  approved_connection?: string;
+  filming_conditions?: string[];
+}
+interface PreviewCue {
+  text:string;
+  phase:'original'|'explanation';
+  narration?:string[];
+  output_ranges?:Array<[number,number]>;
 }
 export interface PreviewReferenceText {
   channel: 'narration' | 'annotation';
@@ -25,8 +33,12 @@ export interface PreviewReferenceText {
 export interface PreviewReviewInput {
   duration_seconds: number;
   points: PreviewFocus[];
-  units: Array<{ unit_id: string; point_ids: string[]; output_range_seconds?: [number, number] }>;
+  units: Array<{ unit_id: string; point_ids: string[]; output_range_seconds?: [number, number];
+    approved_teaching_ranges?: Array<[number, number]>;
+    approved_narration?: string[];
+    approved_cues?: PreviewCue[] }>;
   reference_text: PreviewReferenceText[];
+  check_blueprint_alignment?: true;
   visual_criteria?: Array<{point_id:string;quote:string;question:string;pictureStage?:string;fileName:string;seconds:number;base64:string}>;
 }
 export interface ReviewReceipt {
@@ -53,10 +65,12 @@ export interface PreviewTeachingJudgment {
     narrative: Finding;
     teaching: Finding;
   }>;
+  blueprint_alignment?: Finding;
 }
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
+const textList = (v:unknown):v is string[] => Array.isArray(v)&&v.every(text);
 const hash = (v: string | Uint8Array) => createHash('sha256').update(v).digest('hex');
 const normalize = (v: string) => v.normalize('NFKC').toLowerCase().replace(/[\p{P}\s]+/gu, '');
 const range = (v: Record<string, unknown>, duration: number, observation=false) => typeof v.start_seconds === 'number'
@@ -69,9 +83,13 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
     || value.duration_seconds <= 0 || !Array.isArray(value.points) || !value.points.length
     || !Array.isArray(value.units) || !value.units.length || !Array.isArray(value.reference_text)) throw new Error('Invalid preview review input');
   const ids = new Set<string>();
+  const alignment=value.check_blueprint_alignment===true;
+  if(value.check_blueprint_alignment!==undefined&&!alignment)throw Error('Invalid preview blueprint alignment flag');
   for (const point of value.points) {
     if (!object(point) || !text(point.point_id) || ids.has(point.point_id)
       || !text(point.teaching_goal_zh) || !text(point.product_relevance)) throw new Error('Invalid or duplicate focus point');
+    if(alignment&&((point.approved_connection!==undefined&&!text(point.approved_connection))
+      ||(point.filming_conditions!==undefined&&!textList(point.filming_conditions))))throw Error('Invalid approved teaching conditions');
     ids.add(point.point_id);
   }
   for (const reference of value.reference_text) {
@@ -84,6 +102,17 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
       || !unit.point_ids.length || !unit.point_ids.every((id) => typeof id === 'string' && ids.has(id))) throw new Error('Invalid review unit');
     if (unit.output_range_seconds !== undefined && (!Array.isArray(unit.output_range_seconds) || unit.output_range_seconds.length !== 2
       || !range({ start_seconds: unit.output_range_seconds[0], end_seconds: unit.output_range_seconds[1] }, value.duration_seconds))) throw new Error('Invalid unit output range');
+    if(alignment&&!unit.unit_id.startsWith('delivery/')&&unit.output_range_seconds===undefined)throw Error('Approved teaching unit requires an output range');
+    const outputRange=unit.output_range_seconds as [number,number]|undefined;
+    const validRanges=(ranges:unknown)=>ranges===undefined||!!outputRange&&Array.isArray(ranges)&&ranges.length>0
+      &&ranges.every(s=>Array.isArray(s)&&s.length===2&&s.every(n=>typeof n==='number'&&Number.isFinite(n))
+        &&s[0]>=outputRange[0]&&s[1]<=outputRange[1]&&s[1]>s[0]);
+    if(alignment&&((unit.approved_narration!==undefined&&!textList(unit.approved_narration))||!validRanges(unit.approved_teaching_ranges)))
+      throw Error('Invalid approved teaching ranges or narration');
+    const cues=unit.approved_cues;
+    if(alignment&&cues!==undefined&&(!Array.isArray(cues)||!cues.every(c=>object(c)&&text(c.text)
+      &&(c.phase==='original'||c.phase==='explanation')&&(c.narration===undefined||textList(c.narration))&&validRanges(c.output_ranges))))
+      throw Error('Invalid approved teaching cues');
     units.add(unit.unit_id);
   }
   // Whitelist fields: author reasons, expected verdicts and prior reviews never enter the prompt.
@@ -94,17 +123,60 @@ export function validatePreviewReviewInput(value: unknown): PreviewReviewInput {
       &&typeof v.seconds==='number'&&Number.isFinite(v.seconds)&&v.seconds>=0&&text(v.base64)&&v.base64.length<=1_500_000&&/^[A-Za-z0-9+/]+={0,2}$/.test(v.base64))))
     throw Error('Invalid preview visual criteria');
   return { duration_seconds: value.duration_seconds,
-    points: value.points.map((p) => ({ point_id: p.point_id, teaching_goal_zh: p.teaching_goal_zh, product_relevance: p.product_relevance })),
-    units: value.units.map((u) => ({ unit_id: u.unit_id, point_ids: [...u.point_ids], ...(u.output_range_seconds === undefined ? {} : { output_range_seconds: [...u.output_range_seconds] as [number, number] }) })),
+    points: value.points.map((p) => ({ point_id: p.point_id, teaching_goal_zh: p.teaching_goal_zh, product_relevance: p.product_relevance,
+      ...(alignment&&p.approved_connection!==undefined?{approved_connection:p.approved_connection}:{}),
+      ...(alignment&&p.filming_conditions!==undefined?{filming_conditions:[...p.filming_conditions]}:{}) })),
+    units: value.units.map((u) => ({ unit_id: u.unit_id, point_ids: [...u.point_ids], ...(u.output_range_seconds === undefined ? {} : { output_range_seconds: [...u.output_range_seconds] as [number, number] }),
+      ...(alignment&&u.approved_teaching_ranges?{approved_teaching_ranges:u.approved_teaching_ranges.map((r:[number,number])=>[...r] as [number,number])}:{}),
+      ...(alignment&&u.approved_narration?{approved_narration:[...u.approved_narration]}:{}),
+      ...(alignment&&u.approved_cues?{approved_cues:u.approved_cues.map((c:PreviewCue)=>({text:c.text,phase:c.phase,
+        ...(c.narration?{narration:[...c.narration]}:{}),...(c.output_ranges?{output_ranges:c.output_ranges.map(([start,end]):[number,number]=>[start,end])}:{})}))}:{}) })),
     reference_text: value.reference_text.map((r) => ({ channel: r.channel, start_seconds: r.start_seconds,
       end_seconds: r.end_seconds, text: r.text })),
-    ...(Array.isArray(visual)?{visual_criteria:visual.map(v=>({point_id:v.point_id,quote:v.quote,question:v.question,...(v.pictureStage===undefined?{}:{pictureStage:v.pictureStage}),fileName:v.fileName,seconds:v.seconds,base64:v.base64}))}:{}) };
+    ...(Array.isArray(visual)?{visual_criteria:visual.map(v=>({point_id:v.point_id,quote:v.quote,question:v.question,...(v.pictureStage===undefined?{}:{pictureStage:v.pictureStage}),fileName:v.fileName,seconds:v.seconds,base64:v.base64}))}:{}),
+    ...(alignment?{check_blueprint_alignment:true as const}:{}) };
 }
 
 export function assertExternalVideoUrlSize(bytes: number): void {
   if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > EXTERNAL_VIDEO_URL_MAX_BYTES) {
     throw new Error('External video URL exceeds the documented 15MB limit; use bounded inline input or an explicitly supported file-upload route');
   }
+}
+
+export function previewBlueprintAlignmentDigest(input:PreviewReviewInput) {
+  if(!input.check_blueprint_alignment)return undefined;
+  const {visual_criteria,...approved}=validatePreviewReviewInput(input);
+  const criteria=new Set(visual_criteria?.map(c=>c.point_id));
+  return hash(JSON.stringify({...approved,
+    points:approved.points.filter(p=>!criteria.has(p.point_id)),
+    units:approved.units.filter(u=>!u.point_ids.every(id=>criteria.has(id)))}));
+}
+
+/** Missing review evidence needs inspection before another edit. A repeated
+ * substantive finding is identified by what was reported, not the new MP4 hash. */
+export function previewAlignmentFindingKeys(receipt:unknown){
+  if(!object(receipt)||!object(receipt.effective_review)||!text(receipt.effective_review.blueprint_alignment_input_sha256))return [];
+  const result=receipt.result,judgment=object(result)?result.judgment:undefined;
+  if(!object(judgment))return [];
+  const key=(id:unknown,report:unknown)=>{
+    if(!text(id)||!object(report)||report.status!=='not_supported'||!text(report.reasoning)||!Array.isArray(report.evidence))return [];
+    return [hash(JSON.stringify([id,report.reasoning,report.evidence.map(e=>object(e)?[e.channel,e.observed,e.quote]:null)]))];
+  };
+  return [
+    ...key('blueprint_alignment',judgment.blueprint_alignment),
+    ...(Array.isArray(judgment.coverage)?judgment.coverage.flatMap(p=>object(p)?key(p.point_id,p.teaching):[]):[]),
+    ...(Array.isArray(judgment.continuity)?judgment.continuity.flatMap(u=>object(u)?key(u.unit_id,u.teaching):[]):[]),
+  ];
+}
+
+export function previewAlignmentRepairPause(previous:unknown,current:unknown):string|undefined{
+  if(!object(current)||!object(current.effective_review)||!text(current.effective_review.blueprint_alignment_input_sha256)
+    ||!Array.isArray(current.effective_review.blockers))return;
+  const blockers=current.effective_review.blockers;
+  if(blockers.some(issue=>typeof issue==='string'&&(issue==='missing_blueprint_alignment'||issue==='blueprint_alignment:insufficient_evidence'
+    ||issue.endsWith(':approved_cue_visual_evidence_missing')||issue.endsWith(':teaching_evidence_outside_approved_unit'))))
+    return 'preview_blueprint_alignment_evidence_missing';
+  if(Array.isArray(previous)&&previewAlignmentFindingKeys(current).some(key=>previous.includes(key)))return 'preview_blueprint_alignment_no_progress';
 }
 
 function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: PreviewReviewInput) {
@@ -120,7 +192,9 @@ function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: 
 证据={"start_seconds":0,"end_seconds":1,"channel":"original或narration或annotation或visual_organization","observed":"实际观察","quote":"仅口播或文字时引用；视觉组织可不填"}
 学习目标和工程文字：\n${JSON.stringify(material)}${clean.points.some(p=>p.point_id.startsWith('delivery/'))
  ?'\n以 delivery/ 开头的是交付验收。根据实际导出像素和口播判断所列要求，逐项给时间证据；teaching 字段在这里填交付效果，无需教学知识。coverage 的每项正向结论（包括 delivery/criterion/ 项）都必须在自己的teaching.evidence中给至少一条与本段相交的visual_organization证据；口播提问标准也要另附实际画面证据，不能只给narration或借用其他coverage行。片头可用本段和相邻画面核承接。'
- :''}${criteria?'\n用户原话、问题和参照另附。'+visualInstruction+'无法在实际导出中定位时填 insufficient_evidence。':''}`;
+ :''}${criteria?'\n用户原话、问题和参照另附。'+visualInstruction+'无法在实际导出中定位时填 insufficient_evidence。':''}${clean.check_blueprint_alignment?
+ '\n逐点用本组实际画面、字幕或口播核对 approved_connection 和 filming_conditions：具体说出实际内容怎样兑现已审手法和购买判断依据，没兑现填 not_supported，证据不清填 insufficient_evidence。逐组 continuity.teaching 核对已审原声与讲解顺序、approved_narration 和 approved_cues 是否在对应阶段或句子出现且指向本组。短标附 output_ranges 时，在给定阶段时窗内引用。教学证据必须落在 approved_teaching_ranges 内（没有时用 output_range_seconds），跨段则分条。逐项短标给本组 visual_organization 证据，quote 逐字记录实际看到的文字，同一短标在本组可共用一条证据。reference_text 是工程记录，不可充当实际听到或看到的证明，也不代表额外文字已获批准。\n顶层另必填 blueprint_alignment（同“判断”结构）：连续检查整片（含组间及片尾），核查是否有未审新增、替换的教学论断、口播、短标或视觉主张。发现则填 not_supported 并给成片位置；无法核清填 insufficient_evidence；确认兑现已审范围且无此类新增才填 supported，简述检查范围并给实际时间证据。允许已审原声、背景、片头片尾和正常画面组织。':''
+ }`;
   const shell = { contents: [{ role: 'user', parts: [
     part, { text: instruction },
   ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json' } };
@@ -185,11 +259,26 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
       }
     }
   };
+  if(input.check_blueprint_alignment){
+    if(!finding(value.blueprint_alignment))issues.push('missing_blueprint_alignment');
+    else positive(value.blueprint_alignment,false,'blueprint_alignment');
+  }
+  const inApprovedRanges=(e:ReviewReceipt,windows:Array<[number,number]>)=>
+    windows.some(([start,end])=>e.start_seconds<end&&e.end_seconds>start
+      &&e.start_seconds>=start-.005&&e.end_seconds<=end+.005);
+  const inApprovedUnit=(e:ReviewReceipt,unit:PreviewReviewInput['units'][number])=>
+    inApprovedRanges(e,unit.approved_teaching_ranges??(unit.output_range_seconds?[unit.output_range_seconds]:[]));
   for (const row of value.coverage) {
     if (!object(row) || !text(row.point_id) || !input.points.some((p) => p.point_id === row.point_id)
       || covered.has(row.point_id) || !receipts(row.depiction) || !finding(row.teaching)) { issues.push('invalid_coverage_row'); continue; }
     covered.add(row.point_id);
     positive(row.teaching, true, row.point_id);
+    if(input.check_blueprint_alignment&&!row.point_id.startsWith('delivery/')&&row.teaching.status==='supported'){
+      const teaching=row.teaching;
+      const units=input.units.filter(unit=>unit.point_ids.includes(row.point_id as string));
+      if(!units.length||units.some(unit=>!teaching.evidence.some(e=>e.channel!=='original'&&inApprovedUnit(e,unit))))
+        issues.push(`${row.point_id}:teaching_evidence_outside_approved_unit`);
+    }
     if(row.point_id.startsWith('delivery/')&&row.teaching.status==='supported'){
       const pointId=row.point_id,teaching=row.teaching,localized=input.visual_criteria?.some(c=>c.point_id===pointId&&c.pictureStage!==undefined);
       const windows=input.units.filter(unit=>unit.point_ids.includes(pointId)).map(unit=>unit.output_range_seconds);
@@ -209,6 +298,16 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
     units.add(row.unit_id);
     const expected = input.units.find((u) => u.unit_id === row.unit_id)!;
     const window=expected.output_range_seconds;
+    if(input.check_blueprint_alignment&&!expected.unit_id.startsWith('delivery/')&&row.teaching.status==='supported'
+      &&(!row.current.some(e=>inApprovedUnit(e,expected))||!row.teaching.evidence.some(e=>e.channel!=='original'&&inApprovedUnit(e,expected))))
+      issues.push(`${row.unit_id}:teaching_evidence_outside_approved_unit`);
+    if(input.check_blueprint_alignment&&row.teaching.status==='supported'){
+      const quoteKey=(value:string)=>value.normalize('NFC').replace(/\s+/gu,' ').trim();
+      const observed=row.teaching.evidence.filter(e=>e.channel==='visual_organization'&&text(e.quote)&&inApprovedUnit(e,expected));
+      if(expected.approved_cues?.some(cue=>!observed.some(e=>quoteKey(e.quote!)===quoteKey(cue.text)
+        &&(!cue.output_ranges||inApprovedRanges(e,cue.output_ranges)))))
+        issues.push(`${row.unit_id}:approved_cue_visual_evidence_missing`);
+    }
     if(window&&input.visual_criteria?.some(c=>c.pictureStage!==undefined&&expected.point_ids.includes(c.point_id))&&row.teaching.status==='supported'){
       const located=(e:ReviewReceipt)=>e.channel==='visual_organization'&&e.start_seconds>=window[0]&&e.end_seconds<=window[1];
       if(!row.current.some(located)||!row.teaching.evidence.some(located))issues.push(`${row.unit_id}:visual_evidence_outside_requested_window`);

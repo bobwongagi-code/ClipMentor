@@ -42,7 +42,8 @@ import {createProductionPreparation,productionBoardPhaseIssues,verifyProductionN
 import {openHeadlessEditor,type RenderSnapshotBinding} from './headless-editor';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
-import {productionPreviewFacts,previewFactsDigest,assertPreviewExportBinding} from './production-preview-facts';
+import {productionPreviewFacts,previewFactsDigest,assertPreviewExportBinding,productionPreviewReviewInput} from './production-preview-facts';
+import {previewBlueprintAlignmentDigest} from './preview-review';
 import {productionDeliverables} from './production-deliverables';
 import {collectSavedPreviewVisualEvidence} from './preview-visual-evidence';
 import {productionOpeningComparison,productionReviewRequirements,productionTeachingBrief} from './production-task';
@@ -98,7 +99,7 @@ const goals={
  analysis:'完整观察原片，理解商品购买理由及结构，登记证据、重点与蓝图基线。登记完整分析基线供下阶段连续视听；抽帧只证明可见画面。读取当前项目中的商品图和销量截图。不能听清的留未知。用 source_breakdown 回读登记；人审版由后续蓝图阶段处理。不得配音或剪辑。',
  blueprint:'先回读已保存的 source_breakdown 和 current_copy。逐个保留组用 revise_clipmentor_analysis 的 set_copy_candidate 一次登记马来语口播、同文字幕、中文与画面计划；首稿在 record 内写 source_candidate_id:null，已有稿用现行 ID。两种情况都给新的 script_candidate_ 和 picture_plan_ ID，不用 revise 手写指针。全部保留组登记后再用 observe_clipmentor_source_video 补核关键原声和动作，需要时局部修订。成绩与学习过渡缺资料时明确记录原因，不静默删掉；按完整话意和动作决定看一组讲一组或其他组织，不固定四组。把卖点、怎么拍、为什么这样拍讲清，原消费者促单与达人阶段邀请分开。每组用既有unit表达原声与解释，必要条件、画面承担、回看进出和视觉继承明确。未配音仅填语义锚点，不编实测秒数；先检查最终审核投影。不得自签审核或剪辑。',
  audio:'只处理已审现行稿。先找同文、同音色现有音频；仅合成缺少的句子，保留实测声长及来源。按整组核承载，缺素材或需改稿时说明冲突，不赶读、慢放、循环或长定格凑时长。',
- edit:'按当前已审蓝图和真实音频执行。edit_item 的 adds 用于从真实素材创建尚不存在的实例；fixed_native_edits 只是已有实例的差异补丁，空数组不代表禁止创建。空时间线应按已审阶段顺序创建；输出帧位由实测音频长度及有效词级锚点落实，不能把无绝对摆放位置误判成没有音频锚点，不得把估算当实测。保留已定源窗，声画无法承载时返回具体句和冲突，不把整项交回用户。读取 current_copy 的 summary/candidate/picture_plan 必须带实际 unitId。完成原生实例组装后回读；宿主根据真实音频实例、原声播放和已审逐句选材核对实际摆放，不要求执行者改写蓝图或补production_rows，不自行调用revise_clipmentor_analysis登记。原声实例保留正常声音，讲解回看视频静音；源片参照图用save_clipmentor_source_frame保留来源，不用无关素材。保留教学重点和必要拍法，原片/讲解强区分、字幕实底可读且无阴影。源片对象、阶段与讲解意群对应。用实际合成帧自查，保存后停止，不自行导出。'
+ edit:'按当前已审蓝图和真实音频执行。edit_item 的 adds 用于从真实素材创建尚不存在的实例；fixed_native_edits 只是已有实例的差异补丁，空数组不代表禁止创建。空时间线应按已审阶段顺序创建；输出帧位由实测音频长度及有效词级锚点落实，不能把无绝对摆放位置误判成没有音频锚点，不得把估算当实测。保留已定源窗，声画无法承载时返回具体句和冲突，不把整项交回用户。读取 current_copy 的 summary/candidate/picture_plan 必须带实际 unitId。按已审逐句 evidence_source_ranges 落回看，每个所讲重点都要用到自己的证据；context_source_ranges 只补充。短标跟随本组约定的原声、回看或讲解句。完成原生实例组装后回读；宿主根据真实音频实例、原声播放和已审逐句选材核对实际摆放，不要求执行者改写蓝图或补production_rows，不自行调用revise_clipmentor_analysis登记。原声实例保留正常声音，讲解回看视频静音；源片参照图用save_clipmentor_source_frame保留来源，不用无关素材。保留教学重点和必要拍法，原片/讲解强区分、字幕实底可读且无阴影。源片对象、阶段与讲解意群对应。用实际合成帧自查，保存后停止，不自行导出。'
 };
 
 /** Author examples are loaded only while forming the teaching plan, never as
@@ -249,7 +250,9 @@ async function runProductionCopyReview({
 
 async function runProductionExport(task:ProductionTask,editor:Awaited<ReturnType<typeof openHeadlessEditor>>,doc:ProjectDoc,signal:AbortSignal):Promise<StageResult>{
  await verifyProductionNarrationFiles(doc,task.input.voice);
- const facts=productionPreviewFacts(doc,editor.context.getState(),await copyTeachingPacketFromDoc(doc));
+ const packet=await copyTeachingPacketFromDoc(doc);
+ const facts=productionPreviewFacts(doc,editor.context.getState(),packet);
+ const alignmentDigest=previewBlueprintAlignmentDigest(productionPreviewReviewInput(doc,facts.input,packet));
  const exportedRevision=editor.revision,factsDigest=previewFactsDigest(facts);
  const result=await editor.execute('submit_render_job',{format:'video',codec:'h264',resolution:'720p',videoBitrate:3000000,name:'ClipMentor-review-preview.mp4'},'export') as RenderSnapshotBinding;
  if(!result.renderId)throw new Error('Missing render ID');
@@ -264,7 +267,7 @@ async function runProductionExport(task:ProductionTask,editor:Awaited<ReturnType
     if(!file)throw Error('Preview missing');
     outputDimensions=await verifyProductionOutput(file,signal);
    }
-   return {artifact:{renderId:result.renderId,...snapshot.result,...(outputDimensions?{outputDimensions}:{}),revision:exportedRevision,facts_digest:factsDigest,feedback_project_digest:feedbackProjectDigest(doc)}};
+   return {artifact:{renderId:result.renderId,...snapshot.result,...(outputDimensions?{outputDimensions}:{}),revision:exportedRevision,facts_digest:factsDigest,blueprint_alignment_input_sha256:alignmentDigest,feedback_project_digest:feedbackProjectDigest(doc)}};
   }
   if(['failed','cancelled'].includes(snapshot.status))throw new Error(snapshot.error??'Render failed; committed editing retained');
   await new Promise<void>((resolve,reject)=>{const stop=()=>{clearTimeout(timer);reject(signal.reason);};const timer=setTimeout(()=>{signal.removeEventListener('abort',stop);resolve();},1000);signal.addEventListener('abort',stop,{once:true});});
@@ -671,16 +674,22 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    const file=resolveUploadFile(src.replace(/^\/media\/uploads\//,''));if(!file)throw new Error('Preview missing');
    if(task.input.panelDelivery)await verifyProductionOutput(file,stage.signal);
    const packet=await copyTeachingPacketFromDoc(doc),t=editor.context.getState();
-   const facts=productionPreviewFacts(doc,t,packet);
+   const alignmentDigest=exported?.blueprint_alignment_input_sha256;
+   const facts=productionPreviewFacts(doc,t,packet,alignmentDigest===undefined?{legacyExport:true}:undefined);
    assertPreviewExportBinding(exported,editor.revision,facts);
    const deliverables=(await productionDeliverables(doc,undefined,task.completed.export?.at,task.input.panelDelivery)).map(({bytes:_bytes,...output})=>output);
-   const {input,executionManifest}=facts;
+   const {executionManifest}=facts;
+   const alignedInput=alignmentDigest===undefined?undefined:productionPreviewReviewInput(doc,facts.input,packet);
+   if(alignedInput&&previewBlueprintAlignmentDigest(alignedInput)!==alignmentDigest)throw Error('preview_blueprint_alignment_binding_stale');
+   const input=alignedInput??facts.input;
    const reviewed=await executeWithRecovery('review_clipmentor_preview',{action:'request',operationId:operation('independent-review'),maxRequests:1,src,videoSha256:await sha256File(file),input,
     executionManifest},'preview-review') as Record<string,unknown>;
    if(reviewed.error||reviewed.status!=='completed')throw new Error('连续成片复核未取得有效回执');
    if(criteria&&reviewed.visualCriteriaDigest!==criteria.digest)throw Error('handoff_visual_criteria_preview_missing_or_stale');
    const result=await collectSavedPreviewVisualEvidence(reviewed,args=>editor.execute('review_clipmentor_preview',args,'preview-visual-evidence'));
-   if(!(result.effective_review as {can_use_as_pass?:boolean})?.can_use_as_pass)return {artifact:{receipt:result,revision:editor.revision},repair:'edit'};
+   const gate=result.effective_review as {can_use_as_pass?:boolean;blueprint_alignment_input_sha256?:string}|undefined;
+   if(alignmentDigest!==undefined&&gate?.blueprint_alignment_input_sha256!==alignmentDigest)throw Error('preview_blueprint_alignment_receipt_missing_or_stale');
+   if(!gate?.can_use_as_pass)return {artifact:{receipt:result,revision:editor.revision},repair:'edit'};
    return {artifact:{receipt:result,preview:src,deliverables,requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),...(criteria?{visualCriteriaDigest:criteria.digest}:{}),executionReport:task.completed.edit?.artifact.executionReport??null,language_review:'final_operator_required',complete_film_accepted:false}};
   }
   // Only these author stages may call the API model; review/export have separate host paths.
