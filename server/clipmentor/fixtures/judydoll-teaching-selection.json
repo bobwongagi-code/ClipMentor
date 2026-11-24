@@ -1,0 +1,17 @@
+{
+  "provenance": "Isolated calibration based on the saved v3-b2e014a5 readback and full-film inventory. New draft and receipt judgments are regression controls.",
+  "duration": 67.33,
+  "windows": [
+    {"id":"hook","range":[0,4.967],"function":"开场给出上脸结果与反应","observation":"开头画面有鼻尖亮部和表情变化，产品在画面一角。","emphasis":["脸部近景","表情变化"]},
+    {"id":"product","range":[4.967,7.6],"function":"交代商品","observation":"她把粉盘举到脸旁展示。","emphasis":["产品举至脸旁"]},
+    {"id":"palettes","range":[7.6,9.8],"function":"把盘内颜色与号码放到同一参照","observation":"两只打开的粉盘和各自的标签同框。","emphasis":["双盘同框","标签入画"]},
+    {"id":"use","range":[9.8,34],"function":"展开实际使用过程","observation":"她把刷头落到脸上，再出现不同位置的上妆动作。","emphasis":["刷头接触面部"]},
+    {"id":"nose","range":[34,36.6],"function":"给上脸位置参照","observation":"切换后的画面可见鼻侧棕色，刷头不挡住该处。","emphasis":["刷头移开","鼻侧入画"]},
+    {"id":"tail","range":[36.6,67.33],"function":"后半示范和收尾线索","unknown":"收尾口述未听审，弱促单只记录原有事实。","emphasis":[]}
+  ],
+  "hookDraft":"Dia buka dengan hasil sapuan dan reaksinya.",
+  "paletteDraft":"Dia tunjuk dua palet dengan kod dalam satu syot, jadi pembeli boleh padankan warna dengan kodnya.",
+  "inferenceDraft":"Dia sengaja edit macam ni sebab dia nak tarik perhatian orang.",
+  "savedPalette":"Dia tunjuk dua palet sekali dengan kod. Pembeli boleh bandingkan warna dalam kedua-dua palet sebelah-menyebelah, lepas tu padankan warna dengan kodnya.",
+  "savedNose":"Lepas berus dialih, dia tunjuk sisi hidung. Cuping hidung jadi penanda: pembeli nampak di mana warna coklat tu pada kulitnya."
+}

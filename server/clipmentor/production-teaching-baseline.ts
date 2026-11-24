@@ -2,7 +2,8 @@ import type { ProjectDoc } from '../../src/editor/types';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
 import { breakdownPointEvidence,contiguousPlaybackRuns,originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-sections';
-import { readBlueprint } from '../../src/clipmentor/blueprint-lint';
+import { readBlueprint, teachingReplayRisks } from '../../src/clipmentor/blueprint-lint';
+import { teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { currentAgentSessionGeneration } from '../../src/persist/agentSessionGeneration';
 import { loadAgentRuntimeSidecar } from '../../src/persist/agentRuntimeStore';
@@ -35,6 +36,7 @@ function unitDefinition(breakdown: SourceBreakdown, unit: SourceBreakdown['units
  const segmentIds = new Set([...unit.original_segment_ids, ...unit.explanation_segment_ids, ...points.flatMap(point => point.segment_ids)]);
  return {
   unit_id:unit.unit_id, points,
+  ...(unit.teaching_selection?{teaching_selection:unit.teaching_selection}:{}),
   source_ranges:originalPlaybackRanges(breakdown,unit),
   segments:breakdown.segments.filter(segment => segmentIds.has(segment.segment_id)).map(segment => ({
    id:segment.segment_id, range:segment.source_range_seconds, visible:segment.visible_evidence_ids, claims:segment.claim_evidence_ids, unknowns:segment.unknowns,
@@ -98,7 +100,9 @@ export function teachingDefinitionDigest(doc:ProjectDoc) {
  const baseline=doc.clipMentorAnalysis?.source_breakdown;
  const closing=baseline?.source_closing;
  const segment=closing&&baseline.segments.find(item=>item.segment_id===closing.segment_id);
+ const inventory=baseline?.segments.flatMap(segment=>segment.inventory?[segment]:[]);
  return digestValue(baseline&&{scope:baseline.review_scope,units:baseline.units.map(unit=>unitDefinition(baseline,unit)),
+  ...(inventory?.length?{inventory}:{}),...(baseline.unselected_buyer_roles?{unselectedBuyerRoles:baseline.unselected_buyer_roles}:{}),
   ...(closing?{closing,segment}:{})});
 }
 
@@ -108,6 +112,7 @@ export function confirmedTeachingDigest(doc:ProjectDoc){
  const baseline=analysis?.source_breakdown;
  const closing=baseline?.source_closing&&baseline.segments.find(segment=>segment.segment_id===baseline.source_closing?.segment_id);
  const pending=[...new Set([...(baseline?.points.flatMap(point=>point.teaching_basis?.evidence_ids??[])??[]),
+  ...(baseline?.segments.flatMap(segment=>segment.inventory?[...segment.visible_evidence_ids,...segment.claim_evidence_ids,...segment.interpretation_evidence_ids]:[])??[]),
   ...(closing?[...closing.visible_evidence_ids,...closing.claim_evidence_ids,...closing.interpretation_evidence_ids]:[])])];
  const linked=new Set(pending),byId=new Map(analysis?.evidence.map(item=>[item.evidence_id,item]));
  for(const id of pending)for(const support of byId.get(id)?.supporting_evidence_ids??[]){
@@ -177,6 +182,12 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   rebuilding:!!task.repairContext?.teaching_rebuild,
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
   ...(reviewNarration?{narrationTargets:finalNarrationTargets(doc,baseline),...(selectionRationale.length?{selectionRationale}:{})}:{}),
+  ...(task.input.panelDelivery?.selectionPolicy==='v1'?{selection:{
+   inventory:baseline.segments.filter(segment=>segment.inventory),
+   unselectedBuyerRoles:baseline.unselected_buyer_roles??{},
+   gaps:teachingSelectionGaps(baseline,analysis.source.duration_seconds,analysis.source.fps),
+   ...(reviewNarration?{timingRisks:teachingReplayRisks(doc)}:{}),
+  }}:{}),
   ...(topics?{frozenTopics:{...topics,closingUnitId:closingUnit?.unit_id??null,closingSegmentId:closingSegment?.segment_id??null,
    misplacedClosingNote:!sourceClosing.factOnly&&!closingSegment&&baseline.segments.some(segment=>hasClosingNote(segment.unknowns,topics.closing)),
    ...(sourceClosing.factOnly&&baseline.source_closing&&baseline.source_closing.status!==topics.closingStatus
@@ -226,15 +237,17 @@ export function checkedNarration(value:unknown,targets:NonNullable<BaselineSourc
 }
 
 function narrationReviewSubject(task:ProductionTask,targets:NonNullable<BaselineSource['narrationTargets']>,teaching:string|undefined,
- requirementsDigest:string|undefined,{purpose,task:brief,feedback}=teachingReviewContext(task)){
- return digestValue({targets,teaching,requirementsDigest,purpose,brief,feedback,sourceCriteria:task.input.doneCriteria});
+ requirementsDigest:string|undefined,{purpose,task:brief,feedback}=teachingReviewContext(task),timingRisks?:ReturnType<typeof teachingReplayRisks>){
+ return digestValue({targets,teaching,requirementsDigest,purpose,brief,feedback,sourceCriteria:task.input.doneCriteria,
+  ...(timingRisks?{timingRisks}:{})});
 }
 
 export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,digest:unknown,requirementsDigest:string){
  const baseline=doc.clipMentorAnalysis?.source_breakdown;
  if(!baseline||typeof digest!=='string')throw Error('human_blueprint_narration_receipt_missing');
  const targets=finalNarrationTargets(doc,baseline);
- const narrationSubject=narrationReviewSubject(task,targets,confirmedTeachingDigest(doc),requirementsDigest);
+ const timingRisks=task.input.panelDelivery?.selectionPolicy==='v1'?teachingReplayRisks(doc):undefined;
+ const narrationSubject=narrationReviewSubject(task,targets,confirmedTeachingDigest(doc),requirementsDigest,undefined,timingRisks);
  const receipt=Object.entries(task.effects).find(([key,effect])=>
   key.startsWith('copy_review:')&&key.endsWith(':teaching-baseline:'+digest)&&effect.kind==='model'&&effect.status==='completed'
   &&row(effect.result)&&effect.result.digest===digest&&effect.result.runId===effect.operationId
@@ -256,7 +269,8 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
   return {...answer,source_evidence_id:evidence.evidence_id,source_quote:point.source_quote};
  });
  const selection=baseline.units.map(unit=>({
-  unitId:unit.unit_id,topics:unit.coverage.filter(({treatment})=>treatment!=='omit').map(({point_id,treatment})=>{
+  unitId:unit.unit_id,...(unit.teaching_selection?{decision:unit.teaching_selection}:{}),
+  topics:unit.coverage.filter(({treatment})=>treatment!=='omit').map(({point_id,treatment})=>{
    const point=baseline.points.find(entry=>entry.point_id===point_id);
    return {pointId:point_id,treatment,question:point?.teaching_question,method:point?.teaching_basis?.method,connection:point?.teaching_basis?.connection};
   }),
@@ -566,7 +580,8 @@ function teachingMeaning(unit:BaselineSource['units'][number]) {
   const {evidence_ids:_ids,...basis}=point.teaching_basis;
   return {...point,filming_conditions:[],teaching_basis:basis};
  });
- return digestValue({points,coverage:unit.coverage,handoffs:unit.handoffs,original:unit.source_ranges,explanation:unit.explanation_segments});
+ return digestValue({points,coverage:unit.coverage,handoffs:unit.handoffs,original:unit.source_ranges,explanation:unit.explanation_segments,
+  ...(unit.teaching_selection?{teachingSelection:unit.teaching_selection}:{})});
 }
 
 function evidenceDigest(source:BaselineSource,unit:BaselineSource['units'][number]) {
@@ -579,13 +594,14 @@ function evidenceDigest(source:BaselineSource,unit:BaselineSource['units'][numbe
 
 function wholeTeachingMeaning(source:BaselineSource) {
  const selection=source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)]);
+ const unselected=source.selection?.unselectedBuyerRoles;
  const topics=source.frozenTopics;
- if(!topics||source.sourceClosing.factOnly)return digestValue(selection);
+ if(!topics||source.sourceClosing.factOnly)return digestValue(unselected?{selection,unselected}:selection);
  const closing=source.units.find(unit=>unit.unit_id===topics.closingUnitId);
  const endingNotes=closing?.segments.filter(segment=>topics.closingTailSegmentIds.includes(segment.id)).map(segment=>({
   range:segment.range,unknowns:[...new Set(segment.unknowns.map(normalized))].sort(),
  }));
- return digestValue({selection,closing:closing?.unit_id,endingNotes});
+ return digestValue({selection,closing:closing?.unit_id,endingNotes,...(unselected?{unselected}:{})});
 }
 
 function wholeTeachingEvidence(source:BaselineSource) {
@@ -686,6 +702,7 @@ const baselineInstructions=(source:BaselineSource)=>(source.narrationTargets?.le
  +(source.sourceClosing.factOnly?' 任务声明已记录原片弱促单事实。whole_film.frozen_topic_checks 只填 {main_scope:"pass"|"fail"}。如实登记已完成，缺少重复注记、回放或讲解时仍按教学内容作答。核对实际稿件和证据；主线越界，或把弱促单改判、升格为教学或补写推荐时，main_scope 判 fail，并指出当前内容和依据。'
  :source.frozenTopics?' frozenTopics 是本片已确认的选题范围。无论总评如何，whole_film 须填 frozen_topic_checks:{main_scope:"pass"|"fail",closing_status:"pass"|"fail"}。main_scope 核对实际提交的标题、问题、讲解任务和证据。超出 frozenTopics.main 或将 frozenTopics.background 当成教学依据时判 fail。closing_status 按 sourceClosing 核对已核定的档位、处置及注记位置。处置或注记不符时判 fail。总评在 reason 中说明具体问题。'
  :source.sourceClosingRegistration?' whole_film 必须含 frozen_topic_checks:{main_scope:"pass",closing_status:"pass"|"fail"}。main_scope 由原有整片评审负责。closing_status 复核 sourceClosing 的档位、原片依据和实际处置。':'')
+ +(source.selection?' 先从全片证据独立判断哪里支持想试、比较或跟着操作，再核对教学选点。盘点和选组文字是待核陈述。selection.gaps、角色和备选都是审阅提示，依据是实际选点、原片和稿件。仅有一层、缺备选或资料填写不全时，沿用现行判据。若确实漏掉会改变买家判断的内容，或两组实质重复，引用原片并说明损失。合组核对真实先后，每句引用本句供给的一个或多个实际窗口。把推断的动机、观众反应或功效当事实时，基线写进 point_checks 的 fix，口播写进 narration_checks 的 fix 并引用该句。编辑实看时点是回看线索。仅在当前结论依赖无法核实的证据时判 unresolved。selection.timingRisks 是逐句估计。若缺处置，引用相关句并指出待实测的声画风险。估算、单纯短窗或处置字段缺失不决定通过状态。':'')
  +(source.narrationTargets?.length?' 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?,quote?}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并逐字引用能让他领会该决定的某句。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id 和逐字 quote。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。':'');
 
 export function teachingBaselineDigest(source:BaselineSource) {
@@ -693,7 +710,7 @@ export function teachingBaselineDigest(source:BaselineSource) {
 }
 
 export async function checkTeachingBaseline(task:ProductionTask,stage:StageContext,source:BaselineSource,requirementsDigest?:string) {
- const narrationSubject=source.narrationTargets?narrationReviewSubject(task,source.narrationTargets,source.evidenceBinding,requirementsDigest,source):undefined;
+ const narrationSubject=source.narrationTargets?narrationReviewSubject(task,source.narrationTargets,source.evidenceBinding,requirementsDigest,source,source.selection?.timingRisks):undefined;
  const baselineDigest=teachingBaselineDigest(source);
  const digest=narrationSubject?digestValue({baselineDigest,narrationSubject}):baselineDigest;
  const bind=(runId:string,review:BaselineReview)=>({digest,runId,review,...(narrationSubject?{narrationSubject}:{})});

@@ -81,7 +81,7 @@ export interface ProductionInput {
  humanBlueprintReview?:true;
  gatewayRecovery?:'bounded'|'none';
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
-  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
+  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
  reviewerBackend?:'codex';
  budget:EffectCounts&{maxElapsedMs:number;maxRepairs:number;routine?:EffectCounts};
@@ -448,6 +448,7 @@ export function validateProductionInput(v:ProductionInput){
   if(!v.humanBlueprintReview||ids.some(id=>typeof id!=='string'||!id.trim())||new Set(ids).size!==ids.length
    ||(v.panelDelivery.bookends!==undefined&&v.panelDelivery.bookends!=='layered-v1')
    ||(v.panelDelivery.editorialPolicy!==undefined&&v.panelDelivery.editorialPolicy!=='exemplar-v1')
+   ||(v.panelDelivery.selectionPolicy!==undefined&&(v.panelDelivery.selectionPolicy!=='v1'||v.panelDelivery.editorialPolicy!=='exemplar-v1'))
    ||(v.panelDelivery.partnerEnding!==undefined&&v.panelDelivery.partnerEnding!=='product_storyboard_pdf')
    ||((v.panelDelivery.salesEvidenceId!==undefined||v.panelDelivery.salesEvidenceSha256!==undefined)
     &&(v.panelDelivery.bookends!=='layered-v1'||typeof v.panelDelivery.salesEvidenceId!=='string'||!v.panelDelivery.salesEvidenceId.trim()

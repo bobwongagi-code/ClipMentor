@@ -3,7 +3,7 @@ import corpus from './fixtures/blueprint-self-check-cases.json';
 import { blueprintPictureNotices, pictureNoticeRows, verifyPictureNoticeSources, currentPicturePhases } from './blueprint-picture-notices';
 import {labelTranslationsConflict} from './author-translations';
 import {validatePicturePlanProjection} from './production-gate';
-import {checkSourceBreakdown} from './source-breakdown';
+import {checkSourceBreakdown, copyLineSourceBinding, isSourceBreakdown} from './source-breakdown';
 import {deliveryOpeningTextIssue} from './delivery-bindings';
 import type {ProjectDoc} from '../editor/types';
 
@@ -53,6 +53,59 @@ export function calibrateSpeech(samples: SpeechSample[]) {
   return { sample_count: valid.length, words_per_second: rate, empirical_error_seconds_per_word: bounds.length ? Math.max(...bounds) : null,
     empirical_lower_error_seconds_per_word: lowerErrors.length ? Math.max(...lowerErrors) : null,
     samples: errors, groups: groupErrors, note: 'Existing normal-speed file durations, including pauses. Empirical range only; not measured speech or evidence of teaching fit.' };
+}
+
+/** Estimate each current line against its own moving pictures, never a group's summed envelopes. */
+export function teachingReplayRisks(value: unknown) {
+  const blueprint = readBlueprint(value);
+  const calibration = calibrateSpeech(corpus.calibration);
+  const ledger = obj(obj(value).clipMentorAnalysis).source_breakdown;
+  const breakdown = isSourceBreakdown(ledger) ? ledger : undefined;
+  const risks: Array<{unit_id: string; line_id: string; estimated_seconds: number; dynamic_seconds: number;
+    replay_windows: Range[]; picture_tasks: string[];
+    disposition: {action: 'reference_reading' | 'hold_for_measurement'; reason: string} | null}> = [];
+  if (!calibration.words_per_second) return risks;
+  for (const { unit, plan, resolved } of blueprint.selectedPlans) {
+    const plans = resolved?.phases ?? arr(plan.phases);
+    const phases = plans.map(obj).filter(phase => phase.mode === 'explanation');
+    const registered = breakdown?.units.find(entry => entry.unit_id === unit.unit_id);
+    const lineIds = new Set(phases.map(phase => str(phase.line_id)).filter(Boolean));
+    for (const id of lineIds) {
+      const line = blueprint.lines.find(entry => entry.id === id);
+      if (!line) continue;
+      const linePhases = phases.filter(phase => phase.line_id === id);
+      const phaseWindows = linePhases
+        .map(phase => range(phase.source_range_seconds) ?? range(phase.source_seconds))
+        .filter((window): window is Range => window !== null);
+      if (!phaseWindows.length) continue;
+      const binding = breakdown && registered ? copyLineSourceBinding(breakdown, registered, line.raw, plan) : null;
+      if (breakdown && registered && !binding) continue;
+      const picked = binding && [...binding.evidence_source_ranges, ...binding.context_source_ranges];
+      const windows = (picked ? phaseWindows.flatMap(([from, to]) => picked.flatMap(({source_range_seconds: [start, end]}) => {
+        const intersection: Range = [Math.max(from, start), Math.min(to, end)];
+        return intersection[1] > intersection[0] ? [intersection] : [];
+      })) : phaseWindows).sort((a, b) => a[0] - b[0]);
+      const replayWindows: Range[] = [];
+      for (const [from, to] of windows) {
+        const last = replayWindows.at(-1);
+        if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+        else replayWindows.push([from, to]);
+      }
+      const dynamic = replayWindows.reduce((sum, [from, to]) => sum + to - from, 0);
+      const words = wordCount(line.text), estimated = words / calibration.words_per_second;
+      const lower = estimated - words * (calibration.empirical_lower_error_seconds_per_word ?? 0);
+      if (lower <= dynamic + 1e-6) continue;
+      const entries = arr(plan.timing_dispositions).map(obj).filter(entry => entry.line_id === id);
+      const [entry] = entries;
+      const reason = str(entry?.reason).trim();
+      const disposition: (typeof risks)[number]['disposition'] = entries.length === 1 && reason && reason.length <= 500
+        && (entry.action === 'reference_reading' || entry.action === 'hold_for_measurement')
+        ? {action: entry.action, reason} : null;
+      risks.push({unit_id: str(unit.unit_id), line_id: id, estimated_seconds: round(estimated), dynamic_seconds: round(dynamic),
+        replay_windows: replayWindows, picture_tasks: linePhases.map(phase => str(phase.picture)).filter(Boolean), disposition});
+    }
+  }
+  return risks;
 }
 
 interface Line { id: string; text: string; zh: string; raw: Row; path: string }

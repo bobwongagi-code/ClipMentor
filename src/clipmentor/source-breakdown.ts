@@ -4,6 +4,7 @@ import type { SourceClosingStatus } from '../../shared/clipmentor-handoff';
 import type { ProjectDoc } from '../editor/types';
 import { sourceWindowForTimelineRange } from '../editor/sourceLimit';
 import {trackKind} from '../editor/timelineTypes';
+import {isSourceInventory, isTeachingSelection, isUnselectedBuyerRoles, type BuyerRole, type SourceInventory, type TeachingSelection} from './teaching-selection';
 
 export const teachingPrinciples=['buyer-first','complete-demo','same-frame','purchase-invitation'] as const;
 
@@ -13,6 +14,7 @@ export interface SourceBreakdown {
   /** Frozen task scope, never inferred from the clips selected for playback. Missing on legacy drafts. */
   review_scope?: SourceReviewScope;
   source_closing?: {status:SourceClosingStatus;segment_id:string;note:string};
+  unselected_buyer_roles?: Partial<Record<BuyerRole, string>>;
   segments: Array<{
     segment_id: string;
     source_range_seconds: [number, number];
@@ -20,6 +22,7 @@ export interface SourceBreakdown {
     claim_evidence_ids: string[];
     interpretation_evidence_ids: string[];
     unknowns: string[];
+    inventory?: SourceInventory;
   }>;
   points: Array<{
     point_id: string;
@@ -39,6 +42,7 @@ export interface SourceBreakdown {
   }>;
   units: Array<{
     unit_id: string;
+    teaching_selection?: TeachingSelection;
     original_segment_ids: string[];
     /** Selected original playback; evidence indexes can be sparser than this continuous context. */
     original_source_ranges?: Array<[number, number]>;
@@ -85,11 +89,13 @@ export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
   if (!row(v)) return false;
   const closing=v.source_closing;
   if (v.version !== 1 || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
+    || v.unselected_buyer_roles !== undefined && !isUnselectedBuyerRoles(v.unselected_buyer_roles)
     || closing!==undefined&&(!row(closing)
       || !['confirmed','weak_candidate','none'].some(status=>status===closing.status)
       || !text(closing.segment_id)||!text(closing.note)||closing.note.length>300)
     || !rows(v.segments, (s) => text(s.segment_id) && range(s.source_range_seconds)
-      && strings(s.visible_evidence_ids) && strings(s.claim_evidence_ids) && strings(s.interpretation_evidence_ids) && strings(s.unknowns))
+      && strings(s.visible_evidence_ids) && strings(s.claim_evidence_ids) && strings(s.interpretation_evidence_ids) && strings(s.unknowns)
+      && (s.inventory === undefined || isSourceInventory(s.inventory)))
     || !rows(v.points, (p) => text(p.point_id) && strings(p.segment_ids) && p.segment_ids.length > 0
       && text(p.buying_concern) && text(p.teaching_question) && strings(p.filming_conditions)
       && (typeof p.role === 'string' && ['primary', 'supporting', 'auxiliary'].includes(p.role))
@@ -97,6 +103,7 @@ export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
       && (p.supports_point_id === undefined || text(p.supports_point_id)) && (p.change_reason === undefined || text(p.change_reason))
       && (p.teaching_basis === undefined || teachingBasis(p.teaching_basis)))
     || !rows(v.units, (u) => text(u.unit_id) && strings(u.original_segment_ids) && strings(u.explanation_segment_ids)
+      && (u.teaching_selection === undefined || isTeachingSelection(u.teaching_selection))
       && (u.original_source_ranges === undefined || (Array.isArray(u.original_source_ranges) && u.original_source_ranges.length > 0 && u.original_source_ranges.every(range)))
       && rows(u.coverage, (c) => text(c.point_id) && (typeof c.treatment === 'string' && ['explain', 'merged', 'visual_only', 'omit'].includes(c.treatment))
         && (c.reason === undefined || text(c.reason)) && (c.merged_into_point_id === undefined || text(c.merged_into_point_id)))
@@ -631,6 +638,11 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
       ||b.source_closing.status==='confirmed'&&!closing.claim_evidence_ids.length)
       issue('source_closing_evidence_binding_invalid',b.source_closing.segment_id);
   }
+  const selectedSegments = new Set([
+    ...b.points.flatMap(point => point.segment_ids),
+    ...b.units.flatMap(unit => [...unit.original_segment_ids, ...unit.explanation_segment_ids]),
+    ...(b.source_closing ? [b.source_closing.segment_id] : []),
+  ]);
   for (const s of b.segments) {
     if (s.source_range_seconds[1] > a.source.duration_seconds) issue('segment_time_out_of_bounds', s.segment_id);
     const groups = [
@@ -638,7 +650,8 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
       [s.claim_evidence_ids, ['original_claim']],
       [s.interpretation_evidence_ids, ['expression_analysis_not_verified_causal_effect', 'operator_supplied']],
     ] as const;
-    if (!groups.some(([ids]) => ids.length)) issue('segment_without_evidence', s.segment_id);
+    if (!groups.some(([ids]) => ids.length) && (!s.inventory || selectedSegments.has(s.segment_id)))
+      issue('segment_without_evidence', s.segment_id);
     for (const [ids, kinds] of groups) for (const id of ids) {
       const e = evidence.get(id);
       if (!e || !(kinds as readonly string[]).includes(e.kind)) { issue('segment_evidence_kind_or_reference', id); continue; }
@@ -659,7 +672,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
   }
   for (const u of b.units) {
     // Preserve older extra metadata on read, but never silently treat an unknown field as plan authority.
-    const fields = new Set(['unit_id', 'original_segment_ids', 'original_source_ranges', 'explanation_segment_ids', 'coverage', 'revisits', 'placement']);
+    const fields = new Set(['unit_id', 'original_segment_ids', 'original_source_ranges', 'explanation_segment_ids', 'coverage', 'revisits', 'placement', 'teaching_selection']);
     for (const key of Object.keys(u)) if (!fields.has(key)) issue('unrecognized_unit_field', `${u.unit_id}:${key}`);
     const originalRanges = originalPlaybackRanges(b, u);
     if (originalRanges.some((r) => r[1] > a.source.duration_seconds)) issue('original_playback_out_of_bounds', u.unit_id);

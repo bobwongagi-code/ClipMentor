@@ -7,6 +7,7 @@ import { createServer,type RequestListener } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import fixture from './fixtures/judydoll-teaching-baseline-r9.json';
 import narrationCounterexample from './fixtures/judydoll-final-narration-v3-d00da4d8.json';
+import selectionFixture from './fixtures/judydoll-teaching-selection.json';
 import exemplars from './fixtures/exemplar-teaching-comparison-20261121.json';
 import humanTeachingCalibration from './fixtures/human-teaching-calibration.json';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
@@ -26,7 +27,7 @@ let analysisCorrection:SourceBreakdown|undefined;
 let rejectSupplement=false;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
 let narrationAction:'missing'|'wrong-quote'|'missing-basis'|'same-finding'|undefined;
-let wholeFilmAction:'missing'|'omission'|undefined;
+let wholeFilmAction:'missing'|'omission'|'selection-omission'|undefined;
 let panelRequest:RequestListener|undefined;
 const authorPrompts=new Map<string,string>();
 const independentPrompts:string[]=[];
@@ -123,18 +124,21 @@ const host=createServer(async(req,res)=>{
  const fail=data.units[0].points[0].teaching_question===fixture.source_breakdown.points[0].teaching_question.normalize('NFKC');
  const mainPoint=data.units.flatMap((unit:any)=>unit.points).find((point:any)=>point.role==='primary');
  const mainEvidence=data.evidence.find((entry:any)=>mainPoint?.teaching_basis?.evidence_ids.includes(entry.id));
- const wholeEvidence=wholeFilmAction==='omission'?data.evidence.find((entry:any)=>entry.id==='fixture-unselected-result'):mainEvidence;
+ const missingEvidenceId=wholeFilmAction==='omission'?'fixture-unselected-result':wholeFilmAction==='selection-omission'?'V-hook':undefined;
+ const wholeEvidence=missingEvidenceId?data.evidence.find((entry:any)=>entry.id===missingEvidenceId):mainEvidence;
  const verdict={
   feedback_scope:data.feedback?(fail?'baseline':'copy'):'none',summary:'ok',
   ...(data.pointReview&&wholeFilmAction!=='missing'?{whole_film:{
-   status:wholeFilmAction==='omission'?'fix':'ok',main_point_id:mainPoint.point_id,
+   status:missingEvidenceId?'fix':'ok',main_point_id:mainPoint.point_id,
    focus:'在相同参照下判断落点或关系',alternative:'单独解释包装和产品辨认',
-   reason:wholeFilmAction==='omission'?'原片另有买家需要的结果，逐个动作成立仍不能替代这段解释。':'该组选点比单独介绍产品更能回答具体购买疑问。',
+   reason:missingEvidenceId?'原片另有买家需要的结果，逐个动作成立仍不能替代这段解释。':'该组选点比单独介绍产品更能回答具体购买疑问。',
    evidence_id:wholeEvidence.id,source_quote:wholeEvidence.text,
-   affected_unit_ids:wholeFilmAction==='omission'?[data.units[0].unit_id]:[],
+   affected_unit_ids:missingEvidenceId?[data.units[0].unit_id]:[],
   }}:{}),
   ...(data.narrationTargets?.length&&narrationAction!=='missing'?{narration_checks:data.narrationTargets.map((target:any)=>{
    const line=target.lines[0];
+   if(data.selection&&line?.narration===selectionFixture.inferenceDraft)return {unit_id:target.unit_id,point_id:target.point_id,
+    status:'fix',line_id:line.line_id,quote:line.narration,reason:'把吸引观众的剪辑动机写成了已观察的事实。'};
    const counterexample=narrationAction==='same-finding'?narrationCounterexample.items[1]
     :narrationCounterexample.items.find(item=>item.narration_ms===line?.narration);
    if(counterexample&&(!narrationAction||narrationAction==='same-finding')||!line)return {unit_id:target.unit_id,point_id:target.point_id,status:'fix',
@@ -900,6 +904,50 @@ try{
  assert(validateTeachingBaselineReview(positiveReceipt,strictPositive).units.every(u=>u.status==='ok'));
  const {verifyFrozenTopics}=await import('./production-frozen-topics.verify-suite');
  await verifyFrozenTopics(draft,strictTask,strictPositive,validateTeachingBaselineReview(positiveReceipt,strictPositive));
+ const {verifyTeachingSelections}=await import('./production-teaching-selection.verify-suite');
+ const selectionFixtures=verifyTeachingSelections(old,strictTask);
+ const selectionWorkerTask=async(label:string,doc:ProjectDoc)=>{
+  const task=await taskFor(label,doc,2,'exemplar-v1');
+  task.input.panelDelivery!.selectionPolicy='v1';
+  task.stage='copy_review';
+  await productionTaskStore.save(task);
+  return task;
+ };
+ const missingRole=await selectionWorkerTask('teaching-selection-missing-role',selectionFixtures.missingRole);
+ const overrun=await selectionWorkerTask('teaching-selection-overrun',selectionFixtures.reassurance);
+ const repaired=await selectionWorkerTask('teaching-selection-recorded',selectionFixtures.doc);
+ for(const task of [missingRole,overrun,repaired]){
+  await assert.rejects(productionStageWorker(task,{...noEffect,async effect(){throw Error('selection-review-boundary');}}),
+   /selection-review-boundary/,'advisory selection and timing notes must reach the existing independent review');
+  assert.equal(task.attempts.model,0);
+ }
+ wholeFilmAction='selection-omission';
+ calls=[];
+ await advanceProductionTask(missingRole,async(task,stage)=>{
+  if(task.stage!=='copy_review')throw Error('selection fixture stops before reselection');
+  const result=await productionStageWorker(task,stage);
+  assert.equal(result.repair,'analysis');
+  assert.match(String(result.artifact.teaching_baseline_issue),/原片另有买家需要的结果/);
+  assert.equal((result.artifact.teaching_rebuild as {wholeFilm:{evidenceId:string}}).wholeFilm.evidenceId,'V-hook');
+  return result;
+ });
+ wholeFilmAction=undefined;
+ assert.deepEqual(calls,['baseline']);
+ assert.equal(missingRole.completed.copy_review,undefined);
+ const inference=await selectionWorkerTask('teaching-selection-inference',selectionFixtures.inference);
+ calls=[];
+ await advanceProductionTask(inference,async(task,stage)=>{
+  if(task.stage!=='copy_review')throw Error('selection fixture stops before redrafting');
+  const result=await productionStageWorker(task,stage);
+  assert.equal(result.repair,'blueprint');
+  assert.match(String(result.artifact.teaching_baseline_issue),/剪辑动机/);
+  return result;
+ });
+ assert.deepEqual(calls,['baseline']);
+ assert.match(independentPrompts.at(-1)??'',/把推断的动机/);
+ assert.match(independentPrompts.at(-1)??'',/unselectedBuyerRoles/);
+ assert.equal(inference.completed.copy_review,undefined);
+ console.log('PASS selection and timing advice reach the existing review without forcing a repair, and substantive narration failures still route to blueprint');
  // Replay the blind local decisions. Semantic judgment is supplied by the
  // reviewer; the product checks that each verdict is complete and source-bound.
  for(const sample of humanTeachingCalibration){

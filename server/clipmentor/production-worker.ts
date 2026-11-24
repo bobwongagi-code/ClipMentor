@@ -3,6 +3,8 @@ import {frozenTeachingTopics,sourceClosingPolicy} from './production-source-poli
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
 import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
 import {pictureRepairWriteError} from './production-capacity-repair';
+import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
+import {teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
 import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
@@ -352,6 +354,21 @@ function productionAuthorToolExecutor({
    }
    return result;
   }
+  if(task.stage==='analysis'&&task.input.panelDelivery?.selectionPolicy==='v1'
+   &&(name==='read_clipmentor_analysis'&&args.view==='source_breakdown'
+    ||name==='revise_clipmentor_analysis'&&args.action==='set_source_breakdown')){
+   const result=await executeWithRecovery(name,args,id);
+   const analysis=editor.getDoc().clipMentorAnalysis;
+   if(!analysis?.source_breakdown||!result||typeof result!=='object'||'error' in result)return result;
+   return {...result,teaching_selection_gaps:teachingSelectionGaps(analysis.source_breakdown,source.duration_seconds,source.fps)};
+  }
+  if(task.stage==='blueprint'&&task.input.panelDelivery?.selectionPolicy==='v1'
+   &&name==='read_clipmentor_analysis'&&args.view==='current_copy'){
+   const result=await executeWithRecovery(name,args,id);
+   if(!result||typeof result!=='object'||'error' in result)return result;
+   const risks=teachingReplayRisks(editor.getDoc()).filter(risk=>!args.unitId||risk.unit_id===args.unitId);
+   return risks.length?{...result,teaching_replay_risks:risks}:result;
+  }
   return name==='load_skill'?editor.loadSkillTool(args):name==='observe_clipmentor_source_video'?requestObservation(args,id):executeWithRecovery(name,args,id);
  };
 }
@@ -583,6 +600,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    type NarrationReview=Awaited<ReturnType<typeof checkTeachingBaseline>>['review']['narration_checks'];
    const rejectedNarrationDigest=(findings:NarrationReview)=>findings?.length&&source.narrationTargets
     ?digestValue({requirements:baselinePolicyDigest,criteria:task.input.doneCriteria,feedback:task.blueprintFeedback,
+     ...(source.selection?.timingRisks?{replay:source.selection.timingRisks.filter(risk=>findings.some(finding=>
+      finding.unit_id===risk.unit_id&&finding.line_id===risk.line_id))}:{}),
      targets:source.narrationTargets.filter(target=>findings.some(finding=>finding.unit_id===target.unit_id&&finding.point_id===target.point_id))
       .map(target=>[target.unit_id,target.point_id,target.lines.map(line=>line.narration.normalize('NFKC').trim().replace(/\s+/gu,' '))])})
     :undefined;
@@ -992,6 +1011,8 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    findings:task.repairContext.narration_repair_findings,
    instruction:'对照现行口播和独立审核，逐项修正列出的口播及其同文字幕，核对当句回看是否仍匹配。保留已核选题、未点名的教学组和片头片尾。版本号、标题和短标的改动不能代替口播修订。'} }:{}),
   ...(['analysis','blueprint'].includes(task.stage)?{teachingPurpose,sourceClosing:sourceClosingPolicy(frozenTopics,doc)}:{}),
+  ...(task.input.panelDelivery?.selectionPolicy==='v1'&&['analysis','blueprint'].includes(task.stage)
+   ?{teachingSelectionContract:'v1'}:{}),
   ...(frozenTopics?{frozenTopics,
    frozenTopicInstruction:'在主线重点的 teaching_basis.evidence_ids 中分别登记已声明窗口内的可见依据。背景只能保留在原片或作为引入上下文。收尾按 sourceClosing 处置。'}:{}),
   ...(task.sharedProduction?.prepared?{sharedBody:{end_frame:task.sharedProduction.endFrame,
@@ -1000,7 +1021,11 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
   ...(references.length?{teachingReferences:{references,
    instruction:'按 sectionId 定位教学组（时间线 ID 表示全部组）。用 view_asset_frames 按 reference.assetId 和 seconds 查看指定参照，再回看本片证据。先确定它改变了本组哪项选材或讲解安排，把该取舍写进现行计划和实际稿；参照只供比较。组尚未建立时按原始要求建立该组，不能改指其他组。'} }:{}),
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&['analysis','blueprint'].includes(task.stage)?{
-   teachingSelection:task.stage==='analysis'
+   teachingSelection:task.input.panelDelivery.selectionPolicy==='v1'
+    ?task.stage==='analysis'
+     ?'用 planning.md 的选题方法对比候选，用 source_breakdown 回读盘点提示 teaching_selection_gaps。本阶段登记选题基线。'
+     :'沿核验过的决定及各自源窗写句。用 current_copy 回读 teaching_replay_risks，明确需要实测或补参照的地方。'
+    :task.stage==='analysis'
     ?'先按证据盘点完整原片的表达选择和对应的买家顾虑，再从有出处的卖点里选值得达人学的单元。比较最强的另一个讲法：如果选它，达人会少学或多学哪个决定？选中这条主线后，他拍同类内容时具体会改哪一步？各组怎样一起解释这个决定，哪些只作支持？根据选中的单元概括本片可学的价值，把决定、可回读的取舍及放弃备选的损失写进现有主讲点 coverage.reason，买家多得到的具体判断依据写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；按 sourceClosing 处理收尾。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
     :'先按核验通过的选题说明每组需要保住的证据：静态细节、完整动作及结果、共同参照或套装与价格。先估保留这些信息所需的最短完整时段，再找逐句窗口。设想换成最接近的另一段会少哪一项判断；实际解释画面保住这个关系。原声给事实和反应，讲解说明拍法为什么有用，短标指向判断对象。优先合理回看；仍无足够画面就说明具体缺口，别靠缩讲解或合组填平。普通做法与她的差异、声画配合、同框比较、先后承接可按实际证据组织。',
    teachingExemplars:'每个 source_breakdown.points 的 teaching_question 说明为什么这个拍法帮助买家判断。teaching_basis={selling_point,evidence_ids,method,connection,must_capture,claim_limit,exemplar,difference}；证据来自本点关联的原话候选或可见动作，范例资料只供思考。exemplar 登记本片证据适用的 principle ID，difference 说明本片成立条件与范例的差异，或说明为何本片不宜套用范例做法。清楚的听写候选可以支持原话转述，但注明未听审。纯画面例外须在 coverage.reason 说明为什么成立。',
