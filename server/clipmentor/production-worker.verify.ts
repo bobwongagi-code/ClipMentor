@@ -12,7 +12,7 @@ import {projectDoc} from '../external-agent/offline-runtime.verify-fixtures';
 import {makeDraft} from '../../src/editor/store';
 import {checkTransitionManifest} from '../../src/clipmentor/transition-check';
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
-import {productionAuthorSelfCheckSource,checkProductionAuthorBlueprint} from './production-author-self-check';
+import {blockingAuthorBlueprintChecks,productionAuthorSelfCheckSource,checkProductionAuthorBlueprint} from './production-author-self-check';
 import { verifyAuthorSelfCheckRecovery } from './production-author-self-check.verify-suite';
 import {createProductionPreparation} from './production-readiness';
 import {isBoundCanvasReflow,assertCanvasReflowPreservation} from './production-worker';
@@ -193,6 +193,9 @@ assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(multipleReferences),sour
  ]),panelSource)[0];
  const bad=structuredClone(rows);bad[0].status='fix';bad[0].reason='讲解只有靠近镜头，漏掉用效果抓注意再引出双盘比较';
  assert.equal(result(bad).status,'fix','an aggregate ok cannot overrule a rejected JUDYDOLL group');
+ assert.equal(result([{...rows[0],delivered:[rows[0].delivered]},...rows.slice(1)]).status,'ok');
+ assert.throws(()=>result([{...rows[0],delivered:[rows[0].delivered,rows[1].delivered]},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
+ assert.throws(()=>result([{...rows[0],delivered:[rows[1].delivered]},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
  assert.throws(()=>result(undefined),/invalid:S1/,'seven valid generic answers still leave every group unchecked');
  assert.throws(()=>result([rows[1],rows[1],rows[2]]),/invalid:S1:teaching_unit=U-01/);
  assert.throws(()=>result([{...rows[0],source_evidence_ids:['why']},...rows.slice(1)]),/invalid:S1:teaching_unit=U-01/);
@@ -219,6 +222,20 @@ assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(multipleReferences),sour
  ]),related)[0];
  assert.equal(relatedResult('raw-0').status,'ok');
  assert.throws(()=>relatedResult('in-group-other'),/invalid:S1:teaching_unit=U-01/,'a same-window action cannot stand in for the selected teaching evidence');
+ const strictPanel={...related,editorialPolicy:'exemplar-v1'};
+ const strictRows=[{...checks[0],reference:corrected,teaching_units:[{...rows[0],status:'fix',delivered:undefined},...rows.slice(1)]},
+  ...checks.slice(1).map(check=>({...check,reference:corrected}))];
+ const strictChecks=validateAuthorSelfCheck(JSON.stringify(strictRows),strictPanel);
+ assert.equal(strictChecks.find(check=>check.id==='S1')?.status,'fix','preserve the original author opinion');
+ assert.deepEqual(blockingAuthorBlueprintChecks(strictChecks,true),[]);
+ assert.equal(blockingAuthorBlueprintChecks(strictChecks,false)[0].id,'S1');
+ assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(strictRows.slice(1)),strictPanel).map(check=>check.id),['S2','S3','S4','S5','S6','S7']);
+ const labelOnly={...rows[0],delivered:{line_id:'L0',quote:'仅有短标'}};
+ strictPanel.blueprint.units[0].lines[0].labels=['仅有短标'];
+ const invalidS1={...strictRows[0],teaching_units:[labelOnly,...rows.slice(1)]};
+ assert(!validateAuthorSelfCheck(JSON.stringify([invalidS1,...strictRows.slice(1)]),strictPanel).some(check=>check.id==='S1'));
+ const strictS2Fix=strictChecks.map(check=>check.id==='S2'?{...check,status:'fix' as const}:check);
+ assert.deepEqual(blockingAuthorBlueprintChecks(strictS2Fix,true).map(check=>check.id),['S2']);
  const visual=structuredClone(panelSource) as {panelTeachingReview:boolean;blueprint:TeachingPacket};
  visual.blueprint.units[0].points=[{point_id:'P0',role:'primary',question:rows[0].takeaway,evidence_ids:['raw-0','bare-frame'],
   treatment:'visual_only',visual_evidence:[{segment_id:'S0',phase:'explanation',source_range_seconds:[0,4],evidence_ids:['raw-0','bare-frame']}]}];

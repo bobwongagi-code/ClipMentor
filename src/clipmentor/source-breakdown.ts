@@ -200,7 +200,7 @@ export class PicturePlanIssue extends Error {
   }
 }
 
-function contiguousPlaybackRuns(windows: Array<[number,number]>, tolerance: number) {
+export function contiguousPlaybackRuns(windows: Array<[number,number]>, tolerance: number) {
   const runs: Array<[number,number]> = [];
   for (const [start,end] of windows) {
     const previous = runs.at(-1);

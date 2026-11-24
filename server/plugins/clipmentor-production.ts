@@ -1,4 +1,4 @@
-import {pictureRepairNotice} from '../clipmentor/production-decisions';
+import {blueprintRepairNotice} from '../clipmentor/production-decisions';
 import {createProductionPanel,currentPanelTask,panelServiceUnavailable} from '../clipmentor/production-panel';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {activateOfflineAgentRuntimeBackend} from '../external-agent/agent-runtime-persistence';
@@ -186,7 +186,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(isActive(task.taskId,task.projectId))throw new Error('Production task already running');
     if(['resume','feedback','accept'].includes(String(body.action)))await publishedProductionParent(task);
     if(body.action==='resume'){
-     const blocked=pictureRepairNotice(task);
+     const blocked=blueprintRepairNotice(task);
      if(blocked)throw Error(blocked);
      if(!await requeuePanelAuthorCheck(task)){
       if(task.status==='awaiting_blueprint')throw Error('蓝图没有可恢复的自检任务');

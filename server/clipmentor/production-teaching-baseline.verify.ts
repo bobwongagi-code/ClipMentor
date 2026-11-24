@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { createServer,type RequestListener } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import fixture from './fixtures/judydoll-teaching-baseline-r9.json';
+import narrationCounterexample from './fixtures/judydoll-final-narration-v3-d00da4d8.json';
 import exemplars from './fixtures/exemplar-teaching-comparison-20261121.json';
 import humanTeachingCalibration from './fixtures/human-teaching-calibration.json';
+import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import accepted from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import { projectDoc } from '../external-agent/offline-runtime.verify-fixtures';
 import type { ProjectDoc } from '../../src/editor/types';
@@ -23,6 +25,7 @@ let calls:string[]=[];
 let analysisCorrection:SourceBreakdown|undefined;
 let rejectSupplement=false;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
+let narrationAction:'missing'|'wrong-quote'|'missing-basis'|'same-finding'|undefined;
 let wholeFilmAction:'missing'|'omission'|undefined;
 let panelRequest:RequestListener|undefined;
 const authorPrompts=new Map<string,string>();
@@ -130,6 +133,21 @@ const host=createServer(async(req,res)=>{
    evidence_id:wholeEvidence.id,source_quote:wholeEvidence.text,
    affected_unit_ids:wholeFilmAction==='omission'?[data.units[0].unit_id]:[],
   }}:{}),
+  ...(data.narrationTargets?.length&&narrationAction!=='missing'?{narration_checks:data.narrationTargets.map((target:any)=>{
+   const line=target.lines[0];
+   const counterexample=narrationAction==='same-finding'?narrationCounterexample.items[1]
+    :narrationCounterexample.items.find(item=>item.narration_ms===line?.narration);
+   if(counterexample&&(!narrationAction||narrationAction==='same-finding')||!line)return {unit_id:target.unit_id,point_id:target.point_id,status:'fix',
+    reason:'基线有、口播没有：'+(counterexample?.learner_gap??'未登记实际口播。')};
+   const palette=line.narration.includes('kod masing-masing');
+   return {unit_id:target.unit_id,point_id:target.point_id,status:'ok',
+    decision:palette?'达人在同一镜头摆两盘供看差别':'达人把刷头退开后的结果留在镜头中',
+    ...(narrationAction==='missing-basis'?{}:{viewer_basis:palette
+     ?'观众可以把色差对回两个编号。':'观众能判断无遮挡时鼻侧色痕有多明显。'}),
+    line_id:line.line_id,
+    quote:narrationAction==='wrong-quote'?'这句只存在于策划备注里。':line.narration,
+    reason:'口播已经交代何时收镜和买家届时能看到什么结果。'};
+  })}:{}),
   units:data.units.map((unit:any)=>({
    unit_id:unit.unit_id,status:fail?'fix':'ok',source_role:fail?'展示动作未说明教学功能':'以相同参照让受众判断差异',
    takeaway:fail?'需要回到原片确认怎样呈现购买理由':'达人可学走把观察对象和比较结果放在一起的拍法',
@@ -160,6 +178,8 @@ try{
  };
  const {runtimeProfile}=await import('../runtime-profile');
  assert.equal(runtimeProfile().rootDir,path,'test must never initialize the project store against the operator profile');
+ const {activateOfflineAgentRuntimeBackend}=await import('../external-agent/agent-runtime-persistence');
+ activateOfflineAgentRuntimeBackend();
  const {panelOpeningComparison}=await import('./production-panel-delivery');
  const {setStoredEntry}=await import('../plugins/project-store');
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
@@ -307,6 +327,179 @@ try{
  const withCopy=(await loadOfflineStoredProject('teaching-first-copy-unchanged'))!.doc;
  const sourceHash=await sha256File(sourcePath);
  const boardDoc=JSON.parse(JSON.stringify(withCopy).replaceAll('a'.repeat(64),sourceHash).replaceAll('judy-fixture.mp4',sourceName)) as ProjectDoc;
+ // The positive is a controlled rewrite of the same teaching point and source evidence.
+ const descriptive=narrationCounterexample.items[1].narration_ms;
+ const actionable='Jangan tamatkan syot masa berus masih menutup sisi hidung. Tahan syot sampai berus beralih supaya pembeli boleh nilai sendiri betapa ketaranya kesan coklat itu.';
+ const narrationDoc=(spoken:string,palette=false)=>{
+  const doc=structuredClone(boardDoc);
+  doc.clipMentorAnalysis!.source_breakdown!.units[0].coverage[0].reason='提前切走会丢失刷头离开后的鼻侧色痕。';
+  const candidate=(doc.clipMentorAnalysis!.blueprint[0] as {internal_review:Record<string,any>}).internal_review;
+  const line={narration_ms:spoken,caption_lines:[spoken]};
+  Object.assign(candidate[candidate.current_script_candidate].lines[0],line);
+  for(const selected of candidate[candidate.current_picture_plan]?.selected_narration??[])Object.assign(selected,line);
+  if(palette){
+   const analysis=doc.clipMentorAnalysis!;
+   analysis.source_breakdown!.units[0].coverage[0].reason='分别介绍两盘会让买家依赖上一镜的记忆来比。';
+   analysis.evidence[0].text='两盘打开且编号和色格同框。';
+   const point=analysis.source_breakdown!.points[0];
+   point.teaching_question='为什么把编号和两盘色格留在同一镜头？';
+   point.buying_concern='怎么把盘色和编号准确对上？';
+   Object.assign(point.teaching_basis!,{selling_point:'两盘棕色格色调不同',method:'两盘打开并保留对应编号',
+    connection:'买家可以在同一画面反复比较，无需跨镜头记颜色。'});
+  }
+  return doc;
+ };
+ const runNarration=(id:string)=>({
+  signal:new AbortController().signal,
+  effect:async<T>(_kind:unknown,_key:unknown,work:(id:string)=>Promise<T>)=>work(id),
+ });
+ const description=narrationDoc(descriptive);
+ const badNarrationTask=await taskFor('teaching-final-narration-description',description,0,'exemplar-v1');
+ badNarrationTask.stage='copy_review';
+ calls=[];
+ const narrationReject=await productionStageWorker(badNarrationTask,runNarration('fixture-narration-no'));
+ assert.equal(narrationReject.repair,'blueprint');
+ assert.match(String(narrationReject.artifact.teaching_baseline_issue),/基线有、口播没有/);
+ assert.equal(narrationReject.artifact.teaching_rebuild,undefined,'a supported baseline is preserved');
+ assert.deepEqual(calls,['baseline']);
+ assert(independentPrompts.at(-1)!.includes(descriptive));
+ assert(independentPrompts.at(-1)!.includes('提前切走会丢失刷头离开后的鼻侧色痕。'));
+ const paletteCopy=narrationCounterexample.items[0].narration_ms;
+ const paletteTask=await taskFor('teaching-final-narration-palette-description',narrationDoc(paletteCopy,true),0,'exemplar-v1');
+ paletteTask.stage='copy_review';
+ const paletteRejection=await productionStageWorker(paletteTask,runNarration('fixture-narration-palette-no'));
+ assert.equal(paletteRejection.repair,'blueprint');
+ assert.match(String(paletteRejection.artifact.teaching_baseline_issue),/缺少分开拍/);
+ assert(independentPrompts.at(-1)!.includes(paletteCopy));
+ badNarrationTask.repairContext=narrationReject.artifact;
+ const narrationRepair=await productionAuthorTaskData({...badNarrationTask,stage:'blueprint',repairContext:{
+  ...narrationReject.artifact,repair:{prior:[]},
+ }},description,{policy:null,references:[]});
+ assert.deepEqual(narrationRepair.narrationRepair?.findings,narrationReject.artifact.narration_repair_findings,
+  'author sees group-specific narration findings even with an older copy-review repair attached');
+ assert.match(narrationRepair.narrationRepair!.instruction,/保留已核选题/);
+ calls=[];
+ await assert.rejects(productionStageWorker(badNarrationTask,runNarration('fixture-narration-repeat')),/teaching_final_narration_repair_no_progress/);
+ assert.deepEqual(calls,[]);
+ const superficialRewrite=narrationDoc(descriptive+' Ini yang penonton nampak.');
+ const repeatedTask=await taskFor('teaching-final-narration-repeat-finding',superficialRewrite,3,'exemplar-v1');
+ repeatedTask.stage='copy_review';
+ repeatedTask.repairContext=narrationReject.artifact;
+ narrationAction='same-finding';
+ await advanceProductionTask(repeatedTask,productionStageWorker,productionTaskStore);
+ assert.equal(repeatedTask.status,'blocked');
+ assert.match(repeatedTask.error??'',/teaching_final_narration_repair_no_progress: 同一讲解缺口/);
+ assert.equal(repeatedTask.repairs,0,'the second identical finding must not dispatch another repair');
+ assert.deepEqual(calls,['baseline']);
+ const stopped=await productionTaskStore.load(repeatedTask.projectId,repeatedTask.taskId);
+ assert.equal(stopped.repairContext?.revision,repeatedTask.projectRevision);
+ assert(Object.values(stopped.effects).some(effect=>effect.status==='completed'),'preserve the second independent receipt');
+ await advanceProductionTask(stopped,async()=>{throw Error('a paused repair must not restart');},productionTaskStore);
+ assert.equal(stopped.sequence,repeatedTask.sequence);
+ narrationAction=undefined;
+ calls=[];
+ badNarrationTask.blueprintFeedback='核对这段是否教会达人决定在哪一刻收镜。';
+ badNarrationTask.blueprintFeedbackRevision=badNarrationTask.projectRevision;
+ const checkedNewScope=await productionStageWorker(badNarrationTask,runNarration('fixture-narration-new-scope'));
+ assert.equal(checkedNewScope.repair,'blueprint');
+ assert.deepEqual(calls,['baseline'],'prior rejection of the old brief does not suppress a fresh human question');
+ delete badNarrationTask.blueprintFeedback;
+ delete badNarrationTask.blueprintFeedbackRevision;
+ narrationAction='missing';
+ delete badNarrationTask.repairContext;
+ await assert.rejects(productionStageWorker(badNarrationTask,runNarration('fixture-narration-missing')),/teaching_final_narration_receipt_invalid/);
+ narrationAction='wrong-quote';
+ await assert.rejects(productionStageWorker(badNarrationTask,runNarration('fixture-narration-false-quote')),/teaching_final_narration_receipt_invalid/);
+ narrationAction='missing-basis';
+ await assert.rejects(productionStageWorker(badNarrationTask,runNarration('fixture-narration-missing-basis')),/teaching_final_narration_receipt_invalid/);
+ narrationAction=undefined;
+ const correctedNarration=narrationDoc(actionable);
+ assert.equal(confirmedTeachingDigest(description),confirmedTeachingDigest(correctedNarration));
+ const goodNarrationTask=await taskFor('teaching-final-narration-decision',correctedNarration,0,'exemplar-v1');
+ goodNarrationTask.stage='copy_review';
+ const {checkTeachingBaseline}=await import('./production-teaching-baseline');
+ const acceptedNarration=await checkTeachingBaseline(goodNarrationTask,runNarration('fixture-narration-yes'),
+  teachingBaselineSource(correctedNarration,goodNarrationTask,[]));
+ assert.equal(acceptedNarration.review.narration_checks?.[0].status,'ok');
+ assert.equal(acceptedNarration.review.narration_checks?.[0].quote,actionable);
+ // Both examples from the operator are references for the decision, not approved copy.
+ const paletteReference='Dia letak 02 dan 06 sebelah-menyebelah dengan kod masing-masing nampak sekali, jadi penonton tak perlu ingat warna palet tadi untuk membandingkan.';
+ const noseReference='Bila berus dialihkan, kamera masih dekat dengan sisi hidung, jadi garis coklat itu nampak jelas tanpa terlindung. Penonton boleh nilai sendiri sejelas mana ia pada muka dia ketika itu.';
+ const humanNarration=narrationDoc(paletteReference,true);
+ for(const [id,doc,quote] of [['palette',humanNarration,paletteReference],['nose',narrationDoc(noseReference),noseReference]] as const){
+  const task=await taskFor('teaching-final-narration-reference-'+id,doc,0,'exemplar-v1');
+  task.stage='copy_review';
+  const accepted=await checkTeachingBaseline(task,runNarration('fixture-human-narration-yes-'+id),teachingBaselineSource(doc,task,[]));
+  assert.equal(accepted.review.narration_checks?.[0].quote,quote);
+ }
+ const {registerHandoff,readHandoffPolicy,handoffKey}=await import('./handoff');
+ let reviewBoardTask:ProductionTask|undefined;
+ for(const scenario of ['author-only','generic-review','wrong-revision','wrong-requirements','wrong-purpose','old-feedback','rejected','write-race','requirements-race','passed','visual-only'] as const){
+  const doc=structuredClone(scenario==='rejected'?description:correctedNarration);
+  if(scenario==='visual-only'){
+   Object.assign(doc.clipMentorAnalysis!.source_breakdown!.units[0].coverage[0],
+    {treatment:'visual_only',reason:'用已登记的鼻侧回看承载可见落点。'});
+  }
+  const task=await taskFor('teaching-publication-'+scenario,doc,0,'exemplar-v1');
+  const revision=task.projectRevision!;
+  task.stage='copy_review';
+  task.completed.blueprint={at:Date.now(),artifact:{revision}};
+  const brief={version:1,briefId:'narration-publication',revision:1,mode:'autonomous',phase:'planning',planner:'builtin_agent',executor:'builtin_agent',
+   projectId:task.projectId,timelineId:doc.activeTimelineId,objective:'核对口播的拍摄决定',doneCriteria:['引用现行口播。'],blueprint:null,
+   budget:{maxModelTurns:6,maxToolCalls:20,maxElapsedMs:120_000,paidToolCalls:{}}};
+  const withHandoff=scenario==='passed'||scenario==='requirements-race';
+  const requirements=withHandoff?digestValue({objective:brief.objective,doneCriteria:brief.doneCriteria}):panelBlueprintRequirementsDigest(null);
+  const raceStore:typeof productionTaskStore={...productionTaskStore,async save(current,guards){
+   if(current.status==='awaiting_blueprint'){
+    if(scenario==='requirements-race'){
+     assert(guards?.some(guard=>guard.key===handoffKey(current.projectId)));
+     const policy=await readHandoffPolicy(current.projectId);
+     await registerHandoff({projectId:current.projectId,expectedProjectRevision:revision,previousDigest:policy?.digest,
+      brief:{...brief,revision:2,objective:'改为核对亲自展示试色的价值'}});
+    }else{
+     assert(guards?.some(guard=>guard.key==='project:'+current.projectId));
+     const concurrent=structuredClone(doc);
+     concurrent.clipMentorAnalysis!.revision++;
+     await setStoredEntry('project:'+current.projectId,concurrent);
+    }
+   }
+   return productionTaskStore.save(current,guards);
+  }};
+  await advanceProductionTask(task,async(current,ctx)=>{
+   assert.equal(current.stage,'copy_review');
+   if(scenario==='generic-review')return {artifact:{revision,authorSelfCheck:'passed',gate:{allowed:true},panelDeliveryVerified:true}};
+   const saved=(await loadOfflineStoredProject(current.projectId))!.doc;
+   const source=teachingBaselineSource(scenario==='wrong-revision'?humanNarration:saved,current,[]);
+   if(scenario==='wrong-purpose')source.purpose={...teachingPurpose,review_question:'旧版审核只问讲解是否清晰。'};
+   const reviewRequirements=scenario==='wrong-requirements'?'e'.repeat(64):requirements;
+   const digest=scenario==='author-only'?'a'.repeat(64):(await checkTeachingBaseline(current,ctx,source,reviewRequirements)).digest;
+   if(scenario==='old-feedback')current.blueprintFeedback='再核同框的比较依据。';
+   // Publish a completed production effect against an explicit handoff. The
+   // separate handoff run-admission path is covered by the handoff suites.
+   if(withHandoff)await registerHandoff({projectId:current.projectId,expectedProjectRevision:revision,previousDigest:null,brief});
+   return {artifact:{revision,requirementsDigest:requirements,authorSelfCheck:'passed',
+    author_self_check_source_digest:'d'.repeat(64),teaching_baseline_digest:digest,
+    independentNarrationAnswers:[{status:'ok',decision:'Ignored worker claim',quote:actionable}]},awaitBlueprintFeedback:true};
+  },scenario.endsWith('-race')?raceStore:productionTaskStore);
+  if(scenario!=='passed'&&scenario!=='visual-only'){
+   assert.equal(task.status,'blocked');
+   assert.match(task.error??'',scenario==='generic-review'?/human_blueprint_draft_binding_missing/
+    :scenario.endsWith('-race')?/agent_runtime_precondition_changed/:/human_blueprint_narration_(?:receipt_missing|not_passed)/);
+   assert.equal((await productionTaskStore.load(task.projectId,task.taskId)).status,'blocked');
+   continue;
+  }
+  assert.equal(task.status,'awaiting_blueprint',task.error);
+  const current=await productionTaskStore.load(task.projectId,task.taskId);
+  const published=current.completed.blueprint!.artifact;
+  assert.equal(published.teachingDecisionChange,'首份送审蓝图。');
+  if(scenario==='visual-only'){
+   assert.deepEqual(published.independentNarrationAnswers,[]);
+   continue;
+  }
+  assert.equal((published.independentNarrationAnswers as Array<{quote:string}>)[0].quote,actionable);
+  reviewBoardTask=task;
+ }
+ console.log('PASS saved descriptive narration is returned without reopening the baseline; unchanged, missing and falsely quoted decisions are blocked; actionable narration passes the independent contract');
  const boardStages=new Map<string,string[]>();
  const app=createMiniConnect(error=>{throw error;});
  panelRequest=(req,res)=>app.handle(req,res);
@@ -317,6 +510,40 @@ try{
   if(t.stage==='analysis')throw Error('fixture stops after routing back to analysis');
   return productionStageWorker(t,ctx);
  }).configureServer as any)({httpServer:host,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
+ assert(reviewBoardTask);
+ {
+  const task=reviewBoardTask,projectId=task.projectId,revision=task.projectRevision!;
+  const url=origin+'/api/clipmentor/production-task';
+  const headers={Origin:origin,'Sec-Fetch-Site':'same-origin'};
+  const panel=await realFetch(url+'?'+new URLSearchParams({view:'panel',projectId}),{headers});
+  assert.equal(panel.status,200);
+  const {task:{boardIdentity,blueprintRevision}}=await panel.json();
+  assert.equal(blueprintRevision,revision);
+  const board=await realFetch(url+'?'+new URLSearchParams({view:'panel_board',projectId,revision,boardIdentity}),{headers});
+  const html=await board.text();
+  assert.equal(board.status,200,board.ok?'':html);
+  assert.equal(board.headers.get('x-clipmentor-board-identity'),boardIdentity);
+  assert(html.includes(teachingPurpose.audience)&&html.includes(teachingPurpose.review_question));
+  assert.match(html,/<section class="group"[^>]*data-unit-id="fixture-group".*达人把刷头退开后的结果留在镜头中.*观众能判断无遮挡时鼻侧色痕有多明显。.*data-quote-line-id="fixture-line"/su);
+  assert.match(html,/data-source-evidence-id="fixture-visual">原片依据 刷子与鼻侧同框。/u);
+  assert(html.includes(actionable));
+  assert(!html.includes('Ignored worker claim'));
+  const published=task.completed.blueprint!.artifact;
+  const {openHeadlessEditor}=await import('./headless-editor');
+  const editor=await openHeadlessEditor({projectId,runId:task.taskId,origin});
+  try{
+   const file='references/teaching-purpose.json';
+   const loaded=await editor.loadSkill('clipmentor',file);
+   assert.deepEqual(JSON.parse(loaded),teachingPurpose);
+  }finally{await editor.close();}
+  await queueDraftBlueprintFeedback(task,revision,'保留选题，只调整字幕字号。',productionTaskStore);
+  assert.equal(task.previousBlueprintTeaching?.selection,published.teachingSelectionDigest);
+  assert.equal(task.previousBlueprintTeaching?.narration,published.teachingNarrationDigest);
+  const stale=await realFetch(url+'?'+new URLSearchParams({view:'panel_board',projectId,revision,boardIdentity}),{headers});
+  assert.equal(stale.status,409,'the board URL cannot expose an earlier receipt after feedback');
+  assert(!(await stale.text()).includes(actionable));
+  console.log('PASS live panel HTTP binds the independent answers and evidence to the current board revision');
+ }
  const qualificationRoutes:Record<string,{calls:string[];stages:string[]}>={};
  for(const scenario of [
   {id:'direction',feedback:'第1组教学方向是错的。'},
@@ -369,6 +596,7 @@ try{
    const boardHtml=await board.text();
    assert.equal(board.status,200,board.ok?'':boardHtml);
    assert.match(boardHtml,/data-card="group-1"/);
+   assert(!boardHtml.includes('data-narration-review'),'a historical board without a matching independent answer may not show one');
    const submit=()=>realFetch(url+'?'+query,{method:'POST',headers,
     body:JSON.stringify({action:'revise_blueprint',revision,boardIdentity,text:feedback})});
    const results=await Promise.all([submit(),submit()]);
@@ -864,7 +1092,6 @@ try{
   props:{clipmentorReferenceOnly:true}};
  referenceDoc.assets.push(reference);
  const referencesTask=await taskFor('teaching-exemplar-bound-reference',referenceDoc,0,'exemplar-v1');
- const {registerHandoff,readHandoffPolicy}=await import('./handoff');
  const {uploadDir}=await import('../media-dir');
  const referenceFile=join(uploadDir(),reference.name);
  await mkdir(uploadDir(),{recursive:true});
@@ -957,10 +1184,15 @@ try{
  for(const stage of ['analysis','blueprint']){
   const prompt=authorPrompts.get(stage);
   assert(prompt,`missing real ${stage} author request`);
+  assert(prompt.includes(teachingPurpose.audience)&&prompt.includes(teachingPurpose.review_question),`${stage} must receive the shared purpose`);
+  for(const boundary of teachingPurpose.boundaries)assert(prompt.includes(boundary));
   for(const label of cardLabels)assert(prompt.includes(label),`${stage} author missing ${label}`);
  }
  assert(independentPrompts.length>0,'the fake service must receive a real independent review request');
  for(const prompt of independentPrompts){
+  if(!prompt.includes('旧版审核只问讲解是否清晰。'))
+   assert(prompt.includes(teachingPurpose.review_question),'independent baseline and narration requests must receive the shared purpose');
+  for(const boundary of teachingPurpose.boundaries)assert(prompt.includes(boundary));
   assert(!prompt.includes('人工拆解单元：同一主题怎样讲得具体'));
   for(const label of cardLabels)assert(!prompt.includes(label));
   for(const sample of humanTeachingCalibration){

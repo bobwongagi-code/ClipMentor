@@ -1,0 +1,20 @@
+{
+  "revision": "v3-d00da4d8",
+  "project_sha256": "bdc8bc936f463d7c9cb91f7291baca51daadcf4737ea3fd70a4a9c63267e4292",
+  "items": [
+    {
+      "unit_id": "U-pans",
+      "line_id": "L-pans-01",
+      "narration_ms": "Dua palet terbuka dalam satu syot, dengan kod masing-masing. Pembeli boleh terus bandingkan coklat yang lebih kelabu pada kod 02 dengan coklat yang lebih hangat pada kod 06.",
+      "approved_scope": "原片 7.6–9.8 秒的盘内相对色差",
+      "learner_gap": "口播交代同框的结果，缺少分开拍时观众会失去哪一项比较依据。"
+    },
+    {
+      "unit_id": "U-nose",
+      "line_id": "L-nose-01",
+      "narration_ms": "Tengok semula sisi hidung. Kamera masih dekat bila berus beralih, jadi pembeli boleh nampak di mana kesan coklat itu dan bagaimana rupanya ketika itu.",
+      "approved_scope": "原片 34–36.6 秒当时可见的鼻侧色痕，色号归属待核",
+      "learner_gap": "口播描述撤刷后的画面，缺少应当何时收镜以及提前切走会失去什么。"
+    }
+  ]
+}

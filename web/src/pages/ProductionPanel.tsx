@@ -12,6 +12,7 @@ type Task = {
   visualCriteria?: { digest: string }; downloadName?:string
   attachments?: {assetId:string;fileName:string}[]; deliveryUnavailable?:boolean
   boardIdentity?:string; blueprintRevision?: string; canApproveBlueprint?: boolean; blueprintMessage?: string
+  teachingDecisionChange?:string
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
 }
 type Audience = 'new_contact' | 'existing_partner'
@@ -303,6 +304,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     </> : boardRevision || awaitingPreview || completed ? <>
       {!unifiedBlueprint && <div className={outputAudience?"cm-output-heading":"cm-heading"}><h1>{outputAudience?audienceTitle:reviewTitle}</h1></div>}
       <section className="cm-panel cm-work">
+        {boardRevision && currentBoard?.revision === boardRevision && task.teachingDecisionChange && <p>{task.teachingDecisionChange}</p>}
         {boardRevision && (currentBoard?.revision === boardRevision
           ? <iframe key={boardKey} ref={boardFrame} title="人审版蓝图" className="cm-review-board" sandbox="allow-scripts" srcDoc={currentBoard.html} />
           : boardError ? <div className="cm-footer"><p role="status">{boardError}</p>

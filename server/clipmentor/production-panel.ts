@@ -33,7 +33,7 @@ import {currentCreatorDocument} from './creator-storyboard-document';
 import { copyReviewDependencies } from './copy-review';
 import {frozenTeachingTopics} from './production-source-policy';
 import {readPanelSourceCriteria} from './production-panel-source-requirements';
-import {bindTeachingFeedbackUnits} from './production-teaching-baseline';
+import {bindTeachingFeedbackUnits,type PublishedNarrationDecision} from './production-teaching-baseline';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
@@ -230,13 +230,17 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const siblingEntry=currentTask?.input.panelDelivery?.audience==='existing_partner'
         ?parent?.productionChildren?.find(entry=>entry.audience==='new_contact'):undefined;
       const sibling=siblingEntry?await loadOfflineStoredProject(siblingEntry.projectId):undefined;
+      const artifact=currentTask?.completed.blueprint?.artifact;
+      const narrationDecisions=artifact?.revision===revision&&Array.isArray(artifact.independentNarrationAnswers)
+        ?artifact.independentNarrationAnswers as PublishedNarrationDecision[]:undefined;
       const artifactIdentity=digestValue({version:2,projectId,taskId:currentTask?.taskId,revision,
         criteriaDigest:boundVisualCriteria(currentPolicy)?.digest,
         requirementsDigest:currentPolicy?panelBlueprintRequirementsDigest(currentPolicy):undefined,
         sourceCriteriaDigest:currentTask?.input.doneCriteria?.length?digestValue(currentTask.input.doneCriteria):undefined,
+        ...(narrationDecisions?.length?{narrationReview:digestValue(narrationDecisions)}:{}),
         siblingProjectId:siblingEntry?.projectId,siblingRevision:sibling?.revision,siblingMissing:!!siblingEntry&&!sibling});
       const identity=digestValue({artifactIdentity,feedbackSequence:currentTask?.blueprintFeedback?currentTask.sequence:undefined});
-      return {identity,artifactIdentity,siblingEntry,sibling,siblingRevision:sibling?.revision};
+      return {identity,artifactIdentity,siblingEntry,sibling,siblingRevision:sibling?.revision,narrationDecisions};
     };
     if (req.method === 'GET') {
       const preview=task&&previewFile(task);
@@ -280,7 +284,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         // A shared-body task owns the current teaching plan; its sibling owns only
         // the other ending. Join read-only presentation, never execution documents.
         const subject=await boardSubject(revision);
-        const {identity,artifactIdentity,siblingEntry,sibling,siblingRevision}=subject;
+        const {identity,artifactIdentity,siblingEntry,sibling,siblingRevision,narrationDecisions}=subject;
         if(siblingEntry&&!sibling)throw Error('新建联片尾工程缺失');
         if(query.has('boardIdentity')&&query.get('boardIdentity')!==identity)throw Error('审片板已变化，请刷新');
         const assertBoardCurrent=async()=>{
@@ -351,6 +355,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             // Human product review shows this project's storyboard and actual preview.
             if ((await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
             input.embedded=true;
+            input.narrationDecisions=narrationDecisions;
             if(isPanelBlueprintDraft(task))input.teachingExcerptUnit=representativeTeachingExcerpt(saved.doc)?.unitId;
             const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel', artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
@@ -464,6 +469,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
         ...(blueprintRevision?{blueprintRevision,boardIdentity:(await boardSubject(blueprintRevision)).identity,canApproveBlueprint,
+          ...(task.completed.blueprint?.artifact.revision===blueprintRevision&&typeof task.completed.blueprint.artifact.teachingDecisionChange==='string'
+            ?{teachingDecisionChange:task.completed.blueprint.artifact.teachingDecisionChange}:{}),
           canConfirmBlueprint,...(blueprintMessage?{blueprintMessage}:{})}:{}),
         ...(task.input.panelDelivery?{dualBlueprint,
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),

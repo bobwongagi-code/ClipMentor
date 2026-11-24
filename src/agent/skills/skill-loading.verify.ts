@@ -90,6 +90,7 @@ try {
     'references/delivery-checklist.md',
     'references/reproduction-lessons.md',
     'references/pre-edit-analysis.md',
+    'references/teaching-purpose.json',
     'references/analysis-method.md',
     'references/review-boundaries.md',
   ]) {
@@ -130,7 +131,7 @@ try {
     }
     if (file === 'references/planning.md') {
       for (const requirement of ['Production review checkpoints', '1. Blueprint review', '2. Audio-visual capacity review',
-        '3. Continuous viewing review', 'group_checks.L1', 'omission_loss']) assert(result.contents[file].includes(requirement));
+        '3. Continuous viewing review', 'group_checks.L1', 'omission_loss', '(teaching-purpose.json)']) assert(result.contents[file].includes(requirement));
     }
     if (file === 'references/delivery-checklist.md') assert(result.contents[file].includes('三个审核检查点'));
     if (file === 'references/review-boundaries.md') {
