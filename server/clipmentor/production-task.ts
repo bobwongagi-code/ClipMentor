@@ -47,6 +47,13 @@ export function productionRepairContext(previous:Record<string,unknown>|undefine
   ...(previous?.final_feedback?{final_feedback:previous.final_feedback}:{})};
 }
 
+function clearNarrationRepair(context:ProductionTask['repairContext']){
+ if(!context)return;
+ delete context.narration_repair_digest;
+ delete context.narration_repair_findings;
+ delete context.narration_repair_scope;
+}
+
 export async function structuralRepairPause(task:ProductionTask,issue:unknown,sourceHash?:string|null){
  if(!pictureRepairFindings(issue).length)return;
  if(sourceHash){
@@ -700,11 +707,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      }
     }
     blueprint.artifact={...blueprint.artifact,...result.artifact};
-    if(task.repairContext){
-     delete task.repairContext.narration_repair_digest;
-     delete task.repairContext.narration_repair_findings;
-     delete task.repairContext.narration_repair_scope;
-    }
+    clearNarrationRepair(task.repairContext);
     task.status='awaiting_blueprint';await publishStage(teachingGuards);break;
    }
    if(task.stage==='copy_review'&&isPanelBlueprintDraft(task)&&task.input.panelDelivery?.editorialPolicy==='exemplar-v1')
@@ -725,7 +728,10 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    }
    task.completed[task.stage]={at:now(),artifact:result.artifact};
    if(task.stage==='edit')delete task.editPublication;
-   if(task.stage==='analysis')delete task.teachingAnalysisPublication;
+   if(task.stage==='analysis'){
+    delete task.teachingAnalysisPublication;
+    clearNarrationRepair(task.repairContext);
+   }
    if(task.stage==='copy_review'&&(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed===true&&task.repairContext){
     delete task.repairContext.pending_review_repair;delete task.repairContext.repair;
    }
@@ -822,9 +828,7 @@ async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:st
   delete next.repairContext.blueprint_structure_issue;
   delete next.repairContext.last_picture_repair_issue;
   delete next.repairContext.picture_repair_coverage;
-  delete next.repairContext.narration_repair_digest;
-  delete next.repairContext.narration_repair_findings;
-  delete next.repairContext.narration_repair_scope;
+  clearNarrationRepair(next.repairContext);
  }
  if(dispatch){
   const previous=task.completed.blueprint?.artifact;

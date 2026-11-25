@@ -101,6 +101,35 @@ for (const [name, args] of [
 }
 
 assert((await call('revise_clipmentor_analysis', importArgs)).error, 'stale write rejected');
+{
+  const evidenceEngine = makeDraft({
+    ...engine.getDoc(), assets: [...engine.getDoc().assets,
+      { id: 'fixture-review-picture', name: 'Product still', kind: 'image', src: '/media/uploads/fixture-review-picture.png', durationInFrames: 30 }],
+  });
+  const evidenceContext = { ...ctx, commands: evidenceEngine.commands, getDoc: evidenceEngine.getDoc, getState: evidenceEngine.getState };
+  const row = { kind: 'operator_supplied', text: 'Project delivery context', status: 'operator_provided_not_independently_verified',
+    source_ids: ['fixture-review-picture'], supporting_evidence_ids: [] };
+  const first = { ...row, evidence_id: 'fixture-valid-image' };
+  const wrongVideo = { ...row, evidence_id: 'fixture-wrong-video', source_ids: [assetId] };
+  const wrongShape = { ...row, evidence_id: 'fixture-wrong-shape', supporting_evidence_ids: false };
+  const wrongReference = { ...row, evidence_id: 'fixture-wrong-support', supporting_evidence_ids: ['not-registered'] };
+  const before = evidenceEngine.getDoc();
+  const submit = (evidence: unknown[]) => executeTool('revise_clipmentor_analysis', {
+    action: 'append', expectedRevision: before.clipMentorAnalysis!.revision, actor, reason: 'Verify batch evidence diagnostics', records: { evidence },
+  }, evidenceContext);
+  const rejected = await submit([first, wrongVideo, wrongShape, wrongReference]) as {
+    error: string; evidence_issues: Array<{ index: number; evidence_id: string; field: string }>;
+  };
+  assert.match(rejected.error, /nothing changed/);
+  assert(Array.isArray(rejected.evidence_issues),'the tool must return row and field diagnostics for the rejected batch');
+  assert.deepEqual(rejected.evidence_issues.map(({index,evidence_id,field})=>[index,evidence_id,field]),[
+    [1,'fixture-wrong-video','source_ids'],[2,'fixture-wrong-shape','supporting_evidence_ids'],[3,'fixture-wrong-support','supporting_evidence_ids'],
+  ]);
+  assert.deepEqual(evidenceEngine.getDoc(),before,'one bad reference cannot publish any row in the append');
+  const accepted = await submit([first]) as { ok: boolean };
+  assert.equal(accepted.ok,true);
+  assert(evidenceEngine.getDoc().clipMentorAnalysis!.evidence.some(e=>e.evidence_id===first.evidence_id));
+}
 assert.equal((await checkAnalysisHandoff(engine.getDoc())).status, 'review_required');
 const originalTimeline = JSON.stringify(engine.getDoc().timelines);
 const historicalImported = structuredClone(engine.getDoc());

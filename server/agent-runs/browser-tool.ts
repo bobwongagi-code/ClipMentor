@@ -104,7 +104,7 @@ export async function executeBrowserTool(
         ?Object.fromEntries(Object.entries(delivered).filter(([key])=>key!=='__images')):delivered;
       artifactRef=await archiveAgentToolResult(run.projectId,run.id,{toolCallId,toolName:schema.name,result:receipt});
       pushRunEvent(run,'server-tool-result',{toolCallId,name:schema.name,argsDigest,success:!isFailedToolResult(delivered),
-        result:artifactRef?artifactPlaceholder(artifactRef):compactToolResultForModel(projectToolResultForPersistence(receipt))});
+        result:artifactRef?artifactPlaceholder(artifactRef,receipt):compactToolResultForModel(projectToolResultForPersistence(receipt))});
       hostOutcomeRecorded=true;
     }
     const followup = delivered && typeof delivered === 'object'

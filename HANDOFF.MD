@@ -860,3 +860,11 @@ For mixed feedback, bind the proposed changes and verbatim preserved sentences t
 
 The shipping review reconciled the confirmation with actual playback phase order and overlapping source-speech windows, including legacy timelines. Keep ambiguous mixed comments in the reviewer’s draft. Check the same scoped revision and compute differences at both human-blueprint publication paths. The browser fixture drives production-task publication so a missing readback cannot be hidden by a fabricated diff. Keep the existing group statements available when approving a blueprint with optional empty opinions.
 Keep browser HTML cache changes separate from the board identity used by stored stances. Whole-board approval preserves saved statements and respects an existing objection. Complete the scope check before saving a human-review checkpoint so a stopped repair cannot skip review on resume.
+
+### 2026-11-25 · Bind narration and evidence feedback to the saved draft
+
+The author reference separates what a product offers from what a buyer still needs to judge. Estimate narration against useful original-speed action. A brief annotated hold lets the audience read a particular visible detail. Teach movement with a moving example, and measure the final voice and picture together.
+
+Validate supplemental evidence by row, then commit the complete append only if all rows pass. Report the field and registered evidence type on each rejection. Preserve the compact no-write outcome alongside archived details. When replaying an interrupted analysis, check the matched successful write and the current baseline before proceeding.
+
+Return a narration finding against the same unit and registered teaching point. A claim-boundary objection quotes the actual current line. A real omission identifies the missing decision and what the buyer loses. Group and whole-film findings still have their own grounding. An unbound or stale return remains readable without authorizing a new repair. A completed analysis retires prior narration repair instructions. Compare the rejected line for a factual claim and the whole teaching point for an omission before another review. Leave new wording requests as suggestions until agreed.

@@ -14,7 +14,7 @@ import { requestSourceVideo, readSourceVideo } from '../../clipmentor/request-so
 import { editClipMentorPreview } from '../../clipmentor/preview-edit';
 import { requestPreviewReview } from '../../clipmentor/request-preview-review';
 import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-review';
-import { appendAnalysisFindings, OBSERVATION_ID_MISMATCH } from '../../clipmentor/append-findings';
+import { AnalysisEvidenceInputError, appendAnalysisFindings } from '../../clipmentor/append-findings';
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview, validatePicturePlanProjection } from '../../clipmentor/production-gate';
 import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
@@ -438,8 +438,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     return { ok: true, revision: a.revision, handoff, breakdown_check: breakdown, identity: 'local_declared_not_authenticated' };
   } catch (error) {
     if(error instanceof BlueprintImportError)return{error:error.code};
-    // Only this static domain error is exposed; arbitrary input/errors remain redacted.
-    if (error instanceof Error && error.message === OBSERVATION_ID_MISMATCH) return { error: OBSERVATION_ID_MISMATCH };
+    if (error instanceof AnalysisEvidenceInputError) return { error: error.message, evidence_issues: error.issues };
     return { error: 'Analysis input could not be validated; nothing changed' };
   }
 }

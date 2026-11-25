@@ -67,7 +67,7 @@ function jsonLength(value: unknown): number {
 /** Keep model-visible tool history bounded while the UI retains the complete execution result. */
 export function compactToolResultForModel(value: unknown): unknown {
   const artifactRef = agentArtifactRefOf(value);
-  if (artifactRef) return artifactPlaceholder(artifactRef);
+  if (artifactRef) return artifactPlaceholder(artifactRef, value);
   const originalText = jsonText(value);
   if (originalText !== null && originalText.length <= MODEL_RESULT_MAX_CHARS) return value;
 
@@ -99,7 +99,7 @@ export function compactToolResultForTransport(value: unknown, preserveImages: bo
   const { __images } = value as JsonRecord;
   const artifactRef = agentArtifactRefOf(value);
   const compacted = artifactRef
-    ? artifactPlaceholder(artifactRef)
+    ? artifactPlaceholder(artifactRef, value)
     : compactToolResultForModel(Object.fromEntries(
       Object.entries(value as JsonRecord).filter(([key]) => key !== '__images'),
     ));

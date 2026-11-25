@@ -12,7 +12,7 @@ import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewComplet
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
-import {checkTeachingBaseline,confirmedTeachingDigest,interruptedClosingPlanUnit,newlyChangedTeaching,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
+import {boundNarrationCriterion,checkTeachingBaseline,confirmedTeachingDigest,interruptedClosingPlanUnit,newlyChangedTeaching,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDefinitionDigest,teachingDraftPointersDigest,
  teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,wholeFilmIssue,type TeachingRebuild} from './production-teaching-baseline';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
@@ -378,6 +378,10 @@ function productionAuthorToolExecutor({
 export const productionStageWorker:StageWorker=async(task,stage)=>{
  let reflowBaseline:ProjectDoc|undefined;
  const panelDraft=isPanelBlueprintDraft(task);
+ const savedNarrationFindings=task.repairContext?.narration_repair_findings;
+ if(panelDraft&&task.stage==='blueprint'&&Array.isArray(savedNarrationFindings)
+  &&savedNarrationFindings.some(finding=>!finding?.baseline_criterion))
+   throw Error('teaching_final_narration_baseline_criterion_missing_in_saved_review');
  const strictEditorial=task.input.panelDelivery?.editorialPolicy==='exemplar-v1';
  const approvedOutput=strictEditorial&&task.input.panelDelivery?.audience?task.blueprintApproval:undefined;
  let frozenTeaching=approvedOutput?.confirmedTeachingDigest;
@@ -473,6 +477,16 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    return {artifact:publication.artifact};
   }
   if(task.projectRevision&&editor.revision!==task.projectRevision)throw new Error('production_project_changed; reconcile the saved project before resuming');
+  if(panelDraft&&task.stage==='blueprint'&&Array.isArray(savedNarrationFindings)){
+   const baseline=editor.getDoc().clipMentorAnalysis?.source_breakdown;
+   for(const finding of savedNarrationFindings){
+    const covered=baseline?.units.find(unit=>unit.unit_id===finding.unit_id)?.coverage.some(
+     item=>item.point_id===finding.point_id&&item.treatment==='explain');
+    const point=covered?baseline?.points.find(item=>item.point_id===finding.point_id&&item.role==='primary'):undefined;
+    if(!boundNarrationCriterion(finding.baseline_criterion,point?.teaching_basis))
+     throw Error('teaching_final_narration_baseline_criterion_stale_in_saved_review');
+   }
+  }
   if(isBoundCanvasReflow(task,editor.getDoc()))reflowBaseline=structuredClone(editor.getDoc());
   else if(task.input.panelDelivery)assertProductionCanvas(editor.getDoc());
   const policy=await productionReviewRequirements(task.projectId),criteria=boundVisualCriteria(policy);
@@ -614,8 +628,13 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     ?digestValue({requirements:baselinePolicyDigest,criteria:task.input.doneCriteria,feedback:task.blueprintFeedback,
      ...(source.selection?.timingRisks?{replay:source.selection.timingRisks.filter(risk=>findings.some(finding=>
       finding.unit_id===risk.unit_id&&finding.line_id===risk.line_id))}:{}),
-     targets:source.narrationTargets.filter(target=>findings.some(finding=>finding.unit_id===target.unit_id&&finding.point_id===target.point_id))
-      .map(target=>[target.unit_id,target.point_id,target.lines.map(line=>line.narration.normalize('NFKC').trim().replace(/\s+/gu,' '))])})
+     targets:source.narrationTargets.flatMap(target=>{
+      const finding=findings.find(entry=>entry.unit_id===target.unit_id&&entry.point_id===target.point_id);
+      if(!finding)return [];
+      const lines=finding.baseline_criterion?.field==='claim_limit'
+       ?target.lines.filter(line=>line.line_id===finding.line_id):target.lines;
+      return [[target.unit_id,target.point_id,lines.map(line=>line.narration.normalize('NFKC').trim().replace(/\s+/gu,' '))]];
+     })})
     :undefined;
    const priorNarration=task.repairContext?.narration_repair_findings as NarrationReview;
    const priorNarrationDigest=rejectedNarrationDigest(priorNarration);
@@ -628,12 +647,17 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    const checked=await checkTeachingBaseline(task,stage,source,baselinePolicyDigest);
    if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
     return {artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:task.stage as 'blueprint'|'copy_review'};
+   if(source.narrationTargets?.length&&checked.review.units.some(unit=>unit.status!=='ok'&&
+    !unit.point_checks?.some(point=>point.status!=='ok')))
+     throw Error('teaching_final_narration_unit_finding_unbound');
    const topicIssue=wholeFilmIssue(checked.review.whole_film);
    const unitIssues=checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason);
    const issues=topicIssue?['整片选题 '+topicIssue,...unitIssues]:unitIssues;
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
    const narrationIssues=checked.review.narration_checks?.filter(answer=>answer.status!=='ok');
    if(narrationIssues?.length){
+    if(narrationIssues.some(answer=>!answer.baseline_criterion))
+     throw Error('teaching_final_narration_baseline_criterion_missing_in_saved_review');
     const normalizedReason=(reason:string)=>reason.normalize('NFKC').replace(/\s+/gu,' ').trim().replace(/[。.!！]+$/u,'');
     const repeated=sameNarrationScope&&narrationIssues.find(answer=>priorNarration?.some(old=>
      old.unit_id===answer.unit_id&&old.point_id===answer.point_id&&old.status===answer.status

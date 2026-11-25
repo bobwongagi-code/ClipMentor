@@ -217,9 +217,17 @@ export function finalNarrationTargets(doc:ProjectDoc,baseline:SourceBreakdown) {
 export type NarrationDecision={
  unit_id:string;point_id:string;status:'ok'|'fix'|'unresolved';reason:string;
  decision?:string;viewer_basis?:string;line_id?:string;quote?:string;
+ baseline_criterion?:{field:'method'|'connection'|'claim_limit';quote:string};
 };
 export type PublishedNarrationDecision=NarrationDecision&{source_evidence_id:string;source_quote:string};
-export function checkedNarration(value:unknown,targets:NonNullable<BaselineSource['narrationTargets']>):NarrationDecision[]{
+export function boundNarrationCriterion(criterion:unknown,basis:SourceBreakdown['points'][number]['teaching_basis']):NarrationDecision['baseline_criterion']{
+ if(!basis||!row(criterion)||(criterion.field!=='method'&&criterion.field!=='connection'&&criterion.field!=='claim_limit')
+  ||typeof criterion.quote!=='string'||!criterion.quote.trim())return;
+ const {field}=criterion;
+ if(normalized(criterion.quote)===normalized(basis[field]))return {field,quote:basis[field]};
+}
+export function checkedNarration(value:unknown,targets:NonNullable<BaselineSource['narrationTargets']>,
+ confirmedUnits?:BaselineSource['units']):NarrationDecision[]{
  const invalid=()=>Error('teaching_final_narration_receipt_invalid');
  if(!Array.isArray(value)||value.length!==targets.length)throw invalid();
  return targets.map(target=>{
@@ -227,7 +235,16 @@ export function checkedNarration(value:unknown,targets:NonNullable<BaselineSourc
   const entry=matches[0];
   if(matches.length!==1||!shortText(entry.reason)||!['ok','fix','unresolved'].includes(entry.status))throw invalid();
   const result:NarrationDecision={unit_id:target.unit_id,point_id:target.point_id,status:entry.status,reason:entry.reason};
-  if(entry.status!=='ok'&&!entry.line_id&&!entry.quote)return result;
+  if(confirmedUnits&&entry.status!=='ok'){
+   const basis=confirmedUnits.find(unit=>unit.unit_id===target.unit_id)?.points.find(point=>point.point_id===target.point_id)?.teaching_basis;
+   const criterion=boundNarrationCriterion(entry.baseline_criterion,basis);
+   if(!criterion)throw Error('teaching_final_narration_baseline_criterion_invalid');
+   result.baseline_criterion=criterion;
+  }
+  if(entry.status!=='ok'&&!entry.line_id&&!entry.quote){
+   if(result.baseline_criterion?.field==='claim_limit')throw invalid();
+   return result;
+  }
   const line=target.lines.find(item=>item.line_id===entry.line_id);
   if(!line||!shortText(entry.quote)||!exactExcerpt(entry.quote,line.narration)
    ||(entry.status==='ok'&&(!shortText(entry.decision)||!shortText(entry.viewer_basis))))throw invalid();
@@ -517,7 +534,7 @@ export function wholeFilmIssue(whole:WholeFilmDecision|undefined){
  return issues.length?issues.join('。'):whole.reason;
 }
 
-export function validateTeachingBaselineReview(value: unknown, source: BaselineSource): BaselineReview {
+export function validateTeachingBaselineReview(value: unknown, source: BaselineSource, requireNarrationCriterion=true): BaselineReview {
  const invalid = () => Error('teaching_baseline_review_invalid');
  if (!row(value) || !Array.isArray(value.units) || value.units.length !== source.units.length) throw invalid();
  const hasFeedback=!!source.feedback;
@@ -535,7 +552,7 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
  const decisions = value.units;
  const whole_film=source.pointReview?readWholeFilmDecision(value.whole_film,source):undefined;
  const wholeFilmResult={...(whole_film?{whole_film}:{}),...(source.narrationTargets?.length
-  ?{narration_checks:checkedNarration(value.narration_checks,source.narrationTargets)}:{})};
+  ?{narration_checks:checkedNarration(value.narration_checks,source.narrationTargets,requireNarrationCriterion?source.units:undefined)}:{})};
  const units = source.units.map(unit => {
   const matches = decisions.filter(entry => row(entry) && entry.unit_id === unit.unit_id);
   const entry = matches[0];
@@ -549,6 +566,10 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
   const {unit_id,status,source_role,takeaway,evidence_ids,reason} = entry;
   const points=source.pointReview?reviewedPoints(entry.point_checks,unit,source):undefined;
   const issue=points?.find(point=>point.status==='fix')??points?.find(point=>point.status==='unresolved');
+  // At final narration review, a bare group verdict cannot turn a new
+  // narration demand into a baseline repair. Whole-film findings stay separate.
+  if(requireNarrationCriterion&&source.narrationTargets?.length&&status!=='ok'&&!issue)
+   throw Error('teaching_final_narration_unit_finding_unbound');
   return {unit_id,status:issue?.status==='fix'?'fix':status==='ok'?issue?.status??'ok':status,source_role,takeaway,evidence_ids,
    reason:issue?`${issue.point_id} ${issue.connection}`:reason,
    ...(points?{point_checks:points}:{})} as Decision;
@@ -708,7 +729,7 @@ const reviewInstructions = (opening:string,feedbackInstructions:string,feedbackO
 
 const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。用本点原片证据核对作者的卖点、买家顾虑和拍法。按 purpose 作答。learner_takeaway 写达人拍同类内容时会改的具体决定，connection 写原作者的这个选择让观众多得到哪一项判断依据。只说能看到、能比较、能认出，没说明具体依据时同样判 fix。选题或答案只复述动作时，即使换了词或问题带「为什么」，也判 fix。只列功能、混淆原片促单与达人CTA、照搬别片形式同样判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
 const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画面证据独立找最有解释力的教学主线及一个合理备选。比较两条主线各自会让达人改哪个决定，说明为何选这条、放弃备选会少教什么，以及前后各组怎样服务主线。核对有无漏掉会改变买家判断的内容。不要把多段相似演示当多个购买理由，也不要因为强证据更容易截图就让辅助点变主线。另在同一 JSON 增加 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。各项简洁具体。ok 时 main_point_id 是实际承载主线的主讲重点，evidence_id 属于该点，affected_unit_ids 为空。整片重点选错、排序影响理解或有重要遗漏，即使各组单独成立也标 fix，引用能说明问题的全片原证据，可来自未选中的段落。证据决定当前关键结论却无法核清，标 unresolved；仅当无可引用证据时 evidence_id 和 source_quote 均填 null。fix 或 unresolved 要列出受影响的现行组 ID，主线未成立时 main_point_id 可为 null。';
-function baselineInstructions(source:BaselineSource,legacyReceipt=false){
+function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireNarrationCriterion=true){
  const feedbackInstructions=legacyReceipt
   ?'若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。'
   :source.feedback?'按 feedback 原话判断是否必须重做选题、功能或购买理由；须重做时将 feedback_requires_baseline 填 true，并列出有原片依据的退回项。仅改措辞或版式填 false。rebuilding=true 时核对已重选的教学能否兑现意见；保留其中其他要求。':'';
@@ -722,11 +743,12 @@ function baselineInstructions(source:BaselineSource,legacyReceipt=false){
  :source.frozenTopics?' frozenTopics 是本片已确认的选题范围。无论总评如何，whole_film 须填 frozen_topic_checks:{main_scope:"pass"|"fail",closing_status:"pass"|"fail"}。main_scope 核对实际提交的标题、问题、讲解任务和证据。超出 frozenTopics.main 或将 frozenTopics.background 当成教学依据时判 fail。closing_status 按 sourceClosing 核对已核定的档位、处置及注记位置。处置或注记不符时判 fail。总评在 reason 中说明具体问题。'
  :source.sourceClosingRegistration?' whole_film 必须含 frozen_topic_checks:{main_scope:"pass",closing_status:"pass"|"fail"}。main_scope 由原有整片评审负责。closing_status 复核 sourceClosing 的档位、原片依据和实际处置。':'')
  +(source.selection?' 先从全片证据独立判断哪里支持想试、比较或跟着操作，再核对教学选点。盘点和选组文字是待核陈述。selection.gaps、角色和备选都是审阅提示，依据是实际选点、原片和稿件。仅有一层、缺备选或资料填写不全时，沿用现行判据。若确实漏掉会改变买家判断的内容，或两组实质重复，引用原片并说明损失。合组核对真实先后，每句引用本句供给的一个或多个实际窗口。把推断的动机、观众反应或功效当事实时，基线写进 point_checks 的 fix，口播写进 narration_checks 的 fix 并引用该句。编辑实看时点是回看线索。仅在当前结论依赖无法核实的证据时判 unresolved。selection.timingRisks 是逐句估计。若缺处置，引用相关句并指出待实测的声画风险。估算、单纯短窗或处置字段缺失不决定通过状态。':'')
- +(source.narrationTargets?.length?' 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?,quote?}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并逐字引用能让他领会该决定的某句。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id 和逐字 quote。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。':'');
+ +(source.narrationTargets?.length?' 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?,quote?}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并逐字引用能让他领会该决定的某句。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id 和逐字 quote。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。'
+  +(requireNarrationCriterion?' 每条 fix 或 unresolved 必须另填 baseline_criterion:{field:"method"|"connection"|"claim_limit",quote:当前组当前点 teaching_basis 对应字段的完整原文}。reason 写明引用的判据和现行口播在哪一点不符。只按已经核定的判断和边界裁决。想加的细节或新标准仅作审阅建议，不能用来退回。必须拍到的内容不因此变成必须逐项念到的内容。引用 claim_limit 时，还须给出现行口播中受该边界影响的 line_id 和逐字 quote。实质漏讲而没有可引句子时，说明缺失的内容。逐组基线退回须有对应的 point_checks 问题，口播问题留在 narration_checks。':''):'');
 }
 
-export function teachingBaselineDigest(source:BaselineSource,legacyReceipt=false) {
- return digestValue({source,instructions:baselineInstructions(source,legacyReceipt)});
+export function teachingBaselineDigest(source:BaselineSource,legacyReceipt=false,requireNarrationCriterion=true) {
+ return digestValue({source,instructions:baselineInstructions(source,legacyReceipt,requireNarrationCriterion)});
 }
 
 export async function checkTeachingBaseline(task:ProductionTask,stage:StageContext,source:BaselineSource,requirementsDigest?:string) {
@@ -735,25 +757,27 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
  const currentDigest=reviewDigest(teachingBaselineDigest(source));
  const priorReviews=Object.entries(task.effects).filter(([id,effect])=>effect.kind==='model'&&id.includes(':teaching-baseline:'));
  const effectsFor=(digest:string)=>priorReviews.filter(([id])=>id.endsWith(':teaching-baseline:'+digest));
- const current=effectsFor(currentDigest);
- // Keep a previously submitted review bound to its original effect key.
- const legacyDigest=priorReviews.length>current.length&&!current.some(([,effect])=>effect.status==='completed')
-  ?reviewDigest(teachingBaselineDigest(source,true)):undefined;
- const legacy=legacyDigest?effectsFor(legacyDigest):[];
- const digest=legacyDigest&&(legacy.some(([,effect])=>effect.status==='completed')||!current.length&&legacy.length)
-  ?legacyDigest:currentDigest;
+ const current={digest:currentDigest,requireCriterion:true,effects:effectsFor(currentDigest)};
+ // Keep each previously submitted review on its original digest and response contract.
+ const legacy=priorReviews.length?[false,true].flatMap(feedbackScope=>{
+  const digest=reviewDigest(teachingBaselineDigest(source,feedbackScope,false));
+  return digest===currentDigest?[]:[{digest,requireCriterion:false,effects:effectsFor(digest)}];
+ }):[];
+ const versions=[current,...legacy];
+ const {digest,requireCriterion,effects}=versions.find(version=>version.effects.some(([,effect])=>effect.status==='completed'))
+  ??versions.find(version=>version.effects.length)??current;
  const bind=(runId:string,review:BaselineReview)=>({digest,runId,review,...(narrationSubject?{narrationSubject}:{})});
  const key = 'teaching-baseline:'+digest;
- const effects=digest===currentDigest?current:legacy;
  const saved = effects.find(([,effect])=>effect.status==='completed')?.[1];
  const read = (value:unknown,operationId:string) => {
   if (!row(value) || value.digest!==digest || value.runId!==operationId) throw Error('teaching_baseline_receipt_binding_mismatch');
-  return validateTeachingBaselineReview(value.review,source);
+  return validateTeachingBaselineReview(value.review,source,requireCriterion);
  };
  if (saved) return {digest,review:read(saved.result,saved.operationId)};
  if (effects.length && !stage.hasEffect?.('model',key)) throw Error('teaching_baseline_prior_attempt_unresolved');
  let runId:string|undefined;
  const result = await stage.effect('model',key,async operationId => {
+  if(!requireCriterion)throw Error('teaching_baseline_prior_attempt_unresolved');
   runId=operationId;
   const author=task.input.author,backend=task.input.authorBackend??'api';
   const run=createRun({id:operationId,userInputDigest:digest,projectId:task.projectId,sessionGeneration:await currentAgentSessionGeneration(task.projectId),
@@ -769,7 +793,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
     async execute(){throw Error('teaching_baseline_read_only');}}});
   if(run.status!=='completed')throw Error(run.error??'teaching_baseline_check_failed');
   const value=parseTeachingBaselineText(authorSelfCheckText(run.events));
-  return bind(operationId,validateTeachingBaselineReview(value,source));
+  return bind(operationId,validateTeachingBaselineReview(value,source,requireCriterion));
  },async operationId => {
   runId=operationId;
   const {runs}=await loadAgentRuntimeSidecar(task.projectId);
@@ -777,7 +801,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
   if(!run)throw Error('teaching_baseline_recovery_run_unverified');
   const {text,verified}=authorSelfCheckReceiptText(run);
   if(!verified)throw Error('teaching_baseline_recovery_text_unverified');
-  return bind(operationId,validateTeachingBaselineReview(parseTeachingBaselineText(text),source));
+  return bind(operationId,validateTeachingBaselineReview(parseTeachingBaselineText(text),source,requireCriterion));
  });
  const id=runId??Object.entries(task.effects).find(([id])=>id.endsWith(':'+key))?.[1].operationId;
  if(!id)throw Error('teaching_baseline_receipt_binding_mismatch');

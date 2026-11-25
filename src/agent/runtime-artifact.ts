@@ -179,9 +179,16 @@ export function agentArtifactRefOf(value: unknown): AgentArtifactRef | undefined
   return (value as { [AGENT_ARTIFACT_REF]?: AgentArtifactRef })[AGENT_ARTIFACT_REF]
     ?? fallbackRefs.get(value);
 }
-export function artifactPlaceholder(ref: AgentArtifactRef): Record<string, unknown> {
+export function artifactPlaceholder(ref: AgentArtifactRef, result?: unknown): Record<string, unknown> {
+  const receipt = result as { ok?: unknown; success?: unknown; error?: unknown; evidence_issues?: unknown } | null | undefined;
+  // Keep the no-write outcome visible even when per-row details need an artifact read.
+  const evidenceError = receipt?.ok !== true && receipt?.success !== true
+    && Array.isArray(receipt?.evidence_issues) && typeof receipt?.error === 'string'
+    && receipt.error.length <= 512 && receipt.error.endsWith('; nothing changed')
+    ? redactTextSecrets(receipt.error, { redacted: false, binaryOmitted: false }) : undefined;
   return {
     archived: true,
+    ...(evidenceError ? { error: evidenceError } : {}),
     artifactId: ref.artifactId,
     bodySha256: ref.bodySha256,
     originalChars: ref.originalChars,
