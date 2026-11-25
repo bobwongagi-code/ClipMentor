@@ -3,6 +3,7 @@ import { isClipMentorAnalysis } from '../../src/clipmentor/analysis';
 import { copyPreparationReady } from '../../src/clipmentor/source-breakdown';
 import { teachingPointGaps, type teachingBaselineSource } from './production-teaching-baseline';
 import { digestValue } from '../agent-runs/store-values';
+import { redactTextForAgentRuntime } from '../../src/agent/runtime-artifact';
 
 type Event = { type: string; data: unknown };
 const record = (value: unknown): Record<string, unknown> =>
@@ -18,6 +19,7 @@ export function recoveredAnalysisWrite(doc: ProjectDoc, events: readonly Event[]
   const revision = analysis.revision;
   const unresolved = new Set<string>();
   const pending = new Map<string, Record<string, unknown>>();
+ const reportedError = redactTextForAgentRuntime(error);
   let registered: string | undefined;
   let rejected: string | undefined;
   for (const event of events) {
@@ -28,7 +30,7 @@ export function recoveredAnalysisWrite(doc: ProjectDoc, events: readonly Event[]
       if (data.success === true) unresolved.delete(data.name);
       else unresolved.add(data.name);
     }
-    if (['read_clipmentor_analysis', 'read_project', 'load_skill'].includes(String(data.name))) continue;
+    if (['read_clipmentor_analysis', 'read_agent_artifact', 'read_project', 'load_skill'].includes(String(data.name))) continue;
     if (event.type === 'server-tool-request') {
       if (pending.size) return; // Overlapping writes have no unambiguous publication order.
       pending.set(data.toolCallId, data);
@@ -52,7 +54,7 @@ export function recoveredAnalysisWrite(doc: ProjectDoc, events: readonly Event[]
         args.expectedRevision === revision && Object.keys(fields).length === 1 && Array.isArray(fields.evidence) && fields.evidence.length &&
         fields.evidence.every(item => record(item).kind === 'operator_supplied') &&
         data.success === false && typeof result.error === 'string' && /nothing changed\.?$/i.test(result.error) &&
-        error.includes('revise_clipmentor_analysis: ' + result.error)) {
+        reportedError.includes('revise_clipmentor_analysis: ' + redactTextForAgentRuntime(result.error))) {
       rejected = data.toolCallId;
       continue;
     }

@@ -148,6 +148,8 @@ export function verifyTeachingSelections(template: ProjectDoc, templateTask: Pro
     source_quote:input.evidence.find(item=>item.id===point.teaching_basis!.evidence_ids[0])!.text}))})),
   narration_checks:input.narrationTargets!.map(target=>({unit_id:target.unit_id,point_id:target.point_id,
    status:rejectInference&&target.point_id==='hook'?'fix':'ok',
+   ...(rejectInference&&target.point_id==='hook'?{baseline_criterion:{field:'claim_limit',
+    quote:input.units.find(unit=>unit.unit_id===target.unit_id)!.points.find(point=>point.point_id===target.point_id)!.teaching_basis!.claim_limit}}:{}),
    reason:rejectInference&&target.point_id==='hook'?'把吸引观众的剪辑动机写成了已观察的事实。':'可从该句回读本组安排。',
    line_id:target.lines[0].line_id,quote:target.lines[0].narration,decision:'调整出镜和参照的顺序。',
    viewer_basis:'可核对本组要交代的颜色和位置。'})),

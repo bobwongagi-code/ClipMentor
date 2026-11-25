@@ -24,9 +24,10 @@ const prior=process.env.OPENCHATCUT_DATA_DIR,realFetch=globalThis.fetch;
 process.env.OPENCHATCUT_DATA_DIR=path;
 let calls:string[]=[];
 let analysisCorrection:SourceBreakdown|undefined;
-let rejectSupplement=false;
+let rejectSupplement:false|'small'|'archived'=false;
+let supplementArchiveId:string|undefined;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
-let narrationAction:'missing'|'wrong-quote'|'missing-basis'|'same-finding'|undefined;
+let narrationAction:'missing'|'wrong-quote'|'missing-basis'|'same-finding'|'missing-criterion'|'new-criterion'|'partial-criterion'|'no-claim-quote'|'bare-unit'|'cited-fact'|'cited-teaching'|undefined;
 let wholeFilmAction:'missing'|'omission'|'selection-omission'|undefined;
 let unexpectedInitialFeedbackScope=false;
 let panelRequest:RequestListener|undefined;
@@ -100,12 +101,28 @@ const host=createServer(async(req,res)=>{
    const send=stream();
    const toolReplies=body.messages.filter(message=>message.role==='tool');
    if(rejectSupplement&&toolReplies.length===1){
+    const status='operator_provided_not_independently_verified';
+    const evidence=rejectSupplement==='small'?[
+     {kind:'operator_supplied',status,source_ids:[]},
+    ]:Array.from({length:100},(_,i)=>({evidence_id:'image-row-'+i,kind:'operator_supplied',status,
+     text:'Refers to a non-image asset',source_ids:['video-fixture-id'],supporting_evidence_ids:[]}));
+    if(rejectSupplement==='archived')evidence[0]={...evidence[0],evidence_id:'api_key:fixture-standin'};
     const args={action:'append',expectedRevision:data.revision+1,reason:'补充已上传图片说明',
      actor:{operator:'fixture',executor:'builtin_api_agent',instruction:'核对素材',identity:'local_declared_not_authenticated'},
-     records:{evidence:[{kind:'operator_supplied',status:'operator_provided_not_independently_verified',source_ids:[]}]}};
+     records:{evidence}};
     send({role:'assistant',tool_calls:[{index:0,id:'call_supplement',type:'function',function:{name:'revise_clipmentor_analysis',arguments:JSON.stringify(args)}}]},null);
     send({},'tool_calls');
+   }else if(rejectSupplement==='archived'&&toolReplies.length===2){
+    const receipt=JSON.parse(toolReplies.at(-1)!.content);
+    assert.equal(receipt.archived,true);
+    assert.match(receipt.error,/source_ids:.*nothing changed/);
+    assert(!receipt.error.includes('fixture-standin'));
+    supplementArchiveId=receipt.artifactId;
+    send({role:'assistant',tool_calls:[{index:0,id:'call_details',type:'function',function:{name:'read_agent_artifact',
+     arguments:JSON.stringify({artifactId:supplementArchiveId,pointer:'/evidence_issues/99'})}}]},null);
+    send({},'tool_calls');
    }else if(toolReplies.length){
+    if(rejectSupplement==='archived')assert.equal(JSON.parse(JSON.parse(toolReplies.at(-1)!.content).content).evidence_id,'image-row-99');
     send({role:'assistant',content:'已保存教学选题。'},null);send({},'stop');
    }else{
     const args={action:'set_source_breakdown',expectedRevision:data.revision,record:analysisCorrection,reason:'按现场原片证据修订购买关注与作用',
@@ -138,12 +155,23 @@ const host=createServer(async(req,res)=>{
   }}:{}),
   ...(data.narrationTargets?.length&&narrationAction!=='missing'?{narration_checks:data.narrationTargets.map((target:any)=>{
    const line=target.lines[0];
+   const point=data.units.find((unit:any)=>unit.unit_id===target.unit_id).points.find((item:any)=>item.point_id===target.point_id);
+   const criterion=(field:'connection'|'claim_limit')=>narrationAction==='missing-criterion'?{}:{baseline_criterion:{
+    field,quote:narrationAction==='new-criterion'?'必须在开场报出鼻侧颜色。':
+     narrationAction==='partial-criterion'?point.teaching_basis[field].slice(0,5):point.teaching_basis[field]}};
    if(data.selection&&line?.narration===selectionFixture.inferenceDraft)return {unit_id:target.unit_id,point_id:target.point_id,
-    status:'fix',line_id:line.line_id,quote:line.narration,reason:'把吸引观众的剪辑动机写成了已观察的事实。'};
+    status:'fix',line_id:line.line_id,quote:line.narration,reason:'把吸引观众的剪辑动机写成了已观察的事实。',...criterion('claim_limit')};
+   if(narrationAction==='no-claim-quote')return {unit_id:target.unit_id,point_id:target.point_id,
+    status:'fix',reason:'口播把结果归给具体色号。',...criterion('claim_limit')};
+   if(narrationAction==='cited-fact'||narrationAction==='cited-teaching')return {
+    unit_id:target.unit_id,point_id:target.point_id,status:'fix',line_id:line.line_id,quote:line.narration,
+    reason:narrationAction==='cited-fact'?'越出了画面所能支持的说法。':'只描述了当时的画面。',
+    ...criterion(narrationAction==='cited-fact'?'claim_limit':'connection')};
    const counterexample=narrationAction==='same-finding'?narrationCounterexample.items[1]
     :narrationCounterexample.items.find(item=>item.narration_ms===line?.narration);
-   if(counterexample&&(!narrationAction||narrationAction==='same-finding')||!line)return {unit_id:target.unit_id,point_id:target.point_id,status:'fix',
-    reason:'基线有、口播没有：'+(counterexample?.learner_gap??'未登记实际口播。')};
+   if(counterexample&&(!narrationAction||['same-finding','missing-criterion','new-criterion','partial-criterion'].includes(narrationAction))||!line)
+    return {unit_id:target.unit_id,point_id:target.point_id,status:'fix',
+     reason:'基线有、口播没有：'+(counterexample?.learner_gap??'未登记实际口播。'),...criterion('connection')};
    const palette=line.narration.includes('kod masing-masing');
    return {unit_id:target.unit_id,point_id:target.point_id,status:'ok',
     decision:palette?'达人在同一镜头摆两盘供看差别':'达人把刷头退开后的结果留在镜头中。',
@@ -154,7 +182,7 @@ const host=createServer(async(req,res)=>{
     reason:'口播已经交代何时收镜和买家届时能看到什么结果。'};
   })}:{}),
   units:data.units.map((unit:any)=>({
-   unit_id:unit.unit_id,status:fail?'fix':'ok',source_role:fail?'展示动作未说明教学功能':'以相同参照让受众判断差异',
+   unit_id:unit.unit_id,status:fail||narrationAction==='bare-unit'?'fix':'ok',source_role:fail?'展示动作未说明教学功能':'以相同参照让受众判断差异',
    takeaway:fail?'需要回到原片确认怎样呈现购买理由':'达人可学走把观察对象和比较结果放在一起的拍法',
    evidence_ids:[data.evidence.find((e:any)=>unit.source_ranges.some(([a,b]:number[])=>e.range[0]>=a&&e.range[0]<b))?.id].filter(Boolean),
    reason:fail?'教学基线遗漏了原片承接和观众要判断的问题。':'人工标注的符合样本',
@@ -369,6 +397,55 @@ try{
  assert.deepEqual(calls,['baseline']);
  assert(independentPrompts.at(-1)!.includes(descriptive));
  assert(independentPrompts.at(-1)!.includes('提前切走会丢失刷头离开后的鼻侧色痕。'));
+ assert.match(independentPrompts.at(-1)!,/baseline_criterion/);
+ const returned=(narrationReject.artifact.narration_repair_findings as Array<{baseline_criterion?:{field:string;quote:string}}>)[0];
+ assert.deepEqual(returned.baseline_criterion,{field:'connection',quote:description.clipMentorAnalysis!.source_breakdown!.points[0].teaching_basis!.connection});
+ for(const [invalid,expected] of [
+  ['missing-criterion','teaching_final_narration_baseline_criterion_invalid'],
+  ['new-criterion','teaching_final_narration_baseline_criterion_invalid'],
+  ['partial-criterion','teaching_final_narration_baseline_criterion_invalid'],
+  ['no-claim-quote','teaching_final_narration_receipt_invalid'],
+  ['bare-unit','teaching_final_narration_unit_finding_unbound'],
+ ] as const){
+  narrationAction=invalid;calls=[];
+  const failed=await taskFor('teaching-final-narration-'+invalid,description,3,'exemplar-v1');
+  failed.stage='copy_review';
+  await advanceProductionTask(failed,productionStageWorker,productionTaskStore);
+  assert.equal(failed.status,'blocked');
+  assert.equal(failed.error,'Error: '+expected);
+  assert.equal(failed.repairs,0,'invalid review cannot dispatch a new author repair');
+  assert.deepEqual(calls,['baseline']);
+ }
+ narrationAction=undefined;
+ const legacyRepair=await taskFor('teaching-final-narration-legacy-dispatch',description,3,'exemplar-v1');
+ legacyRepair.stage='blueprint';
+ const priorFinding=structuredClone(narrationReject.artifact.narration_repair_findings as Array<Record<string,unknown>>);
+ delete priorFinding[0].baseline_criterion;
+ legacyRepair.repairContext={...narrationReject.artifact,narration_repair_findings:priorFinding};
+ await productionTaskStore.save(legacyRepair);
+ const resumedLegacyRepair=await productionTaskStore.load(legacyRepair.projectId,legacyRepair.taskId);
+ calls=[];
+ await advanceProductionTask(resumedLegacyRepair,productionStageWorker,productionTaskStore);
+ assert.equal(resumedLegacyRepair.status,'blocked');
+ assert.match(resumedLegacyRepair.error??'',/teaching_final_narration_baseline_criterion_missing_in_saved_review/);
+ assert.deepEqual(calls,[],'a stored unbound review cannot authorize any dispatch after upgrade');
+ const staleRepair=await taskFor('teaching-final-narration-reselected-point',description,3,'exemplar-v1');
+ staleRepair.stage='blueprint';
+ const staleFinding=structuredClone(narrationReject.artifact.narration_repair_findings as Array<{baseline_criterion:{quote:string}}>);
+ staleFinding[0].baseline_criterion.quote='旧选题里已经被替换的判断要求。';
+ staleRepair.repairContext={...narrationReject.artifact,narration_repair_findings:staleFinding};
+ await assert.rejects(productionStageWorker(staleRepair,runNarration('fixture-narration-stale-dispatch')),
+  /teaching_final_narration_baseline_criterion_stale_in_saved_review/);
+ assert.deepEqual(calls,[],'a changed criterion cannot dispatch with an obsolete repair');
+ staleRepair.stage='analysis';
+ delete staleRepair.completed.analysis;
+ await advanceProductionTask(staleRepair,async current=>{
+  if(current.stage==='analysis')return {artifact:{revision:current.projectRevision}};
+  assert.equal(current.stage,'blueprint');
+  assert.equal(current.repairContext?.narration_repair_findings,undefined,'a completed reselection retires obsolete narration authority');
+  throw Error('fixture stops before new author dispatch');
+ },productionTaskStore);
+ assert.match(staleRepair.error??'',/fixture stops before new author dispatch/);
  const paletteCopy=narrationCounterexample.items[0].narration_ms;
  const paletteTask=await taskFor('teaching-final-narration-palette-description',narrationDoc(paletteCopy,true),0,'exemplar-v1');
  paletteTask.stage='copy_review';
@@ -386,11 +463,38 @@ try{
  calls=[];
  await assert.rejects(productionStageWorker(badNarrationTask,runNarration('fixture-narration-repeat')),/teaching_final_narration_repair_no_progress/);
  assert.deepEqual(calls,[]);
+ const twoLineDraft=narrationDoc(descriptive);
+ const twoLineInternal=(twoLineDraft.clipMentorAnalysis!.blueprint[0] as {internal_review:Record<string,any>}).internal_review;
+ const currentCandidate=twoLineInternal[twoLineInternal.current_script_candidate];
+ currentCandidate.lines.push({...currentCandidate.lines[0],id:'fixture-sibling',narration_ms:'Pada bahagian ini.',caption_lines:['Pada bahagian ini.']});
+ const citedTask=await taskFor('teaching-final-narration-cited-line',twoLineDraft,3,'exemplar-v1');
+ citedTask.stage='copy_review';
+ narrationAction='cited-fact';
+ const citedRepair=await productionStageWorker(citedTask,runNarration('fixture-narration-cited-line'));
+ assert.equal(citedRepair.repair,'blueprint');
+ const siblingEdit=structuredClone(twoLineDraft);
+ const siblingInternal=(siblingEdit.clipMentorAnalysis!.blueprint[0] as {internal_review:Record<string,any>}).internal_review;
+ Object.assign(siblingInternal[siblingInternal.current_script_candidate].lines[1],
+  {narration_ms:'Di sini.',caption_lines:['Di sini.']});
+ const siblingTask=await taskFor('teaching-final-narration-sibling-only-edit',siblingEdit,3,'exemplar-v1');
+ siblingTask.stage='copy_review';
+ siblingTask.repairContext=citedRepair.artifact;
+ calls=[];
+ await assert.rejects(productionStageWorker(siblingTask,runNarration('fixture-narration-sibling-only-edit')),/teaching_final_narration_repair_no_progress/);
+ assert.deepEqual(calls,[],'editing an uncited sibling cannot re-review the same rejected line');
+ narrationAction='cited-teaching';
+ const missingLesson=await productionStageWorker(citedTask,runNarration('fixture-narration-cited-teaching'));
+ siblingTask.repairContext=missingLesson.artifact;
+ await assert.rejects(productionStageWorker(siblingTask,{
+  signal:new AbortController().signal,
+  async effect(){throw Error('the amended teaching point reached review');},
+ }),/the amended teaching point reached review/);
  const superficialRewrite=narrationDoc(descriptive+' Ini yang penonton nampak.');
  const repeatedTask=await taskFor('teaching-final-narration-repeat-finding',superficialRewrite,3,'exemplar-v1');
  repeatedTask.stage='copy_review';
  repeatedTask.repairContext=narrationReject.artifact;
  narrationAction='same-finding';
+ calls=[];
  await advanceProductionTask(repeatedTask,productionStageWorker,productionTaskStore);
  assert.equal(repeatedTask.status,'blocked');
  assert.match(repeatedTask.error??'',/teaching_final_narration_repair_no_progress: 同一讲解缺口/);
@@ -836,12 +940,16 @@ try{
  assert.equal(realCorrection.clipMentorAnalysis!.source_breakdown!.points[0].teaching_question,b.points[0].teaching_question);
  assert.equal(teachingDraftPointersDigest(realCorrection),teachingDraftPointersDigest(old),'analysis rewrite leaves old candidates for the draft phase');
  assert.equal(correctionTask.teachingAnalysisPublication,undefined,'analysis publication body is cleared once its stage settles');
- rejectSupplement=true;
- for(const complete of [true,false]){
-  const item=await taskFor('teaching-supplement-'+complete,firstCopyDoc,0,'exemplar-v1');
+ for(const [size,complete] of [['small',true],['archived',true],['archived',false]] as const){
+  rejectSupplement=size;
+  supplementArchiveId=undefined;
+  const item=await taskFor('teaching-supplement-'+size+'-'+complete,firstCopyDoc,0,'exemplar-v1');
   item.stage='analysis';delete item.completed.analysis;
   analysisCorrection=structuredClone(breakdown);
-  if(!complete)analysisCorrection.points[0].buying_concern=analysisCorrection.points[0].teaching_basis!.selling_point;
+  if(!complete){
+   analysisCorrection.points[0].buying_concern=analysisCorrection.points[0].teaching_basis!.selling_point;
+   analysisCorrection.points[0].change_reason='Fixture registers an incomplete editorial choice';
+  }
   const original=(await loadOfflineStoredProject(item.projectId))!;
   const context={signal:new AbortController().signal,effect:async()=>null} as Parameters<typeof productionStageWorker>[1];
   if(complete){
@@ -851,6 +959,15 @@ try{
   }else{
    await assert.rejects(productionStageWorker(item,context),/tool failed/i);
    assert.equal((await loadOfflineStoredProject(item.projectId))?.revision,original.revision);
+  }
+  if(size==='archived'){
+   assert(supplementArchiveId);
+   const {loadAgentArtifact}=await import('../../src/persist/agentRuntimeStore');
+   const artifact=await loadAgentArtifact(item.projectId,supplementArchiveId);
+   assert(artifact);
+   const issues=JSON.parse(artifact.body).evidence_issues;
+   assert.equal(issues.length,100);
+   assert.equal(issues.at(-1).evidence_id,'image-row-99');
   }
  }
  console.log('PASS failed supplementary write publishes only a complete registered analysis for independent review');

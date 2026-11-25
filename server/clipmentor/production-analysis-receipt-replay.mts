@@ -17,6 +17,7 @@ const run=runtime.runs.find((r:any)=>r.projectId===projectId&&r.context.transpor
 assert.ok(run);
 const events=run.events.flatMap((e:any)=>{try{return JSON.parse(e.summary).serverEvent??[];}catch{return [];}});
 const doc=await load('project:'+projectId);
+const suppliedImages=doc.assets.filter((asset:{kind:string})=>asset.kind==='image').map((asset:{id:string})=>asset.id);
 const calls=new Map<string,any>();
 let analysis,latest;
 for(const event of events){
@@ -31,7 +32,7 @@ for(const event of events){
  }
  if(!analysis||name!=='revise_clipmentor_analysis'||result.ok!==true)continue;
  const a=calls.get(toolCallId);assert.equal(a.expectedRevision,analysis.revision);
- if(a.action==='append')analysis=await appendAnalysisFindings(analysis,a.records,a.actor,a.reason,doc.assets.map((item:any)=>item.id));
+ if(a.action==='append')analysis=await appendAnalysisFindings(analysis,a.records,a.actor,a.reason,suppliedImages);
  else {assert.equal(a.action,'set_source_breakdown');analysis.source_breakdown=structuredClone(a.record);analysis.revision++;}
  assert.equal(result.revision,analysis.revision);latest=toolCallId;
 }

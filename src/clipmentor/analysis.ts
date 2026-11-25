@@ -107,6 +107,29 @@ export function isAnalysisActor(v: unknown): v is AnalysisActor {
   return row(v) && nonempty(v.operator) && nonempty(v.executor) && nonempty(v.instruction)
     && v.identity === 'local_declared_not_authenticated';
 }
+
+export function invalidAnalysisEvidenceField(value: unknown): string | null {
+  if (!row(value)) return 'record';
+  const imageObservation = value.kind === 'source_frame' || value.kind === 'visible_action';
+  const fields: Array<[string, boolean]> = [
+    ['evidence_id', nonempty(value.evidence_id)],
+    ['status', nonempty(value.status)],
+    ['text', str(value.text)],
+    ['kind', typeof value.kind === 'string' && ['source_frame', 'original_claim', 'visible_action', 'expression_analysis_not_verified_causal_effect', 'operator_supplied'].includes(value.kind)],
+    ['meaning_zh', value.meaning_zh === undefined || nonempty(value.meaning_zh)],
+    ['provenance', value.provenance === undefined || nonempty(value.provenance)],
+    ['supporting_evidence_ids', strings(value.supporting_evidence_ids)],
+    ['source_ids', strings(value.source_ids)],
+    ['source_range_seconds', value.source_range_seconds === undefined || range(value.source_range_seconds, value.kind === 'visible_action')],
+    ['time_seconds', value.time_seconds === undefined ? value.kind !== 'source_frame' : finite(value.time_seconds) && value.time_seconds >= 0],
+    ['source_frame', value.source_frame === undefined ? value.kind !== 'source_frame' : Number.isSafeInteger(value.source_frame) && Number(value.source_frame) >= 0],
+    ['observation_method', value.observation_method === undefined ? !imageObservation : nonempty(value.observation_method)],
+    ['call_status', value.call_status === undefined ? !imageObservation : typeof value.call_status === 'string' && ['historical_unknown', 'unknown', 'failed', 'succeeded'].includes(value.call_status)],
+    ['observation_id', value.observation_id === undefined || nonempty(value.observation_id)],
+  ];
+  return fields.find(([, valid]) => !valid)?.[0] ?? null;
+}
+
 /** Shape validation preserves uncertain/dangling records for review; handoff validates references. */
 export function isClipMentorAnalysis(v: unknown): v is ClipMentorAnalysis {
   if (!row(v) || v.schema_version !== 1 || !nonempty(v.analysis_id)
@@ -128,19 +151,7 @@ export function isClipMentorAnalysis(v: unknown): v is ClipMentorAnalysis {
     && (o.sampling === undefined || (typeof o.sampling === 'string' && ['explicit_times', 'sequence'].includes(o.sampling)))
     && (o.failure === undefined || o.failure === 'extraction_failed_or_incomplete'))
     || !unique(v.observations as unknown[], 'observation_id'))) return false;
-  if (!rows(v.evidence, (e) => nonempty(e.evidence_id) && nonempty(e.status) && str(e.text)
-    && (typeof e.kind === 'string' && ['source_frame', 'original_claim', 'visible_action', 'expression_analysis_not_verified_causal_effect', 'operator_supplied'].includes(e.kind))
-    && (e.meaning_zh === undefined || nonempty(e.meaning_zh))
-    && (e.provenance === undefined || nonempty(e.provenance))
-    && strings(e.supporting_evidence_ids) && strings(e.source_ids)
-    && (e.source_range_seconds === undefined || range(e.source_range_seconds, e.kind === 'visible_action'))
-    && (e.time_seconds === undefined || (finite(e.time_seconds) && e.time_seconds >= 0))
-    && (e.source_frame === undefined || (Number.isSafeInteger(e.source_frame) && Number(e.source_frame) >= 0))
-    && (e.observation_method === undefined || nonempty(e.observation_method))
-    && (e.call_status === undefined || (typeof e.call_status === 'string' && ['historical_unknown', 'unknown', 'failed', 'succeeded'].includes(e.call_status)))
-    && (e.observation_id === undefined || nonempty(e.observation_id))
-    && (e.kind !== 'source_frame' || (finite(e.time_seconds) && Number.isSafeInteger(e.source_frame)))
-    && (!(typeof e.kind === 'string' && ['source_frame', 'visible_action'].includes(e.kind)) || (nonempty(e.observation_method) && nonempty(e.call_status))))) return false;
+  if (!rows(v.evidence, (e) => invalidAnalysisEvidenceField(e) === null)) return false;
   if (!rows(v.points, (p) => nonempty(p.point_id) && nonempty(p.unit_id) && range(p.source_range_seconds)
     && nonempty(p.buying_reason_or_function) && strings(p.filming_conditions) && strings(p.evidence_ids)
     && strings(p.uncertainties) && typeof p.required === 'boolean' && nonempty(p.explanation_priority) && nonempty(p.status)

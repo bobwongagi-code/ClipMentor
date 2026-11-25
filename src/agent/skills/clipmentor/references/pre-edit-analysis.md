@@ -39,7 +39,7 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 网页共用蓝图在写稿前先读原任务和原片证据，再核已存基线选了什么。逐组说明该段的表达功能、观众要判断什么、原作者怎样让它可见或可听、达人能借鉴什么。教学方向或选点需改时，先修 `source_breakdown`，保留历史点与原话，等宿主回读通过后成组更新受影响的讲解和画面。只改标题或备注不能解决教学缺口。组数、开场方式与保留哪些卖点由本片证据决定。
 
-下面是字段示例，证据和单元ID需来自本项目真实记录；不是Teashell素材事实或可以直接导入的成品：
+填写买家顾虑和卖点时，见 [选题字段示例](planning.md#selected-point-baseline-and-explanation-units)。下面的证据和单元 ID 需来自本项目真实记录，只演示结构。
 
 ```json
 {
@@ -132,6 +132,6 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 协作模式指定策划者提供的稿件、重点和画面方案也须通过 `revise_clipmentor_analysis` 写回对应工程，保留稳定ID和旧稿审计，标明实际外部/策划来源、保持candidate/pending；执行者登记不等于自主发现或确认。最终复读核对实际蓝图与交付文档一致，不能只在文件中修稿而让后续工具继续读取旧蓝图。独立测试工程不可用协作答案回填。
 
-新增帧必须由观察工具生成，不能用append伪造。新增记录ID不能与旧记录冲突，修改旧记录仍用revise；顺序写入使用最近成功结果的revision，冲突或结果不明时重读，结束时统一复读。按原片顺序组织段落，以时长、解释深度、素材丰富度体现重点，不把钩子移到重点后。按任务的 `sourceClosing` 核对收尾证据及处置，套餐数量、价格和购买入口只引用有依据的信息。
+新增帧由观察工具生成。`operator_supplied.source_ids` 接受图片素材 ID 或已登记的转写 ID。引用原片画面时，用 `supporting_evidence_ids` 指向已登记的实际帧证据。写入返回 `evidence_issues` 时，按记录和字段逐条核对。回执只附归档指针时，用 `read_agent_artifact` 读取 `/evidence_issues`。整批校验通过才推进 revision。用最近一次成功回读的 revision 写入，版本冲突或结果不明时重新读当前记录，修订旧记录用 revise。按原片顺序组织段落，用时长、解释深度和画面体现重点，保留开场钩子与主体的先后。按任务的 `sourceClosing` 核对收尾，套餐数量、价格和购买入口各自保留出处。
 
 本轮输出：产品定位/购买理由 → 实际画面与时间ID → 值得借鉴的拍法条件 → 解释候选 → 未知项。保存成功、结构检查和待审核状态均不等于“分析质量已通过”或成片通过。保留模型初稿再做主Agent复核，不能将人工补入反记为自主发现。
