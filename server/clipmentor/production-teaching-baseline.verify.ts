@@ -220,9 +220,9 @@ try{
  const {advanceProductionTask,createProductionTask,queueDraftBlueprintFeedback,productionTaskStore,panelBlueprintRequirementsDigest}=await import('./production-task');
  const {revisionOf}=await import('../../src/agent/external-edit-session');
  const {digestValue}=await import('../agent-runs/store-values');
- const {teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
+ const {checkTeachingBaseline,teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
   unchangedRejectedTeaching,unchangedWholeFilmTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,
-  confirmedTeachingDigest,teachingDefinitionDigest,rejectsTeachingDirection}=await import('./production-teaching-baseline');
+  confirmedTeachingDigest,teachingDefinitionDigest,qualifiedTeachingDigest,rejectsTeachingDirection}=await import('./production-teaching-baseline');
  const {copyPreparationReady,checkSourceBreakdown,breakdownPointEvidence}=await import('../../src/clipmentor/source-breakdown');
  const old=projectDoc(1080,1920);
  old.assets=[{id:'source',kind:'video',src:'/media/uploads/judy-fixture.mp4',name:'fixture',durationInFrames:2020,width:1080,height:1920,sourceContentHash:'a'.repeat(64)}];
@@ -291,10 +291,18 @@ try{
  const revisedBreakdown=structuredClone(breakdown);
  revisedBreakdown.points[0].teaching_question='为什么同框能让买家区分落点和周围皮肤？';
  revisedBreakdown.points[0].change_reason='从原片补核落点和周围皮肤的关系。';
+ const replayOnly=structuredClone(breakdown);
+ replayOnly.units[0].original_source_ranges=[[0,4.48]];
+ const wrongEvidence=structuredClone(breakdown);
+ wrongEvidence.points[0].teaching_basis!.evidence_ids=['fixture-unrelated'];
+ wrongEvidence.points[0].change_reason='替换该教学点引用的原片依据。';
+ wrongEvidence.segments[0].visible_evidence_ids.push('fixture-unrelated');
  for(const scenario of [
   {label:'unchanged'},
   {label:'definition',change:{action:'set_source_breakdown',record:revisedBreakdown}},
   {label:'evidence',change:{action:'revise',collection:'evidence',id:visible.evidence_id,record:{...visible,text:'刷子与鼻翼边缘同框。'}}},
+  {label:'evidence binding',change:{action:'set_source_breakdown',record:wrongEvidence}},
+  {label:'replay window',change:{action:'set_source_breakdown',record:replayOnly}},
   {label:'unrelated evidence',change:{action:'revise',collection:'evidence',id:'fixture-unrelated',
    record:{...visible,evidence_id:'fixture-unrelated',text:'补充观察。'}}},
   {label:'legacy',legacy:true},
@@ -313,11 +321,11 @@ try{
   const saved=after.doc.clipMentorAnalysis!.blueprint[0] as {internal_review?:Record<string,unknown>};
   if(scenario.change){
    assert.equal(attempt.receipts[0].ok,true,`the ${scenario.label} change must actually apply first: ${JSON.stringify(attempt.receipts[0])}`);
-   assert.equal(after.doc.clipMentorAnalysis!.audit.some(entry=>entry.action===(scenario.label==='definition'?'set_source_breakdown':'revise')
+   assert.equal(after.doc.clipMentorAnalysis!.audit.some(entry=>entry.action===scenario.change!.action
     &&entry.revision===attempt.receipts[0].revision),true);
   }
   const copyReceipt=attempt.receipts.at(-1)!;
-  if(scenario.label==='definition'||scenario.label==='evidence'){
+  if(['definition','evidence','evidence binding'].includes(scenario.label)){
    assert.equal(copyReceipt.error,'teaching_baseline_changed_before_copy');
    assert.equal(saved.internal_review?.current_script_candidate,undefined);
    assert.equal(saved.internal_review?.current_picture_plan,undefined);
@@ -333,7 +341,14 @@ try{
    const candidate=saved.internal_review?.[firstDraft.candidate_id] as {lines:unknown}|undefined;
    assert.deepEqual(candidate?.lines,firstDraft.lines);
    assert.notEqual(after.revision,before.revision);
-   assert.equal(confirmedTeachingDigest(after.doc),confirmedTeachingDigest(before.doc));
+   assert.equal(qualifiedTeachingDigest(after.doc),qualifiedTeachingDigest(before.doc));
+  }
+  if(scenario.label==='replay window'){
+   const next={...task,stage:'blueprint' as const,repairs:task.repairs+1};
+   const sameApproval=await checkTeachingBaseline(next,{signal:new AbortController().signal,
+    async effect(){throw Error('a replay-only edit must reuse the existing selection review');}},
+   teachingBaselineSource(after.doc,next,[]),panelBlueprintRequirementsDigest(null),qualifiedTeachingDigest(after.doc));
+   assert.equal(sameApproval.review.whole_film?.status,'ok');
   }
  }
  console.log('PASS qualified first copy saves on the unchanged project and rejects real definition or same-ID evidence changes');
@@ -463,21 +478,33 @@ try{
  calls=[];
  await assert.rejects(productionStageWorker(badNarrationTask,runNarration('fixture-narration-repeat')),/teaching_final_narration_repair_no_progress/);
  assert.deepEqual(calls,[]);
- const twoLineDraft=narrationDoc(descriptive);
+ const unsupportedApplication='Dia dah sapu bedak di bawah mata.';
+ const twoLineDraft=narrationDoc(unsupportedApplication);
  const twoLineInternal=(twoLineDraft.clipMentorAnalysis!.blueprint[0] as {internal_review:Record<string,any>}).internal_review;
  const currentCandidate=twoLineInternal[twoLineInternal.current_script_candidate];
  currentCandidate.lines.push({...currentCandidate.lines[0],id:'fixture-sibling',narration_ms:'Pada bahagian ini.',caption_lines:['Pada bahagian ini.']});
  const citedTask=await taskFor('teaching-final-narration-cited-line',twoLineDraft,3,'exemplar-v1');
  citedTask.stage='copy_review';
+ const adviceText='仅用于核对作者入口的选材建议';
+ citedTask.input.doneCriteria=[{kind:'source_teaching',source:{assetId:citedTask.input.sourceAssetId,sha256:sourceHash},
+  quote:'保留画面所能支持的讲解',guidance:[{category:'temporarily_unused',text:adviceText,
+   source:{who:'fixture author',reference:'fixture selection discussion'},
+   rationale:'先对照另一段有证据的动作。',reconsiderWhen:'用法组调整时重新看。'}],
+  closing:{status:'weak_candidate',note:'已登记待核线索',evidenceRange:[3.5,4.5]}}];
  narrationAction='cited-fact';
  const citedRepair=await productionStageWorker(citedTask,runNarration('fixture-narration-cited-line'));
  assert.equal(citedRepair.repair,'blueprint');
+ assert(!independentPrompts.at(-1)!.includes(adviceText),'author suggestions cannot influence the independent verdict as review requirements');
+ const unsupportedFinding=(citedRepair.artifact.narration_repair_findings as Array<{quote:string;baseline_criterion:{field:string}}>)[0];
+ assert.equal(unsupportedFinding.quote,unsupportedApplication);
+ assert.equal(unsupportedFinding.baseline_criterion.field,'claim_limit');
  const siblingEdit=structuredClone(twoLineDraft);
  const siblingInternal=(siblingEdit.clipMentorAnalysis!.blueprint[0] as {internal_review:Record<string,any>}).internal_review;
  Object.assign(siblingInternal[siblingInternal.current_script_candidate].lines[1],
   {narration_ms:'Di sini.',caption_lines:['Di sini.']});
  const siblingTask=await taskFor('teaching-final-narration-sibling-only-edit',siblingEdit,3,'exemplar-v1');
  siblingTask.stage='copy_review';
+ siblingTask.input.doneCriteria=citedTask.input.doneCriteria;
  siblingTask.repairContext=citedRepair.artifact;
  calls=[];
  await assert.rejects(productionStageWorker(siblingTask,runNarration('fixture-narration-sibling-only-edit')),/teaching_final_narration_repair_no_progress/);
@@ -526,7 +553,6 @@ try{
  assert.equal(confirmedTeachingDigest(description),confirmedTeachingDigest(correctedNarration));
  const goodNarrationTask=await taskFor('teaching-final-narration-decision',correctedNarration,0,'exemplar-v1');
  goodNarrationTask.stage='copy_review';
- const {checkTeachingBaseline}=await import('./production-teaching-baseline');
  const acceptedNarration=await checkTeachingBaseline(goodNarrationTask,runNarration('fixture-narration-yes'),
   teachingBaselineSource(correctedNarration,goodNarrationTask,[]));
  assert.equal(acceptedNarration.review.feedback_scope,'none');

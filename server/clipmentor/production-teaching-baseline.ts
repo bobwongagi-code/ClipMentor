@@ -106,13 +106,12 @@ export function teachingDefinitionDigest(doc:ProjectDoc) {
   ...(closing?{closing,segment}:{})});
 }
 
-/** Bind the evidence chosen for the confirmed teaching, while allowing later unrelated evidence. */
-export function confirmedTeachingDigest(doc:ProjectDoc){
+function boundTeachingEvidence(doc:ProjectDoc,includeInventory:boolean){
  const analysis=doc.clipMentorAnalysis;
  const baseline=analysis?.source_breakdown;
  const closing=baseline?.source_closing&&baseline.segments.find(segment=>segment.segment_id===baseline.source_closing?.segment_id);
  const pending=[...new Set([...(baseline?.points.flatMap(point=>point.teaching_basis?.evidence_ids??[])??[]),
-  ...(baseline?.segments.flatMap(segment=>segment.inventory?[...segment.visible_evidence_ids,...segment.claim_evidence_ids,...segment.interpretation_evidence_ids]:[])??[]),
+  ...(includeInventory?baseline?.segments.flatMap(segment=>segment.inventory?[...segment.visible_evidence_ids,...segment.claim_evidence_ids,...segment.interpretation_evidence_ids]:[])??[]:[]),
   ...(closing?[...closing.visible_evidence_ids,...closing.claim_evidence_ids,...closing.interpretation_evidence_ids]:[])])];
  const linked=new Set(pending),byId=new Map(analysis?.evidence.map(item=>[item.evidence_id,item]));
  for(const id of pending)for(const support of byId.get(id)?.supporting_evidence_ids??[]){
@@ -125,9 +124,23 @@ export function confirmedTeachingDigest(doc:ProjectDoc){
   .sort((a,b)=>a.observation_id.localeCompare(b.observation_id));
  const transcripts=analysis?.transcripts.filter(item=>sources.has(item.source_id)).sort((a,b)=>a.source_id.localeCompare(b.source_id));
  const transcription=analysis?.source_transcription;
- return digestValue({definition:teachingDefinitionDigest(doc),source:analysis?.source,evidence,
+ return {source:analysis?.source,evidence,
   ...(observations?.length?{observations}:{}),...(transcripts?.length?{transcripts}:{}),
-  ...(transcription&&sources.has(transcription.operation_id)?{transcription}:{})});
+  ...(transcription&&sources.has(transcription.operation_id)?{transcription}:{})};
+}
+
+/** Keep the identity of published teaching and the exact reviewed material. */
+export function confirmedTeachingDigest(doc:ProjectDoc){
+ return digestValue({definition:teachingDefinitionDigest(doc),...boundTeachingEvidence(doc,true)});
+}
+
+/** Authority to write copy follows decisions and source evidence; edit windows have their own checks. */
+export function qualifiedTeachingDigest(doc:ProjectDoc){
+ const baseline=doc.clipMentorAnalysis?.source_breakdown;
+ return digestValue({
+  units:baseline?.units.map(unit=>[unit.unit_id,teachingMeaning(unitDefinition(baseline,unit),'choices-v1')]),
+  scope:baseline?.review_scope,closing:baseline?.source_closing,...boundTeachingEvidence(doc,false),
+ });
 }
 
 const teachingFeedback=(task:ProductionTask)=>task.blueprintFeedback?{text:task.blueprintFeedback,revision:task.blueprintFeedbackRevision,
@@ -298,8 +311,7 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
 type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takeaway:string;connection:string;question_quote:string;
  source_evidence_id:string;source_quote:string;visual_check?:string;omission_loss?:string};
 type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string;point_checks?:PointDecision[]};
-type FrozenTopicChecks={main_scope:'pass'|'fail';closing_status?:'pass'|'fail'};
-const mainScopeIssue='主线超出任务声明的教学范围';
+type FrozenTopicChecks={main_scope?:'pass'|'fail';closing_status?:'pass'|'fail'};
 const closingStatusIssue='收尾处置与任务声明不符';
 type WholeFilmDecision = {
  status:Decision['status'];main_point_id:string|null;focus:string;alternative:string;reason:string;
@@ -310,10 +322,6 @@ type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[];
 
 function repeatsTeachingAction(method:string|undefined,evidence:readonly string[],answer:string){
  return [method,...evidence].some(input=>typeof input==='string'&&sameWords(input,answer));
-}
-
-function withinTopicRange([start,end]:readonly [number,number],[from,to]:readonly [number,number]){
- return start>=from&&start<to&&end<=to;
 }
 
 function hasClosingNote(notes:readonly string[],required:string){
@@ -359,38 +367,17 @@ export function interruptedClosingPlanUnit(doc:ProjectDoc,source:BaselineSource)
  if(!closingPlayback(windows,source.source,topics.closingEvidenceRange))return unitId;
 }
 
-function frozenTopicReview(source:BaselineSource){
+function declaredClosingIssues(source:BaselineSource){
  const topics=source.frozenTopics;
- if(!topics)return;
- const mainPointIds=new Set<string>();
- const coveredWindows=new Set<number>();
- const issues=new Set<string>();
- for(const unit of source.units){
-  for(const point of unit.points){
-   const treatment=unit.coverage.find(entry=>entry.point_id===point.point_id)?.treatment;
-   if(!treatment||treatment==='omit')continue;
-   const selected=source.evidence.filter(entry=>point.teaching_basis?.evidence_ids.includes(entry.id));
-   const visible=selected.filter(entry=>entry.kind==='visible_action');
-   if(selected.some(({range:[start,end]})=>topics.backgroundRanges.some(range=>
-    withinTopicRange([start,end],range)||start<range[1]&&range[0]<end)))
-    issues.add(`${point.point_id} 该来源仅限任务声明的背景用途`);
-   if(point.role!=='primary'||(treatment!=='explain'&&treatment!=='visual_only'))continue;
-   topics.mainRanges.forEach((range,index)=>{
-    if(visible.some(entry=>withinTopicRange(entry.range,range))){
-     coveredWindows.add(index);
-     mainPointIds.add(point.point_id);
-    }
-   });
-  }
- }
- if(coveredWindows.size!==topics.mainRanges.length)issues.add('主线须覆盖任务声明的全部主要证据窗口');
+ if(!topics)return [];
  if(source.sourceClosing.factOnly){
-  if(topics.closingFactConflict)issues.add('source_closing_status_changed 收尾分类与任务声明的弱促单事实不符');
- }else if(!topics.closingTailSegmentIds.length)issues.add('最后一个教学组的原片回放须覆盖已登记的收尾证据并到达片尾');
- else if(topics.misplacedClosingNote)issues.add('source_closing_note_binding_changed 收尾注记须绑定实际收尾段');
- else if(!topics.closingSegmentId)issues.add('收尾须登记：'+topics.closing);
- else if(topics.duplicateClosingNote)issues.add('source_closing_note_duplicate 收尾待核注记只保留在证据段 '+topics.closingSegmentId+'，保留原片播放和教学点');
- return {mainPointIds,issues:[...issues]};
+  return topics.closingFactConflict?['source_closing_status_changed 收尾分类与任务声明的弱促单事实不符']:[];
+ }
+ if(!topics.closingTailSegmentIds.length)return ['最后一个教学组的原片回放须覆盖已登记的收尾证据并到达片尾'];
+ if(topics.misplacedClosingNote)return ['source_closing_note_binding_changed 收尾注记须绑定实际收尾段'];
+ if(!topics.closingSegmentId)return ['收尾须登记：'+topics.closing];
+ if(topics.duplicateClosingNote)return ['source_closing_note_duplicate 收尾待核注记只保留在证据段 '+topics.closingSegmentId+'，保留原片播放和教学点'];
+ return [];
 }
 
 export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
@@ -410,7 +397,7 @@ export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
     evidence.range[0]===evidence.range[1]?from<=evidence.range[0]&&evidence.range[0]<to:evidence.range[0]<to&&from<evidence.range[1])
     ?[evidence]:[];
   });
-  if(!basis||selected.length!==basis.evidence_ids.length)
+  if(!basis||!selected.length||selected.length!==basis.evidence_ids.length)
    return [point.point_id+' 缺教学依据或本点原片证据'];
   if(sameWords(basis.selling_point,point.buying_concern))
    return [point.point_id+' 卖点与买家顾虑重复，分别写清商品提供什么和买家要解决的问题'];
@@ -421,7 +408,7 @@ export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
    return [point.point_id+' 缺纯画面承载理由'];
   return [];
  });
- return [...points,...(frozenTopicReview(source)?.issues??[])];
+ return [...points,...declaredClosingIssues(source)];
 }
 
 function teachingDirectionGroups(feedback:string|undefined){
@@ -479,16 +466,17 @@ function pointForIndependentReview(point:BaselineSource['units'][number]['points
 }
 
 function baselineReviewInput(source:BaselineSource){
- const {referenceBinding:_reference,evidenceBinding:_evidence,narrationTargets,...input}=source;
+ const {referenceBinding:_reference,evidenceBinding:_evidence,narrationTargets,frozenTopics:_advice,...input}=source;
  const material=narrationTargets?.length?{narrationTargets,...input}:input;
  return input.pointReview?{...material,units:input.units.map(unit=>({...unit,points:unit.points.map(pointForIndependentReview)}))}:material;
 }
 
-function readFrozenTopicChecks(value:unknown,reviewClosing:boolean):FrozenTopicChecks {
- if(!row(value)||(value.main_scope!=='pass'&&value.main_scope!=='fail'))throw Error('teaching_frozen_topic_verdict_invalid');
- if(!reviewClosing)return {main_scope:value.main_scope};
- if(value.closing_status!=='pass'&&value.closing_status!=='fail')throw Error('teaching_frozen_topic_verdict_invalid');
- return {main_scope:value.main_scope,closing_status:value.closing_status};
+function readFrozenTopicChecks(value:unknown,reviewClosing:boolean):FrozenTopicChecks|undefined {
+ const mainScope=row(value)&&(value.main_scope==='pass'||value.main_scope==='fail')?value.main_scope:undefined;
+ const historical:FrozenTopicChecks|undefined=mainScope?{main_scope:mainScope}:undefined;
+ if(!reviewClosing)return historical;
+ if(!row(value)||(value.closing_status!=='pass'&&value.closing_status!=='fail'))throw Error('teaching_frozen_topic_verdict_invalid');
+ return {...historical,closing_status:value.closing_status};
 }
 
 function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDecision {
@@ -505,20 +493,18 @@ function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDec
   &&unit.coverage.some(coverage=>coverage.point_id===main_point_id&&['explain','visual_only'].includes(coverage.treatment)));
  const main=mainUnit?.points.find(point=>point.point_id===main_point_id);
  if((main_point_id!==null||status==='ok')&&!main)throw invalid();
- const frozen=frozenTopicReview(source);
- if(status==='ok'&&frozen&&(frozen.issues.length||!main||!frozen.mainPointIds.has(main.point_id)))
-  throw Error('teaching_frozen_topic_scope_invalid');
+ if(status==='ok'&&declaredClosingIssues(source).length)
+  throw Error('teaching_source_closing_invalid');
  const evidence=source.evidence.find(entry=>entry.id===evidence_id);
  if(status!=='unresolved'||evidence_id!==null||source_quote!==null){
   if(!evidence||!exactExcerpt(source_quote,evidence.text))throw invalid();
   if(status==='ok'&&!main?.teaching_basis?.evidence_ids.includes(evidence.id))throw invalid();
  }
- const checks=frozen||source.sourceClosingRegistration?readFrozenTopicChecks(value.frozen_topic_checks,!source.sourceClosing.factOnly):undefined;
+ const checks=source.frozenTopics||source.sourceClosingRegistration?readFrozenTopicChecks(value.frozen_topic_checks,!source.sourceClosing.factOnly):undefined;
  const result:WholeFilmDecision={status,main_point_id:main?.point_id??null,focus,alternative,reason,evidence_id:evidence?.id??null,
   source_quote:typeof source_quote==='string'?source_quote:null,affected_unit_ids,...(checks?{frozen_topic_checks:checks}:{})};
  if(status!=='ok'||!checks)return result;
  const affected=new Set<string>();
- if(checks.main_scope==='fail'&&mainUnit)affected.add(mainUnit.unit_id);
  if(checks.closing_status==='fail'){
   const closingUnit=source.frozenTopics?.closingUnitId??source.units.at(-1)?.unit_id;
   if(closingUnit)affected.add(closingUnit);
@@ -529,7 +515,6 @@ function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDec
 export function wholeFilmIssue(whole:WholeFilmDecision|undefined){
  if(!whole||whole.status==='ok')return;
  const issues=[];
- if(whole.frozen_topic_checks?.main_scope==='fail')issues.push(mainScopeIssue);
  if(whole.frozen_topic_checks?.closing_status==='fail')issues.push(closingStatusIssue);
  return issues.length?issues.join('。'):whole.reason;
 }
@@ -558,9 +543,19 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
   const entry = matches[0];
   if (matches.length !== 1 || !['ok','fix','unresolved'].includes(entry.status) || ![entry.source_role,entry.takeaway,entry.reason].every(shortText)
    || !Array.isArray(entry.evidence_ids) || entry.evidence_ids.length > 8 || new Set(entry.evidence_ids).size !== entry.evidence_ids.length) throw invalid();
-  const ranges = unit.source_ranges;
-  const overlaps = (start:number,end:number) => ranges.some(([a,b]) => start === end ? a <= start && start < b : start < b && a < end);
-  if (!entry.evidence_ids.every((id:unknown) => source.evidence.some(evidence => evidence.id === id && overlaps(...evidence.range)))) throw invalid();
+  const overlaps = ([start,end]:readonly [number,number],[a,b]:readonly [number,number]) =>
+   start === end ? a <= start && start < b : start < b && a < end;
+  const replay=unit.segments.filter(segment=>unit.explanation_segments.includes(segment.id));
+  const covered=unit.points.filter(point=>unit.coverage.some(item=>item.point_id===point.point_id&&item.treatment!=='omit'));
+  const belongsToUnit=(id:unknown)=>{
+   const evidence=source.evidence.find(item=>item.id===id);
+   if(!evidence)return false;
+   if(unit.source_ranges.some(range=>overlaps(evidence.range,range)))return true;
+   return replay.some(segment=>overlaps(evidence.range,segment.range)
+    &&(segment.visible.includes(evidence.id)||segment.claims.includes(evidence.id))
+    &&covered.some(point=>point.segment_ids.includes(segment.id)&&point.teaching_basis?.evidence_ids.includes(evidence.id)));
+  };
+  if(!entry.evidence_ids.every(belongsToUnit))throw invalid();
   if (entry.status === 'ok' && (!entry.evidence_ids.length || !unit.points.some(point => point.role === 'primary'
    && unit.coverage.some(coverage => coverage.point_id === point.point_id && ['explain','visual_only'].includes(coverage.treatment))))) throw invalid();
   const {unit_id,status,source_role,takeaway,evidence_ids,reason} = entry;
@@ -599,6 +594,7 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
 
 type PriorTeachingMaterial=Omit<ReturnType<typeof currentTeachingMaterial>,'spoken'|'voice'>&{voice?:string};
 export type TeachingRebuild = {
+ meaning?:'choices-v1';
  rejected:Array<{unitId:string;pointIds:string[];definition:string;evidence:string;status:Decision['status'];reason:string}>;
  affected:Array<{unitId:string;pointIds:string[]}>;
  prior:Record<string,PriorTeachingMaterial>;
@@ -606,7 +602,18 @@ export type TeachingRebuild = {
  wholeFilm?:{definition:string;evidenceId:string|null;evidence:string;status:'fix'|'unresolved';reason:string;unitIds:string[]};
 };
 
-function teachingMeaning(unit:BaselineSource['units'][number]) {
+function teachingMeaning(unit:BaselineSource['units'][number],meaning:TeachingRebuild['meaning']) {
+ if(meaning==='choices-v1'){
+  const points=unit.points.map(({point_id,buying_concern,teaching_question,role,importance,supports_point_id,teaching_basis})=>({
+   point_id,buying_concern,teaching_question,role,importance,supports_point_id,
+   ...(teaching_basis?{basis:{
+    selling_point:normalized(teaching_basis.selling_point),method:normalized(teaching_basis.method),
+    connection:normalized(teaching_basis.connection),claim_limit:normalized(teaching_basis.claim_limit),
+    evidence_ids:[...teaching_basis.evidence_ids].sort(),
+   }}:{}),
+  }));
+  return digestValue({points,coverage:unit.coverage,decision:normalized(unit.teaching_selection?.decision)});
+ }
  const points=unit.points.map(input=>{
   const point=pointForIndependentReview(input);
   if(!point.teaching_basis)return point;
@@ -625,8 +632,8 @@ function evidenceDigest(source:BaselineSource,unit:BaselineSource['units'][numbe
  return digestValue({evidence:[...new Set(evidence)].sort(),transcripts:[...new Set(transcripts)].sort()});
 }
 
-function wholeTeachingMeaning(source:BaselineSource) {
- const selection=source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)]);
+function wholeTeachingMeaning(source:BaselineSource,meaning:TeachingRebuild['meaning']) {
+ const selection=source.units.map(unit=>[unit.unit_id,teachingMeaning(unit,meaning)]);
  const unselected=source.selection?.unselectedBuyerRoles;
  const topics=source.frozenTopics;
  if(!topics||source.sourceClosing.factOnly)return digestValue(unselected?{selection,unselected}:selection);
@@ -646,33 +653,35 @@ function wholeTeachingEvidence(source:BaselineSource) {
 
 export function unchangedWholeFilmTeaching(source:BaselineSource,rebuild:TeachingRebuild) {
  const finding=rebuild.wholeFilm;
- return !!finding&&finding.definition===wholeTeachingMeaning(source)
+ return !!finding&&finding.definition===wholeTeachingMeaning(source,rebuild.meaning)
   &&(finding.status==='fix'||finding.evidence===wholeTeachingEvidence(source));
 }
 
 export function teachingRebuild(source: BaselineSource, doc: ProjectDoc, review: BaselineReview, previous?:TeachingRebuild):TeachingRebuild {
+ const meaning=previous?previous.meaning:'choices-v1';
  const rejected=review.units.filter(decision => decision.status !== 'ok').map(decision => {
   const unit=source.units.find(item=>item.unit_id===decision.unit_id)!;
-  return {unitId:unit.unit_id,pointIds:unit.points.map(point=>point.point_id),definition:teachingMeaning(unit),evidence:evidenceDigest(source,unit),status:decision.status,reason:decision.reason};
+  return {unitId:unit.unit_id,pointIds:unit.points.map(point=>point.point_id),definition:teachingMeaning(unit,meaning),evidence:evidenceDigest(source,unit),status:decision.status,reason:decision.reason};
  });
  const whole=review.whole_film;
  const wholeFilm:TeachingRebuild['wholeFilm']=whole&&whole.status!=='ok'?{
-  definition:wholeTeachingMeaning(source),evidenceId:whole.evidence_id,evidence:wholeTeachingEvidence(source),
+  definition:wholeTeachingMeaning(source,meaning),evidenceId:whole.evidence_id,evidence:wholeTeachingEvidence(source),
   status:whole.status,reason:wholeFilmIssue(whole)??whole.reason,unitIds:whole.affected_unit_ids,
  }:whole?undefined:previous?.wholeFilm;
  return {
+  ...(meaning?{meaning}:{}),
   prior:previous?.prior ?? Object.fromEntries(source.units.map(unit => {
    const {spoken:_spoken,...prior}=currentTeachingMaterial(doc,unit.unit_id);
    return [unit.unit_id,prior];
   })),
-  definitions:previous?.definitions ?? Object.fromEntries(source.units.map(unit=>[unit.unit_id,teachingMeaning(unit)])),
+  definitions:previous?.definitions ?? Object.fromEntries(source.units.map(unit=>[unit.unit_id,teachingMeaning(unit,meaning)])),
   rejected, affected:[...new Map([...(previous?.affected??[]),...rejected].map(unit=>[unit.unitId,{unitId:unit.unitId,pointIds:unit.pointIds}])).values()],
   ...(wholeFilm?{wholeFilm}:{}),
  };
 }
 
 export function newlyChangedTeaching(before:BaselineSource,after:BaselineSource,doc:ProjectDoc,previous?:TeachingRebuild) {
- const changed=before.units.filter(unit=>!after.units.some(next=>teachingMeaning(unit)===teachingMeaning(next)&&next.unit_id===unit.unit_id));
+ const changed=before.units.filter(unit=>!after.units.some(next=>teachingMeaning(unit,'choices-v1')===teachingMeaning(next,'choices-v1')&&next.unit_id===unit.unit_id));
  if(!changed.length)return previous;
  const findings:BaselineReview={feedback_scope:'none',units:changed.map(unit=>({unit_id:unit.unit_id,status:'unresolved',
   evidence_ids:[],reason:'Teaching definition changed.',source_role:'',takeaway:''}))};
@@ -687,7 +696,7 @@ function affectedTeachingUnit(unit:BaselineSource['units'][number],entry:Teachin
 export function unchangedRejectedTeaching(source:BaselineSource, rebuild:TeachingRebuild) {
  return rebuild.rejected.filter(rejected => {
   const units=source.units.filter(unit=>affectedTeachingUnit(unit,rejected));
-  return !units.length||units.some(unit=>teachingMeaning(unit)===rejected.definition
+  return !units.length||units.some(unit=>teachingMeaning(unit,rebuild.meaning)===rejected.definition
    &&(rejected.status==='fix'||evidenceDigest(source,unit)===rejected.evidence));
  });
 }
@@ -699,7 +708,7 @@ export function staleRebuiltTeaching(source:BaselineSource, doc:ProjectDoc, rebu
  const containsCopy=(spoken:string,prior:string)=>prior ? (' '+spoken+' ').includes(' '+prior+' ') : !spoken;
  return source.units.filter(unit => {
   const affected=rebuild.affected.filter(entry=>affectedTeachingUnit(unit,entry));
-  if(!affected.length&&rebuild.definitions[unit.unit_id]===teachingMeaning(unit))return false;
+  if(!affected.length&&rebuild.definitions[unit.unit_id]===teachingMeaning(unit,rebuild.meaning))return false;
   const now=current.get(unit.unit_id)!;
   if (!now.hasCopy) return true;
   const targets=new Set(affected.flatMap(entry=>entry.pointIds));
@@ -739,8 +748,9 @@ function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireN
   :'只读核验教学选题，不审稿。';
 
  return reviewInstructions(opening,feedbackInstructions,feedbackOutput)+(source.pointReview?wholeFilmInstructions+(source.sourceClosing.factOnly?'':'收尾处置与 sourceClosing 不一致判 fix，证据决定结论且无法核清则判 unresolved。')+pointInstructions:'')
- +(source.sourceClosing.factOnly?' 任务声明已记录原片弱促单事实。whole_film.frozen_topic_checks 只填 {main_scope:"pass"|"fail"}。如实登记已完成，缺少重复注记、回放或讲解时仍按教学内容作答。核对实际稿件和证据；主线越界，或把弱促单改判、升格为教学或补写推荐时，main_scope 判 fail，并指出当前内容和依据。'
- :source.frozenTopics?' frozenTopics 是本片已确认的选题范围。无论总评如何，whole_film 须填 frozen_topic_checks:{main_scope:"pass"|"fail",closing_status:"pass"|"fail"}。main_scope 核对实际提交的标题、问题、讲解任务和证据。超出 frozenTopics.main 或将 frozenTopics.background 当成教学依据时判 fail。closing_status 按 sourceClosing 核对已核定的档位、处置及注记位置。处置或注记不符时判 fail。总评在 reason 中说明具体问题。'
+ +(source.frozenTopics?' 核对实际讲解对象、引用和原片能支持的结论。仅因换窗、增加原先未选的镜头或发现另一处可以讲，不得退回。新增方向留在 alternative；只有现行方案的证据错误或真正漏讲才返回 fix，并指明实际内容和依据。':'')
+ +(source.sourceClosing.factOnly?' 任务声明已记录原片弱促单事实。缺少重复注记、回放或讲解无需退回。若实际选题把弱促单升格或补写确定推荐，按内容判 fix，引用出错内容和原片依据。'
+ :source.frozenTopics?' whole_film.frozen_topic_checks 填 {closing_status:"pass"|"fail"}。按 sourceClosing 核对实际收尾、证据和处置。总评在 reason 中说明具体问题。'
  :source.sourceClosingRegistration?' whole_film 必须含 frozen_topic_checks:{main_scope:"pass",closing_status:"pass"|"fail"}。main_scope 由原有整片评审负责。closing_status 复核 sourceClosing 的档位、原片依据和实际处置。':'')
  +(source.selection?' 先从全片证据独立判断哪里支持想试、比较或跟着操作，再核对教学选点。盘点和选组文字是待核陈述。selection.gaps、角色和备选都是审阅提示，依据是实际选点、原片和稿件。仅有一层、缺备选或资料填写不全时，沿用现行判据。若确实漏掉会改变买家判断的内容，或两组实质重复，引用原片并说明损失。合组核对真实先后，每句引用本句供给的一个或多个实际窗口。把推断的动机、观众反应或功效当事实时，基线写进 point_checks 的 fix，口播写进 narration_checks 的 fix 并引用该句。编辑实看时点是回看线索。仅在当前结论依赖无法核实的证据时判 unresolved。selection.timingRisks 是逐句估计。若缺处置，引用相关句并指出待实测的声画风险。估算、单纯短窗或处置字段缺失不决定通过状态。':'')
  +(source.narrationTargets?.length?' 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?,quote?}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并逐字引用能让他领会该决定的某句。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id 和逐字 quote。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。'
@@ -751,7 +761,7 @@ export function teachingBaselineDigest(source:BaselineSource,legacyReceipt=false
  return digestValue({source,instructions:baselineInstructions(source,legacyReceipt,requireNarrationCriterion)});
 }
 
-export async function checkTeachingBaseline(task:ProductionTask,stage:StageContext,source:BaselineSource,requirementsDigest?:string) {
+export async function checkTeachingBaseline(task:ProductionTask,stage:StageContext,source:BaselineSource,requirementsDigest?:string,qualifiedSelection?:string) {
  const narrationSubject=source.narrationTargets?narrationReviewSubject(task,source.narrationTargets,source.evidenceBinding,requirementsDigest,source,source.selection?.timingRisks):undefined;
  const reviewDigest=(baselineDigest:string)=>narrationSubject?digestValue({baselineDigest,narrationSubject}):baselineDigest;
  const currentDigest=reviewDigest(teachingBaselineDigest(source));
@@ -766,7 +776,25 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
  const versions=[current,...legacy];
  const {digest,requireCriterion,effects}=versions.find(version=>version.effects.some(([,effect])=>effect.status==='completed'))
   ??versions.find(version=>version.effects.length)??current;
- const bind=(runId:string,review:BaselineReview)=>({digest,runId,review,...(narrationSubject?{narrationSubject}:{})});
+ const qualification=task.stage==='blueprint'&&qualifiedSelection&&!narrationSubject?digestValue({
+  selection:qualifiedSelection,requirementsDigest,requirements:source.requirements,reference:source.referenceBinding,
+  task:source.task,objective:source.objective,purpose:source.purpose,feedback:source.feedback,closing:source.sourceClosing,
+ }):undefined;
+ if(qualification&&!effects.length){
+  const prior=priorReviews.findLast(([key,effect])=>key.startsWith('blueprint:')&&effect.status==='completed'
+    &&row(effect.result)&&effect.result.qualification===qualification&&effect.result.runId===effect.operationId
+    &&typeof effect.result.digest==='string'&&key.endsWith(':teaching-baseline:'+effect.result.digest))?.[1].result;
+  if(row(prior)&&typeof prior.digest==='string'){
+   const review=validateTeachingBaselineReview(prior.review,source);
+   if(!wholeFilmIssue(review.whole_film)&&review.units.every(unit=>unit.status==='ok'))return {digest:prior.digest,review};
+  }
+ }
+ // A saved review of the same stage and repair epoch may have used the
+ // retired window gate. Keep its receipt and require a new editorial subject.
+ const epoch=`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:teaching-baseline:`;
+ if(source.frozenTopics&&!effects.length&&priorReviews.some(([id])=>id.startsWith(epoch)))
+  throw Error('teaching_selection_review_contract_changed');
+ const bind=(runId:string,review:BaselineReview)=>({digest,runId,review,...(qualification?{qualification}:{}),...(narrationSubject?{narrationSubject}:{})});
  const key = 'teaching-baseline:'+digest;
  const saved = effects.find(([,effect])=>effect.status==='completed')?.[1];
  const read = (value:unknown,operationId:string) => {

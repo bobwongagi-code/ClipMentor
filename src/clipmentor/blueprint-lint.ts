@@ -344,7 +344,7 @@ export function lintBlueprint(input: unknown, options: { markdown?: MarkdownChec
       });
     }
     for (const issue of checkSourceBreakdown(data.root as unknown as ProjectDoc).issues) {
-      if (issue.code === 'original_segment_outside_playback' || issue.code === 'picture_plan_revisits_mismatch') {
+      if (['original_segment_outside_playback','picture_plan_revisits_mismatch','picture_plan_replay_outside_evidence'].includes(issue.code)) {
         add('PLAN_STRUCTURE', 'warn', locations.get(issue.id) ?? '$.clipMentorAnalysis.source_breakdown', '', issue.code);
       }
     }

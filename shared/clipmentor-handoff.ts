@@ -19,11 +19,19 @@ export interface OpeningComparisonCriterion {
 export type SourceWindow=[number,number];
 export type SourceAssetBinding={assetId:string;sha256:string};
 export type SourceClosingStatus='confirmed'|'weak_candidate'|'none';
-export interface SourceTeachingCriterion {
- kind:'source_teaching';source:SourceAssetBinding;quote:string;main:string;background:string;
- mainRanges:SourceWindow[];backgroundRanges:SourceWindow[];
+export interface SourceTeachingGuidance {
+ category:'teaching_decision'|'fact_boundary'|'material_suggestion'|'temporarily_unused';
+ text:string;source:{who:string;reference:string};rationale:string;reconsiderWhen:string;
+}
+interface SourceTeachingDeclaration {
+ kind:'source_teaching';source:SourceAssetBinding;quote:string;
  closing:{status:SourceClosingStatus;note:string;evidenceRange:SourceWindow};
 }
+export type SourceTeachingCriterion=SourceTeachingDeclaration&(
+ {guidance:SourceTeachingGuidance[]}
+ // Historical fields are accepted for readback and projected as advice.
+ |{main:string;background:string;mainRanges:SourceWindow[];backgroundRanges:SourceWindow[]}
+);
 export interface SourcePerformanceCriterion extends Omit<OpeningComparisonCriterion,'kind'|'results'> {
  kind:'source_performance';results:NonNullable<OpeningComparisonCriterion['results']>;
  source:SourceAssetBinding;evidence:SourceAssetBinding;
@@ -72,10 +80,19 @@ const sourceAssetBinding=(v:unknown):v is SourceAssetBinding=>handoffRecord(v)&&
 const sourceWindow=(v:unknown):v is SourceWindow=>Array.isArray(v)&&v.length===2
  &&v.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0)&&v[0]<v[1];
 const sourceWindows=(v:unknown):v is SourceWindow[]=>Array.isArray(v)&&v.length<=12&&v.every(sourceWindow);
+const sourceTeachingGuidance=(v:unknown):v is SourceTeachingGuidance=>handoffRecord(v)
+ &&keys(v,['category','text','source','rationale','reconsiderWhen'])
+ &&typeof v.category==='string'&&['teaching_decision','fact_boundary','material_suggestion','temporarily_unused'].includes(v.category)
+ &&handoffRecord(v.source)&&keys(v.source,['who','reference'])
+ &&boundedText(v.source.who,160)&&boundedText(v.source.reference,1000)
+ &&[v.text,v.rationale,v.reconsiderWhen].every(x=>boundedText(x,1000));
 const sourceTeachingShape=(v:unknown):v is SourceTeachingCriterion=>handoffRecord(v)
- &&keys(v,['kind','source','quote','main','background','mainRanges','backgroundRanges','closing'])&&v.kind==='source_teaching'
- &&sourceAssetBinding(v.source)&&[v.quote,v.main,v.background].every(x=>boundedText(x,1000))
- &&sourceWindows(v.mainRanges)&&v.mainRanges.length>0&&sourceWindows(v.backgroundRanges)
+ &&v.kind==='source_teaching'&&sourceAssetBinding(v.source)&&boundedText(v.quote,1000)
+ &&(keys(v,['kind','source','quote','guidance','closing'])
+  ?Array.isArray(v.guidance)&&v.guidance.length<=12&&v.guidance.every(sourceTeachingGuidance)
+  :keys(v,['kind','source','quote','main','background','mainRanges','backgroundRanges','closing'])
+   &&[v.main,v.background].every(x=>boundedText(x,1000))
+   &&sourceWindows(v.mainRanges)&&v.mainRanges.length>0&&sourceWindows(v.backgroundRanges))
  &&handoffRecord(v.closing)&&keys(v.closing,['status','note','evidenceRange'])
  &&typeof v.closing.status==='string'&&['confirmed','weak_candidate','none'].includes(v.closing.status)
  &&boundedText(v.closing.note,300)&&sourceWindow(v.closing.evidenceRange);

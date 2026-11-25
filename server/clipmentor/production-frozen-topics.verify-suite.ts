@@ -38,7 +38,24 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  assert.throws(()=>frozenTeachingTopics(draft,scopeTask),/source_teaching_binding_changed/);
  assert.throws(()=>frozenTeachingTopics(frozenDoc,{...scopeTask,input:{...scopeTask.input,sourceAssetId:'unrelated'}}),/source_teaching_binding_changed/);
  const authorScope=await productionAuthorTaskData({...scopeTask,stage:'analysis'},frozenDoc);
- assert.deepEqual(authorScope.frozenTopics,topics);
+ assert.deepEqual(authorScope.selectionAdvice,{recordedRequest:quote,previousPlan:declaration.main,
+  previousBackground:declaration.background,suggestedWindows:declaration.mainRanges,previouslyUnusedWindows:declaration.backgroundRanges});
+ assert(!Object.hasOwn(authorScope,'frozenTopics'));
+ const advice={category:'teaching_decision',text:'旁白讲动作为什么值得留下。',source:{who:'记录方',reference:'选题讨论'},
+  rationale:'达人用原速示范接触面。',reconsiderWhen:'原片或选题发生变化。'};
+ const proposal={kind:'source_teaching',source,quote,closing:declaration.closing,guidance:[advice]};
+ assert.deepEqual((await productionAuthorTaskData({...scopeTask,stage:'analysis',
+  input:{...scopeTask.input,doneCriteria:parseProductionSourceCriteria([proposal])}},frozenDoc)).selectionAdvice,
+  {recordedRequest:quote,advice:[advice]});
+ for(const field of ['category','source','rationale','reconsiderWhen'] as const){
+  const incomplete:Partial<typeof advice>={...advice};delete incomplete[field];
+  assert.throws(()=>parseProductionSourceCriteria([{...proposal,guidance:[incomplete]}]),/source_criteria_invalid/,field);
+ }
+ for(const extra of [{requiredWindows:[[1,2]]},{backgroundRanges:[[1,2]]},{mustCoverAllWindows:true}]){
+  assert.throws(()=>parseProductionSourceCriteria([{...proposal,...extra}]),/source_criteria_invalid/);
+ }
+ assert.throws(()=>parseProductionSourceCriteria([{...proposal,guidance:[{...advice,
+  enforcement:'hard',confirmedBy:'editor'}]}]),/source_criteria_invalid/);
  assert.deepEqual(authorScope.sourceClosing,teachingBaselineSource(frozenDoc,scopeTask,[]).sourceClosing);
  assert.deepEqual(Object.keys(authorScope.sourceClosing!.rules),['confirmed','weak_candidate','none']);
  assert.equal(authorScope.sourceClosing?.decision,'weak_candidate');
@@ -61,7 +78,7 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  const boundTask={...scopeTask,input:{...scopeTask.input,doneCriteria:[declaration,performance],
   panelDelivery:{...strictTask.input.panelDelivery!,salesAssetId:saleId,salesAssetHash:salesHash,
    salesEvidenceId:sale.evidence_id,salesEvidenceSha256:createHash('sha256').update(sale.text).digest('hex')}}};
- assert((await productionAuthorTaskData({...boundTask,stage:'analysis'},boundDoc)).doneCriteria?.includes(quote));
+ assert(!(await productionAuthorTaskData({...boundTask,stage:'analysis'},boundDoc)).doneCriteria?.includes(quote));
  assert.deepEqual(productionOpeningComparison(boundTask,null,boundDoc)?.results,performance.results);
  const generic=panelSalesEvidence(sourceId,saleId);
  const oldDoc=structuredClone(boundDoc);
@@ -77,7 +94,10 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  const child:ProductionTask={...boundTask,blueprintApproval:{sourceProjectId:boundTask.projectId,sourceTaskId:boundTask.taskId,
   sourceRevision:'fixture',digest:'fixture',requirementsDigest:'fixture',confirmedAt:1,
   teachingBrief:{instruction:'Frozen',doneCriteria:['保留明确交付要求']}}};
- assert.deepEqual(productionTeachingBrief(child,null,boundDoc)?.doneCriteria,[quote,'保留明确交付要求']);
+ assert.deepEqual(productionTeachingBrief(child,null,boundDoc)?.doneCriteria,[quote,'保留明确交付要求'],
+  'an already approved legacy output retains the brief digest used by its receipt');
+ child.blueprintApproval!.teachingBrief!.sourceAdviceSeparated=true;
+ assert.deepEqual(productionTeachingBrief(child,null,boundDoc)?.doneCriteria,['保留明确交付要求']);
  tampered.clipMentorAnalysis!.evidence=boundDoc.clipMentorAnalysis!.evidence;
  tampered.assets.find(a=>a.id===saleId)!.sourceContentHash='c'.repeat(64);
  assert.throws(()=>productionOpeningComparison(boundTask,null,tampered),/source_performance_binding_changed/);
@@ -99,16 +119,28 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
   whole_film:{...positiveReceipt.whole_film,frozen_topic_checks:{main_scope:'pass',closing_status:'pass'}}};
  const weakSource={...scopedSource,sourceClosing:authorScope.sourceClosing!};
  const weakReview={...scopedReceipt,whole_film:{...scopedReceipt.whole_film,frozen_topic_checks:{main_scope:'pass'}}};
+ // A longer observation crosses a historical background boundary. The same
+ // qualified teaching point can cite it without changing its decision.
+ const originalPaletteRange=palette.range;
+ const originalUnitRanges=mainUnit.source_ranges;
+ palette.range=[43.5,43.7];
+ mainUnit.source_ranges=[palette.range,nose.range];
+ assert.equal(validateTeachingBaselineReview(weakReview,weakSource).whole_film?.status,'ok');
+ const withoutOldScopeCheck=structuredClone(weakReview);
+ Reflect.deleteProperty(withoutOldScopeCheck.whole_film,'frozen_topic_checks');
+ assert.equal(validateTeachingBaselineReview(withoutOldScopeCheck,weakSource).whole_film?.status,'ok');
+ palette.range=originalPaletteRange;
+ mainUnit.source_ranges=originalUnitRanges;
  assert.equal(validateTeachingBaselineReview(weakReview,weakSource).whole_film?.status,'ok');
  const staleClosingCheck={...weakReview,whole_film:{...weakReview.whole_film,frozen_topic_checks:{main_scope:'pass',closing_status:'fail'}}};
  assert.equal(wholeFilmIssue(validateTeachingBaselineReview(staleClosingCheck,weakSource).whole_film),undefined);
  const scopeFailure={...weakReview,whole_film:{...weakReview.whole_film,frozen_topic_checks:{main_scope:'fail'}}};
- assert.equal(validateTeachingBaselineReview(scopeFailure,weakSource).whole_film?.status,'fix');
+ assert.equal(validateTeachingBaselineReview(scopeFailure,weakSource).whole_film?.status,'ok');
  const actualRejection={...weakReview,whole_film:{...weakReview.whole_film,status:'fix',affected_unit_ids:[mainUnit.unit_id],
   reason:'实际讲解把原片弱建议写成确定推荐。'}};
  assert.equal(wholeFilmIssue(validateTeachingBaselineReview(actualRejection,weakSource).whole_film),'实际讲解把原片弱建议写成确定推荐。');
  assert.equal(validateTeachingBaselineReview(scopedReceipt,scopedSource).whole_film?.status,'ok');
- for(const field of ['main_scope','closing_status'] as const){
+ for(const field of ['closing_status'] as const){
   const bad=structuredClone(scopedReceipt);
   bad.whole_film.focus='主线超出盘内色差和鼻侧上脸参照的确认范围';
   bad.whole_film.frozen_topic_checks[field]='fail';
@@ -124,47 +156,64 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
   assert.deepEqual(reused.review,result);
  }
  assert.throws(()=>validateTeachingBaselineReview({...scopedReceipt,whole_film:positiveReceipt.whole_film},scopedSource),/teaching_frozen_topic_verdict_invalid/);
- for(const evidenceIds of [[palette.id],[palette.id,nose.id,background.id]]){
-  mainPoint.teaching_basis!.evidence_ids=evidenceIds;
-  assert.throws(()=>validateTeachingBaselineReview(scopedReceipt,scopedSource),/teaching_frozen_topic_scope_invalid/);
-  const gaps=teachingPointGaps(scopedSource,frozenDoc);
-  if(evidenceIds.length===1)assert(gaps.includes('主线须覆盖任务声明的全部主要证据窗口'));
-  else assert(gaps.some(gap=>gap.includes('背景用途')));
- }
- mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id,supplementary.id];
+ // Registered evidence for a point can come from a different window. The
+ // rest of its clips and historical choices need not be cited.
+ mainPoint.teaching_basis!.evidence_ids=[palette.id,supplementary.id];
  assert.equal(validateTeachingBaselineReview(scopedReceipt,scopedSource).whole_film?.status,'ok');
- mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id];
- // Two primary judgments carry different evidence from the same declared topic.
- const secondUnit=structuredClone(strictPositive.units[1]);
- secondUnit.source_ranges=[nose.range];
- const [secondPoint]=secondUnit.points;
- secondPoint.teaching_basis!.evidence_ids=[nose.id,supplementary.id];
- mainPoint.teaching_basis!.evidence_ids=[palette.id];
- scopedSource.units.push(secondUnit);
- const splitReceipt={...scopedReceipt,units:[...scopedReceipt.units,positiveReceipt.units[1]]};
- const missingWindow='主线须覆盖任务声明的全部主要证据窗口';
- assert(!teachingPointGaps(scopedSource,frozenDoc).includes(missingWindow));
- assert.equal(validateTeachingBaselineReview(splitReceipt,scopedSource).whole_film?.status,'ok');
- secondPoint.role='supporting';
- assert(teachingPointGaps(scopedSource,frozenDoc).includes(missingWindow));
- assert.throws(()=>validateTeachingBaselineReview(splitReceipt,scopedSource),/teaching_frozen_topic_scope_invalid/);
- secondPoint.role='primary';
- secondUnit.coverage[0].treatment='omit';
- assert(teachingPointGaps(scopedSource,frozenDoc).includes(missingWindow));
+ assert(!teachingPointGaps(scopedSource,frozenDoc).some(gap=>gap.includes('全部主要证据窗口')));
+ // Adding a new teaching group cannot turn a historical background window
+ // into a prohibition. Reuse an actual point and ground its finding separately.
+ const addedUnit=structuredClone(strictPositive.units[1]);
+ addedUnit.source_ranges=[background.range];
+ const [addedPoint]=addedUnit.points;
+ const originalBackgroundRange=background.range;
+ background.range=[43.6,45.2];
+ addedUnit.source_ranges=[background.range];
+ addedPoint.teaching_basis!.evidence_ids=[background.id];
+ scopedSource.units.push(addedUnit);
+ const [addedDecision]=structuredClone(positiveReceipt.units.slice(1,2));
+ addedDecision.evidence_ids=[background.id];
+ addedDecision.point_checks![0].source_evidence_id=background.id;
+ addedDecision.point_checks![0].source_quote=background.text;
+ const withNewGroup={...scopedReceipt,units:[...scopedReceipt.units,addedDecision]};
+ assert.equal(validateTeachingBaselineReview(withNewGroup,scopedSource).whole_film?.status,'ok');
+ // A group can teach from a registered replay that is outside its own original playback.
+ addedUnit.source_ranges=[[12,22]];
+ const replayId='declared-replay';
+ addedUnit.segments.push({id:replayId,range:background.range,visible:[background.id],claims:[],unknowns:[]});
+ addedPoint.segment_ids=[replayId];
+ addedUnit.explanation_segments=[replayId];
+ assert.equal(validateTeachingBaselineReview(withNewGroup,scopedSource).whole_film?.status,'ok');
+ addedUnit.explanation_segments=[];
+ assert.throws(()=>validateTeachingBaselineReview(withNewGroup,scopedSource),/teaching_baseline_review_invalid/);
+ addedUnit.explanation_segments=[replayId];
+ addedPoint.teaching_basis!.evidence_ids=[];
+ assert.throws(()=>validateTeachingBaselineReview(withNewGroup,scopedSource),/teaching_baseline_review_invalid/);
  scopedSource.units.pop();
+ background.range=originalBackgroundRange;
  mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id];
- const backgroundGroup=structuredClone(strictPositive.units[2]);
- backgroundGroup.source_ranges=[[47,60]];
- background.range=[47,60];
- scopedSource.units.push(backgroundGroup);
- const twoGroups={...scopedReceipt,units:[...scopedReceipt.units,positiveReceipt.units[2]]};
- for(const kind of ['visible_action','original_claim']){
-  background.kind=kind;
-  assert.throws(()=>validateTeachingBaselineReview(twoGroups,scopedSource),/teaching_frozen_topic_scope_invalid/,kind);
- }
- scopedSource.units.pop();
+ const replacedBy=structuredClone(palette);
+ replacedBy.id='replacement-palette-view';replacedBy.range=[10.2,11];
+ scopedSource.evidence.push(replacedBy);
+ mainUnit.source_ranges=[replacedBy.range,nose.range];
+ mainPoint.teaching_basis!.evidence_ids=[replacedBy.id];
+ const switched=structuredClone(scopedReceipt);
+ switched.units[0].evidence_ids=[replacedBy.id];
+ switched.units[0].point_checks![0].source_evidence_id=replacedBy.id;
+ switched.whole_film.evidence_id=replacedBy.id;
+ assert.equal(validateTeachingBaselineReview(switched,scopedSource).whole_film?.status,'ok');
+ // An unregistered citation still fails even when the enclosing verdict is OK.
+ switched.units[0].point_checks![0].source_evidence_id=palette.id;
+ assert.throws(()=>validateTeachingBaselineReview(switched,scopedSource),/teaching_baseline_point_source_quote_invalid/);
+ mainUnit.source_ranges=originalUnitRanges;
+ mainPoint.teaching_basis!.evidence_ids=[palette.id,nose.id];
+ const oldScopeEffect='blueprint:initial:0:teaching-baseline:'+('f'.repeat(64));
+ await assert.rejects(checkTeachingBaseline({...strictTask,stage:'blueprint',repairs:0,feedbackUsed:false,effects:{
+  [oldScopeEffect]:{kind:'model',operationId:'previous-review',status:'completed'},
+ }},{signal:new AbortController().signal,async effect(){throw Error('Must not redispatch a prior review');}},weakSource),
+ /teaching_selection_review_contract_changed/);
  scopedSource.frozenTopics.closingSegmentId=null;
- assert.throws(()=>validateTeachingBaselineReview(scopedReceipt,scopedSource),/teaching_frozen_topic_scope_invalid/);
+ assert.throws(()=>validateTeachingBaselineReview(scopedReceipt,scopedSource),/teaching_source_closing_invalid/);
  assert.equal(validateTeachingBaselineReview(weakReview,weakSource).whole_film?.status,'ok');
  const confirmedNote='原片结尾提出已确认的购买行动';
  const confirmedTask={...scopeTask,input:{...scopeTask.input,doneCriteria:[{...declaration,closing:{...declaration.closing,status:'confirmed',note:confirmedNote}}]}};
@@ -307,5 +356,5 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  ]);
  assert(await firstSuspectedGateDefect(sourceHash,gateIssue));
  assert.equal(await firstSuspectedGateDefect('f'.repeat(64),gateIssue),undefined);
- console.log('PASS frozen topic scope rejects false overall approval, reuses saved decisions and binds the original ending to board order');
+ console.log('PASS source advice is scoped to guidance; replacement evidence passes, invalid facts and broken closing bindings still fail');
 }

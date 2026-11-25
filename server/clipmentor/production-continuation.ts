@@ -91,7 +91,7 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
   ...(selectedRequirements?{requirements:selectedRequirements}:{}),
   ...(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{confirmedTeachingDigest:confirmedTeachingDigest(doc)}:{}),
   ...(parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
-   objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback,
+   objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback,sourceAdviceSeparated:true as const,
    ...(teachingCriteria.length?{doneCriteria:teachingCriteria}:{})}}:{})};
  const task=await createProductionTask({...parent.input,projectId,
   author:{...parent.input.author,origin},reviewer:{...parent.input.reviewer,origin},

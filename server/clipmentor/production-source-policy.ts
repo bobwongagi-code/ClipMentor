@@ -31,11 +31,20 @@ export function frozenTeachingTopics(doc:ProjectDoc,task:{input:Pick<ProductionT
  const timeline=doc.timelines.find(t=>t.id===doc.activeTimelineId);
  const duration=doc.clipMentorAnalysis?.source.duration_seconds??(source?.durationInFrames&&timeline?.fps
   ?source.durationInFrames/timeline.fps:undefined);
- if(duration!==undefined&&[...declaration.mainRanges,...declaration.backgroundRanges,declaration.closing.evidenceRange].some(range=>range[1]>duration))
+ if(duration!==undefined&&declaration.closing.evidenceRange[1]>duration)
   throw Error('source_teaching_window_outside_original');
- return {quote:declaration.quote,main:declaration.main,background:declaration.background,
-  mainRanges:declaration.mainRanges,backgroundRanges:declaration.backgroundRanges,
+ return {quote:declaration.quote,
+  ...('guidance' in declaration?{guidance:declaration.guidance}:{
+   main:declaration.main,background:declaration.background,mainRanges:declaration.mainRanges,backgroundRanges:declaration.backgroundRanges}),
   closingStatus:declaration.closing.status,closing:declaration.closing.note,closingEvidenceRange:declaration.closing.evidenceRange};
+}
+
+/** Intake registration cannot grant approval. The editor's blueprint approval binds the actual selected teaching. */
+export function sourceTeachingAdvice(topics:NonNullable<ReturnType<typeof frozenTeachingTopics>>){
+ return 'guidance' in topics?{recordedRequest:topics.quote,advice:topics.guidance}:{
+  recordedRequest:topics.quote,previousPlan:topics.main,previousBackground:topics.background,
+  suggestedWindows:topics.mainRanges,previouslyUnusedWindows:topics.backgroundRanges,
+ };
 }
 
 export function sourceClosingDecision(topics:ReturnType<typeof frozenTeachingTopics>,doc?:ProjectDoc):SourceClosingStatus|null{
