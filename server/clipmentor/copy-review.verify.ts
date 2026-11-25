@@ -43,6 +43,7 @@ import { saveStoredServerRun, readStoredServerRun } from '../../src/agent/server
 import { runtimeEvent } from '../agent-runs/store-values';
 import { saveServerRunDraftBase, saveServerRunDraftTool, loadServerRunDraft } from '../../src/agent/serverRunDraftStore';
 import { migrateProjectDoc } from '../../src/persist/projectStore';
+import {selectedCopyReviewReferences} from './copy-review-reference-selection';
 
 const oracle = regression.regression_oracles.find((o) => o.label === 'qualified_scent_excerpt_from_revision95')!;
 const positive = regression.blind_input.cases.find((c) => c.case_id === oracle.case_id)!.packet.units[0];
@@ -171,6 +172,19 @@ try {
   }};
   const rawTeaching=await reviewClipMentorCopy(teachingRequest,teachingDeps);
   assert.equal(rawTeaching.receipt.verdict,'pass');
+  const withSelections=teachingAnswer();
+  const selectedReceipt={...withSelections,reference_protocol:'selection-v1',
+    cases:withSelections.cases.map(entry=>({...entry,units:entry.units.map(unit=>({...unit,
+      points:unit.points.map(point=>({...point,quotes:point.quotes.map(({text,...pick})=>pick)})),
+    }))})),
+    copy_units:withSelections.copy_units.map(unit=>({...unit,group_checks:{...unit.group_checks,L1:{...unit.group_checks.L1,
+      evidence:[{kind:'copy',line_id:line.line_id,channel:'narration'}]}}}))};
+  const selectedReceiptRequest={...teachingRequest,operationId:randomUUID()};
+  const hydrated=await reviewClipMentorCopy(selectedReceiptRequest,{...teachingDeps,run:async()=>selectedReceipt});
+  assert.equal(hydrated.receipt.verdict,'pass');
+  const wrongUnit=structuredClone(selectedReceipt);
+  wrongUnit.copy_units[0].group_checks.L1.evidence[0].line_id='different-unit-line';
+  assert.throws(()=>selectedCopyReviewReferences(wrongUnit,teachingRequest.packet),/current_unit_narration/);
   assert.equal((await reviewClipMentorCopy(teachingRequest,teachingDeps)).receipt.verdict,rawTeaching.receipt.verdict);
   assert.equal(teachingRequests,1,'reopening the original review does not ask an independent reviewer again');
   {

@@ -910,3 +910,21 @@ On four saved candidates the zero-provider sweep checked teaching coverage, sour
 When another draft stops before review, read its full mechanical findings together. Compare the actual saved phases and evidence to the projections before asking the author to rewrite. A real missing teaching point, invented action or unrelated reference still needs content correction.
 
 The real-handler browser replay also exposed a timing gap after a praise-only opinion. The acknowledgement cleared the group fields and unlocked them before the follow-up read released the current action. The parent could discard the next edit. Keep the input locked through that read. A fixture that holds the readback fails on the previous main and passes with this change.
+
+### 2026-11-25 · Fresh JUDYDOLL intake stopped at the author-check receipt
+
+After PR #56 reached main, one start in the Codex browser uploaded the four original inputs and proceeded through playback preparation to copy review in an isolated project. The saved draft `v3-4d0d14d7` contains the merged opening and palette comparison and a separate usage group. At the final checkpoint the page showed that production was paused and that upload progress was saved. There was no formal human review board. No speech, export, or second start followed.
+
+Both complete author self-check replies were preserved under the same source digest. The first S5 row gave fix and cited “僅看”; the single format retry gave ok and cited “Dentro”. Neither excerpt is in the current saved material, and both receipts failed the same reference check. These invalid replies establish a receipt-binding failure and do not settle the S5 content judgment. Both also returned S7 unresolved. That is the separate, visible question of whether the original ending artwork's commission and promotional terms are applicable.
+
+For maintenance, compare both saved replies and the reference choices actually presented before executing the validator in an offline regression. The archive replay in PR #56 covered the saved plan and mechanical review preparation. This run demonstrates why a full intake claim also needs to exercise the author-check receipt and show a published board. Preserve the existing quote validation and reconstruct any structured reference from the saved revision. The isolated source project, exact operation IDs, and original checkpoint are kept in the local replay archive.
+
+### 2026-11-25 · Keep self-check attachments separate from independent review
+
+Use the current material's reference identifiers for the author check, teaching decisions and independent copy review. Reconstruct quotes from the saved subject. Selection cannot make a nearby original observation support a different teaching point. The archive still reads its original quote-format receipts, with the original payloads and verdicts intact.
+
+On the saved two-group JUDYDOLL draft, the two original read-only author replies exposed two different invalid selections in the same S5 field. The old flow stopped before the web board after the format retry. The archived replay kept both failed effects, did not submit a request, and published the same candidate and same two independent narration judgments to the actual dual-ending panel endpoint. S7's valid unresolved business question is still visible and the board cannot confirm production. A valid selection-format attachment can cite that same draft, while a same-window unregistered reference still fails.
+
+The next declaration records the editor's separate cheek-makeup closing-angle decision. It shares the same source-bound record with authoring, independent review and publication. Actual sample windows are advice. The older two-group receipt cannot establish that the new group was delivered. Offline speech estimates exposed a real capacity gap in the older copy as well as in the long alternatives for the new group. Read the word estimate against each line's moving pictures and reserve a pause for a concrete viewing task.
+
+Regenerate panel HTML without changing the identity used by existing feedback when the only change is presentation. Keep the author and reviewer rubric in their own inputs. The product page uses a short business status when cooperation terms still need checking.

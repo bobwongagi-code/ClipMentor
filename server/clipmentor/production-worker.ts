@@ -223,16 +223,23 @@ async function runProductionCopyReview({
   const check=await checkProductionAuthorBlueprint(task,stage,doc,prepared,await editor.loadSkill('clipmentor','references/blueprint-self-check.md'),authorCriteria,hostDeliveryEvidence,panelDraft);
   if(check.digest!==digest)throw new Error('blueprint_author_self_check_stale');
   const issues=blockingAuthorBlueprintChecks(check.checks,panelDraft&&strictEditorial);
-  const pendingBusinessClaim=panelDraft&&issues.length===1&&issues[0].id==='S7'&&issues[0].status==='unresolved'?issues[0]:undefined;
-  if(issues.length&&!pendingBusinessClaim)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
+  const incompleteAttachment=panelDraft&&strictEditorial&&!!check.referenceIssues?.length;
+  const businessCheck=check.checks.find(entry=>entry.id==='S7');
+  const pendingBusinessClaim=incompleteAttachment
+   ?businessCheck?.status==='ok'?undefined:businessCheck
+   :panelDraft&&issues.length===1&&issues[0].id==='S7'&&issues[0].status==='unresolved'?issues[0]:undefined;
+  const businessNotice=pendingBusinessClaim?.reason??(incompleteAttachment&&!businessCheck?'片尾素材中的合作条款还需核实。':undefined);
+  if(issues.length&&!pendingBusinessClaim&&!incompleteAttachment)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
   if(panelDraft){
    const currentPolicy=await productionReviewRequirements(task.projectId);
    if(panelBlueprintRequirementsDigest(currentPolicy)!==baselinePolicyDigest)return repairRequirements();
    const current=await loadOfflineStoredProject(task.projectId);
    if(current?.revision!==editor.revision)throw Error('blueprint_author_self_check_stale');
    return {artifact:{revision:editor.revision,blueprint_digest:digest,
-    authorSelfCheck:pendingBusinessClaim?'needs_human_review':'passed',
-    ...(pendingBusinessClaim?{authorSelfCheckNotice:pendingBusinessClaim.reason,authorSelfCheckFinding:pendingBusinessClaim}:{}),
+    authorSelfCheck:businessNotice?'needs_human_review':incompleteAttachment?'pending':'passed',
+    ...(businessNotice?{authorSelfCheckNotice:businessNotice}:{}),
+    ...(pendingBusinessClaim?{authorSelfCheckFinding:pendingBusinessClaim}:{}),
+    ...(incompleteAttachment?{authorSelfCheckReferenceIssues:check.referenceIssues}:{}),
     teaching_baseline_digest:teachingDigest,
     ...(strictEditorial?{authorNarrationAnswers:check.checks.find(entry=>entry.id==='S1')?.teaching_units??[]}:{}),
     author_self_check_source_digest:check.sourceDigest,requirementsDigest:panelBlueprintRequirementsDigest(currentPolicy),

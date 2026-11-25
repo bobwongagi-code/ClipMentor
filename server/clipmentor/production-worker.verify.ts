@@ -174,12 +174,26 @@ for(const name of ['revise_clipmentor_analysis','submit_voice','observe_clipment
 assert.equal(productionStageToolAllowed('blueprint','revise_clipmentor_analysis'),true);assert.equal(productionStageToolAllowed('edit','edit_item'),true);
 
 
-const {validateAuthorSelfCheck,runAuthorSelfCheckWithFormatRetry,selectAuthorSelfCheckReceipt}=await import('./production-author-self-check');
+const {validateAuthorSelfCheck,readAuthorCheckAttachment,runAuthorSelfCheckWithFormatRetry,selectAuthorSelfCheckReceipt}=await import('./production-author-self-check');
 const source={currentLine:'Perhatikan warna di tangan'};
 const checks=Array.from({length:7},(_,index)=>({id:`S${index+1}`,status:'ok',reference:'warna di tangan',reason:'对应当前口播及手背演示'}));
 assert.equal(validateAuthorSelfCheck(JSON.stringify(checks),source).length,7);
+const damagedReceipt=checks.map(row=>row.id==='S5'?{...row,reference:['僅看','Dentro']}:row);
+assert.throws(()=>validateAuthorSelfCheck(JSON.stringify(damagedReceipt),source),error=>{
+ const result=error as {issues?:{field:string;value?:string}[];checks?:{id:string}[]};
+ assert.deepEqual(result.issues?.map(issue=>[issue.field,issue.value]),[['S5.reference[0]','僅看'],['S5.reference[1]','Dentro']]);
+ assert(result.checks?.some(check=>check.id==='S7'),'an independent business caution must remain readable');
+ return true;
+});
 const multipleReferences=[{...checks[0],status:'fix',reference:['Perhatikan warna','warna di tangan']},...checks.slice(1)];
 assert.deepEqual(validateAuthorSelfCheck(JSON.stringify(multipleReferences),source)[0],multipleReferences[0]);
+const selectableSource={blueprint:{units:[{lines:[{narration_ms:source.currentLine}]}]}};
+const picked=checks.map(({reference:_,...check})=>({...check,reference_ids:['blueprint.units.0.lines.0.narration_ms']}));
+assert.equal(readAuthorCheckAttachment(JSON.stringify(picked),selectableSource,true).checks[4]?.reference instanceof Array,true);
+const injected=picked.map(check=>check.id==='S5'?{...check,reference_ids:['僅看','Dentro']}:check);
+const partial=readAuthorCheckAttachment(JSON.stringify(injected),selectableSource,true);
+assert.equal(partial.checks.length,6);
+assert.deepEqual(partial.referenceIssues?.map(issue=>issue.value),['僅看','Dentro']);
 // Reduced replay of JUDYDOLL v3-8fed2080. The first group names
 // visible actions correctly but never teaches the hook-to-product handoff.
 {

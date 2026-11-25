@@ -48,6 +48,10 @@ export function isUnselectedBuyerRoles(value: unknown): value is Partial<Record<
 /** Author and reviewer prompts. Selection quality is decided in the existing evidence review. */
 export function teachingSelectionGaps(breakdown: SourceBreakdown, duration: number, fps: number) {
   const gaps: string[] = [];
+  for (const point of breakdown.points) {
+    if (point.teaching_basis && sameDecision(point.teaching_basis.selling_point) === sameDecision(point.buying_concern))
+      gaps.push(point.point_id + ' 卖点与买家顾虑文案相同。核对商品提供什么，以及买家下单前想判断什么。');
+  }
   const inventory = breakdown.segments.filter(segment => segment.inventory)
     .sort((a, b) => a.source_range_seconds[0] - b.source_range_seconds[0]);
   let covered = 0;

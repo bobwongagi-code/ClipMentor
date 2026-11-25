@@ -8,7 +8,7 @@ import type { ProjectDoc, TimelineItem } from '../editor/types';
 import type { AgentContext } from '../agent/context';
 import type { SourceBreakdown } from './source-breakdown';
 import { isSourceBreakdown, checkSourceBreakdown, breakdownRevisionError } from './source-breakdown';
-import { isClipMentorAnalysis } from './analysis';
+import { isClipMentorAnalysis, pointDigest } from './analysis';
 import { makeDraft } from '../editor/store';
 import { executeTool } from '../agent/tools';
 import { compactToolResultForModel } from '../agent/tool-result-compaction';
@@ -235,8 +235,11 @@ for (const invalid of [null, {}, { ...b, segments: [] }, { ...b, points: [b.poin
 const changed = structuredClone(b);
 changed.points = [];
 assert(breakdownRevisionError(b, changed));
+assert.equal(breakdownRevisionError(b, changed, new Set()), null, 'a provisional point may be removed without erasing its saved history');
 changed.points = [{ ...b.points[0], role: 'auxiliary', change_reason: 'Author tries to waive' }];
 assert(breakdownRevisionError(b, changed), 'an author cannot turn a required teaching point into a transition');
+assert(breakdownRevisionError(b, changed, new Set([b.points[0].point_id])));
+assert.equal(breakdownRevisionError(b, changed, new Set()), null);
 changed.points = [{ ...b.points[0], buying_concern: 'Corrected context' }];
 assert(breakdownRevisionError(b, changed));
 changed.points[0].change_reason = 'Explicit correction';
@@ -546,7 +549,6 @@ for (const executor of [executeTool]) {
     [{ ...freshRecord, lines: [{ ...freshLine, zh: '' }] }, 1, 'U1'],
     [{ ...freshRecord, lines: [{ ...freshLine, production_allowed: true }] }, 1, 'U1'],
     [{ ...freshRecord, production_allowed: true }, 1, 'U1'],
-    [{ ...freshRecord, plan: { selected_narration: [] } }, 1, 'U1'],
   ] as const) {
     const denied = context(bulkyDoc);
     assert((await executor('revise_clipmentor_analysis', { action: 'set_copy_candidate', id, record,
@@ -614,7 +616,7 @@ for (const executor of [executeTool]) {
   const selectionContext = context(afterPlan);
   const selectedLine = (reviewAfter.copy as any).lines[0];
   const selection = { source_candidate_id: 'copy', candidate_id: 'script_candidate_selected_test', line_ids: [selectedLine.id],
-    plan_id: 'picture_plan_selected_test', plan: { selected_narration: [selectedLine], status: 'pass', production_allowed: true },
+    plan_id: 'picture_plan_selected_test', plan: { selected_narration: [{...selectedLine,narration_ms:'Stale mirror'}], status: 'pass', production_allowed: true },
     line_guidance: 'Use selected current candidate and bound pending picture plan' };
   const selected = await executor('revise_clipmentor_analysis', { action: 'select_copy_lines', id: 'U1', record: selection,
     expectedRevision: 2, actor, reason: 'Activate existing words only, no new copy or production permission' }, selectionContext.ctx) as any;
@@ -625,6 +627,7 @@ for (const executor of [executeTool]) {
   assert.equal(selectedInternal.current_script_candidate, selection.candidate_id);
   assert.equal(selectedInternal.current_picture_plan, selection.plan_id);
   assert.deepEqual(selectedInternal[selection.candidate_id].lines, [selectedLine]);
+  assert.deepEqual(selectedInternal[selection.plan_id].selected_narration, [selectedLine]);
   assert.equal(selectedInternal[selection.plan_id].script_candidate_id, selection.candidate_id);
   assert.equal(selectedInternal[selection.plan_id].production_allowed, false);
   assert.equal(selectedInternal[selection.plan_id].review_status, 'pending');
@@ -634,7 +637,6 @@ for (const executor of [executeTool]) {
     { ...selection, source_candidate_id: 'stale' }, { ...selection, candidate_id: 'copy' },
     { ...selection, plan_id: planRecord.plan_id }, { ...selection, line_ids: [] },
     { ...selection, line_ids: ['missing'] }, { ...selection, line_ids: [selectedLine.id, selectedLine.id] },
-    { ...selection, plan: { selected_narration: [{ ...selectedLine, narration_ms: 'Altered words' }] } },
     { ...selection, narration_ms: 'New words are not accepted' },
   ]) {
     const rejectedContext = context(afterPlan);
@@ -718,7 +720,18 @@ for (const executor of [executeTool]) {
   twoPoints.units[0].coverage.push({ point_id: 'P2', treatment: 'omit', reason: 'Explicit optional candidate, not a production waiver' });
   assert((await executor('revise_clipmentor_analysis', { action: 'set_source_breakdown', expectedRevision: 4, record: twoPoints, actor, reason: 'Test adding a selected task' }, ctx) as { ok?: boolean }).ok);
   const eraseFirst = structuredClone(twoPoints); eraseFirst.points.shift(); eraseFirst.units[0].coverage.shift();
-  assert((await executor('revise_clipmentor_analysis', { action: 'set_source_breakdown', expectedRevision: 5, record: eraseFirst, actor, reason: 'Try to hide an earlier required task' }, ctx) as { error?: string }).error);
+  const tentative = context(draft.getDoc());
+  const removing = { action:'set_source_breakdown', expectedRevision:5, record:eraseFirst, actor, reason:'Reconsider a draft teaching task' };
+  assert((await executor('revise_clipmentor_analysis',removing,tentative.ctx) as {ok?:boolean}).ok);
+  const approved = structuredClone(draft.getDoc());
+  const analysis = approved.clipMentorAnalysis!;
+  const pointId = 'P1';
+  analysis.points.push({point_id:pointId,unit_id:'U1',source_range_seconds:[59.4,62.2],buying_reason_or_function:'Synthetic buyer reason',
+    filming_conditions:[],evidence_ids:['F1'],uncertainties:[],required:true,explanation_priority:'primary',
+    status:'candidate',review_status:'pending',provenance:'fixture'});
+  analysis.reviews=[{point_id:pointId,state:'confirmed',content_digest:await pointDigest(analysis,pointId),
+    source_hash:analysis.source.sourceContentHash,actor,at:Date.now(),reason:'Editor keeps this selected teaching decision'}];
+  assert((await executor('revise_clipmentor_analysis',removing,context(approved).ctx) as {error?:string}).error);
   assert.equal(draft.getDoc().clipMentorAnalysis!.revision, 5);
   assert.equal(JSON.stringify(draft.getDoc().timelines), before);
 }
@@ -807,15 +820,22 @@ assert(visualRows.ok, 'a bound current picture plan with visual lines is not new
 assert(JSON.stringify(await copyTeachingPacketFromDoc(visualRowsContext.draft.getDoc())).includes('VALID_VISUAL_ROW'), 'visual rows must reach independent review');
 // A current picture plan cannot silently introduce a different narration.
 for (const duplicateKey of ['lines', 'selected_narration']) {
-  const currentLines = structuredClone((base.clipMentorAnalysis!.blueprint[0] as any).internal_review.copy.lines);
+  const currentLines: Array<{narration_ms:string;caption_lines:string[]}> = structuredClone((base.clipMentorAnalysis!.blueprint[0] as any).internal_review.copy.lines);
   const changedLines = structuredClone(currentLines);
   changedLines[0].narration_ms = 'New conflicting narration'; changedLines[0].caption_lines = ['New conflicting narration'];
   const conflicted = context(base), frozen = JSON.stringify(conflicted.draft.getDoc());
   const input = { action: 'set_picture_plan', id: 'U1', expectedRevision: 1, actor, reason: 'Guard duplicate narration',
     record: { plan_id: 'picture_plan_duplicate_check', script_candidate_id: 'copy', line_guidance: 'Same current copy', plan: { [duplicateKey]: changedLines } } };
   const refused: any = await executeTool('revise_clipmentor_analysis', input, conflicted.ctx);
-  assert(refused.error?.includes('picture_plan_copy_mismatch'), 'a visual plan cannot save a different script: ' + duplicateKey);
-  assert.equal(JSON.stringify(conflicted.draft.getDoc()), frozen);
+  if (duplicateKey === 'selected_narration') {
+    assert(refused.ok, 'the writer cannot create a stale copy mirror');
+    const saved = (conflicted.draft.getDoc().clipMentorAnalysis!.blueprint[0] as any).internal_review;
+    assert.deepEqual(saved.copy.lines, currentLines);
+    assert.deepEqual(saved.picture_plan_duplicate_check.selected_narration, currentLines);
+  } else {
+    assert(refused.error?.includes('picture_plan_copy_mismatch'), 'a visual plan cannot save a different script: ' + duplicateKey);
+    assert.equal(JSON.stringify(conflicted.draft.getDoc()), frozen);
+  }
   const valid = context(base);
   const allowed: any = await executeTool('revise_clipmentor_analysis', { ...input, record: { ...input.record, plan: { [duplicateKey]: currentLines } } }, valid.ctx);
   assert(allowed.ok, 'exact duplicate copy remains compatible');

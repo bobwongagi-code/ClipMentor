@@ -119,14 +119,16 @@ export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
 }
 
 /** Keep the baseline across revisions. Corrections are explicit and invalidate the existing digest. */
-export function breakdownRevisionError(previous: SourceBreakdown | undefined, next: SourceBreakdown): string | null {
+export function breakdownRevisionError(previous: SourceBreakdown | undefined, next: SourceBreakdown, confirmed?: ReadonlySet<string>): string | null {
   if (!previous) return null;
-  if (previous.points.some((p) => !next.points.some((n) => n.point_id === p.point_id))) return 'Selected points cannot disappear; record a treatment and reason';
+  const locked = (id:string) => confirmed?.has(id) ?? true;
+  if (previous.points.some((p) => locked(p.point_id) && !next.points.some((n) => n.point_id === p.point_id))) return 'Selected points cannot disappear; record a treatment and reason';
   if (previous.segments.some((s) => !next.segments.some((n) => n.segment_id === s.segment_id))) return 'Source segments cannot disappear; preserve their IDs';
   for (const old of previous.points) {
-    const current = next.points.find((p) => p.point_id === old.point_id)!;
-    if ((old.importance === 'must_explain' && current.importance !== old.importance)
-      || (old.role === 'primary' && current.role !== old.role)) return 'The author cannot downgrade a required/primary task; keep it unresolved for independent scope review';
+    const current = next.points.find((p) => p.point_id === old.point_id);
+    if (!current) continue;
+    if (locked(old.point_id) && ((old.importance === 'must_explain' && current.importance !== old.importance)
+      || (old.role === 'primary' && current.role !== old.role))) return 'The author cannot downgrade a required/primary task; keep it unresolved for independent scope review';
     const { change_reason: _oldReason, ...before } = old;
     const { change_reason: _newReason, ...after } = current;
     if (JSON.stringify(before) !== JSON.stringify(after) && (!current.change_reason || current.change_reason === old.change_reason)) return 'Changing a selected teaching task requires a new point change_reason';
@@ -291,7 +293,6 @@ export function registerGroupedPlayback(
   unit.revisits = [];
   delete plan.revisits;
   if (Object.hasOwn(plan,'original_source_ranges')) plan.original_source_ranges = grouped.originals;
-  plan.selected_narration = structuredClone(lines);
 }
 
 /** Modern units come from the selected breakdown; legacy point reviews

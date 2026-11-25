@@ -39,7 +39,7 @@ import {prepareBlueprintOpinions,type BlueprintOpinionRecord} from './production
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
-  isPanelBlueprintDraft, panelAuthorCheckMatches,panelAuthorNeedsHumanReview,panelBlueprintRequirementsDigest,
+  isPanelBlueprintDraft, panelAuthorCheckMatches,panelAuthorCheckPending,panelAuthorNeedsHumanReview,panelBlueprintRequirementsDigest,
   latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,saveProductionControl,
   type ProductionTask,
 } from './production-task';
@@ -225,7 +225,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     const requirementsDigest=policy?digestValue(policy.brief.doneCriteria):undefined;
     const draftChecked=(current:ProductionTask,revision:string,currentPolicy:HandoffPolicy|null)=>
       !isPanelBlueprintDraft(current)||panelAuthorCheckMatches(current,revision,panelBlueprintRequirementsDigest(currentPolicy))
-        ||panelAuthorNeedsHumanReview(current,revision,panelBlueprintRequirementsDigest(currentPolicy));
+        ||panelAuthorNeedsHumanReview(current,revision,panelBlueprintRequirementsDigest(currentPolicy))
+        ||current.status==='awaiting_blueprint'&&panelAuthorCheckPending(current,revision,panelBlueprintRequirementsDigest(currentPolicy));
     // This identity belongs to the HTTP review surface, never to the authored blueprint.
     const boardSubject=async(revision:string,currentTask=task,currentPolicy=policy)=>{
       const parent=currentTask?.blueprintApproval?await productionTaskStore.load(currentTask.blueprintApproval.sourceProjectId,currentTask.blueprintApproval.sourceTaskId):undefined;
@@ -362,7 +363,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             input.embedded=true;
             input.narrationDecisions=narrationDecisions;
             if(isPanelBlueprintDraft(task))input.teachingExcerptUnit=representativeTeachingExcerpt(saved.doc)?.unitId;
-            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel-opinions-v1', artifactIdentity), undefined, 'human');
+            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel-opinions-v2', artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
             return result.artifacts[0].path;
           })();
@@ -456,7 +457,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         :undefined;
       const blueprintMessage=!blueprintRevision||canConfirmBlueprint||!dualBlueprint&&canApproveBlueprint?undefined
         :task?.repairContext?.pending_blueprint_feedback?'修改意见已保存，当前蓝图暂不能确认。'
-        :needsHuman?'请核对计划上屏的承诺。如需补充事实或删改内容，请提交修改意见。'
+        :needsHuman?'片尾合作条款待核实。'
         :atLimit||dualBlueprint&&!canConfirmBlueprint&&!!task&&task.attempts.model>=task.input.budget.model
           ?'本次制作已达到处理上限，当前蓝图仍可查看。'
         :!previewReviewAvailable?'制作服务暂时不可用，当前蓝图仍可查看。'

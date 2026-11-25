@@ -22,6 +22,7 @@ export type SourceClosingStatus='confirmed'|'weak_candidate'|'none';
 export interface SourceTeachingGuidance {
  category:'teaching_decision'|'fact_boundary'|'material_suggestion'|'temporarily_unused';
  text:string;source:{who:string;reference:string};rationale:string;reconsiderWhen:string;
+ confirmedDecisionId?:string;
 }
 interface SourceTeachingDeclaration {
  kind:'source_teaching';source:SourceAssetBinding;quote:string;
@@ -81,7 +82,9 @@ const sourceWindow=(v:unknown):v is SourceWindow=>Array.isArray(v)&&v.length===2
  &&v.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0)&&v[0]<v[1];
 const sourceWindows=(v:unknown):v is SourceWindow[]=>Array.isArray(v)&&v.length<=12&&v.every(sourceWindow);
 const sourceTeachingGuidance=(v:unknown):v is SourceTeachingGuidance=>handoffRecord(v)
- &&keys(v,['category','text','source','rationale','reconsiderWhen'])
+ &&(keys(v,['category','text','source','rationale','reconsiderWhen'])
+  ||keys(v,['category','text','source','rationale','reconsiderWhen','confirmedDecisionId'])&&v.category==='teaching_decision'
+   &&typeof v.confirmedDecisionId==='string'&&ID.test(v.confirmedDecisionId))
  &&typeof v.category==='string'&&['teaching_decision','fact_boundary','material_suggestion','temporarily_unused'].includes(v.category)
  &&handoffRecord(v.source)&&keys(v.source,['who','reference'])
  &&boundedText(v.source.who,160)&&boundedText(v.source.reference,1000)
@@ -90,6 +93,7 @@ const sourceTeachingShape=(v:unknown):v is SourceTeachingCriterion=>handoffRecor
  &&v.kind==='source_teaching'&&sourceAssetBinding(v.source)&&boundedText(v.quote,1000)
  &&(keys(v,['kind','source','quote','guidance','closing'])
   ?Array.isArray(v.guidance)&&v.guidance.length<=12&&v.guidance.every(sourceTeachingGuidance)
+   &&new Set(v.guidance.flatMap(g=>g.confirmedDecisionId?[g.confirmedDecisionId]:[])).size===v.guidance.filter(g=>g.confirmedDecisionId).length
   :keys(v,['kind','source','quote','main','background','mainRanges','backgroundRanges','closing'])
    &&[v.main,v.background].every(x=>boundedText(x,1000))
    &&sourceWindows(v.mainRanges)&&v.mainRanges.length>0&&sourceWindows(v.backgroundRanges))
