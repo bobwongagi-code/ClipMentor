@@ -28,6 +28,7 @@ let rejectSupplement=false;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
 let narrationAction:'missing'|'wrong-quote'|'missing-basis'|'same-finding'|undefined;
 let wholeFilmAction:'missing'|'omission'|'selection-omission'|undefined;
+let unexpectedInitialFeedbackScope=false;
 let panelRequest:RequestListener|undefined;
 const authorPrompts=new Map<string,string>();
 const independentPrompts:string[]=[];
@@ -127,7 +128,7 @@ const host=createServer(async(req,res)=>{
  const missingEvidenceId=wholeFilmAction==='omission'?'fixture-unselected-result':wholeFilmAction==='selection-omission'?'V-hook':undefined;
  const wholeEvidence=missingEvidenceId?data.evidence.find((entry:any)=>entry.id===missingEvidenceId):mainEvidence;
  const verdict={
-  feedback_scope:data.feedback?(fail?'baseline':'copy'):'none',summary:'ok',
+  ...(unexpectedInitialFeedbackScope?{feedback_scope:'baseline'}:data.feedback?{feedback_requires_baseline:fail}:{}),summary:'ok',
   ...(data.pointReview&&wholeFilmAction!=='missing'?{whole_film:{
    status:missingEvidenceId?'fix':'ok',main_point_id:mainPoint.point_id,
    focus:'在相同参照下判断落点或关系',alternative:'单独解释包装和产品辨认',
@@ -424,8 +425,16 @@ try{
  const {checkTeachingBaseline}=await import('./production-teaching-baseline');
  const acceptedNarration=await checkTeachingBaseline(goodNarrationTask,runNarration('fixture-narration-yes'),
   teachingBaselineSource(correctedNarration,goodNarrationTask,[]));
+ assert.equal(acceptedNarration.review.feedback_scope,'none');
+ assert.doesNotMatch(independentPrompts.at(-1)??'',/feedback_scope|feedback_requires_baseline/,
+  'the reviewer must not be asked to classify feedback on a first draft');
  assert.equal(acceptedNarration.review.narration_checks?.[0].status,'ok');
  assert.equal(acceptedNarration.review.narration_checks?.[0].quote,actionable);
+ unexpectedInitialFeedbackScope=true;
+ const legacyInitial=await checkTeachingBaseline(goodNarrationTask,runNarration('fixture-narration-unexpected-feedback-scope'),
+  teachingBaselineSource(correctedNarration,goodNarrationTask,[]));
+ assert.equal(legacyInitial.review.feedback_scope,'none','a provider cannot invent a feedback round');
+ unexpectedInitialFeedbackScope=false;
  // Both examples from the operator are references for the decision, not approved copy.
  const paletteReference='Dia letak 02 dan 06 sebelah-menyebelah dengan kod masing-masing nampak sekali, jadi penonton tak perlu ingat warna palet tadi untuk membandingkan.';
  const noseReference='Bila berus dialihkan, kamera masih dekat dengan sisi hidung, jadi garis coklat itu nampak jelas tanpa terlindung. Penonton boleh nilai sendiri sejelas mana ia pada muka dia ketika itu.';
@@ -1041,12 +1050,37 @@ try{
  const wrongQuote=structuredClone(positiveReceipt);
  wrongQuote.units[0].point_checks[0].source_quote=samples[1].evidence.text;
  assert.throws(()=>validateTeachingBaselineReview(wrongQuote,strictPositive),/point_source_quote_invalid/);
+ const unregistered=structuredClone(positiveReceipt);
+ unregistered.feedback_scope='baseline';
+ const detail={...strictPositive.evidence[0],id:'unregistered-detail'};
+ Object.assign(unregistered.units[0].point_checks[0],{source_evidence_id:detail.id,source_quote:detail.text});
+ const withDetail={...strictPositive,evidence:[...strictPositive.evidence,detail]};
+ assert.throws(()=>validateTeachingBaselineReview(unregistered,withDetail),/point_source_quote_invalid/,
+  'a real excerpt in the same window still needs this point’s binding');
+ const registered=structuredClone(withDetail);
+ registered.units[0].points[0].teaching_basis!.evidence_ids.push(detail.id);
+ assert.equal(validateTeachingBaselineReview(unregistered,registered).feedback_scope,'none');
+
+ const legacyDigest=teachingBaselineDigest(strictPositive,true),operationId='fixture-initial-legacy';
+ const legacyKey=`fixture:teaching-baseline:${legacyDigest}`;
+ const legacyTask={...strictTask,effects:{[legacyKey]:{kind:'model' as const,operationId,status:'completed' as const,
+  result:{digest:legacyDigest,runId:operationId,review:{...positiveReceipt,feedback_scope:'baseline'}}}}};
+ const noResubmission={signal:new AbortController().signal,async effect(){throw Error('must not resubmit a legacy review');}};
+ const reused=await checkTeachingBaseline(legacyTask,noResubmission,strictPositive);
+ assert.equal(reused.digest,legacyDigest);
+ assert.equal(reused.review.feedback_scope,'none');
+ const failedLegacy={...legacyTask,effects:{[legacyKey]:{kind:'model' as const,operationId,status:'failed' as const}}};
+ await assert.rejects(checkTeachingBaseline(failedLegacy,noResubmission,strictPositive),/prior_attempt_unresolved/);
  const missingPoint=structuredClone(positiveReceipt);
  missingPoint.units[0].point_checks=[];
  assert.throws(()=>validateTeachingBaselineReview(missingPoint,strictPositive),/point_review_incomplete/);
  const overallPass=structuredClone(positiveReceipt);
  overallPass.units[0].point_checks[0].status='fix';
  assert.equal(validateTeachingBaselineReview(overallPass,strictPositive).units[0].status,'fix');
+ const copyFeedback={...strictPositive,feedback:{text:'第二句请精简。',revision:'reviewed-board'}};
+ assert.equal(validateTeachingBaselineReview({...positiveReceipt,feedback_requires_baseline:false},copyFeedback).feedback_scope,'copy');
+ assert.equal(validateTeachingBaselineReview({...overallPass,feedback_requires_baseline:false},copyFeedback).feedback_scope,'baseline');
+ assert.throws(()=>validateTeachingBaselineReview({...positiveReceipt,feedback_requires_baseline:true},copyFeedback),/review_invalid/);
  const forcedRebuild=validateTeachingBaselineReview({...positiveReceipt,feedback_scope:'copy'},
   {...strictPositive,feedback:{text:'我觉得方向错了。',revision:'reviewed-board'}});
  assert.equal(forcedRebuild.feedback_scope,'baseline');
