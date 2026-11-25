@@ -357,9 +357,13 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         if (!isSourceBreakdown(args.record)) return { error: 'Invalid source breakdown; nothing changed' };
         const confirmed = new Set<string>();
         for (const review of a.reviews) {
-          if (review.state !== 'confirmed' || review.source_hash !== a.source.sourceContentHash
+          if (review.state==='needs_revision'||review.source_hash !== a.source.sourceContentHash
             || !a.points.some(point => point.point_id === review.point_id)) continue;
-          if (review.content_digest === await pointDigest(a, review.point_id)) confirmed.add(review.point_id);
+          // A stale copy/readiness check cannot revoke the operator's recorded teaching decision.
+          const decision=a.audit.findLast(entry=>entry.target_id===review.point_id&&entry.at===review.at
+            &&entry.reason===review.reason&&(entry.action==='confirmed'||entry.action==='needs_revision'));
+          if (decision?.action==='confirmed'||(review.state==='confirmed'
+            &&review.content_digest===await pointDigest(a,review.point_id))) confirmed.add(review.point_id);
         }
         const error = breakdownRevisionError(a.source_breakdown, args.record, confirmed);
         if (error) return { error };

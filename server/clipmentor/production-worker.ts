@@ -13,7 +13,7 @@ import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import {boundNarrationCriterion,checkTeachingBaseline,confirmedTeachingDigest,interruptedClosingPlanUnit,newlyChangedTeaching,qualifiedTeachingDigest,retireTeachingDrafts,staleRebuiltTeaching,teachingBaselineSource,teachingDraftPointersDigest,
- teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,wholeFilmIssue,type TeachingRebuild} from './production-teaching-baseline';
+ confirmedTeachingIssue,teachingPointGaps,teachingRebuild,unchangedRejectedTeaching,unchangedWholeFilmTeaching,wholeFilmIssue,type TeachingRebuild} from './production-teaching-baseline';
 import {migrateProjectDoc} from '../../src/persist/projectStore';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {createRun,flushRunPersistence} from '../agent-runs/store';
@@ -689,9 +689,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(source.narrationTargets?.length&&checked.review.units.some(unit=>unit.status!=='ok'&&
     !unit.point_checks?.some(point=>point.status!=='ok')))
      throw Error('teaching_final_narration_unit_finding_unbound');
-   const topicIssue=wholeFilmIssue(checked.review.whole_film);
    const unitIssues=checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason);
-   const issues=topicIssue?['整片选题 '+topicIssue,...unitIssues]:unitIssues;
+   const topicIssues=[wholeFilmIssue(checked.review.whole_film),confirmedTeachingIssue(checked.review)]
+    .filter(issue=>!!issue).map(issue=>'整片选题 '+issue);
+   const issues=[...topicIssues,...unitIssues];
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
    const narrationIssues=checked.review.narration_checks?.filter(answer=>answer.status!=='ok');
    if(narrationIssues?.length){

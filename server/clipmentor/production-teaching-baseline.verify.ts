@@ -1061,6 +1061,12 @@ try{
   units:positiveReceipt.units.map(unit=>({...unit,point_checks:unit.point_checks.map(
    ({source_quote,question_quote,...point})=>point)}))};
  assert.deepEqual(validateTeachingBaselineReview(selectedReceipt,strictPositive),validateTeachingBaselineReview(positiveReceipt,strictPositive));
+ const longEvidence=structuredClone(strictPositive);
+ longEvidence.evidence[0].text+=' This sentence adds more visible detail to the same evidence. '.repeat(10);
+ const longSelection=validateTeachingBaselineReview(selectedReceipt,longEvidence);
+ assert.equal(longSelection.whole_film?.source_quote,longEvidence.evidence[0].text);
+ assert.deepEqual(validateTeachingBaselineReview(JSON.parse(JSON.stringify(longSelection)),longEvidence),longSelection);
+ assert.equal(validateTeachingBaselineReview(positiveReceipt,longEvidence).whole_film?.status,'ok');
  const unrelatedSameWindow={...strictPositive.evidence[0],id:'same-window-without-selection'};
  const selectedWrongPoint=structuredClone(selectedReceipt);
  selectedWrongPoint.units[0].point_checks[0].source_evidence_id=unrelatedSameWindow.id;
@@ -1071,9 +1077,43 @@ try{
   confirmedDecisionId:'fixture-demonstration'};
  const scopedDecision={...strictPositive,confirmedDecisions:[requiredDecision]};
  assert.throws(()=>validateTeachingBaselineReview(selectedReceipt,scopedDecision),/confirmed_teaching_checks_missing/);
- assert.equal(validateTeachingBaselineReview({...selectedReceipt,confirmed_teaching_checks:[
-  {id:requiredDecision.confirmedDecisionId,status:'missing',reason:'The editor-confirmed decision is not in the draft.'}
- ]},scopedDecision).whole_film?.status,'fix');
+ const missingDecision={id:requiredDecision.confirmedDecisionId,status:'missing',reason:'The editor-confirmed decision is not in the draft.'};
+ for(const status of ['ok','unresolved'] as const){
+  const inputWhole=status==='ok'?selectedReceipt.whole_film:{...selectedReceipt.whole_film,status,
+   evidence_id:null,affected_unit_ids:['green-0']};
+  const missing=validateTeachingBaselineReview({...selectedReceipt,whole_film:inputWhole,
+   confirmed_teaching_checks:[missingDecision]},scopedDecision);
+  assert.equal(missing.whole_film?.status,status,'keep the independent whole-film answer intact');
+  assert.deepEqual(validateTeachingBaselineReview(JSON.parse(JSON.stringify(missing)),scopedDecision),missing);
+  assert.match(teachingRebuild(scopedDecision,old,missing).wholeFilm?.reason??'',/editor-confirmed decision/);
+ }
+ {
+  const {createAgentRun}=await import('../../src/persist/agentRuntimeStore');
+  const {runtimeEvent}=await import('../agent-runs/store-values');
+  const raw=structuredClone({...selectedReceipt,confirmed_teaching_checks:[missingDecision],whole_film:{...selectedReceipt.whole_film,
+   status:'unresolved',evidence_id:null,affected_unit_ids:['green-0']}});
+  Object.assign(raw.units[0].point_checks[0],{status:'unresolved',source_evidence_id:null});
+  const valid=validateTeachingBaselineReview(raw,scopedDecision);
+  const malformed={...valid,whole_film:{...valid.whole_film,status:'fix',reason:`${missingDecision.id} ${missingDecision.reason}`}};
+  const digest=teachingBaselineDigest(scopedDecision),operationId='fixture-projected-whole-film';
+  const key='blueprint:initial:0:teaching-baseline:'+digest;
+  const replayTask={...strictTask,projectId:'fixture-projected-whole-film-project',effects:{[key]:{
+   kind:'model' as const,status:'completed' as const,operationId,result:{digest,runId:operationId,review:malformed},
+  }}};
+  const archived=structuredClone(replayTask.effects);
+  const noProvider={signal:new AbortController().signal,async effect(){throw Error('The archived operation cannot dispatch');}};
+  await assert.rejects(checkTeachingBaseline(replayTask,noProvider,scopedDecision),/recovery_run_unverified/);
+  const createdAt=replayTask.createdAt+1;
+  const events=[runtimeEvent({id:1,type:'text-delta',data:{text:JSON.stringify(raw)},at:createdAt}),
+   runtimeEvent({id:2,type:'done',data:{status:'completed'},at:createdAt+1})];
+  await createAgentRun({version:1,runId:operationId,projectId:replayTask.projectId,status:'completed',askOnly:true,
+   userInputPreview:'fixture',userInputDigest:digest,createdAt,updatedAt:createdAt+1,backend:replayTask.input.authorBackend??'api',
+   modelId:replayTask.input.author.model,provider:replayTask.input.author.provider,
+   context:{transportStatus:'completed'} as any,artifactIds:[],checkpointIds:[],proposalIds:[],
+   events:events.map((event,i)=>({...event,eventId:`${operationId}-${i}`,projectId:replayTask.projectId,runId:operationId,sequence:i+1,createdAt:createdAt+i}))});
+  assert.deepEqual((await checkTeachingBaseline(replayTask,noProvider,scopedDecision)).review,valid);
+  assert.deepEqual(replayTask.effects,archived);
+ }
  assert.equal(validateTeachingBaselineReview({...selectedReceipt,confirmed_teaching_checks:[
   {id:requiredDecision.confirmedDecisionId,status:'covered',reason:'Verified against this point.',unit_id:'green-0',
    point_id:samples[0].point_id,evidence_id:samples[0].evidence.id}

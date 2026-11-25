@@ -194,6 +194,47 @@ export async function verifyGroupedReviewReceipts({root,deps,base,request,goodRa
     assert.equal(result.receipt.verdict,'pass',container);
     assert.deepEqual(result.receipt.units[0].group_checks!.group_reviews,expected);
     assert.equal(JSON.stringify(raw),before,'nested list conversion never mutates reviewer output');
+    const selected=structuredClone(raw);
+    selected.reference_protocol='selection-v1';
+    for(const entry of selected.cases[0].units[0].points)
+      entry.quotes=entry.quotes.map(({text,...pick}:{text:string;channel:string;line_id:string})=>{
+        if(pick.channel!=='label')return pick;
+        const line=groupPacket.units[0].lines.find(line=>line.line_id===pick.line_id);
+        const label_index=line?.labels.findIndex(label=>label.includes(text))??-1;
+        assert(label_index>=0);
+        return {...pick,label_index};
+      });
+    selected.copy_units[0].findings=[];
+    const rawGroupChecks=selected.copy_units[0].group_checks;
+    const selectedGroups=container==='groups'?rawGroupChecks:rawGroupChecks.group_reviews;
+    for(const group of selectedGroups)for(const relation of group.source_relations){
+      if(relation.claim_impact)relation.claim_impact.claims=relation.claim_impact.claims.map(({quote:_,...pick}:Record<string,unknown>)=>pick);
+    }
+    const selectedGroup=selectedGroups[0];
+    const sourceRelation=selectedGroup.source_relations[0];
+    selectedGroup.L1.evidence=[{kind:'copy',channel:'narration',line_id:sourceRelation.line_ids[0]}];
+    const extra={...sourceRelation,assessment:'uncertain',reason:'This additional detail is not in the existing claim.'};
+    const relationIndex=selectedGroup.source_relations.push(extra)-1;
+    if(container==='unit_group_reviews')rawGroupChecks.source_relations=selectedGroups.flatMap((group:any)=>group.source_relations);
+    const req=groupRequest(),selectedDeps={...chainDeps,resolve:()=> 'offline-group-source',
+      hash:async()=>req.source.hash,run:async()=>selected};
+    const knownUnknown=await reviewClipMentorCopy(req,selectedDeps);
+    assert.equal(knownUnknown.receipt.verdict,'insufficient_evidence');
+    const digest=(text:string)=>createHash('sha256').update(text).digest('hex');
+    const ledgerPath=join(root,req.operationId+'.json'),ledger=await readFile(ledgerPath,'utf8');
+    const claims=sourceRelation.line_ids.map((id:string)=>({line_id:id,channel:'narration',
+      quote:req.packet.units[0].lines.find(line=>line.line_id===id)!.narration_ms}));
+    const scope={unit_id:req.subject.units[0].unit_id,group_id:selectedGroup.group_id,relation_index:relationIndex,
+      relation_sha256:digest(JSON.stringify(extra)),reviewer_reason_quote:extra.reason,claim_impact:{
+        status:'does_not_affect_current_claim',unknown_detail:'Additional detail',reason:'The existing covered relation supports these exact claims.',claims,
+      }};
+    const annotation={actor:'fixture reviewer',originalLedgerSha256:digest(ledger),scopes:[scope]};
+    const offline={...selectedDeps,run:async()=>{throw Error('Offline revalidation cannot dispatch');}};
+    await assert.rejects(revalidateStoredCopyReview(req,offline,{...annotation,scopes:[{...scope,group_id:'G2'}]}),/revalidation_scope_invalid/);
+    const revalidated=await revalidateStoredCopyReview(req,offline,annotation);
+    assert.equal(revalidated.receipt.verdict,'pass',container);
+    assert.deepEqual(await revalidateStoredCopyReview(req,offline,annotation),revalidated);
+    assert.equal(await readFile(ledgerPath,'utf8'),ledger);
     for(const broken of [[],['kept',4]]){
       const invalid:any=structuredClone(raw),group=container==='groups'?invalid.copy_units[0].group_checks[2]:invalid.copy_units[0].group_checks.group_reviews[2];
       group.L2.viewer_chain=broken;

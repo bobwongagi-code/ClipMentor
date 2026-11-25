@@ -937,12 +937,18 @@ function reviewableDeliverySections(sections: DeliverySection[]): DeliverySectio
 }
 
 /** Only the current material and neutral criteria enter the independent request. */
-export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>) {
+export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>, selection=false) {
   if (!cases.length || !distinct(cases.map((c) => c.case_id)) || cases.some((c) => !text(c.case_id) || !teachingPacket(c.packet))) throw new Error('Invalid teaching review packet');
   for (const { packet } of cases) for (const unit of packet.units) checkGroupedReviewHandoff(unit);
   const hasTeachingBasis = cases.some(({ packet }) => packet.units.some(unit => unit.points.some(point => point.teaching_basis)));
   const teachingBasisCriteria = hasTeachingBasis ? '\n\n核每个带 teaching_basis 的重点。先独立从原片及本组现行稿或可见安排答：买家在意哪项产品价值，原作者用了什么手法，该手法多给了买家什么判断依据？只靠基线、中文译文或作者备注明白的关系不能通过。用已有 connection、learner_takeaway、quotes 或 visual_check 判定。只列镜头填 action_only，只报功能填 function_only。另填 source_quote:{evidence_id,quote}，从本点 teaching_basis.evidence_ids 的一条原片动作或原话正文逐字摘录，不引用元数据。只有原声候选时按原作者的说法注明未人工听审，不能据此担保功效；只有画面时只核可见关系。无可引证据时保留不确定。' : '';
-  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${teachingRegression.instructions}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${VISUAL_REVIEW_CRITERIA}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${teachingBasisCriteria}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
+  const pointReview=selection?teachingRegression.instructions
+    .replace('quote只可逐字引自narration_ms、caption_lines或labels','quotes 只选现行 narration_ms、caption_lines 或 labels 的编号')
+    .replace(',"text":"逐字摘录"',''):teachingRegression.instructions;
+  const visualReview=selection?VISUAL_REVIEW_CRITERIA.replace('口播点原有的逐字引文要求不变。','口播点沿用现行编号。'):VISUAL_REVIEW_CRITERIA;
+  const basisReview=selection?teachingBasisCriteria.replace('source_quote:{evidence_id,quote}，从本点 teaching_basis.evidence_ids 的一条原片动作或原话正文逐字摘录',
+    'source_quote:{evidence_id}，从本点 teaching_basis.evidence_ids 选择一条原片动作或原话的编号'):teachingBasisCriteria;
+  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${pointReview}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${visualReview}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${basisReview}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
     ...(packet.delivery_sections?.length?{delivery_sections:reviewableDeliverySections(packet.delivery_sections)}:{}),
     audience: packet.audience,
     product: { name: packet.product.name, purchase_concerns: [...packet.product.purchase_concerns], unknowns: [...packet.product.unknowns] },

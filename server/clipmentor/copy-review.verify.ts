@@ -166,7 +166,9 @@ try {
     assert(prompt.includes(JSON.stringify(teachingBrief)));
     assert(prompt.includes(teachingPurpose.review_question)&&prompt.includes(teachingPurpose.audience));
     for(const boundary of teachingPurpose.boundaries)assert(prompt.includes(boundary));
-    assert(prompt.includes('有口播的主讲先读现行口播并逐字引用承担这个决定的句子'));
+    assert(prompt.includes('有口播的主讲先读现行口播并选择承担这个决定的句子编号'));
+    assert(!prompt.includes('quote:稿中原句')&&!prompt.includes('"text":"逐字摘录"'));
+    assert(!prompt.includes('same_product_words'),'an unregistered opening has no generated quote contract');
     assert(!prompt.includes('AUTHOR_REVISIT_REASON_MUST_NOT_LEAK'));
     return teachingAnswer();
   }};
@@ -175,7 +177,7 @@ try {
   const withSelections=teachingAnswer();
   const selectedReceipt={...withSelections,reference_protocol:'selection-v1',
     cases:withSelections.cases.map(entry=>({...entry,units:entry.units.map(unit=>({...unit,
-      points:unit.points.map(point=>({...point,quotes:point.quotes.map(({text,...pick})=>pick)})),
+      points:unit.points.map(point=>({...point,quotes:point.quotes.map(({text:_,...pick})=>pick)})),
     }))})),
     copy_units:withSelections.copy_units.map(unit=>({...unit,group_checks:{...unit.group_checks,L1:{...unit.group_checks.L1,
       evidence:[{kind:'copy',line_id:line.line_id,channel:'narration'}]}}}))};
@@ -185,6 +187,24 @@ try {
   const wrongUnit=structuredClone(selectedReceipt);
   wrongUnit.copy_units[0].group_checks.L1.evidence[0].line_id='different-unit-line';
   assert.throws(()=>selectedCopyReviewReferences(wrongUnit,teachingRequest.packet),/current_unit_narration/);
+  const multiCard=structuredClone(teachingRequest.packet);
+  multiCard.units[0].lines[0].caption_lines=['First card.','Second card.'];
+  multiCard.units[0].lines[0].labels=['02'];
+  const claimPicks=[{line_id:line.line_id,channel:'caption',caption_index:1},{line_id:line.line_id,channel:'label',label_index:0}];
+  const rawPicks=structuredClone(selectedReceipt) as any;
+  rawPicks.copy_units[0].group_checks.source_relations[0].claim_impact={claims:claimPicks};
+  const normalized=selectedCopyReviewReferences(rawPicks,multiCard) as any;
+  assert.deepEqual(normalized.copy_units[0].group_checks.source_relations[0].claim_impact.claims,[
+    {line_id:line.line_id,channel:'caption',quote:'Second card.'},{line_id:line.line_id,channel:'label',quote:'02'},
+  ]);
+  assert.equal(normalized.reference_protocol,undefined,'a canonical receipt is not parsed as a selection again');
+  delete rawPicks.copy_units[0].group_checks.source_relations[0].claim_impact.claims[0].caption_index;
+  assert.throws(()=>selectedCopyReviewReferences(rawPicks,multiCard),/caption_index/);
+  const noCitation=structuredClone(selectedReceipt) as any;
+  const noCitationPacket=structuredClone(teachingRequest.packet);
+  noCitationPacket.units[0].points[0].teaching_basis={evidence_ids:[noCitationPacket.source_evidence[0].evidence_id]} as any;
+  noCitation.cases[0].units[0].points[0].source_support='uncertain';
+  assert.equal((selectedCopyReviewReferences(noCitation,noCitationPacket) as any).cases[0].units[0].points[0].source_quote,undefined);
   assert.equal((await reviewClipMentorCopy(teachingRequest,teachingDeps)).receipt.verdict,rawTeaching.receipt.verdict);
   assert.equal(teachingRequests,1,'reopening the original review does not ask an independent reviewer again');
   {
@@ -266,8 +286,8 @@ try {
   const pass = await reviewClipMentorCopy(first, deps);
   assert.equal(pass.receipt.verdict, 'pass'); assert.equal(calls, 1);
   assert.deepEqual(pass.receipt.units[0].group_checks, goodRaw().copy_units[0].group_checks);
-  {
-    const req = await request(), raw:any = goodRaw();
+  for(const selection of [false,true]){
+    const req = await request(), raw = selection?structuredClone(selectedReceipt):goodRaw();
     const relation = {...raw.copy_units[0].group_checks.source_relations[0],assessment:'uncertain',
       relation:'Unresolved extra source detail',reason:'The current statement does not assert that detail; its visible relation remains covered.'};
     raw.copy_units[0].group_checks.source_relations.push(relation);
@@ -298,6 +318,11 @@ try {
     assert.equal((await checkCopyProduction(projectedDoc,'clipmentor')).allowed,true);
     projectedDoc.clipMentorAnalysis!.revision++;
     assert.equal((await checkCopyProduction(projectedDoc,'clipmentor')).allowed,false,'changed copy cannot reuse offline scope projection');
+    const revalidatedPath=join(root,req.operationId+'.revalidated-source-impact-v1.json');
+    const corrupt=JSON.parse(await readFile(revalidatedPath,'utf8'));
+    corrupt.result.receipt.verdict='needs_revision';
+    await writeFile(revalidatedPath,JSON.stringify(corrupt));
+    await assert.rejects(revalidateStoredCopyReview(req,noCalls,annotation),/revalidation_record_invalid/);
   }
   const oldRequest=await request();delete oldRequest.packet.units[0].source_context;
   const oldResult=structuredClone(pass);oldResult.operationId=oldRequest.operationId;
