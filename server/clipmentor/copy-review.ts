@@ -386,34 +386,42 @@ export async function revalidateStoredCopyReview(value: unknown, deps: CopyRevie
   if (!file || await deps.hash(file) !== request.source.hash) throw new Error('revalidation_source_changed');
   const projected=structuredClone(selectedCopyReviewReferences(prior.raw_review,request.packet)) as Row;
   const used = new Set<string>();
-  const changedAggregates=new Set<Row>();
+  const changedAggregates=new Map<Row,Row[]>();
   for (const scope of annotation.scopes) {
     if(!object(scope)||!text(scope.unit_id)||scope.group_id!==undefined&&!text(scope.group_id))throw Error('revalidation_scope_invalid');
     const key = JSON.stringify([scope.unit_id,scope.group_id,scope.relation_index]);
     if (used.has(key) || !Number.isSafeInteger(scope.relation_index) || scope.relation_index < 0) throw new Error('revalidation_scope_invalid');
     used.add(key);
     const relationIn=(review:Row)=>{
-      const unit=review.copy_units?.find((u:Row)=>u.unit_id===scope.unit_id);
-      const aggregate=unit?.group_checks;
-      const groups=Array.isArray(aggregate)?aggregate:aggregate?.group_reviews;
-      if(!Array.isArray(groups))return {relation:scope.group_id===undefined?aggregate?.source_relations?.[scope.relation_index]:undefined};
-      const matches=groups.filter((group:Row)=>group.group_id===scope.group_id);
-      return {relation:scope.group_id&&matches.length===1?matches[0].source_relations?.[scope.relation_index]:undefined,
-        aggregate:object(aggregate)?aggregate:undefined};
+      const units=review.copy_units;
+      if(!Array.isArray(units))return {};
+      const unit=units.find((entry):entry is Row=>object(entry)&&entry.unit_id===scope.unit_id);
+      const groupChecks=unit?.group_checks;
+      const aggregate=object(groupChecks)?groupChecks:undefined;
+      const groups=Array.isArray(groupChecks)?groupChecks:aggregate?.group_reviews;
+      const relationAt=(group:Row|undefined)=>{
+        const relations=group?.source_relations;
+        const relation=Array.isArray(relations)?relations[scope.relation_index]:undefined;
+        return object(relation)?relation:undefined;
+      };
+      if(!Array.isArray(groups))return {relation:scope.group_id===undefined?relationAt(aggregate):undefined};
+      if(!groups.every(object))return {};
+      const matches=groups.filter(group=>group.group_id===scope.group_id);
+      return {relation:scope.group_id&&matches.length===1?relationAt(matches[0]):undefined,aggregate,groups};
     };
-    const {relation,aggregate}=relationIn(projected),{relation:originalRelation}=relationIn(prior.raw_review);
+    const {relation,aggregate,groups}=relationIn(projected),{relation:originalRelation}=relationIn(prior.raw_review);
     if (!relation || !originalRelation || originalRelation.assessment !== 'uncertain' || originalRelation.claim_impact !== undefined
       || digest(JSON.stringify(originalRelation)) !== scope.relation_sha256 || !text(scope.reviewer_reason_quote)
       || originalRelation.reason !== scope.reviewer_reason_quote) throw new Error('revalidation_scope_invalid');
-    if(aggregate&&!changedAggregates.has(aggregate)){
-      if(digestValue(aggregate.source_relations)!==digestValue(aggregate.group_reviews.flatMap((group:Row)=>group.source_relations)))
+    if(aggregate&&groups&&!changedAggregates.has(aggregate)){
+      if(digestValue(aggregate.source_relations)!==digestValue(groups.flatMap(group=>group.source_relations)))
         throw Error('revalidation_scope_invalid');
-      changedAggregates.add(aggregate);
+      changedAggregates.set(aggregate,groups);
     }
     relation.claim_impact = scope.claim_impact;
     if (!sourceRelationsShape([relation])) throw new Error('revalidation_impact_invalid');
   }
-  for(const aggregate of changedAggregates)aggregate.source_relations=aggregate.group_reviews.flatMap((group:Row)=>group.source_relations);
+  for(const [aggregate,groups] of changedAggregates)aggregate.source_relations=groups.flatMap(group=>group.source_relations);
   const priorReceipt=prior.result.receipt as CopyProductionReview;
   const contract=priorReceipt.l1_evidence_contract||priorReceipt.visual_criteria_digest
     ?await recordedReviewContract(request,deps,prior):undefined;
