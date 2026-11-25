@@ -120,6 +120,7 @@ export async function verifyRegisteredGroupPlayback(base: ProjectDoc, legacyLine
     {...firstExplanation, source_range_seconds: [6, 10.2]});
   const splitPrepared = await prepareProductionBlueprint(splitNarration);
   const splitBinding = splitPrepared.packet.units[0].picture_plan!.line_source_ranges[0];
+  assert(splitBinding.evidence_source_ranges);
   assert.deepEqual(splitBinding.evidence_source_ranges.map(e => e.source_range_seconds), [[0, 4], [6, 10.2]],
     'one narration can use two shots without authorizing playback of the gap');
   const secondShot = splitPlan.phases[2];
