@@ -29,6 +29,38 @@ try{
   const a=r.doc.clipMentorAnalysis!;assert.deepEqual(a.source,d.clipMentorAnalysis!.source);assert(!a.production_copy_review);
   assert.deepEqual((await copyTeachingPacketFromDoc(r.doc)).units.map(u=>u.lines),(await copyTeachingPacketFromDoc(d)).units.map(u=>u.lines));assert(!(await checkCopyProduction(r.doc,'clipmentor')).allowed);
  });
+ await test('editing another group never releases an explicitly confirmed teaching decision',async()=>{
+  const {pointDigest,pointReviewTargetDigest}=await import('./analysis');
+  const {default:savedProduction}=await import('./fixtures/production-saved-projects-20261028.json');
+  const d=structuredClone(savedProduction.cases.find(entry=>entry.case_id==='new-contact')!.doc) as unknown as ProjectDoc;
+  const draft=makeDraft(d);
+  const context={...draft,getCreativeMode:()=> 'clipmentor',templates:[],audio:[]};
+  const current=()=>draft.getDoc().clipMentorAnalysis!;
+  const point=current().source_breakdown!.points.find(p=>p.importance==='must_explain')!;
+  const record=(next:typeof point)=>{
+   const breakdown=structuredClone(current().source_breakdown!);
+   breakdown.points=breakdown.points.map(p=>p.point_id===next.point_id?next:p);
+   return breakdown;
+  };
+  const review=async(state:'confirmed'|'needs_revision')=>execClipMentorAnalysisTool('review_clipmentor_analysis',{
+   pointId:point.point_id,state,actor,reason:`Fixture editor ${state}`,expectedRevision:current().revision,
+   expectedPointDigest:await pointReviewTargetDigest(current(),undefined,await pointDigest(current(),point.point_id)),
+  },context) as Promise<{ok?:boolean;error?:string}>;
+  const revise=async(breakdown:ReturnType<typeof record>)=>execClipMentorAnalysisTool('revise_clipmentor_analysis',{
+   action:'set_source_breakdown',actor,reason:'Fixture teaching change',expectedRevision:current().revision,record:breakdown,
+  },context) as Promise<{ok?:boolean;error?:string}>;
+  const confirmation=await review('confirmed');assert(confirmation.ok,JSON.stringify(confirmation));
+  const downgrade=()=>revise(record({...point,importance:'should_explain',change_reason:'Fixture downgrade decision'}));
+  assert.match((await downgrade()).error??'',/cannot downgrade/);
+  const unrelated=structuredClone(current().source_breakdown!);
+  const other=unrelated.units.flatMap(unit=>unit.coverage).find(coverage=>coverage.point_id!==point.point_id)!;
+  other.reason='Fixture clarifies an unrelated teaching group.';
+  assert((await revise(unrelated)).ok);
+  assert.equal(current().reviews.find(r=>r.point_id===point.point_id)?.state,'stale');
+  assert.match((await downgrade()).error??'',/cannot downgrade/);
+  assert((await review('needs_revision')).ok);
+  assert((await downgrade()).ok,'explicit reopening permits the prior draft choice to be revised');
+ });
  await test('full local wrapper imports with both opening and selected creator ending in actual packet',async()=>{
   const d=source(),p=pack(d),original=JSON.stringify(p),r=await run(d,p);assert(r.result.ok,JSON.stringify(r.result));assert.equal(JSON.stringify(p),original);
   const packet=await copyTeachingPacketFromDoc(r.doc);assert.equal(packet.delivery_sections!.length,2);assert.equal(packet.delivery_sections![0].line.narration_ms,p.delivery_sections.opening.narration_ms);
