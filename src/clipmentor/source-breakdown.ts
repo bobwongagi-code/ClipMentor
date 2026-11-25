@@ -742,7 +742,13 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
         else if(grouped){
           const windows=[...binding.evidence_source_ranges,...binding.context_source_ranges].map(item=>item.source_range_seconds);
           for(const part of grouped.groups.flatMap(group=>group.explanations)){
-            if(part.lineId===line.id&&!rangesCover(windows,part.source,1e-6))
+            if(part.lineId!==line.id)continue;
+            // The phase is an envelope over the selected slices. It cannot
+            // authorize the gaps as footage or extend past either bound edge.
+            const [start,end]=part.source;
+            const startBound=windows.some(([a,b])=>a<=start+1e-6&&(start<b||a===b&&start===a));
+            const endBound=windows.some(([a,b])=>end<=b+1e-6&&(end>a||a===b&&end===a));
+            if(!startBound||!endBound||missingLinePointEvidence(b,line,binding,[part.source]).length)
               issue('picture_plan_replay_outside_evidence',u.unit_id,[String(line.id)]);
           }
         }
