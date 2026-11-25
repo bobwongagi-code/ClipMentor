@@ -577,7 +577,7 @@ try{
  }
  const {registerHandoff,readHandoffPolicy,handoffKey}=await import('./handoff');
  let reviewBoardTask:ProductionTask|undefined;
- for(const scenario of ['author-only','generic-review','wrong-revision','wrong-requirements','wrong-purpose','old-feedback','rejected','write-race','requirements-race','passed','visual-only'] as const){
+ for(const scenario of ['author-only','generic-review','wrong-revision','wrong-requirements','wrong-purpose','old-feedback','rejected','write-race','requirements-race','pending-author-attachment','pending-without-review','passed','visual-only'] as const){
   const doc=structuredClone(scenario==='rejected'?description:correctedNarration);
   if(scenario==='visual-only'){
    Object.assign(doc.clipMentorAnalysis!.source_breakdown!.units[0].coverage[0],
@@ -615,16 +615,18 @@ try{
    const source=teachingBaselineSource(scenario==='wrong-revision'?humanNarration:saved,current,[]);
    if(scenario==='wrong-purpose')source.purpose={...teachingPurpose,review_question:'旧版审核只问讲解是否清晰。'};
    const reviewRequirements=scenario==='wrong-requirements'?'e'.repeat(64):requirements;
-   const digest=scenario==='author-only'?'a'.repeat(64):(await checkTeachingBaseline(current,ctx,source,reviewRequirements)).digest;
+   const digest=scenario==='author-only'||scenario==='pending-without-review'?'a'.repeat(64):(await checkTeachingBaseline(current,ctx,source,reviewRequirements)).digest;
    if(scenario==='old-feedback')current.blueprintFeedback='再核同框的比较依据。';
    // Publish a completed production effect against an explicit handoff. The
    // separate handoff run-admission path is covered by the handoff suites.
    if(withHandoff)await registerHandoff({projectId:current.projectId,expectedProjectRevision:revision,previousDigest:null,brief});
-   return {artifact:{revision,requirementsDigest:requirements,authorSelfCheck:'passed',
+   const pending=scenario==='pending-author-attachment'||scenario==='pending-without-review';
+   return {artifact:{revision,requirementsDigest:requirements,authorSelfCheck:pending?'pending':'passed',
+    ...(pending?{authorSelfCheckReferenceIssues:[{field:'S5.reference_ids[0]',material:'current_author_check_source'}]}:{}),
     author_self_check_source_digest:'d'.repeat(64),teaching_baseline_digest:digest,
     independentNarrationAnswers:[{status:'ok',decision:'Ignored worker claim',quote:actionable}]},awaitBlueprintFeedback:true};
   },scenario.endsWith('-race')?raceStore:productionTaskStore);
-  if(scenario!=='passed'&&scenario!=='visual-only'){
+  if(scenario!=='passed'&&scenario!=='visual-only'&&scenario!=='pending-author-attachment'){
    assert.equal(task.status,'blocked');
    assert.match(task.error??'',scenario==='generic-review'?/human_blueprint_draft_binding_missing/
     :scenario.endsWith('-race')?/agent_runtime_precondition_changed/:/human_blueprint_narration_(?:receipt_missing|not_passed)/);
@@ -666,7 +668,7 @@ try{
   const html=await board.text();
   assert.equal(board.status,200,board.ok?'':html);
   assert.equal(board.headers.get('x-clipmentor-board-identity'),boardIdentity);
-  assert(html.includes(teachingPurpose.audience)&&html.includes(teachingPurpose.review_question));
+  assert(!html.includes(teachingPurpose.review_question),'the internal review question stays out of the human board');
   assert.match(html,/<section class="group"[^>]*data-unit-id="fixture-group".*达人把刷头退开后的结果留在镜头中。观众能判断无遮挡时鼻侧色痕有多明显。.*data-quote-line-id="fixture-line"/su);
   assert.match(html,/data-source-evidence-id="fixture-visual">原片依据 刷子与鼻侧同框。/u);
   assert(html.includes(actionable));
@@ -973,7 +975,7 @@ try{
   item.stage='analysis';delete item.completed.analysis;
   analysisCorrection=structuredClone(breakdown);
   if(!complete){
-   analysisCorrection.points[0].buying_concern=analysisCorrection.points[0].teaching_basis!.selling_point;
+   delete analysisCorrection.points[0].teaching_basis;
    analysisCorrection.points[0].change_reason='Fixture registers an incomplete editorial choice';
   }
   const original=(await loadOfflineStoredProject(item.projectId))!;
@@ -1054,6 +1056,28 @@ try{
   point_checks:[{point_id:p.point_id,status:'ok',learner_takeaway:p.connection_excerpt,connection:p.connection_excerpt,
    question_quote:p.question,source_evidence_id:p.evidence.id,source_quote:p.evidence.text}]}))};
  assert(validateTeachingBaselineReview(positiveReceipt,strictPositive).units.every(u=>u.status==='ok'));
+ const {source_quote:_,...selectedWhole}=positiveReceipt.whole_film;
+ const selectedReceipt={...positiveReceipt,reference_protocol:'selection-v1',whole_film:selectedWhole,
+  units:positiveReceipt.units.map(unit=>({...unit,point_checks:unit.point_checks.map(
+   ({source_quote,question_quote,...point})=>point)}))};
+ assert.deepEqual(validateTeachingBaselineReview(selectedReceipt,strictPositive),validateTeachingBaselineReview(positiveReceipt,strictPositive));
+ const unrelatedSameWindow={...strictPositive.evidence[0],id:'same-window-without-selection'};
+ const selectedWrongPoint=structuredClone(selectedReceipt);
+ selectedWrongPoint.units[0].point_checks[0].source_evidence_id=unrelatedSameWindow.id;
+ assert.throws(()=>validateTeachingBaselineReview(selectedWrongPoint,{...strictPositive,
+  evidence:[...strictPositive.evidence,unrelatedSameWindow]}),/evidence_selected_for_this_point/);
+ const requiredDecision={category:'teaching_decision' as const,text:'Retain the confirmed demonstration decision.',
+  source:{who:'editor',reference:'confirmed fixture'},rationale:'Retain its teaching role.',reconsiderWhen:'Editor revises the plan.',
+  confirmedDecisionId:'fixture-demonstration'};
+ const scopedDecision={...strictPositive,confirmedDecisions:[requiredDecision]};
+ assert.throws(()=>validateTeachingBaselineReview(selectedReceipt,scopedDecision),/confirmed_teaching_checks_missing/);
+ assert.equal(validateTeachingBaselineReview({...selectedReceipt,confirmed_teaching_checks:[
+  {id:requiredDecision.confirmedDecisionId,status:'missing',reason:'The editor-confirmed decision is not in the draft.'}
+ ]},scopedDecision).whole_film?.status,'fix');
+ assert.equal(validateTeachingBaselineReview({...selectedReceipt,confirmed_teaching_checks:[
+  {id:requiredDecision.confirmedDecisionId,status:'covered',reason:'Verified against this point.',unit_id:'green-0',
+   point_id:samples[0].point_id,evidence_id:samples[0].evidence.id}
+ ]},scopedDecision).whole_film?.status,'ok');
  const {verifyFrozenTopics}=await import('./production-frozen-topics.verify-suite');
  await verifyFrozenTopics(draft,strictTask,strictPositive,validateTeachingBaselineReview(positiveReceipt,strictPositive));
  const {verifyTeachingSelections}=await import('./production-teaching-selection.verify-suite');
@@ -1164,18 +1188,14 @@ try{
  const addedTopic={...strictPositive,units:[...strictPositive.units,newGroup]};
  assert.equal(unchangedWholeFilmTeaching(addedTopic,wholeFilmRebuild),false,'adding the omitted group is progress without rewriting the old one');
  assert(staleRebuiltTeaching(addedTopic,old,wholeFilmRebuild).includes(newGroup.unit_id),'a new teaching group cannot inherit old copy');
- for(const mode of ['missing','omission','duplicate-concern'] as const){
+ for(const mode of ['missing','omission'] as const){
   const doc=structuredClone(firstCopyDoc);
   const analysis=doc.clipMentorAnalysis!;
   analysis.evidence.push({...visible,evidence_id:'fixture-unselected-result',text:'随后并排呈现两种结果，作者指向明显差异。'});
-  if(mode==='duplicate-concern'){
-   const point=analysis.source_breakdown!.points[0];
-   point.teaching_basis!.selling_point=point.buying_concern+'。';
-  }
   const task=await taskFor('whole-film-'+mode,doc,2,'exemplar-v1');
   const stages:string[]=[];
   calls=[];
-  wholeFilmAction=mode==='duplicate-concern'?undefined:mode;
+  wholeFilmAction=mode;
   await advanceProductionTask(task,async(t,ctx)=>{
    stages.push(t.stage);
    if(t.stage==='analysis')throw Error('fixture observes repair routing only');
@@ -1183,13 +1203,21 @@ try{
   });
   wholeFilmAction=undefined;
   assert.deepEqual(stages,mode==='missing'?['blueprint']:['blueprint','analysis']);
-  assert.deepEqual(calls,mode==='duplicate-concern'?[]:['baseline']);
+  assert.deepEqual(calls,['baseline']);
   if(mode==='missing')assert.match(task.error??'',/teaching_whole_film_review_invalid/);
   if(mode==='omission')assert.match(task.repairContext?.teaching_baseline_issue as string,/整片选题.*原片另有/);
   const saved=(await loadOfflineStoredProject(task.projectId))!;
   assert.equal(teachingDraftPointersDigest(saved.doc),teachingDraftPointersDigest(doc));
  }
- console.log('PASS whole-film omission, missing verdict and duplicate concerns cannot reach first-copy authoring');
+ const duplicateConcern=structuredClone(firstCopyDoc);
+ const duplicatePoint=duplicateConcern.clipMentorAnalysis!.source_breakdown!.points[0];
+ duplicatePoint.teaching_basis!.selling_point=duplicatePoint.buying_concern+'。';
+ const duplicateTask=await taskFor('advisory-duplicate-concern',duplicateConcern,1,'exemplar-v1');
+ duplicateTask.input.panelDelivery!.selectionPolicy='v1';
+ const duplicateSource=teachingBaselineSource(duplicateConcern,duplicateTask,[]);
+ assert(duplicateSource.selection?.gaps.some(gap=>gap.includes('卖点与买家顾虑文案相同')));
+ assert(!teachingPointGaps(duplicateSource,duplicateConcern).some(gap=>gap.includes('卖点与买家顾虑')));
+ console.log('PASS whole-film omission and missing verdict stop first-copy authoring; duplicate concern points are advisory');
  const wrongQuote=structuredClone(positiveReceipt);
  wrongQuote.units[0].point_checks[0].source_quote=samples[1].evidence.text;
  assert.throws(()=>validateTeachingBaselineReview(wrongQuote,strictPositive),/point_source_quote_invalid/);

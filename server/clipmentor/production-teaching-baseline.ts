@@ -4,6 +4,7 @@ import { breakdownPointEvidence,contiguousPlaybackRuns,originalPlaybackRanges } 
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-sections';
 import { readBlueprint, teachingReplayRisks } from '../../src/clipmentor/blueprint-lint';
 import { teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
+import {reviewReferenceResolver} from './review-references';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { currentAgentSessionGeneration } from '../../src/persist/agentSessionGeneration';
 import { loadAgentRuntimeSidecar } from '../../src/persist/agentRuntimeStore';
@@ -174,6 +175,7 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
  // Use the complete source evidence, even if the proposed selection overlooked it.
  const transcripts = analysis.transcripts.filter(entry => entry.words.length).map(({source_id,status,words}) => ({source_id,status,words}));
  const topics=frozenTeachingTopics(doc,task);
+ const confirmedDecisions=topics&&'guidance' in topics?topics.guidance?.filter(item=>item.confirmedDecisionId):undefined;
  const sourceClosing=sourceClosingPolicy(topics,doc);
  // The review board renders the registered teaching groups in blueprint order.
  const closingBlueprint=topics&&!sourceClosing.factOnly
@@ -191,6 +193,7 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   ...teachingReviewContext(task),objective,requirements,sourceClosing,
   ...(task.input.sourceClosingRegistration?{sourceClosingRegistration:true as const}:{}),
   scope:baseline.review_scope, units:baseline.units.map(unit => unitDefinition(baseline,unit)),
+  ...(confirmedDecisions?.length?{confirmedDecisions}:{}),
   ...(referenceBinding?{referenceBinding}:{}),
   rebuilding:!!task.repairContext?.teaching_rebuild,
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
@@ -284,9 +287,10 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
   &&effect.result.narrationSubject===narrationSubject)?.[1].result;
  if(!row(receipt)||!row(receipt.review))throw Error('human_blueprint_narration_receipt_missing');
  const reviewedUnits=receipt.review.units;
+ const confirmed=readConfirmedTeachingChecks(receipt.review.confirmed_teaching_checks,teachingBaselineSource(doc,task,[]));
  if(!Array.isArray(reviewedUnits)||reviewedUnits.length!==baseline.units.length
   ||baseline.units.some(unit=>reviewedUnits.filter((answer:unknown)=>row(answer)&&answer.unit_id===unit.unit_id&&answer.status==='ok').length!==1)
-  ||!row(receipt.review.whole_film)||receipt.review.whole_film.status!=='ok')
+  ||!row(receipt.review.whole_film)||receipt.review.whole_film.status!=='ok'||confirmed?.some(check=>check.status!=='covered'))
   throw Error('human_blueprint_teaching_not_passed');
  const answers=checkedNarration(targets.length?receipt.review.narration_checks:receipt.review.narration_checks??[],targets);
  if(answers.some(answer=>answer.status!=='ok'))throw Error('human_blueprint_narration_not_passed');
@@ -318,7 +322,9 @@ type WholeFilmDecision = {
  evidence_id:string|null;source_quote:string|null;affected_unit_ids:string[];
  frozen_topic_checks?:FrozenTopicChecks;
 };
-type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[];whole_film?:WholeFilmDecision;narration_checks?:NarrationDecision[]};
+type ConfirmedDecisionCheck={id:string;status:'covered'|'missing';unit_id?:string;point_id?:string;evidence_id?:string;reason:string};
+type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[];whole_film?:WholeFilmDecision;narration_checks?:NarrationDecision[];
+ confirmed_teaching_checks?:ConfirmedDecisionCheck[]};
 
 function repeatsTeachingAction(method:string|undefined,evidence:readonly string[],answer:string){
  return [method,...evidence].some(input=>typeof input==='string'&&sameWords(input,answer));
@@ -399,8 +405,6 @@ export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
   });
   if(!basis||!selected.length||selected.length!==basis.evidence_ids.length)
    return [point.point_id+' 缺教学依据或本点原片证据'];
-  if(sameWords(basis.selling_point,point.buying_concern))
-   return [point.point_id+' 卖点与买家顾虑重复，分别写清商品提供什么和买家要解决的问题'];
   if(repeatsTeachingAction(basis.method,selected.filter(e=>e.kind==='visible_action').map(e=>e.text),basis.connection)
    ||[basis.selling_point,point.buying_concern].some(input=>sameWords(input,basis.connection)))
    return [point.point_id+' 作用栏只重复原片动作、卖点或顾虑，缺买家的具体判断'];
@@ -519,7 +523,67 @@ export function wholeFilmIssue(whole:WholeFilmDecision|undefined){
  return issues.length?issues.join('。'):whole.reason;
 }
 
-export function validateTeachingBaselineReview(value: unknown, source: BaselineSource, requireNarrationCriterion=true): BaselineReview {
+function selectedTeachingReferences(value: unknown, source: BaselineSource) {
+ if(!row(value)||value.reference_protocol!=='selection-v1')return value;
+ const resolver=reviewReferenceResolver();
+ const fill=(entry:Row,field:string,location:string,material:string,id:unknown,text:string|undefined)=>{
+  if(entry[field]!==undefined||text===undefined)resolver.missing(location+'.'+field,material,entry[field]??id);
+  return text;
+ };
+ const units=Array.isArray(value.units)?value.units.map((entry:unknown)=>{
+  if(!row(entry)||!Array.isArray(entry.point_checks))return entry;
+  const unit=source.units.find(item=>item.unit_id===entry.unit_id);
+  return {...entry,point_checks:entry.point_checks.map((check:unknown)=>{
+   if(!row(check))return check;
+   const point=unit?.points.find(item=>item.point_id===check.point_id);
+   const location='units.'+String(entry.unit_id)+'.points.'+String(check.point_id);
+   const evidence=source.evidence.find(item=>item.id===check.source_evidence_id&&point?.teaching_basis?.evidence_ids.includes(item.id));
+   return {...check,question_quote:fill(check,'question_quote',location,'current_teaching_point',check.point_id,point?.teaching_question),
+    ...(check.status==='ok'||check.source_evidence_id!==undefined||check.source_quote!==undefined
+     ?{source_quote:fill(check,'source_quote',location,'evidence_selected_for_this_point',check.source_evidence_id,evidence?.text)}:{})};
+  })};
+ }):value.units;
+ const whole=row(value.whole_film)?value.whole_film:undefined;
+ const whole_film=whole&&{...whole,source_quote:whole.status==='unresolved'&&whole.evidence_id===null&&whole.source_quote===undefined?null:
+  fill(whole,'source_quote','whole_film','original_source_evidence',whole.evidence_id,source.evidence.find(item=>item.id===whole.evidence_id)?.text)};
+ const narration_checks=Array.isArray(value.narration_checks)?value.narration_checks.map((entry:unknown)=>{
+  if(!row(entry))return entry;
+  const target=source.narrationTargets?.find(item=>item.unit_id===entry.unit_id&&item.point_id===entry.point_id);
+  const basis=source.units.find(item=>item.unit_id===entry.unit_id)?.points.find(item=>item.point_id===entry.point_id)?.teaching_basis;
+  const location='narration_checks.'+String(entry.unit_id)+'.'+String(entry.point_id);
+  const criterion=row(entry.baseline_criterion)?entry.baseline_criterion:undefined;
+  const field=criterion?.field;
+  const criterionText=field==='method'||field==='connection'||field==='claim_limit'?basis?.[field]:undefined;
+  const line=target?.lines.find(item=>item.line_id===entry.line_id);
+  return {...entry,...(criterion?{baseline_criterion:{...criterion,
+   quote:fill(criterion,'quote',location+'.baseline_criterion','current_teaching_basis',field,criterionText)}}:{}),
+   ...(entry.status==='ok'||entry.line_id!==undefined||entry.quote!==undefined
+    ?{quote:fill(entry,'quote',location,'selected_point_current_narration',entry.line_id,line?.narration)}:{})};
+ }):value.narration_checks;
+ resolver.assert();
+ return {...value,units,whole_film,narration_checks};
+}
+
+function readConfirmedTeachingChecks(raw:unknown,source:BaselineSource):ConfirmedDecisionCheck[]|undefined {
+ const decisions=source.confirmedDecisions;
+ if(!decisions?.length)return;
+ if(!Array.isArray(raw)||raw.length!==decisions.length)throw Error('confirmed_teaching_checks_missing');
+ return decisions.map(decision=>{
+  const matches=raw.filter(entry=>row(entry)&&entry.id===decision.confirmedDecisionId);
+  const check=matches[0];
+  const invalid=()=>Error('confirmed_teaching_check_invalid:'+decision.confirmedDecisionId);
+  if(matches.length!==1||!shortText(check.reason)||!['covered','missing'].includes(check.status))throw invalid();
+  if(check.status==='missing')return {id:check.id,status:check.status,reason:check.reason};
+  const unit=source.units.find(unit=>unit.unit_id===check.unit_id);
+  const point=unit?.points.find(point=>point.point_id===check.point_id&&unit.coverage.some(coverage=>
+   coverage.point_id===point.point_id&&['explain','visual_only'].includes(coverage.treatment)));
+  if(!point?.teaching_basis?.evidence_ids.includes(check.evidence_id)||!source.evidence.some(e=>e.id===check.evidence_id))throw invalid();
+  return {id:check.id,status:check.status,unit_id:check.unit_id,point_id:check.point_id,evidence_id:check.evidence_id,reason:check.reason};
+ });
+}
+
+export function validateTeachingBaselineReview(input: unknown, source: BaselineSource, requireNarrationCriterion=true): BaselineReview {
+ const value=selectedTeachingReferences(input,source);
  const invalid = () => Error('teaching_baseline_review_invalid');
  if (!row(value) || !Array.isArray(value.units) || value.units.length !== source.units.length) throw invalid();
  const hasFeedback=!!source.feedback;
@@ -535,8 +599,13 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
   }
  }
  const decisions = value.units;
- const whole_film=source.pointReview?readWholeFilmDecision(value.whole_film,source):undefined;
- const wholeFilmResult={...(whole_film?{whole_film}:{}),...(source.narrationTargets?.length
+ const confirmed=readConfirmedTeachingChecks(value.confirmed_teaching_checks,source);
+ const missingConfirmed=confirmed?.filter(check=>check.status==='missing');
+ const originalWhole=source.pointReview?readWholeFilmDecision(value.whole_film,source):undefined;
+ const whole_film=originalWhole&&missingConfirmed?.length?{...originalWhole,status:'fix' as const,
+  affected_unit_ids:originalWhole.affected_unit_ids.length?originalWhole.affected_unit_ids:source.units.map(unit=>unit.unit_id),
+  reason:missingConfirmed.map(check=>check.id+' '+check.reason).join('；')}:originalWhole;
+ const wholeFilmResult={...(whole_film?{whole_film}:{}),...(confirmed?{confirmed_teaching_checks:confirmed}:{}),...(source.narrationTargets?.length
   ?{narration_checks:checkedNarration(value.narration_checks,source.narrationTargets,requireNarrationCriterion?source.units:undefined)}:{})};
  const units = source.units.map(unit => {
   const matches = decisions.filter(entry => row(entry) && entry.unit_id === unit.unit_id);
@@ -814,7 +883,9 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
   let attempts=0;
   await executeRun(run,{backend,provider:author.provider,model:author.model,origin:author.origin,openAiApiMode:author.apiMode,
    cacheMode:'short',maxOutputTokens:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
-   ...(backend==='codex'?{localProductionCodex:true as const}:{}),instructions:baselineInstructions(source),
+   ...(backend==='codex'?{localProductionCodex:true as const}:{}),instructions:baselineInstructions(source)
+    +(source.confirmedDecisions?' confirmedDecisions 是本次编辑确认的教学决定。顶层 confirmed_teaching_checks 每项返回 {id:confirmedDecisionId,status:covered/missing,reason,unit_id?,point_id?,evidence_id?}。covered 要选择实际讲到该决定的现行点和本点的原片证据。只出现相关画面、属于同一商品，或者藏在备注中时标 missing。missing 说明切实漏掉的教学决定，不要求特定用词或旧窗口。':'')
+    +' 引用协议 selection-v1：输出 reference_protocol:"selection-v1"。选已有 point_id、source_evidence_id、evidence_id、line_id 和 baseline_criterion.field。不要输出 question_quote、source_quote、quote 或 baseline_criterion.quote，宿主从本版材料按编号还原。判断和理由仍按以上要求。没有可引落点的实质遗漏仍可只说明缺失和相应判据。' ,
    messages:[{role:'user',content:JSON.stringify(baselineReviewInput(source))}],
    host:{signal:stage.signal,maxTurns:1,deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     async beforeRequest(){if(attempts++!==0)throw Error('teaching_baseline_single_request');},

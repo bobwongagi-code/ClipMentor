@@ -151,6 +151,11 @@ export function panelAuthorNeedsHumanReview(task:ProductionTask,revision:string,
   &&!!artifact.authorSelfCheckNotice.trim()&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
 }
 
+export function panelAuthorCheckPending(task:ProductionTask,revision:string,requirementsDigest:string,artifact=task.completed.blueprint?.artifact){
+ return artifact?.authorSelfCheck==='pending'&&Array.isArray(artifact.authorSelfCheckReferenceIssues)
+  &&artifact.authorSelfCheckReferenceIssues.length>0&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
+}
+
 
 /** Requalify a saved unchecked draft only when its original execution is still authorized. */
 export async function requeuePanelAuthorCheck(task:ProductionTask){
@@ -161,7 +166,8 @@ export async function requeuePanelAuthorCheck(task:ProductionTask){
  if((await latestPanelProductionTask(task.projectId))?.taskId!==task.taskId)return false;
  const policy=await productionReviewRequirements(task.projectId);
  const requirementsDigest=panelBlueprintRequirementsDigest(policy);
- if(panelAuthorCheckMatches(task,revision,requirementsDigest)||panelAuthorNeedsHumanReview(task,revision,requirementsDigest))return false;
+ if(panelAuthorCheckMatches(task,revision,requirementsDigest)||panelAuthorNeedsHumanReview(task,revision,requirementsDigest)
+  ||panelAuthorCheckPending(task,revision,requirementsDigest))return false;
  const key='project:'+task.projectId,project=await getStoredEntry(key);
  const doc=project.found?runProjectMigrations(project.value)?.doc:undefined;
  if(!doc||revisionOf(doc)!==revision||doc.clipMentorAnalysis?.source.asset_id!==task.input.sourceAssetId)return false;
@@ -681,7 +687,8 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      ||!task.projectRevision||blueprint.artifact.revision!==task.projectRevision||typeof requirementsDigest!=='string'
      ||!/^[a-f0-9]{64}$/.test(requirementsDigest)
      ||(!panelAuthorCheckMatches(task,task.projectRevision,requirementsDigest,result.artifact)
-       &&!panelAuthorNeedsHumanReview(task,task.projectRevision,requirementsDigest,result.artifact)))
+       &&!panelAuthorNeedsHumanReview(task,task.projectRevision,requirementsDigest,result.artifact)
+       &&!(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&panelAuthorCheckPending(task,task.projectRevision,requirementsDigest,result.artifact))))
      throw Error('human_blueprint_draft_binding_missing');
     let teachingGuards:EntryPreconditions|undefined;
     if(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'||task.blueprintOpinions){

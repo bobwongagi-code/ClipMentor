@@ -219,7 +219,10 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     const now = Date.now();
     if (name === 'revise_clipmentor_analysis' && ['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(args.action))
       && object(args.record) && object(args.record.plan)) {
-      try { validatePicturePlanProjection(args.record.plan); }
+      try {
+        const {selected_narration: _mirror, ...plan} = args.record.plan;
+        validatePicturePlanProjection(plan);
+      }
       catch (error) {
         if (!(error instanceof Error) || !/^picture_plan_[a-z_]+(?::[a-z_]+)?$/.test(error.message)) throw error;
         return { error: error.message, next_step: 'Use the declared picture-plan fields, including mode rather than kind for a phase. Nothing changed.' };
@@ -292,12 +295,6 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           || new Set(lines.map((line) => line.id)).size !== lines.length) return { error: 'Copy lines require unique IDs, registered point_ids, in-range source_seconds, matching narration/captions and Chinese meaning' };
         const covered = new Set(lines.flatMap((line) => line.point_ids));
         if (registered.coverage.some((entry) => entry.treatment === 'explain' && !covered.has(entry.point_id))) return { error: 'New copy would remove a registered teaching point; nothing changed' };
-        if (input.plan.selected_narration !== undefined && (!Array.isArray(input.plan.selected_narration)
-          || input.plan.selected_narration.length !== lines.length
-          || input.plan.selected_narration.some((line, i) => !object(line) || Object.keys(line).some((key) => !copyLineKeys.includes(key))
-            || copyLineKeys.some((key) => JSON.stringify(line[key]) !== JSON.stringify(lines[i][key]))))) {
-          return { error: 'Plan selected_narration must match the submitted copy lines; nothing changed' };
-        }
         internal[input.candidate_id] = { status: 'candidate', review_status: 'pending', production_allowed: false,
           lines: structuredClone(lines), base_revision: a.revision, source_candidate_id: input.source_candidate_id };
         internal[input.plan_id] = { ...structuredClone(input.plan), status: 'candidate', review_status: 'pending', production_allowed: false,
@@ -326,17 +323,14 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         const source = internal[input.source_candidate_id as string] as { lines?: Array<Record<string, unknown>> };
         const selectedIds = input.line_ids as string[];
         const lines = selectedIds.map((id) => source?.lines?.find((line) => line.id === id));
-        const plan = input.plan as Record<string, unknown>;
-        const planned = plan.selected_narration;
-        if (lines.some((line) => !line) || (planned !== undefined && (!Array.isArray(planned) || planned.length !== lines.length
-          || planned.some((line, i) => !line || typeof line !== 'object' || copyLineKeys.some((key) => JSON.stringify(line[key]) !== JSON.stringify(lines[i]![key])))))) return { error: 'Selection and selected_narration must reuse the same ordered existing lines verbatim' };
+        if (lines.some(line => !line)) return { error: 'Selection must reuse existing lines verbatim' };
         const covered = new Set(lines.flatMap((line) => Array.isArray(line!.point_ids) ? line!.point_ids : typeof line!.point === 'string' ? [line!.point] : unit.point_ids));
         if (a.source_breakdown!.units.find((entry) => entry.unit_id === unit.unit_id)!.coverage.some((entry) => entry.treatment === 'explain' && !covered.has(entry.point_id))) return { error: 'Selection would remove a registered teaching point; nothing changed' };
         internal[input.candidate_id] = { status: 'candidate', review_status: 'pending', production_allowed: false,
           lines: structuredClone(lines), base_revision: a.revision,
           selection: { source_candidate_id: input.source_candidate_id, line_ids: [...input.line_ids],
             excluded_line_ids: source.lines!.filter((line) => !selectedIds.includes(String(line.id))).map((line) => line.id), reason: args.reason } };
-        internal[input.plan_id] = { ...structuredClone(plan), status: 'candidate', review_status: 'pending', production_allowed: false,
+        internal[input.plan_id] = { ...structuredClone(input.plan as Record<string, unknown>), status: 'candidate', review_status: 'pending', production_allowed: false,
           script_candidate_id: input.candidate_id, source_binding: structuredClone(a.source), base_analysis_revision: a.revision,
           selection_activation: { status: 'active_selection_not_production_approval', formal_candidate_id: input.candidate_id,
             source_candidate_id: input.source_candidate_id, actual_selected_line_ids: [...input.line_ids], production_allowed: false } };
@@ -361,7 +355,13 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         unit.line_guidance = input.line_guidance;
       } else if (args.action === 'set_source_breakdown') {
         if (!isSourceBreakdown(args.record)) return { error: 'Invalid source breakdown; nothing changed' };
-        const error = breakdownRevisionError(a.source_breakdown, args.record);
+        const confirmed = new Set<string>();
+        for (const review of a.reviews) {
+          if (review.state !== 'confirmed' || review.source_hash !== a.source.sourceContentHash
+            || !a.points.some(point => point.point_id === review.point_id)) continue;
+          if (review.content_digest === await pointDigest(a, review.point_id)) confirmed.add(review.point_id);
+        }
+        const error = breakdownRevisionError(a.source_breakdown, args.record, confirmed);
         if (error) return { error };
         const changes = selectedPointChanges(a.source_breakdown, args.record);
         a.source_breakdown = structuredClone(args.record);
@@ -400,6 +400,9 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         const internal = (unit as unknown as { internal_review: Record<string, unknown> }).internal_review;
         const candidate = internal[String(internal.current_script_candidate)];
         const plan = internal[String(internal.current_picture_plan)];
+        if (object(plan) && object(candidate) && Array.isArray(candidate.lines)) {
+          plan.selected_narration = structuredClone(candidate.lines);
+        }
         const copyError = picturePlanCopyError(plan, candidate);
         if (copyError) return { error: copyError };
         const registered = a.source_breakdown?.units.find(entry => entry.unit_id === unit.unit_id);

@@ -22,7 +22,7 @@ export function panelReviewIssue(error:unknown){
  if(opinionIssue)return {kind:'content',message:opinionIssue[1]+(message.includes('blueprint_repair_no_progress')?' 同一问题再次出现，已暂停，待维护侧核对。':'')} as const;
  if(/suspected_gate_defect|门禁问题/.test(message))
   return {kind:'gate',message:'制作已暂停，需维护侧核对校验。候选和回执已保存。'} as const;
- if(/binding|_scope_|_stale|_schema_|_format|execution_mapping_repair_no_progress|feedback_(target_missing|unit_placement_missing|execution_targets_required|changed_)|绑定错|版本.*变化|预览.*变化|版本记录不匹配|片尾.*齐备|片尾.*变化|证据.*缺失/i.test(message))
+ if(/binding|_scope_|_stale|_schema_|_format|review_reference_invalid|author_self_check_invalid|execution_mapping_repair_no_progress|feedback_(target_missing|unit_placement_missing|execution_targets_required|changed_)|绑定错|版本.*变化|预览.*变化|版本记录不匹配|片尾.*齐备|片尾.*变化|证据.*缺失/i.test(message))
   return {kind:'binding',message:'当前版本的素材绑定或格式需要核对。请先刷新，仍有问题请交维护侧。'} as const;
  if(/(?:teaching_baseline_repair|teaching_final_narration_repair|preview_blueprint_alignment|blueprint_repair)_no_progress/.test(message))
   return {kind:'content',message:'同一缺口再次出现，自动返修已暂停。候选和回执已保存，需维护侧核对。'} as const;

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Check, Download, Play, Send } from 'lucide-react'
 import { BLUEPRINT_OPINION_MAX_LENGTH, type BlueprintOpinion, type BlueprintOpinionConfirmation, type BlueprintOpinionDifference, type BlueprintOpinionPlacement } from '../../../shared/clipmentor-blueprint-opinions'
 
-import teachingPurpose from '../../../src/agent/skills/clipmentor/references/teaching-purpose.json'
 import { ProgressNode } from '../components/processing/ProgressNode'
 import { productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
 
@@ -406,7 +405,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const sharedBlueprint = showSharedBlueprint(sharedProgress)
   if(!state)return <p className="cm-caption" role="status">{readError || '正在读取制作状态…'}</p>
   if(state.outputs)return <>
-    <div className="cm-heading"><h1>{productionPageTitle(sharedProgress)}</h1><p>给{teachingPurpose.audience}看的拆解。{teachingPurpose.review_question}</p><p>{sharedBlueprint?'共用片头与教学主体，片尾分别面向新建联和已合作达人。':'共用主体只制作一次，再生成两个片尾版本。'}</p></div>
+    <div className="cm-heading"><h1>{productionPageTitle(sharedProgress)}</h1><p>{sharedBlueprint?'共用片头与教学主体，片尾分别面向新建联和已合作达人。':'共用主体只制作一次，再生成两个片尾版本。'}</p></div>
     <div className="cm-output-list">
     {state.outputs.filter(output=>!sharedBlueprint || output.audience==='existing_partner').map(output=><section key={output.audience} aria-label={sharedBlueprint?'共用蓝图':output.audience==='new_contact'?'新建联达人版':'已合作达人版'}>
       <ProductionPanel assets={assets} onRecheck={onRecheck} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint} outputAudience={output.audience} sharedTask={sharedProgress} onTask={output.audience==='existing_partner'?reportSharedProgress:undefined} />
@@ -427,7 +426,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         </div>
       </section>
     </> : boardRevision || awaitingPreview || completed ? <>
-      {!unifiedBlueprint && <div className={outputAudience?"cm-output-heading":"cm-heading"}><h1>{outputAudience?audienceTitle:reviewTitle}</h1>{!outputAudience&&<p>给{teachingPurpose.audience}看的拆解。{teachingPurpose.review_question}</p>}</div>}
+      {!unifiedBlueprint && <div className={outputAudience?"cm-output-heading":"cm-heading"}><h1>{outputAudience?audienceTitle:reviewTitle}</h1></div>}
       <section className="cm-panel cm-work">
         {boardRevision && currentBoard?.revision === boardRevision && task.teachingDecisionChange && <p>{task.teachingDecisionChange}</p>}
         {boardRevision && (currentBoard?.revision === boardRevision

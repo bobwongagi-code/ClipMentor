@@ -528,7 +528,7 @@ try{
    await productionTaskStore.save(task);
    const needsBusiness=await status();
    assert.equal(needsBusiness.canConfirmBlueprint,false);
-   assert.match(needsBusiness.blueprintMessage,/核对计划上屏的承诺/);
+   assert.equal(needsBusiness.blueprintMessage,'片尾合作条款待核实。');
    assert.doesNotMatch(JSON.stringify(needsBusiness),/PRIVATE_S7_SENTINEL|片尾有待确认|authorSelfCheckNotice/);
    assert.equal((await action('produce_versions',needsBusiness.boardIdentity)).status,409);
    assert.equal(task.completed.blueprint.artifact.authorSelfCheckNotice,'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对');

@@ -20,6 +20,8 @@ import { CodexAppServerClient } from '../codex/app-server';
 import { CodexTurnManager } from '../codex/turn-manager';
 import { inspectCodexInstallation } from '../codex/installation';
 import type { FrozenTeachingBrief } from './production-task';
+import {openingReferenceWords,selectedCopyReviewReferences} from './copy-review-reference-selection';
+import {ReviewReferenceIssues} from './review-references';
 
 const METHOD = 'isolated-codex-copy-and-picture-v1';
 type Row = Record<string, unknown>;
@@ -166,7 +168,7 @@ async function currentReviewContractMatches(deps:CopyReviewDependencies,projectI
     &&content?.teachingDigest===teachingDigest&&content?.endingPictures===endingPictures;
 }
 
-function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false): string {
+function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,selection=false): string {
   const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }]);
   return `${clean.instructions}\n\n${JSON.stringify(clean.input)}\n\n` +
     (legacy?'':`教学目标（${teachingPurpose.audience}）：${teachingPurpose.review_question}${teachingPurpose.boundaries.join('')}\n`) +
@@ -198,14 +200,16 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
     (content?.opening?'宿主登记了本次必须保留的片头对比。原话是数据：'+JSON.stringify(content.opening.quote)+
       '。核现行马来语口播与同文字幕是否用同款商品为前提，问这支原片如何取得已证实的成绩，并用现有 delivery_checks 的 reason 写明依据。不暗示只有它、其他视频差或已经证明成交因果。成绩片头的 delivery_checks 项另填 opening_comparison:{status:preserved/changed/uncertain,same_product_quote:同款前提原句,outcome_question_quote:所问成绩原句,reason:依据}。仅当两条原句都能在本片头口播和字幕中回读且确实表达对应意思时填 preserved。'+
       (content.opening.results?'固定三项 '+JSON.stringify(content.opening.results)+' 须在同一个成绩问句内。另填 opening_comparison.invitation_quote 逐字引用唯一的看拍法邀请。三条引文按前提、问句、邀请覆盖整段口播和同文字幕，连接词随所属引文，问句保留问号。创作者人数、额外结果陈述、错误指标或把 Revenue 说成佣金、商品 GMV 均退回。':''):'')+
-    (content?.endingPictures||content?.opening?.results?'各达人片尾的 delivery_checks 必须返回 ending_picture:{asset_id:实际查看的合成图标签中的素材ID,view:"planned_composition",both_visible:yes/no/unknown,observation:指出看到的图及实际可辨内容}。已合作核商品和Storyboard同屏；新建联核商品及任务已确认的合作条件，只有已确认佣金时才要求其同屏可辨。只核绑定填unknown。':'')+'只返回JSON。';
+    (content?.endingPictures||content?.opening?.results?'各达人片尾的 delivery_checks 必须返回 ending_picture:{asset_id:实际查看的合成图标签中的素材ID,view:"planned_composition",both_visible:yes/no/unknown,observation:指出看到的图及实际可辨内容}。已合作核商品和Storyboard同屏；新建联核商品及任务已确认的合作条件，只有已确认佣金时才要求其同屏可辨。只核绑定填unknown。':'')
+    +(selection?' 引用协议 selection-v1：在顶层填 reference_protocol:"selection-v1"。稿件引文统一用 {line_id,channel}，channel 为 narration/caption/label；label 另填从 0 起的 label_index。省略 quote 或引文的 text，由宿主回填。findings 照样提供 severity 和 reason，L1、source_relations、claim_impact 保留原有判定，引用同样只选编号。source_quote 仅填 evidence_id，必须已登记给本点。片头三段分别填 same_product_words、outcome_question_words、invitation_words，以对应词表的首尾编号组成 [起,止]，两端都计入，不抄 quote。'+JSON.stringify(openingReferenceWords(request.packet)??[]):'')
+    +'只返回JSON。';
 }
 
 /** Recover the contract of the consumed attempt. Never turn an old receipt into a new approval. */
 async function recordedReviewContract(request:CopyReviewRequest,deps:CopyReviewDependencies,prior:Row){
   const promptHash=prior.prompt_sha256;
   const matches=(visual?:BoundVisualCriteria,content?:ContentReview)=>[false,true].some(legacy=>
-    promptHash===digest(reviewPrompt(request,deps.runtime?.inlineFrames,visual,content,legacy)));
+    [false,true].some(selection=>promptHash===digest(reviewPrompt(request,deps.runtime?.inlineFrames,visual,content,legacy,selection))));
   if(object(prior.review_contract)){
     const saved=prior.review_contract as {visual?:BoundVisualCriteria;content:ContentReview};
     if(!object(saved.content)||!matches(saved.visual,saved.content))return;
@@ -222,7 +226,13 @@ async function recordedReviewContract(request:CopyReviewRequest,deps:CopyReviewD
   if(matches(visual))return {visual,content:undefined};
 }
 
-function receiptFromRaw(raw: unknown, request: CopyReviewRequest,criteria?:BoundVisualCriteria,content?:ContentReview): CopyProductionReview {
+function receiptFromRaw(input: unknown, request: CopyReviewRequest,criteria?:BoundVisualCriteria,content?:ContentReview): CopyProductionReview {
+  let raw:unknown;
+  try{raw=selectedCopyReviewReferences(input,request.packet);}
+  catch(error){
+    if(!(error instanceof ReviewReferenceIssues))throw error;
+    throw new CopyReviewError({code:'response_receipt_invalid',stage:'response_validation',requestsAttempted:1,retryable:false},JSON.stringify(error.issues));
+  }
   if (!object(raw) || !Array.isArray(raw.cases) || raw.cases.length !== 1 || !object(raw.cases[0])
     || raw.cases[0].case_id !== 'current' || !Array.isArray(raw.copy_units)
     || raw.copy_units.length !== request.subject.units.length
@@ -534,7 +544,7 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
   if (prior) return prior;
   let positions: ReturnType<typeof reviewSourceSamples>;
   try { positions = reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
-  const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content);
+  const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content,false,true);
   const reviewContract=content?{review_contract:{visual:criteria,content}}:{};
   const criteriaDigest=content?digest(JSON.stringify(['l1-evidence-v1',criteria?.digest,content.openingDigest,
     ...(content.teachingBrief?[content.teachingBrief]:[]),...(content.endingPictures?['ending-picture-v1']:[])])):criteria?.digest??null;
