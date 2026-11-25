@@ -17,6 +17,7 @@ import {confirmedUnsubmittedGateway} from './production-recovery';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ReviewApiConfig} from './copy-review-api';
 import {openingComparisonCriterion,openingComparisonShape,parseProductionSourceCriteria,sourcePerformanceCriterion,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
+import {frozenTeachingTopics} from './production-source-policy';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {previewAlignmentFindingKeys,previewAlignmentRepairPause} from './preview-review';
 import {productionDeliverables} from './production-deliverables';
@@ -26,7 +27,6 @@ import {verifyProductionOutput} from './production-format';
 import {resolveUploadFile,isSafeUploadName} from '../media-dir';
 import {boundPanelSalesEvidence,declaredPanelOpening,panelSalesEvidence} from './production-panel-delivery';
 import {firstSuspectedGateDefect} from './production-gate-probes';
-import {frozenTeachingTopics} from './production-source-policy';
 import type {BlueprintOpinionRecord} from './production-blueprint-opinions';
 
 /** Keep independent findings through intermediate author/structure repairs, never overwrite them with a self-check. */
@@ -76,7 +76,7 @@ export interface TeachingAnalysisPublication {
  baseRevision:string;revision:string;repairEpoch:number;inputDigest:string;outputDigest:string;artifact:Record<string,unknown>;
  analysis:NonNullable<ProjectDoc['clipMentorAnalysis']>;
 }
-export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[]};
+export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[];sourceAdviceSeparated?:true};
 type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
@@ -282,8 +282,10 @@ export function productionTeachingBrief(task:ProductionTask|undefined,policy:Han
  const objective=policy?.brief.objective??frozen.objective;
  const criteria=policy?policy.brief.doneCriteria.filter((item):item is string=>typeof item==='string')
   :task.input.openingComparison?.results?[]:frozen.doneCriteria??[];
- const teaching=doc&&frozenTeachingTopics(doc,task);
- const doneCriteria=[...new Set([...(teaching?[teaching.quote]:[]),...criteria])];
+ // Preserve the identity of receipts from already approved outputs. New
+ // approvals freeze the viewed teaching without importing advice as criteria.
+ const historicalRequest=doc&&!frozen.sourceAdviceSeparated?frozenTeachingTopics(doc,task)?.quote:undefined;
+ const doneCriteria=[...new Set(historicalRequest?[historicalRequest,...criteria]:criteria)];
  return {instruction:frozen.instruction,...(objective!==undefined?{objective}:{}),
   ...(frozen.feedback!==undefined?{feedback:frozen.feedback}:{}),...(doneCriteria.length?{doneCriteria}:{})};
 }

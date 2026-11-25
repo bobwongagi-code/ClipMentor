@@ -62,6 +62,15 @@ export async function verifyRegisteredGroupPlayback(base: ProjectDoc, legacyLine
   subInternal[subInternal.current_picture_plan].phases[1].source_range_seconds = [1, 4];
   assert.deepEqual((await prepareProductionBlueprint(groupedSubwindow)).packet.units[0].picture_plan!.registered_revisits[0],
     { from_source_range: [0, 10.733333333333333], to_source_range: [1, 4] });
+  const narrowedLine=structuredClone(groupedSubwindow);
+  const narrowedReview=(narrowedLine.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  narrowedReview[narrowedReview.current_script_candidate].lines[0].source_seconds=[1,4];
+  assert(!checkSourceBreakdown(narrowedLine).issues.some(issue=>issue.code==='picture_plan_replay_outside_evidence'));
+  narrowedReview[narrowedReview.current_picture_plan].phases[1].source_range_seconds=[1,4.1];
+  const outside=checkSourceBreakdown(narrowedLine).issues;
+  assert(outside.some(issue=>issue.code==='picture_plan_replay_outside_evidence'&&issue.targets?.includes('BT-L01')));
+  assert(!outside.some(issue=>issue.code==='picture_plan_revisits_mismatch'),'the broad replay segment cannot authorize a line to exceed its own evidence');
+  await assert.rejects(prepareProductionBlueprint(narrowedLine),/picture_plan_replay_outside_evidence/);
   for (const change of [
     (doc: ProjectDoc) => { doc.clipMentorAnalysis!.source_breakdown!.units[0].revisits[0].from_segment_id = 'BT-G2-original'; },
     (doc: ProjectDoc) => { const ir = (doc.clipMentorAnalysis!.blueprint[0] as any).internal_review; ir[ir.current_picture_plan].phases[1].source_range_seconds = [1, 10.5]; },

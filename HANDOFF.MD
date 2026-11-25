@@ -868,3 +868,27 @@ The author reference separates what a product offers from what a buyer still nee
 Validate supplemental evidence by row, then commit the complete append only if all rows pass. Report the field and registered evidence type on each rejection. Preserve the compact no-write outcome alongside archived details. When replaying an interrupted analysis, check the matched successful write and the current baseline before proceeding.
 
 Return a narration finding against the same unit and registered teaching point. A claim-boundary objection quotes the actual current line. A real omission identifies the missing decision and what the buyer loses. Group and whole-film findings still have their own grounding. An unbound or stale return remains readable without authorizing a new repair. A completed analysis retires prior narration repair instructions. Compare the rejected line for a factual claim and the whole teaching point for an omission before another review. Leave new wording requests as suggestions until agreed.
+
+### 2026-11-25 · Keep independent selection findings inside the confirmed scope
+
+A live intake hit two versions of the same whole-film return. The reviewer marked the confirmed scope as passing while asking the author to teach footage declared as background. The write gate rejected that addition. After it was removed, the next review asked for it again and automatically dispatched another repair. The intake was stopped with its four assets, revisions and original receipts intact. No human review board was published.
+
+The review contract retains the general search for omissions when a confirmed scope and a fact-only ending coexist. Check that combination in both directions. A proposal to expand the confirmed scope needs editor agreement before it can drive repair. An omission within the agreed scope can still block. Compare recurring findings against the same editorial decision and evidence even when a round changes the wording. Record run starts, saved revisions and published boards separately.
+
+For an isolated local intake, verify the active model setting against the Codex model list and wait for the actual frontend preflight before starting. Process listings can add escaped characters to copied values. Correct the isolated setting before a task is created.
+
+### 2026-11-25 · Separate source advice from editor approval
+
+Before registering a constraint, distinguish the teaching decision, the factual boundary, the material suggestion, and the temporary omission. Record who supplied it, the discussion or confirmation it came from, the reason, and when to reconsider it. Treat an intake declaration I prepare as advice. The editor approves the actual teaching baseline through the existing version-bound blueprint confirmation. Revisit earlier material choices when the teaching changes.
+
+The author and reviewer may select a clearer original window or reconsider earlier background footage. Each teaching point still needs its own registered evidence. Findings about a false claim still point to the actual sentence and the relevant evidence. CI rejects hard-window fields and checks both sides of the teaching gate. A saved review of a superseded scoped contract remains available for diagnosis and cannot trigger another request in the same stage and repair round.
+
+### 2026-11-25 · Accept evidence bound to a group's replay
+
+A saved baseline review cited a frame outside the group's original playback. The group explicitly selected it as a replay, and the teaching point cited the same frame through that segment. Allow that relationship in the review validator. A frame present in whole-source context alone remains insufficient. Recheck the saved operation identity and exact source digest before resuming; the original operation and review text can be reused without submitting another review.
+
+A later run hit the separate write-qualification problem twice. Both before/after source breakdown comparisons changed only the three groups' `revisits` records. The host treated the resulting digest change as different teaching during copy authoring. It had already entered another review by the time the second occurrence was visible. Stop the retry, keep the drafts and receipts, and use both saved pairs to reproduce the distinction between replay alignment and changes to teaching meaning or evidence.
+
+### 2026-11-25 · Bind writing to teaching decisions, and replay to its evidence
+
+Maintenance recorded the repeated return as a suspected gate defect. A copy-authoring qualification binds the chosen teaching, factual limits and referenced evidence, including changes behind an existing evidence ID. It excludes playback endpoints and revisit links. A picture repair can reuse the same task's compatible positive selection receipt. The current narration and the eventual board still have their own exact receipt bindings. An out-of-bounds replay returns a picture issue naming the line. Fixing a picture slot does not reopen the teaching selection. Both archived pairs retained their original reviews in a zero-call replay.

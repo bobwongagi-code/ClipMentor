@@ -67,7 +67,7 @@ export function copyPreparationReady(doc: ProjectDoc): boolean {
     'copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch',
     'picture_plan_phase_mode_invalid', 'picture_plan_phase_range_invalid', 'picture_plan_phase_original_missing',
     'picture_plan_phase_line_invalid', 'picture_plan_group_explanation_missing',
-    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'delivery_sections_invalid',
+    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'picture_plan_replay_outside_evidence', 'delivery_sections_invalid',
   ].includes(i.code));
 }
 const row = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -737,7 +737,15 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
         ids.forEach((id) => linePoints.add(id));
         if (!ids.length || ids.some((id) => !u.coverage.some((c) => c.point_id === id))) issue('copy_point_not_registered', String(line.id));
         const plan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
-        if (!copyLineSourceBinding(b, u, line, plan)) issue('copy_picture_outside_explanation', String(line.id));
+        const binding=copyLineSourceBinding(b,u,line,plan);
+        if(!binding)issue('copy_picture_outside_explanation',String(line.id));
+        else if(grouped){
+          const windows=[...binding.evidence_source_ranges,...binding.context_source_ranges].map(item=>item.source_range_seconds);
+          for(const part of grouped.groups.flatMap(group=>group.explanations)){
+            if(part.lineId===line.id&&!rangesCover(windows,part.source,1e-6))
+              issue('picture_plan_replay_outside_evidence',u.unit_id,[String(line.id)]);
+          }
+        }
       }
       for (const c of u.coverage) if (['explain', 'merged'].includes(c.treatment) && !linePoints.has(c.point_id)) issue('selected_point_missing_from_copy', c.point_id);
     }
