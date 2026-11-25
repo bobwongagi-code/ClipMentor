@@ -29,6 +29,8 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
   await mkdir(proof, { recursive: true })
   let child: ChildProcess | undefined
   let logs = '', origin = ''
+  let holdPraiseReadback = false
+  const praiseReadback = Promise.withResolvers<void>()
   const blocked: string[] = [], forwarded: string[] = []
   try {
     child = spawn(process.execPath, ['--import', 'tsx', join(sourceRoot, 'server/clipmentor/production-web-loop.test-server.ts')], {
@@ -49,6 +51,10 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
       const request = route.request(), url = new URL(request.url())
       if (url.origin !== origin) { blocked.push(`${request.method()} ${request.url()}`); await route.abort(); return }
       if (url.pathname.startsWith('/api/')) forwarded.push(`${request.method()} ${url.pathname}${url.search}`)
+      if(url.pathname==='/api/clipmentor/production'&&!url.search){
+        if(request.method()==='POST'&&request.postDataJSON()?.blueprintOpinions?.some((entry:{text:string})=>entry.text==='这组很好'))holdPraiseReadback=true
+        if(request.method()==='GET'&&holdPraiseReadback)await praiseReadback.promise
+      }
       await route.continue()
     })
     const state = async () => await (await fetch(origin + '/api/clipmentor/production')).json()
@@ -137,8 +143,16 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     expect((await audit()).workerEvents).toHaveLength(0)
     await overallOpinion.clear()
     await groupOpinion.fill('这组很好')
-    await page.getByRole('button', { name:'提交意见' }).click()
-    await expect(page.getByText('意见已记录。')).toBeVisible()
+    try{
+      await page.getByRole('button', { name:'提交意见' }).click()
+      await expect(page.getByText('意见已记录。')).toBeVisible()
+      await expect(groupOpinion).toHaveValue('')
+      await expect(groupOpinion).toBeDisabled()
+    }finally{
+      holdPraiseReadback=false
+      praiseReadback.resolve()
+    }
+    await expect(groupOpinion).toBeEditable()
     await expect(page.getByRole('button', { name:'确认并修改' })).toHaveCount(0)
     expect((await audit()).workerEvents).toHaveLength(0)
     await groupOpinion.fill('第一句保留，第二句改短')
