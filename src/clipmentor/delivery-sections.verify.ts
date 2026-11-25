@@ -138,6 +138,7 @@ try{const result=await reviewClipMentorCopy(req,deps);assert.equal(result.receip
   requests++;
   assert(prompt.includes('L1.evidence'));
   assert.equal(prompt.includes(quote),!!openingComparisonCriterion(taskPolicy.brief.doneCriteria));
+  assert(!prompt.includes('invitation_words'),'an opening without fixed results has no invitation selector');
   return structuredClone(reply);
  }};
  const changed=(test:(value:typeof reply)=>void)=>{
@@ -312,10 +313,19 @@ try{const result=await reviewClipMentorCopy(req,deps);assert.equal(result.receip
    same_product_quote:premise+', tapi',outcome_question_quote:fixedQuestion,invitation_quote:fixedInvitation});
   Object.assign(fixedReply.delivery_checks[1],{ending_picture:{asset_id:sections[1].picture.asset_id,view:'planned_composition',both_visible:'yes',observation:'Fixture reply'}});
   const fixedService={...service,requirements:async()=>({policy:policy([fixed]),opening:fixed}),async run(prompt:string){
-   requests++;assert(prompt.includes('opening_comparison.invitation_quote'));return fixedReply;
+   requests++;assert(prompt.includes('opening_comparison.invitation_words'));
+   assert(!prompt.includes('opening_comparison.invitation_quote'));return fixedReply;
   }};
   const fixedAccepted=await reviewClipMentorCopy(fixedCurrent.input,fixedService);
   assert.equal(fixedAccepted.receipt.verdict,'pass','an ordinary Malay connector remains possible inside the anchored opening');
+  const {selectedCopyReviewReferences}=await import('../../server/clipmentor/copy-review-reference-selection');
+  const prefixWords=`${premise}, tapi`.split(/\s+/u).length;
+  const endQuestion=prefixWords+fixedQuestion.split(/\s+/u).length;
+  const selectedOpening=selectedCopyReviewReferences({reference_protocol:'selection-v1',delivery_checks:[{
+   ...openingCheck,opening_comparison:{status:'preserved',same_product_words:[1,prefixWords],
+    outcome_question_words:[prefixWords+1,endQuestion],invitation_words:[endQuestion+1,endQuestion+fixedInvitation.split(/\s+/u).length]},
+  }]},fixedCurrent.input.packet) as {delivery_checks:Array<{opening_comparison:{invitation_quote:string}}>};
+  assert.equal(selectedOpening.delivery_checks[0].opening_comparison.invitation_quote,fixedInvitation);
   const savedPath=join(root,`${fixedCurrent.input.operationId}.json`);
   const historical=JSON.parse(await readFile(savedPath,'utf8'));
   delete historical.raw_review.delivery_checks[0].opening_comparison.invitation_quote;

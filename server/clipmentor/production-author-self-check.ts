@@ -22,6 +22,7 @@ type TeachingCheck={
  delivered?:{line_id:string;quote:string}|{evidence_id:string;source_seconds:number};
 };
 type Check = { id:string; status:CheckStatus; reference:string|string[]; reason:string;repair_resolutions?:RepairResolution[];teaching_units?:TeachingCheck[] };
+const shortReference=(value:string)=>/^[\p{L}\p{N}]{2,3}$/u.test(value);
 export const blockingAuthorBlueprintChecks=(checks:readonly Check[],independentTeaching:boolean)=>
  checks.filter(check=>check.status!=='ok'&&(!independentTeaching||check.id!=='S1'));
 type AuthorCheckResult = { digest:string; sourceDigest:string; runId:string; checks:Check[]; referenceIssues?:ReviewReferenceIssue[] };
@@ -34,26 +35,29 @@ class InvalidAuthorCheckResponse extends Error {
 }
 
 type RepairEvidence=Pick<AnalysisEvidence,'kind'|'text'|'source_range_seconds'|'time_seconds'>;
-function repairSourceQuotes(unit:RepairTarget['current'],evidence:readonly RepairEvidence[]) {
- const quotes=unit.lines.flatMap(line=>[line.narration_ms,line.caption_lines.join(' '),...line.labels]);
- const picture=unit.picture_plan?.execution_plan?.content as {
-  phases?:Array<{picture?:string}>;composition?:{detail?:string;comparison_detail?:string};
- }|undefined;
+function repairEvidenceIndexes(unit:RepairTarget['current'],evidence:readonly RepairEvidence[]) {
  const windows=[...(unit.picture_plan?.original_source_ranges??[]),
   ...(unit.picture_plan?.line_source_ranges.flatMap(line=>{
    const selected=[...line.evidence_source_ranges??[],...line.context_source_ranges??[]];
    return selected.length?selected.map(range=>range.source_range_seconds):[line.source_range_seconds];
   })??[])];
- for(const item of evidence){
-  if(item.kind!=='visible_action'&&item.kind!=='original_claim')continue;
+ return evidence.flatMap((item,index)=>{
+  if(item.kind!=='visible_action'&&item.kind!=='original_claim')return [];
   const start=item.source_range_seconds?.[0]??item.time_seconds;
   const end=item.source_range_seconds?.[1]??start;
-  if(start===undefined||end===undefined||!Number.isFinite(start)||!Number.isFinite(end)||end<start)continue;
+  if(start===undefined||end===undefined||!Number.isFinite(start)||!Number.isFinite(end)||end<start)return [];
   // Full-source context provides background for every group. Only a quote
   // within actual playback or selected line material can close this finding.
-  if(windows.some(([a,b])=>a===b?start===a&&end===b:a<=start&&start<b&&end<=b))
-   quotes.push(item.text);
- }
+  return windows.some(([a,b])=>a===b?start===a&&end===b:a<=start&&start<b&&end<=b)?[index]:[];
+ });
+}
+
+function repairSourceQuotes(unit:RepairTarget['current'],evidence:readonly RepairEvidence[]) {
+ const quotes=unit.lines.flatMap(line=>[line.narration_ms,line.caption_lines.join(' '),...line.labels]);
+ const picture=unit.picture_plan?.execution_plan?.content as {
+  phases?:Array<{picture?:string}>;composition?:{detail?:string;comparison_detail?:string};
+ }|undefined;
+ quotes.push(...repairEvidenceIndexes(unit,evidence).map(index=>evidence[index].text));
  return [...quotes,...(picture?.phases?.map(phase=>phase.picture)??[]),picture?.composition?.detail,picture?.composition?.comparison_detail]
   .filter((quote):quote is string=>typeof quote==='string');
 }
@@ -158,8 +162,11 @@ function selectedAuthorReferences(value:unknown,source:unknown) {
   const repair_resolutions=Array.isArray(row.repair_resolutions)?row.repair_resolutions.map((resolution:unknown)=>{
    if(!reviewRecord(resolution))return resolution;
    const target=data.repairReview?.find(entry=>entry.finding_id===resolution.finding_id);
-   const texts=new Set(target?repairSourceQuotes(target.current,data.sourceEvidence??[]):[]);
-   const permitted=new Map([...choices].filter(([,text])=>texts.has(text)));
+   const unitIndex=target?data.blueprint?.units.findIndex(unit=>unit.unit_id===target.unit_id)??-1:-1;
+   const scoped=unitIndex>=0?`blueprint.units.${unitIndex}.`:undefined;
+   const evidenceKeys=new Set(target?repairEvidenceIndexes(target.current,data.sourceEvidence??[]).map(i=>`sourceEvidence.${i}.text`):[]);
+   const permitted=new Map([...choices].filter(([id])=>evidenceKeys.has(id)||scoped&&id.startsWith(scoped)
+    &&/^(?:lines\.\d+\.(?:narration_ms|(?:caption_lines|labels)\.\d+)|picture_plan\.execution_plan\.content\.(?:phases\.\d+\.picture|composition\.(?:detail|comparison_detail)))$/u.test(id.slice(scoped.length))));
    return {...resolution,reference:quote(resolution,path+'.repair_resolutions.'+String(resolution.finding_id),permitted)};
   }):row.repair_resolutions;
   const teaching_units=Array.isArray(row.teaching_units)?row.teaching_units.map((unit:unknown)=>{
@@ -207,7 +214,7 @@ function parseAuthorSelfCheck(text:string, source:unknown, useSelections:boolean
       if(typeof quote!=='string'||quote.length>500)return false;
       const excerpt=quote.trim();
       return excerpt.length>=4?excerpts.some(value=>value.includes(excerpt))
-        :/^[\p{L}\p{N}]{2,3}$/u.test(excerpt)&&excerpts.some(value=>value.trim()===excerpt);
+        :shortReference(excerpt)&&excerpts.some(value=>value.trim()===excerpt);
     };
     if(matching.length!==1||!['ok','fix','unresolved'].includes(row?.status)||typeof row.reason!=='string'
      ||!row.reason.trim()||row.reason.length>900||!references.length||references.length>24
@@ -247,8 +254,8 @@ function parseAuthorSelfCheck(text:string, source:unknown, useSelections:boolean
        ...target.current.source_context?.evidence_ids??[]]);
       if(matches.length!==1||!['resolved','unresolved'].includes(r?.status)||typeof r.reason!=='string'||!r.reason.trim()
        ||!Array.isArray(r.reference)||!r.reference.length||r.reference.length>24
-       ||!r.reference.every((q:unknown)=>typeof q==='string'&&q.trim().length>=4&&q.length<=500
-        &&!identifiers.has(q.trim())&&currentStrings.some(v=>v.includes(q.trim()))))
+       ||!r.reference.every((q:unknown)=>typeof q==='string'&&q.length<=500&&!identifiers.has(q.trim())
+        &&currentStrings.some(v=>q.trim().length>=4?v.includes(q.trim()):shortReference(q.trim())&&v.trim()===q.trim())))
        throw new InvalidAuthorCheckResponse('blueprint_author_repair_reference_invalid');
      }
      check.repair_resolutions=resolutions;
@@ -275,6 +282,13 @@ export function readAuthorCheckAttachment(text:string,source:unknown,useSelectio
   if(!(error instanceof InvalidAuthorCheckResponse))throw error;
   return {checks:error.checks,referenceIssues:error.issues.length?error.issues:[{field:'receipt',material:'current_author_check_source',value:error.message}]};
  }
+}
+
+/** A format retry cannot clear a valid business hold from the same saved subject. */
+export function recoveredAuthorChecks(first:Check[],retry:Check[]):Check[] {
+ const original=first.find(check=>check.id==='S7'&&check.status!=='ok');
+ if(!original||retry.some(check=>check.id==='S7'&&check.status!=='ok'))return retry;
+ return [...retry.filter(check=>check.id!=='S7'),original];
 }
 
 
@@ -402,7 +416,8 @@ export async function checkProductionAuthorBlueprint(
   unchangedReviewedDelivery:unchangedReviewedDelivery(task,prepared.rawPacket)};
  const advisoryReceipt=panelDraft&&exemplarPolicy;
  const referenceChoices=advisoryReceipt?[...authorReferenceChoices(source).keys()]:undefined;
- const selectionInstruction=advisoryReceipt?' 回执引用协议：每条改填 reference_ids 数组，从输入的 referenceChoices 选引用编号；编号是材料内的路径，数组从 0 起。不要输出 reference 或抄原文。repair_resolutions 同样用 reference_ids，但只选当前被修组的材料。S1 delivered 口播只填 line_id，不输出 quote，其余判断、事实边界及视觉证据要求保留。':'';
+ const referenceField=advisoryReceipt?'reference_ids':'reference';
+ const referenceRule=advisoryReceipt?'reference_ids 是包含 1–24 个编号的数组，只选输入 referenceChoices 中的编号（路径下标从 0 起），不输出逐字引文。':'reference 可填一个逐字引文字符串，或由多个逐字引文组成的数组（最多24条）；每条必须能单独在收到的当前材料中找回。';
  const sourceDigest=digestValue({source,guide});
  const legacyName='blueprint-author-self-check';
  const currentName=legacyName+':'+sourceDigest;
@@ -414,22 +429,34 @@ export async function checkProductionAuthorBlueprint(
  const legacy=task.effects?.[effectKey(legacyName)];
  const useLegacy=!panelDraft&&!exemplarPolicy&&!first&&!formatRetry&&legacy?.kind==='model';
  const effectBase=useLegacy?legacyName:currentName;
+ const readRecordedAttachment=async(effect:ProductionTask['effects'][string])=>{
+  const {runs}=await loadAgentRuntimeSidecar(task.projectId);
+  const entry=selectAuthorSelfCheckReceipt(runs,task,effect.operationId,sourceDigest,task.completed.blueprint?.at??task.createdAt,false);
+  if(!entry?.exact)throw Error('blueprint_author_self_check_recovery_run_unverified');
+  const {text,verified}=authorSelfCheckReceiptText(entry.run);
+  if(!verified)throw Error('blueprint_author_self_check_recovery_text_unverified');
+  const result=readAuthorCheckAttachment(text,source,/"reference_ids"\s*:/u.test(text));
+  return {...result,runId:entry.run.runId,
+   referenceIssues:result.referenceIssues?.map(issue=>({...issue,receipt:entry.run.runId}))??[]};
+ };
+ const readAdvisoryAttachment=async(effect:ProductionTask['effects'][string])=>{
+  try {return {...await readRecordedAttachment(effect),verified:true};}
+  catch(error){
+   if(!(error instanceof Error)||!/^blueprint_author_self_check_recovery_/u.test(error.message))throw error;
+   return {runId:effect.operationId,checks:[],verified:false,referenceIssues:[{
+    field:'S7',material:'original_author_check',receipt:effect.operationId,value:error.message,
+   }]};
+  }
+ };
  // The old format retry consumed both operations. Re-read both failures as attachments
  // without settling either failed effect or attempting a third submission.
  if(advisoryReceipt&&first&&formatRetry&&recordedFormatFailure(first)&&recordedFormatFailure(formatRetry)){
-  const {runs}=await loadAgentRuntimeSidecar(task.projectId);
-  const failures=[first,formatRetry].map(effect=>{
-   const entry=selectAuthorSelfCheckReceipt(runs,task,effect.operationId,sourceDigest,task.completed.blueprint?.at??task.createdAt,false);
-   if(!entry?.exact)throw Error('blueprint_author_self_check_recovery_run_unverified');
-   const {text,verified}=authorSelfCheckReceiptText(entry.run);
-   if(!verified)throw Error('blueprint_author_self_check_recovery_text_unverified');
-   const result=readAuthorCheckAttachment(text,source);
-   if(!result.referenceIssues?.length)throw Error('blueprint_author_self_check_saved_result_invalid');
-   return {runId:entry.run.runId,checks:result.checks,
-    issues:result.referenceIssues.map(issue=>({...issue,receipt:entry.run.runId}))};
-  });
-  return {digest:reviewed.subject.digest,sourceDigest,runId:failures[1]!.runId,checks:failures[1]!.checks,
-   referenceIssues:failures.flatMap(failure=>failure.issues)};
+  const [original,retry]=await Promise.all([readAdvisoryAttachment(first),readAdvisoryAttachment(formatRetry)]);
+  const bothVerified=original.verified&&retry.verified&&original.referenceIssues.length>0&&retry.referenceIssues.length>0;
+  const checks=recoveredAuthorChecks(original.checks,retry.checks).filter(check=>bothVerified||check.id!=='S7'||check.status!=='ok');
+  const referenceIssues=[...original.referenceIssues,...retry.referenceIssues];
+  return {digest:reviewed.subject.digest,sourceDigest,runId:retry.runId,checks,
+   referenceIssues:referenceIssues.length?referenceIssues:[{field:'receipt',material:'original_author_check',value:'saved_author_format_status_conflict'}]};
  }
  if(!task.repairContext?.review_contract_recheck&&task.repairContext?.blueprint_digest===reviewed.subject.digest
   &&task.repairContext?.author_self_check_source_digest===sourceDigest
@@ -450,8 +477,8 @@ export async function checkProductionAuthorBlueprint(
   await executeRun(run,{backend,provider:author.provider,model:author.model,origin:author.origin,openAiApiMode:author.apiMode,cacheMode:'short',
    maxOutputTokens:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
    ...(backend==='codex'?{localProductionCodex:true as const}:{}),
-   instructions:`${guide}\n本次只执行只读作者自检。输出 JSON 数组，按 S1–S7 各一条 {id,status,reference,reason}。status 只能是 ok、fix、unresolved。reference 可填一个逐字引文字符串，或由多个逐字引文组成的数组（最多24条）；每条必须能单独在收到的当前材料中找回。reason 写具体判断或最小修法。S6 的版本绑定由服务端核验：用 reportBinding 核本次单元覆盖和报告未读项，不要求你复算摘要，不要求配音、成片或人审板。后续阶段才能检查的事项，标清归属即可，不作为本阶段未通过。S2 只检查现行稿实际说出的断言能否回源，候选引语可以作为有明确边界的原作者转述证据；整句听审、精确同步和已明示未确认的边界属于后续检查，不能单独判未通过。S5 逐句对照已声明的实际子窗和字幕分卡，组级回看外窗可比子窗宽。若输入有 hostDeliveryEvidence，用其像素矩形核裁窗。引用裁切证据时，只逐字引用 referenceText 的文字，不引用 JSON 结构；left/top/right/bottom 是各边去掉的比例，不是坐标端点。已合作版的 attachment 可能是绑定原片文档的索引，不能只按索引后缀判断独立附件格式。若宿主已读到独立 PDF 字节，下载入口放行和最终接收仍属交付阶段。S6 非阻断拼写或标点提示引用报告原文即可；未显示的历史字段不能据此判现行报告漏读。S7 审现行计划要上屏的文字，不要求已经制卡、渲染或完成终审。正常且说明了未知边界的缺失可以保留。如有unchangedReviewedDelivery，它仅指与原审核逐字段相同的片头片尾计划：复用其原判，不因本次输入未重复图片文字转录而要求重审；不代表成片批准，现行可见文字与事实有实际冲突仍须列出。如输入有repairReview，S2必须增加repair_resolutions数组，逐条按finding_id给出{finding_id,status:"resolved"或"unresolved",reference:[现行材料逐字引文],reason}。对照原问题，核当前口播、教学重点、实际画面计划和证据边界是否一起修正；只改备注、换版本或收窄正文但重点仍保留旧断言，不算解决。reference逐字引用本组口播、字幕、短标、画面描述，或时间记录完整落在本组原片及逐句选段内的原话或动作原文。全片上下文、标识符、策划译文和历史判词不能单独结案。补证解决时说明新证据的支持关系。仍不确定就unresolved，不能为进入审核而填resolved。禁止改稿、调用工具或给出生产批准。${panelDraft?` 网页蓝图交审前，在 S1 增加 teaching_units 数组，现行每组恰好一条 {unit_id,status,source_role,source_evidence_ids,takeaway,reason,delivered?}。先用 source_evidence 中原片原话、带时间的听写或具体可见动作和全片顺序写 source_role，说明这一段怎样把观看带到下一步。WHY、只记录已提取的帧、作者点评都不是来源。${exemplarPolicy?'按 teachingPurpose 先只读现行马来语口播，再核本组原片依据。':'再看口播、字幕、短标和计划画面。'}takeaway 写拿掉本组讲解后达人会少学的具体拍法。只复述动作、只在备注解释，或遗漏原片承担的主要作用，判 fix。ok 必须引用本组原片范围里的证据并附 delivered：实际马来语口播${exemplarPolicy?'':'、字幕或短标'}用 {line_id,quote} 逐字引用；纯画面用现行 visual_only 绑定的 {evidence_id,source_seconds}。证据不足写 unresolved，可省 delivered 或暂留空 source_evidence_ids。画面或听写仅支持各自能确认的含义，不需要虚构原话，也不把抽帧当整段听审。`:''}${task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?' 严格网页稿的 S1 只作作者自评。口播主讲逐字引现行马来语，答达人会改哪个拍摄决定、观众多能判断什么。用同组已登记的原片依据核对，纯画面沿用已绑定的可见证据。机器听写候选须标明未听审；缺少中文译文时仍读马来语原话和可见动作。若只能从作者备注读出作用，判 fix。S6 已可见的选材或对象缺项现在修；实测声长留到配音。':''}${selectionInstruction}`,
-   messages:[{role:'user',content:JSON.stringify(referenceChoices?{...source,referenceChoices}:source)},...(formatError?[{role:'user' as const,content:`上次返回未满足自检回执格式（${formatError}）。请基于同一材料重新完成七项，逐字引用材料，按实际判断填写状态。`}]:[])],
+   instructions:`${guide}\n本次只执行只读作者自检。输出 JSON 数组，按 S1–S7 各一条 {id,status,${referenceField},reason}。status 只能是 ok、fix、unresolved。${referenceRule}reason 写具体判断或最小修法。S6 的版本绑定由服务端核验：用 reportBinding 核本次单元覆盖和报告未读项，不要求你复算摘要，不要求配音、成片或人审板。后续阶段才能检查的事项，标清归属即可，不作为本阶段未通过。S2 只检查现行稿实际说出的断言能否回源，候选引语可以作为有明确边界的原作者转述证据；整句听审、精确同步和已明示未确认的边界属于后续检查，不能单独判未通过。S5 逐句对照已声明的实际子窗和字幕分卡，组级回看外窗可比子窗宽。若输入有 hostDeliveryEvidence，用其像素矩形核裁窗。引用裁切证据时，${advisoryReceipt?'只选 referenceText 的编号':'只逐字引用 referenceText 的文字'}，不引用 JSON 结构；left/top/right/bottom 是各边去掉的比例，不是坐标端点。已合作版的 attachment 可能是绑定原片文档的索引，不能只按索引后缀判断独立附件格式。若宿主已读到独立 PDF 字节，下载入口放行和最终接收仍属交付阶段。S6 非阻断拼写或标点提示引用报告原文即可；未显示的历史字段不能据此判现行报告漏读。S7 审现行计划要上屏的文字，不要求已经制卡、渲染或完成终审。正常且说明了未知边界的缺失可以保留。如有unchangedReviewedDelivery，它仅指与原审核逐字段相同的片头片尾计划：复用其原判，不因本次输入未重复图片文字转录而要求重审；不代表成片批准，现行可见文字与事实有实际冲突仍须列出。如输入有repairReview，S2必须增加repair_resolutions数组，逐条按finding_id给出{finding_id,status:"resolved"或"unresolved",${referenceField}:[${advisoryReceipt?'本组现行材料编号':'现行材料逐字引文'}],reason}。对照原问题，核当前口播、教学重点、实际画面计划和证据边界是否一起修正；只改备注、换版本或收窄正文但重点仍保留旧断言，不算解决。${referenceField} 只指向本组口播、字幕、短标、画面描述，或时间记录完整落在本组原片及逐句选段内的原话或动作原文。全片上下文、标识符、策划译文和历史判词不能单独结案。补证解决时说明新证据的支持关系。仍不确定就unresolved，不能为进入审核而填resolved。禁止改稿、调用工具或给出生产批准。${panelDraft?` 网页蓝图交审前，在 S1 增加 teaching_units 数组，现行每组恰好一条 {unit_id,status,source_role,source_evidence_ids,takeaway,reason,delivered?}。先用 source_evidence 中原片原话、带时间的听写或具体可见动作和全片顺序写 source_role，说明这一段怎样把观看带到下一步。WHY、只记录已提取的帧、作者点评都不是来源。${exemplarPolicy?'按 teachingPurpose 先只读现行马来语口播，再核本组原片依据。':'再看口播、字幕、短标和计划画面。'}takeaway 写拿掉本组讲解后达人会少学的具体拍法。只复述动作、只在备注解释，或遗漏原片承担的主要作用，判 fix。ok 必须引用本组原片范围里的证据并附 delivered：实际马来语口播${exemplarPolicy?'':'、字幕或短标'}用 ${advisoryReceipt?'{line_id} 选择句子':'{line_id,quote} 逐字引用'}；纯画面用现行 visual_only 绑定的 {evidence_id,source_seconds}。证据不足写 unresolved，可省 delivered 或暂留空 source_evidence_ids。画面或听写仅支持各自能确认的含义，不需要虚构原话，也不把抽帧当整段听审。`:''}${task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?' 严格网页稿的 S1 只作作者自评。口播主讲定位现行马来语句子，答达人会改哪个拍摄决定、观众多能判断什么。用同组已登记的原片依据核对，纯画面沿用已绑定的可见证据。机器听写候选须标明未听审；缺少中文译文时仍读马来语原话和可见动作。若只能从作者备注读出作用，判 fix。S6 已可见的选材或对象缺项现在修；实测声长留到配音。':''}`,
+   messages:[{role:'user',content:JSON.stringify(referenceChoices?{...source,referenceChoices}:source)},...(formatError?[{role:'user' as const,content:`上次返回未满足自检回执格式（${formatError}）。请基于同一材料重新完成七项，按 ${referenceField} 的格式引用材料，并按实际判断填写状态。`}]:[])],
    host:{signal:stage.signal,maxTurns:1,deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     async beforeRequest(){if(requests++!==0)throw new Error('作者自检单轮额度已用完');},
     async execute(){throw new Error('作者自检只读，不允许调用工具');}},
@@ -510,6 +537,12 @@ export async function checkProductionAuthorBlueprint(
  // A retry can be reserved after a cold format failure while the primary is
  // still reserved. The already-counted slot can recover without the first run.
  if(formatRetry&&(first?.status==='reserved'||recordedFormatFailure(first))){
+  if(advisoryReceipt&&first){
+   const retry=await attempt(undefined,true);
+   const original=await readAdvisoryAttachment(first);
+   const checks=recoveredAuthorChecks(original.checks,retry.checks).filter(check=>original.verified||check.id!=='S7'||check.status!=='ok');
+   return {...retry,checks,...(!original.verified?{referenceIssues:[...retry.referenceIssues??[],...original.referenceIssues]}:{})};
+  }
   if(formatRetry.status!=='completed'&&recordedFormatFailure(first)){
    try { return await attempt(); }
    catch(error){

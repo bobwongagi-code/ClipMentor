@@ -174,7 +174,7 @@ for(const name of ['revise_clipmentor_analysis','submit_voice','observe_clipment
 assert.equal(productionStageToolAllowed('blueprint','revise_clipmentor_analysis'),true);assert.equal(productionStageToolAllowed('edit','edit_item'),true);
 
 
-const {validateAuthorSelfCheck,readAuthorCheckAttachment,runAuthorSelfCheckWithFormatRetry,selectAuthorSelfCheckReceipt}=await import('./production-author-self-check');
+const {validateAuthorSelfCheck,readAuthorCheckAttachment,recoveredAuthorChecks,runAuthorSelfCheckWithFormatRetry,selectAuthorSelfCheckReceipt}=await import('./production-author-self-check');
 const source={currentLine:'Perhatikan warna di tangan'};
 const checks=Array.from({length:7},(_,index)=>({id:`S${index+1}`,status:'ok',reference:'warna di tangan',reason:'对应当前口播及手背演示'}));
 assert.equal(validateAuthorSelfCheck(JSON.stringify(checks),source).length,7);
@@ -194,6 +194,33 @@ const injected=picked.map(check=>check.id==='S5'?{...check,reference_ids:['僅�
 const partial=readAuthorCheckAttachment(JSON.stringify(injected),selectableSource,true);
 assert.equal(partial.checks.length,6);
 assert.deepEqual(partial.referenceIssues?.map(issue=>issue.value),['僅看','Dentro']);
+{
+ const line={line_id:'line-a',narration_ms:source.currentLine,caption_lines:['Perhatikan','warna di tangan'],labels:['02']};
+ const a={unit_id:'group-a',lines:[line],points:[]};
+ const b={unit_id:'group-b',lines:[{...line,line_id:'line-b'}],points:[]};
+ const material={blueprint:{units:[a,b]},repairReview:[{finding_id:'finding-a',unit_id:a.unit_id,current:a}]};
+ const reply=(pick:string)=>picked.map(row=>row.id==='S2'?{...row,repair_resolutions:[{
+  finding_id:'finding-a',status:'resolved',reference_ids:[pick],reason:'Current passage checked',
+ }]}:row);
+ for(const field of ['caption_lines.1','labels.0'])
+  assert.equal(readAuthorCheckAttachment(JSON.stringify(reply(`blueprint.units.0.lines.0.${field}`)),material,true).referenceIssues,undefined);
+ for(const field of ['narration_ms','labels.0']){
+  const crossGroup=readAuthorCheckAttachment(JSON.stringify(reply(`blueprint.units.1.lines.0.${field}`)),material,true);
+  assert.equal(crossGroup.referenceIssues?.[0].field,'S2.repair_resolutions.finding-a.reference_ids[0]');
+  assert(!crossGroup.checks.some(row=>row.id==='S2'));
+ }
+}
+{
+ const incomplete=(hold:boolean)=>readAuthorCheckAttachment(JSON.stringify(injected.map(row=>row.id==='S7'&&hold
+  ?{...row,status:'unresolved',reason:'Original ending terms need confirmation.'}:row)),selectableSource,true).checks;
+ const first=incomplete(true),retry=incomplete(false);
+ const original=structuredClone(first);
+ assert.equal(recoveredAuthorChecks(first,retry).find(row=>row.id==='S7')?.status,'unresolved');
+ assert.equal(recoveredAuthorChecks(first,retry.filter(row=>row.id!=='S7')).find(row=>row.id==='S7')?.status,'unresolved');
+ assert.equal(recoveredAuthorChecks(retry,first).find(row=>row.id==='S7')?.status,'unresolved');
+ assert.equal(recoveredAuthorChecks(retry,retry).find(row=>row.id==='S7')?.status,'ok');
+ assert.deepEqual(first,original);
+}
 // Reduced replay of JUDYDOLL v3-8fed2080. The first group names
 // visible actions correctly but never teaches the hook-to-product handoff.
 {

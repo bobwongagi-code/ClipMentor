@@ -5,6 +5,7 @@ import { digestValue, runtimeEvent } from '../agent-runs/store-values';
 import { checkProductionAuthorBlueprint, productionAuthorSelfCheckSource, productionRepairTargets, selectAuthorSelfCheckReceipt } from './production-author-self-check';
 import type { createProductionPreparation } from './production-readiness';
 import type { EffectKind, ProductionTask, StageContext } from './production-task';
+import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 
 export async function verifyAuthorSelfCheckRecovery(doc: ProjectDoc, prepared: Awaited<ReturnType<typeof createProductionPreparation>>) {
   const guide = 'Fixture self-check guide';
@@ -100,6 +101,35 @@ export async function verifyAuthorSelfCheckRecovery(doc: ProjectDoc, prepared: A
       f.task.effects[f.key(`${currentName}:format-retry`)] = { kind: 'model', operationId: 'saved-format-retry', status: 'completed', result: outcome };
       assert.deepEqual(await f.run(), outcome);
       assert.deepEqual(f.names, [`${currentName}:format-retry`]);
+    });
+    for(const primary of ['failed','reserved','missing-receipt','both-failed-first-missing','both-receipts-missing'] as const)
+    await test(`panel format retry cannot clear a business hold after ${primary}`,async()=>{
+      const f=fixture();
+      f.task.input.panelDelivery={editorialPolicy:'exemplar-v1'} as ProductionTask['input']['panelDelivery'];
+      const panelSource={...productionAuthorSelfCheckSource(doc,prepared,[brief],true),panelTeachingReview:true,
+        editorialPolicy:'exemplar-v1',teachingPurpose,repairReview:[],unchangedReviewedDelivery:[]};
+      const digest=digestValue({source:panelSource,guide});
+      const name=`${legacyName}:${digest}`;
+      f.task.effects[f.key(name)]={kind:'model',operationId:'original-panel-operation',status:primary==='reserved'?'reserved':'failed',
+        ...(primary==='reserved'?{}:{error:'Error: blueprint_author_self_check_invalid:S5'})};
+      const failedRetry=primary==='both-failed-first-missing'||primary==='both-receipts-missing';
+      f.task.effects[f.key(`${name}:format-retry`)]=failedRetry?{kind:'model',operationId:outcome.runId,status:'failed',
+        error:'Error: blueprint_author_self_check_invalid:S5'}:{kind:'model',operationId:outcome.runId,status:'completed',
+        result:{...outcome,sourceDigest:digest,checks:checks.slice(1)}};
+      const retainedOperation=primary==='both-failed-first-missing'?outcome.runId:primary==='failed'||primary==='reserved'?'original-panel-operation':undefined;
+      const raw=checks.map(check=>check.id==='S7'?{...check,status:'unresolved',reason:'Original artwork terms are unconfirmed.'}
+        :check.id==='S5'?{...check,reference:'Unregistered frame text'}:check);
+      if(retainedOperation)await createAgentRun(f.receipt(retainedOperation,digest,[['text-delta',{text:JSON.stringify(raw)}],['done',{status:'completed'}]]));
+      const settled=await checkProductionAuthorBlueprint(f.task,{
+        signal:new AbortController().signal,
+        async effect<T>(_kind:EffectKind,key:string){
+          assert(!failedRetry,'settled failed receipts must not reserve a recovery request');
+          assert.equal(key,`${name}:format-retry`);
+          return structuredClone(f.task.effects[f.key(key)].result) as T;
+        },
+      },doc,prepared,guide,[],undefined,true);
+      assert.equal(settled.checks.find(check=>check.id==='S7')?.status,retainedOperation?'unresolved':undefined);
+      if(!retainedOperation||failedRetry)assert.equal(settled.referenceIssues?.[0].field,'S7');
     });
     await test('a receipt missing its earlier events cannot supply a passing result', async () => {
       const f = fixture();

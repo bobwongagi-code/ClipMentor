@@ -34,13 +34,22 @@ export function selectedCopyReviewReferences(input:unknown,packet:TeachingPacket
   if(entry[field]!==undefined||value===undefined)resolver.missing(path+'.'+field,material,entry[field]??selected);
   return value;
  }
- function copyQuote(entry:Row,unit:Unit|undefined,path:string,field:'quote'|'text',pointId?:unknown) {
+ function copyQuote(entry:Row,unit:Unit|undefined,path:string,field:'quote'|'text',pointId?:unknown,oneCard=false) {
   const line=unit?.lines.find(line=>line.line_id===entry.line_id&&(pointId===undefined||line.point_ids.includes(String(pointId))));
   const channel=entry.channel??'narration';
-  const value=channel==='narration'?line?.narration_ms:channel==='caption'?line?.caption_lines.join(' ')
-   :channel==='label'&&typeof entry.label_index==='number'&&Number.isSafeInteger(entry.label_index)
-    ?line?.labels[entry.label_index]:undefined;
-  return {...entry,[field]:fill(entry,field,path,'current_unit_'+String(channel),entry.line_id,value)};
+  const {caption_index,label_index,...claim}=entry;
+  const validIndex=(index:unknown):index is number=>typeof index==='number'&&Number.isSafeInteger(index)&&index>=0;
+  const caption=caption_index!==undefined?(validIndex(caption_index)?line?.caption_lines[caption_index]:undefined)
+   :oneCard&&line?.caption_lines.length!==1?undefined:line?.caption_lines.join(' ');
+  const value=channel==='narration'?line?.narration_ms:channel==='caption'?caption
+   :channel==='label'&&validIndex(label_index)?line?.labels[label_index]:undefined;
+  const indexField=channel==='label'?'label_index':channel==='caption'&&(oneCard||caption_index!==undefined)?'caption_index':undefined;
+  const material='current_unit_'+String(channel);
+  if(value===undefined&&line&&indexField&&entry[field]===undefined){
+   resolver.missing(path+'.'+indexField,material,entry[indexField]);
+   return claim;
+  }
+  return {...claim,[field]:fill(entry,field,path,material,entry.line_id,value)};
  }
  const cases=mapRows(input.cases,c=>({...c,units:mapRows(c.units,u=>{
   const unit=packet.units.find(entry=>entry.unit_id===u.unit_id),path='cases.units.'+String(u.unit_id);
@@ -50,25 +59,28 @@ export function selectedCopyReviewReferences(input:unknown,packet:TeachingPacket
    const evidence=packet.source_evidence.find(e=>e.evidence_id===citation?.evidence_id&&point?.teaching_basis?.evidence_ids.includes(e.evidence_id));
    const observation=evidence?.observation.match(/^\[(?:visible_action|original_claim); [^\]\r\n]+\] ([\s\S]+)$/u)?.[1];
    return {...p,quotes:mapRows(p.quotes,(q,i)=>copyQuote(q,unit,pointPath+'.quotes.'+i,'text',p.point_id)),
-    ...(citation||point?.teaching_basis?{source_quote:{...citation,
+    ...(p.source_quote!==undefined||point?.teaching_basis&&p.source_support==='supported'?{source_quote:{...citation,
      quote:fill(citation??{},'quote',pointPath+'.source_quote','evidence_selected_for_this_point',citation?.evidence_id,observation)}}:{})};
   })};
  })}));
  function groupChecks(group:Row,unit:Unit|undefined,path:string) {
   const L1=row(group.L1)?group.L1:undefined;
-  return {...group,...(L1?{L1:{...L1,evidence:mapRows(L1.evidence,(ref,i)=>ref.kind==='copy'
+  return {...group,...(L1?.evidence!==undefined?{L1:{...L1,evidence:mapRows(L1.evidence,(ref,i)=>ref.kind==='copy'
     ?copyQuote(ref,unit,path+'.L1.evidence.'+i,'quote'):ref)}}:{}),
-   source_relations:mapRows(group.source_relations,(relation,i)=>{
+   ...(group.source_relations!==undefined?{source_relations:mapRows(group.source_relations,(relation,i)=>{
     const claim=row(relation.claim_impact)?relation.claim_impact:undefined;
     return claim?{...relation,claim_impact:{...claim,claims:mapRows(claim.claims,
-     (entry,j)=>copyQuote(entry,unit,path+'.source_relations.'+i+'.claims.'+j,'quote'))}}:relation;
-   })};
+     (entry,j)=>copyQuote(entry,unit,path+'.source_relations.'+i+'.claims.'+j,'quote',undefined,true))}}:relation;
+   })}:{})};
  }
  const copy_units=mapRows(input.copy_units,u=>{
   const unit=packet.units.find(entry=>entry.unit_id===u.unit_id),path='copy_units.'+String(u.unit_id);
   const groups=u.group_checks;
   return {...u,findings:mapRows(u.findings,(entry,i)=>copyQuote(entry,unit,path+'.findings.'+i,'quote')),
-   group_checks:row(groups)?groupChecks(groups,unit,path+'.group_checks'):mapRows(groups,(entry,i)=>groupChecks(entry,unit,path+'.group_checks.'+i))};
+   group_checks:row(groups)?{...groupChecks(groups,unit,path+'.group_checks'),
+    ...(Array.isArray(groups.group_reviews)?{group_reviews:mapRows(groups.group_reviews,
+     (entry,i)=>groupChecks(entry,unit,path+'.group_checks.group_reviews.'+i))}:{})}:
+    mapRows(groups,(entry,i)=>groupChecks(entry,unit,path+'.group_checks.'+i))};
  });
  const delivery_checks=mapRows(input.delivery_checks,r=>{
   const section=packet.delivery_sections?.find(section=>section.section_id===r.section_id);
@@ -83,5 +95,6 @@ export function selectedCopyReviewReferences(input:unknown,packet:TeachingPacket
   return {...r,opening_comparison:comparison};
  });
  resolver.assert();
- return {...input,cases,copy_units,delivery_checks};
+ const {reference_protocol:_,...receipt}=input;
+ return {...receipt,cases,copy_units,...(delivery_checks!==undefined?{delivery_checks}:{})};
 }
