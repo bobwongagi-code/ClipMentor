@@ -892,3 +892,19 @@ A later run hit the separate write-qualification problem twice. Both before/afte
 ### 2026-11-25 · Bind writing to teaching decisions, and replay to its evidence
 
 Maintenance recorded the repeated return as a suspected gate defect. A copy-authoring qualification binds the chosen teaching, factual limits and referenced evidence, including changes behind an existing evidence ID. It excludes playback endpoints and revisit links. A picture repair can reuse the same task's compatible positive selection receipt. The current narration and the eventual board still have their own exact receipt bindings. An out-of-bounds replay returns a picture issue naming the line. Fixing a picture slot does not reopen the teaching selection. Both archived pairs retained their original reviews in a zero-call replay.
+
+### 2026-11-25 · Verify the fresh intake against actual replay relations
+
+A clean four-asset intake on merged main was started once through the local ClipMentor page. Independent topic review passed for all groups and the whole film. The first saved draft then returned locally to picture repair. The repair reused the approved topic receipt and did not reopen the teaching decision.
+
+The two saved drafts reproduce the next blocker with the real source-breakdown check. The opening group declared three revisit entries for two distinct playback relations. The unchanged extra entry was the second return. The usage group also retained stale entries after its playback order changed. Running the validator on a diagnostic clone with only the extra opening entry removed cleared only that group's finding. Keep both project revisions and their receipts for replay. A follow-up should derive or validate the revisit projection from the actual phases and their evidence bindings when the plan is saved. It should still reject a genuinely wrong source binding.
+
+The webpage reported a saved pause and a binding or format issue. No formal board, final narration review, TTS or render occurred. Check the paused project and its saved proposed playback before authorizing any more provider work.
+
+### 2026-11-25 · Rebuild the playback registration from the saved plan
+
+The three existing copy and picture writes derive grouped playback indexes from the current phases. The reviewer gets revisit relations from these phases and source slices from the actual line and its bound evidence. Preserve the prior plan and exact receipts. Editorial coverage remains the selected baseline, while older analysis point indexes remain available for historical point review. A line can use adjacent picture phases in output order with separated original windows. The gap between them is not authorized playback.
+
+On four saved candidates the zero-provider sweep checked teaching coverage, source/range and phase bindings, the complete production copy preflight, both ending layouts and the publication boundary. Two drafts had stale revisit arrays. An earlier draft also used two legal shots under one line and the old line binder rejected it. All four passed preparation after the real save path was exercised on copies. The latest copy rendered an offline dual-ending review board using the stored media. Publication still refused without a current independent narration receipt. Use a known good and known bad receipt in fixtures for the publication contract. Leave any editorial ruling for the actual review.
+
+When another draft stops before review, read its full mechanical findings together. Compare the actual saved phases and evidence to the projections before asking the author to rewrite. A real missing teaching point, invented action or unrelated reference still needs content correction.

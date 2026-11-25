@@ -42,16 +42,16 @@ export const blueprintFindingKeys=({id,code,targets}:BlueprintFinding)=>targets?
  ?[...new Set(targets)].sort().map(target=>JSON.stringify([id,code,target])):[`${id}:${code}`];
 
 export function pictureRepairFindings(issue:unknown){
- const findings=blueprintFindings(issue).filter(({code})=>/^(picture_plan_|blueprint_execution_plan_missing$|existing_partner_|new_contact_|opening_|delivery_audience_scope_mismatch$|source_review_scope_missing$|storyboard_document_|storyboard_pdf_|storyboard_original_excerpt_changed$|handoff_visual_criterion_|delivery_sections_invalid$|creator_storyboard_delivery_binding_missing$)/.test(code));
+ const findings=blueprintFindings(issue).filter(({code})=>/^(picture_plan_|copy_(picture_outside_explanation|point_not_registered|candidate_pointer_invalid)$|selected_point_missing_from_copy$|blueprint_execution_plan_missing$|existing_partner_|new_contact_|opening_|delivery_audience_scope_mismatch$|source_review_scope_missing$|storyboard_document_|storyboard_pdf_|storyboard_original_excerpt_changed$|handoff_visual_criterion_|delivery_sections_invalid$|creator_storyboard_delivery_binding_missing$)/.test(code));
  return findings;
 }
 
 const repairStopped='blueprint_repair_no_progress';
 function pictureRepairCategory(code:string){
  if(/unsupported|_verifier_unavailable$/.test(code))return '门禁问题（需维护侧排查）';
- if(/^picture_plan_(group_explanation_missing|phase_content_missing|phase_original_missing|stage_cues_missing)$|^blueprint_execution_plan_missing$|_missing$|^storyboard_document_authoring_required$/.test(code))return '缺内容';
+ if(/^picture_plan_(group_explanation_missing|phase_content_missing|phase_original_missing|stage_cues_missing)$|^selected_point_missing_from_copy$|^blueprint_execution_plan_missing$|_missing$|^storyboard_document_authoring_required$/.test(code))return '缺内容';
  if(code==='picture_plan_replay_outside_evidence')return '回看窗口超出已登记证据';
- if(/^picture_plan_(candidate_mismatch|original_order_mismatch|revisits_mismatch|phase_binding_invalid|phase_line_invalid|phase_range_invalid|closing_playback_interrupted)$|^existing_partner_|^new_contact_|^opening_|^delivery_audience_scope_mismatch$/.test(code))return '绑定错';
+ if(/^picture_plan_(candidate_mismatch|original_order_mismatch|revisits_mismatch|phase_binding_invalid|phase_line_invalid|phase_range_invalid|closing_playback_interrupted|pointer_invalid)$|^copy_(picture_outside_explanation|point_not_registered|candidate_pointer_invalid)$|^existing_partner_|^new_contact_|^opening_|^delivery_audience_scope_mismatch$/.test(code))return '绑定错';
  return '门禁问题（需核对校验与当前计划）';
 }
 export function pictureRepairCoverage(issue:unknown){

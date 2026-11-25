@@ -68,6 +68,7 @@ export function copyPreparationReady(doc: ProjectDoc): boolean {
     'picture_plan_phase_mode_invalid', 'picture_plan_phase_range_invalid', 'picture_plan_phase_original_missing',
     'picture_plan_phase_line_invalid', 'picture_plan_group_explanation_missing',
     'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'picture_plan_replay_outside_evidence', 'delivery_sections_invalid',
+    'copy_candidate_pointer_invalid', 'picture_plan_pointer_invalid', 'picture_plan_candidate_mismatch', 'picture_plan_phase_invalid',
   ].includes(i.code));
 }
 const row = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -259,6 +260,9 @@ export function registeredRevisitRanges(
   grouped: ReturnType<typeof groupedPlaybackRelations>,
   mismatchSlots:string[] = [],
 ) {
+  // The grouped save owns playback. An empty legacy ledger means there is
+  // nothing to reconcile: the actual phases already describe each revisit.
+  if (grouped && !unit.revisits.length) return grouped.revisits;
   const result: NonNullable<ReturnType<typeof groupedPlaybackRelations>>['revisits'] = [];
   const count = Math.max(unit.revisits.length,grouped?.revisits.length??0);
   const contains = (outer: [number, number], inner: [number, number]) => outer[0] <= inner[0] && outer[1] >= inner[1];
@@ -273,6 +277,29 @@ export function registeredRevisitRanges(
     else result.push(phase);
   }
   return mismatchSlots.length?null:result;
+}
+
+/** Materialize playback indexes only when a new grouped plan is saved. Saved
+ * legacy plans and exact receipts retain their original interpretation. */
+export function registerGroupedPlayback(
+  unit: SourceBreakdown['units'][number], plan: Row, candidate: Row,
+) {
+  const lines = Array.isArray(candidate.lines) ? candidate.lines.filter(row) : [];
+  const grouped = groupedPlaybackRelations(plan.phases, lines.map(line => String(line.id)), unit.unit_id);
+  if (!grouped || !grouped.originals.length) return;
+  unit.original_source_ranges = grouped.originals;
+  unit.revisits = [];
+  delete plan.revisits;
+  if (Object.hasOwn(plan,'original_source_ranges')) plan.original_source_ranges = grouped.originals;
+  plan.selected_narration = structuredClone(lines);
+}
+
+/** Modern units come from the selected breakdown; legacy point reviews
+ * continue to use their original analysis records and digests. */
+export function currentUnitPointIds(
+  breakdown: SourceBreakdown | undefined, unitId: string, legacyPointIds: string[],
+) {
+  return breakdown?.units.find(unit => unit.unit_id === unitId)?.coverage.map(entry => entry.point_id) ?? legacyPointIds;
 }
 
 function rangesCover(ranges: Array<[number, number]>, target: [number, number], tolerance: number) {
@@ -309,33 +336,41 @@ export function copyLineSourceBinding(b: SourceBreakdown, unit: SourceBreakdown[
   if (!ids.length) return null;
   const directIds = new Set(ids.flatMap((id) => b.points.find((p) => p.point_id === id)?.segment_ids ?? []));
   const direct = b.segments.filter((s) => unit.explanation_segment_ids.includes(s.segment_id) && directIds.has(s.segment_id));
-  const evidence = direct.flatMap((s) => {
-    const start = Math.max(window[0], s.source_range_seconds[0]), end = Math.min(window[1], s.source_range_seconds[1]);
-    return end > start ? [{ segment_id: s.segment_id, source_range_seconds: [start, end] as [number, number] }] : [];
-  });
-  const phases = row(plan) && Array.isArray(plan.phases) ? plan.phases.filter((p) => row(p) && p.line_id === line.id) : [];
-  if (phases.length > 1) return null;
-  const declared = row(phases[0]) ? phases[0].context_source_ranges : undefined;
-  if (declared !== undefined && !Array.isArray(declared)) return null;
+  const planPhases = row(plan) && Array.isArray(plan.phases) ? plan.phases : [];
+  const phases = planPhases.filter(row).filter(p => p.line_id === line.id);
+  const split = phases.length > 1;
+  if (split && planPhases.indexOf(phases.at(-1)) - planPhases.indexOf(phases[0]) + 1 !== phases.length) return null;
   const contexts: CopySourceBinding['context_source_ranges'] = [];
-  const selectedEvidence: CopySourceBinding['evidence_source_ranges'] = [];
-  for (const c of (declared ?? []) as unknown[]) {
-    if (!row(c) || Object.keys(c).some((key) => !['segment_id', 'source_range_seconds', 'purpose'].includes(key))
-      || !text(c.segment_id) || !text(c.purpose) || !Array.isArray(c.source_range_seconds) || c.source_range_seconds.length !== 2
-      || !c.source_range_seconds.every((n) => typeof n === 'number' && Number.isFinite(n))
-      || c.source_range_seconds[0] > c.source_range_seconds[1]) return null;
-    const segment = b.segments.find((s) => s.segment_id === c.segment_id);
-    const [start, end] = c.source_range_seconds as [number, number];
-    if (!segment || !unit.explanation_segment_ids.includes(segment.segment_id)
-      || start < segment.source_range_seconds[0] || start >= segment.source_range_seconds[1] || end > segment.source_range_seconds[1]
-      || start < window[0] || end > window[1]) return null;
-    if(directIds.has(segment.segment_id)){
-      if(end<=start)return null;
-      selectedEvidence.push({segment_id:segment.segment_id,source_range_seconds:[start,end]});
-    }else contexts.push({ segment_id: segment.segment_id, source_range_seconds: [start, end], purpose: c.purpose });
+  const pointEvidence: CopySourceBinding['evidence_source_ranges'] = [];
+  for (const phase of phases.length ? phases : [undefined]) {
+    const phaseRange = split ? phase?.source_range_seconds ?? phase?.source_seconds : window;
+    if ((split && phase?.mode !== 'explanation') || !range(phaseRange)
+      || phaseRange[0] < window[0] || phaseRange[1] > window[1]) return null;
+    const selectedIds = new Set<string>();
+    const declared = phase?.context_source_ranges;
+    if (declared !== undefined && !Array.isArray(declared)) return null;
+    for (const c of (declared ?? []) as unknown[]) {
+      if (!row(c) || Object.keys(c).some(key => !['segment_id', 'source_range_seconds', 'purpose'].includes(key))
+        || !text(c.segment_id) || !text(c.purpose) || !Array.isArray(c.source_range_seconds) || c.source_range_seconds.length !== 2
+        || !c.source_range_seconds.every(n => typeof n === 'number' && Number.isFinite(n))) return null;
+      const segment = b.segments.find(s => s.segment_id === c.segment_id);
+      const [start, end] = c.source_range_seconds as [number, number];
+      if (!segment || !unit.explanation_segment_ids.includes(segment.segment_id) || end < start
+        || start < segment.source_range_seconds[0] || start >= segment.source_range_seconds[1] || end > segment.source_range_seconds[1]
+        || start < phaseRange[0] || end > phaseRange[1]) return null;
+      if (directIds.has(segment.segment_id)) {
+        if (end === start) return null;
+        selectedIds.add(segment.segment_id);
+        pointEvidence.push({segment_id:segment.segment_id,source_range_seconds:[start,end]});
+      } else contexts.push({segment_id:segment.segment_id,source_range_seconds:[start,end],purpose:c.purpose});
+    }
+    for (const segment of direct) {
+      if (selectedIds.has(segment.segment_id)) continue;
+      const start = Math.max(phaseRange[0], segment.source_range_seconds[0]);
+      const end = Math.min(phaseRange[1], segment.source_range_seconds[1]);
+      if (end > start) pointEvidence.push({segment_id:segment.segment_id,source_range_seconds:[start,end]});
+    }
   }
-  const selectedIds=new Set(selectedEvidence.map(item=>item.segment_id));
-  const pointEvidence=selectedIds.size?[...selectedEvidence,...evidence.filter(item=>!selectedIds.has(item.segment_id))]:evidence;
   if(ids.some(id=>!b.points.find(point=>point.point_id===id)?.segment_ids.some(segment=>pointEvidence.some(item=>item.segment_id===segment))))return null;
   // Direct evidence and context are selected pictures, not a request to play
   // the envelope continuously. Both edges must still resolve to registered use.
@@ -415,7 +450,7 @@ function checkPlannedRows(
     const grouped = groupedPlaybackRelations(phases, lines.map(l=>String(l.id)), u.unit_id);
     if (grouped) {
       const expected = grouped.groups.map(group => ({
-        sources:group.originals,lines:group.explanations.map(part => part.lineId),
+        sources:group.originals,lines:[...new Set(group.explanations.map(part => part.lineId))],
       }));
       const actual: Array<{originals:typeof accepted;explanations:typeof accepted}> = [];
       for (const r of sorted) {
@@ -698,9 +733,11 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
     // A grouped plan owns playback order. The two segment lists index available
     // material; concatenating them would invent a full-original-first sequence.
     const order = [...u.original_segment_ids, ...u.explanation_segment_ids].filter((id) => segments.has(id));
+    const phases = row(boundPlan) ? boundPlan.phases : undefined;
+    const groupedPlan = Array.isArray(phases) && phases.some(p => row(p) && (p.mode === 'original' || p.mode === 'explanation'));
     let grouped: ReturnType<typeof groupedPlaybackRelations> = null;
     try {
-      grouped = groupedPlaybackRelations(row(boundPlan) ? boundPlan.phases : undefined,
+      grouped = groupedPlaybackRelations(phases,
         row(candidate) && Array.isArray(candidate.lines) ? candidate.lines.filter(row).map(l => String(l.id)) : [], u.unit_id);
       if (grouped) {
         const {originals}=grouped;
@@ -715,7 +752,7 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
       if(error instanceof PicturePlanIssue)issue(error.code,error.unitId,error.targets);
       else issue('picture_plan_phase_invalid',u.unit_id);
     }
-    if (!grouped) for (let i = 1; i < order.length; i++) {
+    if (!groupedPlan) for (let i = 1; i < order.length; i++) {
         const from = segments.get(order[i - 1])!, to = segments.get(order[i])!;
         if (to.source_range_seconds[0] < from.source_range_seconds[1] - 1 / a.source.fps
           && !u.revisits.some((r) => r.from_segment_id === from.segment_id && r.to_segment_id === to.segment_id)) issue('revisit_not_registered', u.unit_id);
@@ -735,25 +772,26 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
         if (!row(line)) continue;
         const ids = strings(line.point_ids) ? line.point_ids : text(line.point) ? [line.point] : [];
         ids.forEach((id) => linePoints.add(id));
-        if (!ids.length || ids.some((id) => !u.coverage.some((c) => c.point_id === id))) issue('copy_point_not_registered', String(line.id));
+        if (!ids.length || ids.some((id) => !u.coverage.some((c) => c.point_id === id))) issue('copy_point_not_registered', u.unit_id, [String(line.id)]);
         const plan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;
         const binding=copyLineSourceBinding(b,u,line,plan);
-        if(!binding)issue('copy_picture_outside_explanation',String(line.id));
+        if(!binding)issue('copy_picture_outside_explanation',u.unit_id,[String(line.id)]);
         else if(grouped){
           const windows=[...binding.evidence_source_ranges,...binding.context_source_ranges].map(item=>item.source_range_seconds);
-          for(const part of grouped.groups.flatMap(group=>group.explanations)){
-            if(part.lineId!==line.id)continue;
+          const parts=grouped.groups.flatMap(group=>group.explanations).filter(part=>part.lineId===line.id);
+          const outside=parts.some(part=>{
             // The phase is an envelope over the selected slices. It cannot
             // authorize the gaps as footage or extend past either bound edge.
             const [start,end]=part.source;
             const startBound=windows.some(([a,b])=>a<=start+1e-6&&(start<b||a===b&&start===a));
             const endBound=windows.some(([a,b])=>end<=b+1e-6&&(end>a||a===b&&end===a));
-            if(!startBound||!endBound||missingLinePointEvidence(b,line,binding,[part.source]).length)
-              issue('picture_plan_replay_outside_evidence',u.unit_id,[String(line.id)]);
-          }
+            return !startBound||!endBound;
+          });
+          if(outside||parts.length&&missingLinePointEvidence(b,line,binding,parts.map(part=>part.source)).length)
+            issue('picture_plan_replay_outside_evidence',u.unit_id,[String(line.id)]);
         }
       }
-      for (const c of u.coverage) if (['explain', 'merged'].includes(c.treatment) && !linePoints.has(c.point_id)) issue('selected_point_missing_from_copy', c.point_id);
+      for (const c of u.coverage) if (['explain', 'merged'].includes(c.treatment) && !linePoints.has(c.point_id)) issue('selected_point_missing_from_copy', u.unit_id, [c.point_id]);
     }
     if (!checkTimeline) continue;
     const activePlan = row(internal) && text(internal.current_picture_plan) ? internal[internal.current_picture_plan] : undefined;

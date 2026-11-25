@@ -16,7 +16,7 @@ import { requestPreviewReview } from '../../clipmentor/request-preview-review';
 import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-review';
 import { AnalysisEvidenceInputError, appendAnalysisFindings } from '../../clipmentor/append-findings';
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview, validatePicturePlanProjection } from '../../clipmentor/production-gate';
-import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys } from '../../clipmentor/source-breakdown';
+import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys, currentUnitPointIds, picturePlanCopyError, PicturePlanIssue, registerGroupedPlayback } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
 import {deliveryOpeningTextIssue,deliverySectionFieldIssues,deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
 import {readClipMentorStoryboard} from '../../clipmentor/read-storyboard';
@@ -166,8 +166,9 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
       const id = internal?.current_script_candidate;
       const pictureId = internal?.current_picture_plan;
       const candidate = typeof id === 'string' && object(internal?.[id]) ? internal[id] as Record<string, unknown> : null;
+      const pointIds = currentUnitPointIds(a?.source_breakdown, unit.unit_id, unit.point_ids);
       if (view === 'current_copy' && copyPart !== 'all') return {
-        unit_id: unit.unit_id, candidate_id: typeof id === 'string' ? id : null,
+        unit_id: unit.unit_id, point_ids: pointIds, candidate_id: typeof id === 'string' ? id : null,
         picture_plan_id: typeof pictureId === 'string' ? pictureId : null,
         ...(copyPart === 'summary' ? { line_ids: Array.isArray(candidate?.lines) ? candidate.lines.filter(object).map((line) => line.id) : [] } : {}),
         ...(copyPart === 'candidate' ? { candidate: candidate ? {
@@ -177,7 +178,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         } : null } : {}),
         ...(copyPart === 'picture_plan' ? { picture_plan: typeof pictureId === 'string' ? internal?.[pictureId] ?? null : null } : {}),
       };
-      return { unit_id: unit.unit_id, line_guidance: unit.line_guidance, candidate_id: typeof id === 'string' ? id : null,
+      return { unit_id: unit.unit_id, point_ids: pointIds, line_guidance: unit.line_guidance, candidate_id: typeof id === 'string' ? id : null,
         candidate: typeof id === 'string' ? internal?.[id] : null,
         picture_plan_id: typeof pictureId === 'string' ? pictureId : null,
         picture_plan: typeof pictureId === 'string' ? internal?.[pictureId] ?? null : null };
@@ -306,7 +307,6 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         internal.current_picture_plan = input.plan_id;
         review.internal_review = internal;
         unit.line_guidance = input.line_guidance;
-        await invalidateChangedReviews(a);
       } else if (args.action === 'select_copy_lines') {
         const unit = a.blueprint.find((entry) => entry.unit_id === args.id);
         const input = args.record as Record<string, unknown> | undefined;
@@ -328,8 +328,8 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         const lines = selectedIds.map((id) => source?.lines?.find((line) => line.id === id));
         const plan = input.plan as Record<string, unknown>;
         const planned = plan.selected_narration;
-        if (lines.some((line) => !line) || !Array.isArray(planned) || planned.length !== lines.length
-          || planned.some((line, i) => !line || typeof line !== 'object' || ['id', 'narration_ms', 'caption_lines', 'zh', 'point_ids', 'source_seconds'].some((key) => JSON.stringify(line[key]) !== JSON.stringify(lines[i]![key])))) return { error: 'Selection and selected_narration must reuse the same ordered existing lines verbatim' };
+        if (lines.some((line) => !line) || (planned !== undefined && (!Array.isArray(planned) || planned.length !== lines.length
+          || planned.some((line, i) => !line || typeof line !== 'object' || copyLineKeys.some((key) => JSON.stringify(line[key]) !== JSON.stringify(lines[i]![key])))))) return { error: 'Selection and selected_narration must reuse the same ordered existing lines verbatim' };
         const covered = new Set(lines.flatMap((line) => Array.isArray(line!.point_ids) ? line!.point_ids : typeof line!.point === 'string' ? [line!.point] : unit.point_ids));
         if (a.source_breakdown!.units.find((entry) => entry.unit_id === unit.unit_id)!.coverage.some((entry) => entry.treatment === 'explain' && !covered.has(entry.point_id))) return { error: 'Selection would remove a registered teaching point; nothing changed' };
         internal[input.candidate_id] = { status: 'candidate', review_status: 'pending', production_allowed: false,
@@ -343,7 +343,6 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         internal.current_script_candidate = input.candidate_id;
         internal.current_picture_plan = input.plan_id;
         unit.line_guidance = input.line_guidance;
-        await invalidateChangedReviews(a);
       } else if (args.action === 'set_picture_plan') {
         const unit = a.blueprint.find((entry) => entry.unit_id === args.id);
         const input = args.record as Record<string, unknown> | undefined;
@@ -360,7 +359,6 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           script_candidate_id: internal.current_script_candidate, source_binding: structuredClone(a.source), base_analysis_revision: a.revision };
         internal.current_picture_plan = input.plan_id;
         unit.line_guidance = input.line_guidance;
-        await invalidateChangedReviews(a);
       } else if (args.action === 'set_source_breakdown') {
         if (!isSourceBreakdown(args.record)) return { error: 'Invalid source breakdown; nothing changed' };
         const error = breakdownRevisionError(a.source_breakdown, args.record);
@@ -395,6 +393,17 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           || (replacement as Record<string, unknown>)[key] !== args.id) return { error: 'Replace an existing record without changing its ID' };
         rows[index] = structuredClone(replacement) as Record<string, unknown>;
         if (!isClipMentorAnalysis(a)) return { error: 'Invalid analysis record; nothing changed' };
+        await invalidateChangedReviews(a);
+      }
+      if (name === 'revise_clipmentor_analysis' && ['set_copy_candidate', 'select_copy_lines', 'set_picture_plan'].includes(String(args.action))) {
+        const unit = a.blueprint.find(entry => entry.unit_id === args.id)!;
+        const internal = (unit as unknown as { internal_review: Record<string, unknown> }).internal_review;
+        const candidate = internal[String(internal.current_script_candidate)];
+        const plan = internal[String(internal.current_picture_plan)];
+        const copyError = picturePlanCopyError(plan, candidate);
+        if (copyError) return { error: copyError };
+        const registered = a.source_breakdown?.units.find(entry => entry.unit_id === unit.unit_id);
+        if (registered && object(plan) && object(candidate)) registerGroupedPlayback(registered, plan, candidate);
         await invalidateChangedReviews(a);
       }
       a.revision += 1;
@@ -438,6 +447,7 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
     return { ok: true, revision: a.revision, handoff, breakdown_check: breakdown, identity: 'local_declared_not_authenticated' };
   } catch (error) {
     if(error instanceof BlueprintImportError)return{error:error.code};
+    if(error instanceof PicturePlanIssue)return{error:error.code,unit_id:error.unitId,targets:error.targets};
     if (error instanceof AnalysisEvidenceInputError) return { error: error.message, evidence_issues: error.issues };
     return { error: 'Analysis input could not be validated; nothing changed' };
   }

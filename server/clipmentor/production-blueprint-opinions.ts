@@ -4,6 +4,7 @@ import {BLUEPRINT_OPINION_MAX_LENGTH} from '../../shared/clipmentor-blueprint-op
 import {picturePhaseLineIds} from '../../src/clipmentor/blueprint-picture-notices';
 import {readBlueprint} from '../../src/clipmentor/blueprint-lint';
 import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
+import {currentUnitPointIds} from '../../src/clipmentor/source-breakdown';
 import {sourceSpeech} from './blueprint-review-board-human-context';
 import {digestValue} from '../agent-runs/store-values';
 
@@ -39,7 +40,7 @@ const wantsChange=(text:string)=>changeWords.test(text.replace(negativeChange,''
 const isPraise=(text:string)=>praiseWords.test(text)&&praiseOnly.test(text);
 const deletesSentence=new RegExp(`^(?:请)?(?:删掉|删除|去掉|去除)\\s*第\\s*${basicNumber}\\s*句$|^第\\s*${basicNumber}\\s*句\\s*(?:删掉|删除|去掉|去除)$`,'u');
 
-function captureBlueprintOpinions(doc:ProjectDoc){
+function captureBlueprintOpinions(doc:ProjectDoc,useCurrentPoints:boolean){
  const analysis=doc.clipMentorAnalysis;
  const breakdown=analysis?.source_breakdown;
  const data=readBlueprint(doc);
@@ -59,15 +60,16 @@ function captureBlueprintOpinions(doc:ProjectDoc){
    return {range:Array.isArray(range)&&range.length===2?range as [number,number]:null};
   }));
   const base=breakdown?.units.find(value=>value.unit_id===unit.unit_id);
-  const points=breakdown?.points.filter(point=>base?.coverage.some(item=>item.point_id===point.point_id)
-   ||Array.isArray(unit.point_ids)&&unit.point_ids.includes(point.point_id))??[];
+  const pointIds=useCurrentPoints?currentUnitPointIds(breakdown,unit.unit_id,saved?.point_ids??[]):unit.point_ids;
+  const points=breakdown?.points.filter(point=>Array.isArray(pointIds)&&pointIds.includes(point.point_id)
+   ||!useCurrentPoints&&base?.coverage.some(item=>item.point_id===point.point_id))??[];
   const segments=breakdown?.segments.filter(segment=>base?.original_segment_ids.includes(segment.segment_id)
    ||base?.explanation_segment_ids.includes(segment.segment_id)||points.some(point=>point.segment_ids.includes(segment.segment_id)))??[];
   const evidence=analysis?.evidence.filter(item=>points.some(point=>point.teaching_basis?.evidence_ids.includes(item.evidence_id))
    ||segments.some(segment=>[...segment.visible_evidence_ids,...segment.claim_evidence_ids,...segment.interpretation_evidence_ids].includes(item.evidence_id)));
   const {delivery_sections:_delivery,script_candidate_id:_candidate,status:_status,review_status:_review,production_allowed:_allowed,base_analysis_revision:_rev,...picture}=plan;
   return [{id:unit.unit_id,topic:saved?.intent_zh,lines:spokenWithMeaning(playback),
-   digest:digestValue({intent:saved?.intent_zh,guidance:saved?.line_guidance,base,points,segments,evidence,lines,picture,phases,speech,pointIds:unit.point_ids})}];
+   digest:digestValue({intent:saved?.intent_zh,guidance:saved?.line_guidance,base,points,segments,evidence,lines,picture,phases,speech,pointIds})}];
  });
  const sections=deliverySectionsFromDoc(doc).sort((a,b)=>Number(b.kind==='performance_opening')-Number(a.kind==='performance_opening'));
  return {units,overall:{title:analysis?.product?.name,
@@ -79,12 +81,13 @@ type Snapshot=ReturnType<typeof captureBlueprintOpinions>;
 type Compiled=BlueprintOpinion&{label:string;edits:boolean;change:string;keep:Array<{number:number;text:string;meaning?:string;blockMeaning?:string}>;remove?:number[]};
 export type BlueprintOpinionRecord={
  revision:string;boardIdentity:string;token:string;opinions:Compiled[];confirmed:boolean;before:Snapshot;
+ pointProjection?:'breakdown';
  rejectedWrites?:string[];
  differences?:{overall?:BlueprintOpinionDifference;groups:BlueprintOpinionDifference[]};
 };
 
 export function prepareBlueprintOpinions(doc:ProjectDoc,input:unknown,revision:string,boardIdentity:string){
- const before=captureBlueprintOpinions(doc);
+ const before=captureBlueprintOpinions(doc,true);
  if(!Array.isArray(input)||!input.length||input.length>before.units.length+1)throw Error('blueprint_opinion_binding_invalid');
  const labels=before.units.map(({id,topic},index)=>({id,label:`第 ${index+1} 组${topic?' · '+topic:''}`}));
  const seen=new Set<string|null>();
@@ -144,12 +147,12 @@ export function prepareBlueprintOpinions(doc:ProjectDoc,input:unknown,revision:s
   }),change:entry.change,
  }));
  const confirmation:BlueprintOpinionConfirmation|undefined=confirmationRows.length?{token,rows:confirmationRows}:undefined;
- const record:BlueprintOpinionRecord={revision,boardIdentity,token,opinions:compiled,confirmed:false,before};
+ const record:BlueprintOpinionRecord={revision,boardIdentity,token,opinions:compiled,confirmed:false,before,pointProjection:'breakdown'};
  return {record,confirmation,placements:[]};
 }
 
 export function assertBlueprintOpinionScope(record:BlueprintOpinionRecord,doc:ProjectDoc){
- const after=captureBlueprintOpinions(doc);
+ const after=captureBlueprintOpinions(doc,record.pointProjection==='breakdown');
  const allowed=record.opinions.filter(entry=>entry.edits);
  for(const entry of allowed){
   if(!entry.keep.length)continue;
