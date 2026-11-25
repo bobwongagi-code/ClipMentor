@@ -192,8 +192,10 @@ export function productionBoardPhaseIssues(doc:ProjectDoc){
   const plan=internal?.[String(internal.current_picture_plan)];
   if(!plan||typeof plan!=='object'||Array.isArray(plan))
    return [{code:'blueprint_execution_plan_missing',id:unit.unit_id,targets:[]}];
-  const {issues}=currentPicturePhases(plan as Record<string,unknown>,(doc as unknown as Record<string,unknown>).estimated_picture_timeline,
+  const {issues,phases,locations}=currentPicturePhases(plan as Record<string,unknown>,(doc as unknown as Record<string,unknown>).estimated_picture_timeline,
    unit.unit_id,analysis.source.fps,analysis.source.duration_seconds);
-  return issues.map(issue=>({code:picturePhaseIssueCode[issue.kind],id:unit.unit_id,targets:[issue.path]}));
+  return [...issues.map(issue=>({code:picturePhaseIssueCode[issue.kind],id:unit.unit_id,targets:[issue.path]})),
+   ...phases.flatMap((phase,index)=>phase.source_asset_id!==undefined&&phase.source_asset_id!==analysis.source.asset_id
+    ?[{code:picturePhaseIssueCode.binding,id:unit.unit_id,targets:[locations[index]+'.source_asset_id']}]:[])];
  })??[];
 }

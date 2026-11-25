@@ -345,7 +345,8 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       if(name==='revise_blueprint'){
         setOpinionDraft(undefined)
         setOpinionReview(undefined)
-        boardFrame.current?.contentWindow?.postMessage({type:'clipmentor:blueprint-opinion-draft',entries:[],pending:false},'*')
+        // The board must stay locked until the readback releases the current action.
+        boardFrame.current?.contentWindow?.postMessage({type:'clipmentor:blueprint-opinion-draft',entries:[],pending:true},'*')
         if(result.notesSaved)setOpinionNotice(boardKey)
       }
       if (name === 'accept') {

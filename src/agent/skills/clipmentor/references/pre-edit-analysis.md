@@ -29,7 +29,7 @@ The request excludes historical observations and self-evaluation. Read its concr
 0. `review_scope`来自本次冻结任务而非已选播放段。完整拆解填`{kind:"full_source",instruction:"任务原要求"}`；明确局部任务填`{kind:"local_ranges",source_ranges:[[起,止]],instruction:"局部范围依据"}`。沿用原任务范围，改变范围须修订登记并使旧批准失效；不为避开遗漏自行缩窄。历史缺此字段仍可读/存草稿，独立审核在调用前返回`source_review_scope_missing`，不花一次调用猜范围。
 1. `segments` 是源片索引。记录源秒、可见动作证据ID、原片宣称证据ID、解释证据ID和未知，三类引用分开。先用现有观察/append工具建立真实证据和蓝图，再登记索引，不伪造帧或调用成功。空的原片宣称数组表示本窗口没有可引用原话，不表示没有讲话。
 2. `points` 是写稿前选定的教学任务。每条有购买关注、值得学什么的审核问题、必要拍法条件、重要性和源片单元ID。`analysis.points` 是分析发现库；这里是从中选择并保留下来的教学基线，不能把最新短稿反过来当基线。不把每个观察动作都选成必讲点。
-3. `units[].original_source_ranges` 是当前选定的完整原声播放源秒范围（可含必要口播上下文）；`original_segment_ids` 是其中教学证据的索引，不能用稀疏索引代替完整播放范围。未填正式范围的历史记录暂按索引推导；新登记应明确填写。不得另造 `original_playback_entry` 等播放权威字段，未知unit字段会报错并拒绝写入；状态、理由与历史候选放在蓝图的 `internal_review`。完整范围必须在素材内并覆盖原声索引。
+3. `units[].original_source_ranges` 在选题阶段记录计划播放的原声范围，可含必要上下文。`original_segment_ids` 是其中教学证据的索引。逐句画面方案保存后，宿主按实际原声阶段刷新播放范围。旧记录未填范围时仍按段落索引读取。历史候选留在蓝图的 `internal_review`。
 
 4. `units` 分别登记原声展示和讲解使用的源片单元，以及每个重点的 `explain / merged / visual_only / omit` 处理。后3种须有理由，合并须指向同组真正解释的点；出现过不等于讲清。必讲点不能直接omit，作者不能自行降低primary/必讲级别绕过审核；证据不足保留待核，不编造解释。合法的基线内容纠正需要新的 `change_reason` 和重新审核。
 
@@ -60,7 +60,7 @@ The request excludes historical observations and self-evaluation. Read its concr
   "units": [{
     "unit_id": "U-01", "original_segment_ids": ["S-use"], "original_source_ranges": [[10, 12]], "explanation_segment_ids": ["S-use"],
     "coverage": [{"point_id": "P-01", "treatment": "explain"}],
-    "revisits": [{"from_segment_id": "S-use", "to_segment_id": "S-use", "reason": "回看已展示的做法，解释其与购买关注的关系"}]
+    "revisits": []
   }]
 }
 ```
@@ -69,9 +69,9 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 当前没有自动签发“删掉已选教学任务”的独立范围豁免入口。`omit`可记录为待审提案，不代表已有制作许可；证据不足保留未知，不能写空洞解说凑覆盖。先分析清楚再选择值得讲的任务，不把所有动作都登记成必讲项。
 
-写稿的每句继续用现有 `point` 或 `point_ids` 对应这里的重点ID，`source_seconds` 对应讲解段落范围；不能为缩短而换成粗粒度旧ID遮掉细项。`request_clipmentor_copy_review`通过宿主从当前工程生成独立审核包，不手填一个更容易通过的任务。标准包含原声/讲解范围、逐句源窗、登记回看关系及当前画面执行方案，剔除作者理由、自评与旧批准。服务端绑定原片哈希，按登记范围取前后两侧采样供隔离复核者读取；采样不证明连续动作或实际排版已验收。只接受一次授权，结果版本不符不写入，没有自动重试或修稿循环。
+写稿的每句继续用现有 `point` 或 `point_ids` 对应这里的重点ID，`source_seconds` 对应讲解段落范围；不能为缩短而换成粗粒度旧ID遮掉细项。`request_clipmentor_copy_review`通过宿主从当前工程生成独立审核包，不手填一个更容易通过的任务。审核包从现行稿和画面阶段取得原声范围、回看关系、每句取材及其证据，剔除作者理由、自评与旧批准。服务端绑定原片哈希，按登记范围取前后两侧采样供隔离复核者读取；采样不证明连续动作或实际排版已验收。只接受一次授权，结果版本不符不写入，没有自动重试或修稿循环。
 
-实际制作位置确定后，用同一action补 `units[].placement`：`{timeline_id, original_frames:[起,止), explanation_frames:[起,止)}`，均为该时间线帧。Agent只登记输出阶段位置；片段ID、实际源秒和与段落的重叠关系由代码读取真实视频实例计算。不要手填“实际已使用范围”。回看需登记关系和理由，不要求固定口播回看词，是否讲得通交独立审核。
+实际制作位置确定后，用同一action补 `units[].placement`：`{timeline_id, original_frames:[起,止), explanation_frames:[起,止)}`，均为该时间线帧。Agent只登记输出阶段位置；片段ID、实际源秒和与段落的重叠关系由代码读取真实视频实例计算。不要手填“实际已使用范围”。在画面阶段安排回看的先后，保存时由宿主生成回看关系。讲解是否讲得通交独立审核。
 
 历史较多时不要反复全量读取：`read_clipmentor_analysis {view:"source_breakdown"}` 读取正式拆解与当前revision，`{view:"current_copy",unitId:"U-02"}` 只读该组现行候选、不夹带旧稿与转写。全量读取仍可用于需要历史证据的任务，但超长返回不能当作已成功读到后部字段。
 
@@ -81,11 +81,11 @@ The request excludes historical observations and self-evaluation. Read its concr
 
 要登记新的文字版本，用 `revise_clipmentor_analysis {action:"set_copy_candidate",id:"实际单元ID",expectedRevision,actor,reason,record:{source_candidate_id:"刚读到的当前稿ID",candidate_id:"script_candidate_新ID",lines:[{id,point_ids,narration_ms,caption_lines,zh,source_seconds,labels?,labels_zh?}],plan_id:"picture_plan_新ID",plan:{本次紧凑画面方案},line_guidance:"与新稿和方案一致的交接"}}`。提交该单元完整的有序句子，不发送旧候选、旧画面方案或历史。未改句子逐字保留；若本次只授权同步已有作者稿，就不得借登记重写。每句只用这些字段，字幕与口播同文，源范围合法且引用本单元已登记重点，不能丢掉explain任务。代码核对的是格式、引用、范围与同文，不证明中文忠实或教学讲透。供内部人审的原话中文可放在证据的 `meaning_zh`，短标中文可放在句子和交付段落的 `labels_zh`，与 `labels` 逐项等长；均为可选策划译文，不作为已听审原话，不进入独立审核投影。
 
-该操作原子保存新候选、新画面方案与两个current指针，源绑定及 `selected_narration` 由宿主建立；若提交重复的selected_narration，必须与lines一致。旧记录原样保留，新稿/方案固定candidate、pending、production_allowed=false；保存使旧审核过期，不继承声音适配或制作批准。每次写入仍记录actor/reason、校验revision和当前稿ID，冲突/失败不覆盖也不自动重试。随后分开回读candidate和picture_plan，核对新revision、原文、方案和制作门禁。只选旧句仍用select_copy_lines，只改画面仍用set_picture_plan，不为小改动重传整条blueprint。
+该操作原子保存新候选、新画面方案与两个current指针，宿主建立源绑定和当版口播副本，并按画面阶段刷新原声窗和回看登记。旧记录原样保留，新稿/方案固定candidate、pending、production_allowed=false；保存使旧审核过期，不继承声音适配或制作批准。每次写入仍记录actor/reason、校验revision和当前稿ID，冲突/失败不覆盖也不自动重试。随后分开回读candidate和picture_plan，核对新revision、原文、方案和制作门禁。只选旧句仍用select_copy_lines，只改画面仍用set_picture_plan，不为小改动重传整条blueprint。
 
 需要已登记的动作窗口、帧ID或采样状态时，使用`read_clipmentor_analysis {view:"evidence",evidenceIds:["实际已有证据ID"]}`（每批1–8项）。返回这些既有记录、其直接关联帧记录与观察元数据，不重新抽帧、不返回图片，也不构成新观察。读不到的引用会列出缺失，不把“当前稿没带出帧索引”说成原片缺证据；仍不能把采样或历史描述当作本轮连续观看。
 
-画面承载方案用局部操作保存，不能为它重传整条含历史的blueprint：`revise_clipmentor_analysis {action:"set_picture_plan",id:"U-02",expectedRevision,actor,reason,record:{plan_id:"picture_plan_自定新ID",script_candidate_id:"当前current_script_candidate值",plan:{作者自己的画面承载方案},line_guidance:"指向同一当前稿、正式原声范围及新画面方案的交接说明"}}`。同一ID不可覆盖，旧方案保留；代码绑定源素材与当前稿，只存candidate/pending，生产false，旧批准失效。`current_copy`窄读取同时返回`picture_plan_id`和`picture_plan`，保存后据此回读。这里的方案仍需核对画面作用与实际声长，不是已执行的时间线，也不填placement来凑通过。
+画面承载方案用局部操作保存，不能为它重传整条含历史的blueprint：`revise_clipmentor_analysis {action:"set_picture_plan",id:"U-02",expectedRevision,actor,reason,record:{plan_id:"picture_plan_自定新ID",script_candidate_id:"当前current_script_candidate值",plan:{作者自己的画面承载方案},line_guidance:"说明该组原声播放与讲解画面怎样配合"}}`。同一ID不可覆盖，旧方案保留；代码绑定源素材与当前稿，只存candidate/pending，生产false，旧批准失效。`current_copy`窄读取同时返回`picture_plan_id`和`picture_plan`，保存后据此回读。一个讲解句可以有连续排列的几条画面阶段，各自带实际选材窗，方便教同一个动作的不同视角或对照。出问题先核实是引用错了，还是计划与重复登记不同步。这里的方案仍需核对画面作用与实际声长，不是已执行的时间线，也不填placement来凑通过。
 
 `read_clipmentor_analysis` 返回 `breakdown_check` 和 `breakdown_timeline_check`。计划变更使既有制作审核摘要过期；还原旧内容也不会恢复旧批准。正常剪辑期间允许存在尚未搭完的画面，但内置/离线Agent的制作入口在提交导出前会核实际范围。核对可使用已登记placement、已审production_rows，或从冻结阶段选材与实测音频实例推导的native映射；不要求执行者为合法原生实例补写placement。直接视频与带原片来源绑定的静帧按实际覆盖核对；范围不匹配、无法推出有效映射、来源变化仍不放行。嵌套、复杂文字驱动裁切、未绑定来源的静帧或帧时钟不明保留待核，不为过检查强行改成顺播视频。这不是连续视听检查，也没有接管手动UI导出按钮。
 

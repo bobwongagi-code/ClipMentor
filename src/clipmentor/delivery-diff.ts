@@ -1,5 +1,6 @@
 import type { ProjectDoc } from '../editor/types';
 import { checkCopyProduction } from './production-gate';
+import { currentUnitPointIds } from './source-breakdown';
 
 type Row = Record<string, unknown>;
 const object = (v: unknown): v is Row => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -30,7 +31,8 @@ function currentUnits(doc: ProjectDoc): Row[] {
   return doc.clipMentorAnalysis?.blueprint.map(unit => {
     const r = (unit as unknown as Row).internal_review;
     const internal = object(r) ? r : {};
-    return { id: unit.unit_id, point_ids: unit.point_ids, intent_zh: unit.intent_zh, narration_budget_seconds: unit.narration_budget_seconds, line_guidance: unit.line_guidance,
+    return { id: unit.unit_id, point_ids: currentUnitPointIds(doc.clipMentorAnalysis?.source_breakdown, unit.unit_id, unit.point_ids),
+      intent_zh: unit.intent_zh, narration_budget_seconds: unit.narration_budget_seconds, line_guidance: unit.line_guidance,
       candidate_id: internal.current_script_candidate, picture_plan_id: internal.current_picture_plan,
       copy: typeof internal.current_script_candidate === 'string' ? internal[internal.current_script_candidate] : null,
       picture_plan: typeof internal.current_picture_plan === 'string' ? internal[internal.current_picture_plan] : null };

@@ -80,6 +80,56 @@ export async function verifyRegisteredGroupPlayback(base: ProjectDoc, legacyLine
     await assert.rejects(prepareProductionBlueprint(invalid));
   }
   const gInternal = (groupedRegistration.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  // A previously saved draft can carry stale indexes even when its active
+  // copy and actual phases are sound. Exercise the same write the author uses.
+  const { execClipMentorAnalysisTool } = await import('../agent/tools/clipmentor-analysis-tools');
+  const actor = { operator: 'test', executor: 'test', instruction: 'Use the saved phases', identity: 'local_declared_not_authenticated' };
+  for (const action of ['set_picture_plan', 'set_copy_candidate', 'select_copy_lines']) {
+    let current = structuredClone(groupedRegistration);
+    const analysis = current.clipMentorAnalysis!;
+    const unit = analysis.source_breakdown!.units[0];
+    unit.revisits.push({ from_segment_id: 'BT-G4-original', to_segment_id: 'BT-explanation-BT-L01', reason: 'Stale revisit' });
+    unit.original_source_ranges!.reverse();
+    const ir = (analysis.blueprint[0] as any).internal_review;
+    const candidate = ir[ir.current_script_candidate];
+    const plan = structuredClone(ir[ir.current_picture_plan]);
+    const result = await execClipMentorAnalysisTool('revise_clipmentor_analysis', {
+      action, id: unit.unit_id, expectedRevision: analysis.revision, actor, reason: 'Resave the existing phases',
+      record: { plan_id: 'picture_plan_actual', plan, line_guidance: analysis.blueprint[0].line_guidance,
+        ...(action === 'set_picture_plan' ? { script_candidate_id: ir.current_script_candidate } : {
+          source_candidate_id: ir.current_script_candidate, candidate_id: 'script_candidate_actual',
+          ...(action === 'select_copy_lines' ? { line_ids: candidate.lines.map((line: { id: string }) => line.id) } : { lines: candidate.lines }),
+        }) },
+    }, { getDoc: () => current, getCreativeMode: () => 'clipmentor',
+      commands: { applyDoc: (next: ProjectDoc) => { current = next; } } } as import('../agent/context').AgentContext) as { ok?: boolean };
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const prepared = await prepareProductionBlueprint(current);
+    assert.equal(prepared.packet.units[0].picture_plan?.registered_revisits.length, 5);
+    const after = (current.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+    assert.deepEqual(after[ir.current_picture_plan], ir[ir.current_picture_plan], 'previous picture plans retain their original bytes');
+    assert.deepEqual(after[after.current_script_candidate].lines, candidate.lines, 'projection preserves the actual lines');
+    assert.equal((await checkCopyProduction(current, 'clipmentor')).allowed, false);
+  }
+  const splitNarration = structuredClone(groupedRegistration);
+  splitNarration.clipMentorAnalysis!.source_breakdown!.units[0].revisits = [];
+  const splitReview = (splitNarration.clipMentorAnalysis!.blueprint[0] as any).internal_review;
+  const splitPlan = splitReview[splitReview.current_picture_plan];
+  const firstExplanation = splitPlan.phases[1];
+  splitPlan.phases.splice(1, 1,
+    {...firstExplanation, source_range_seconds: [0, 4]},
+    {...firstExplanation, source_range_seconds: [6, 10.2]});
+  const splitPrepared = await prepareProductionBlueprint(splitNarration);
+  const splitBinding = splitPrepared.packet.units[0].picture_plan!.line_source_ranges[0];
+  assert(splitBinding.evidence_source_ranges);
+  assert.deepEqual(splitBinding.evidence_source_ranges.map(e => e.source_range_seconds), [[0, 4], [6, 10.2]],
+    'one narration can use two shots without authorizing playback of the gap');
+  const secondShot = splitPlan.phases[2];
+  secondShot.source_range_seconds = [6, 10.5];
+  await assert.rejects(prepareProductionBlueprint(splitNarration), /copy_picture_outside_explanation|picture_plan_replay_outside_evidence/);
+  secondShot.source_range_seconds = [6, 10.2];
+  splitPlan.phases.splice(2, 1);
+  splitPlan.phases.splice(4, 0, secondShot);
+  await assert.rejects(prepareProductionBlueprint(splitNarration), /copy_picture_outside_explanation/);
   for (const change of [
     (doc: ProjectDoc) => { doc.clipMentorAnalysis!.source_breakdown!.units[0].revisits.pop(); },
     (doc: ProjectDoc) => { doc.clipMentorAnalysis!.source_breakdown!.units[0].original_source_ranges!.reverse(); },

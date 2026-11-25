@@ -25,7 +25,7 @@ import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGener
 import {checkCopyProduction,copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
 import {handoffDigest,openingComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {confirmedOpeningResultsMatch,deliveryPictureBindings} from '../../src/clipmentor/delivery-sections';
-import {openingMaxLineCharacters} from '../../src/clipmentor/delivery-bindings';
+import {deliverySectionsFromDoc,openingMaxLineCharacters} from '../../src/clipmentor/delivery-bindings';
 import {currentPicturePhases,picturePhaseIssueCode} from '../../src/clipmentor/blueprint-picture-notices';
 import {copyPreparationReady,checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {completedSourceEvidenceOperations,importProductionSourceEvidence,productionEvidenceInspection,productionSourceObservationAllowed,productionReviewObservation,verifiedUnansweredSourceObservation} from './production-source-evidence';
@@ -120,8 +120,68 @@ export async function loadProductionAuthorGuidance(stage:ProductionTask['stage']
   return body;
  }))).join('\n');
 }
+/** Check delivery and picture input together before self-check or copy production review. */
+export async function prepareProductionCopyReview(
+ task:ProductionTask,doc:ProjectDoc,revision:string,criteria:ReturnType<typeof boundVisualCriteria>,
+ openingComparison:ReturnType<typeof productionOpeningComparison>,signal:AbortSignal,
+):Promise<{prepared:Awaited<ReturnType<typeof createProductionPreparation>>}|(StageResult&{repair:'blueprint'})>{
+ const issues:ReturnType<typeof blueprintFindings>=task.input.panelDelivery?productionBoardPhaseIssues(doc):[];
+ const add=(code:string,id='delivery',targets?:string[])=>issues.push({code,id,...(targets?.length?{targets}:{})});
+ let prepared:Awaited<ReturnType<typeof createProductionPreparation>>|undefined;
+ try{prepared=await createProductionPreparation(doc);}
+ catch(error){
+  if(!task.input.humanBlueprintReview||!(error instanceof Error))throw error;
+  const findings=blueprintFindings(error.message);
+  if(!findings.length||pictureRepairFindings(error.message).length!==findings.length)throw error;
+  issues.push(...findings);
+ }
+ const sections=()=>{
+  if(prepared)return prepared.rawPacket.delivery_sections;
+  try{return deliverySectionsFromDoc(doc);}
+  catch(error){
+   if(!(error instanceof Error)||!/^delivery_[a-z_]+(?::|$)/.test(error.message))throw error;
+   add('delivery_sections_invalid');
+   return null;
+  }
+ };
+ const delivery=sections();
+ if(task.input.panelDelivery&&(prepared?prepared.rawPacket.units.some(unit=>unit.source_context?.scope!=='frozen_task_scope')
+  :doc.clipMentorAnalysis?.source_breakdown?.review_scope?.kind!=='full_source'))
+  add('source_review_scope_missing','analysis');
+ if(delivery!==null){
+  const openings=delivery?.filter(section=>section.kind==='performance_opening')??[];
+  if(openingComparison&&openings.length!==1)add('opening_comparison_section_missing_or_duplicate');
+  if(openingComparison?.results&&openings.length===1&&!confirmedOpeningResultsMatch(openings[0],openingComparison.results))
+   add('opening_results_missing_or_changed');
+  try{
+   const units=prepared?.rawPacket.units??doc.clipMentorAnalysis?.source_breakdown?.units??[];
+   assertVisualCriteriaPlan(criteria,delivery,units.map(unit=>unit.unit_id),doc.activeTimelineId);
+  }catch(error){
+   if(!(error instanceof Error))throw error;
+   const [code,...targets]=error.message.split(':');
+   add(code,'delivery',targets);
+  }
+  if(task.input.panelDelivery){
+   const content=await currentCreatorDocument(doc);
+   const deliveryIssues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
+   deliveryIssues.forEach(code=>add(code));
+   if(!deliveryIssues.length){
+    const partnerIssue=await panelPartnerCardIssue(doc,task.input.panelDelivery,content,undefined,signal);
+    if(partnerIssue==='existing_partner_composition_verifier_unavailable')throw Error(partnerIssue);
+    if(partnerIssue)add(partnerIssue);
+   }
+  }
+ }
+ if(issues.length){
+  const unique=[...new Map(issues.map(issue=>[digestValue(issue),issue])).values()];
+  return {artifact:{revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(unique)}`},repair:'blueprint'};
+ }
+ if(!prepared)throw Error('blueprint_execution_plan_missing');
+ return {prepared};
+}
+
 async function runProductionCopyReview({
- task,stage,editor,doc,policy,criteria,openingComparison,teachingBriefDigest,baselinePolicyDigest,
+ task,stage,editor,doc,policy,criteria,prepared,teachingBriefDigest,baselinePolicyDigest,
  teachingDigest,panelScope,panelDraft,strictEditorial,executeWithRecovery,operation,
 }:{
  task:ProductionTask;
@@ -130,7 +190,7 @@ async function runProductionCopyReview({
  doc:ProjectDoc;
  policy:Awaited<ReturnType<typeof productionReviewRequirements>>;
  criteria:ReturnType<typeof boundVisualCriteria>;
- openingComparison:ReturnType<typeof productionOpeningComparison>;
+ prepared:Awaited<ReturnType<typeof createProductionPreparation>>;
  teachingBriefDigest:string|undefined;
  baselinePolicyDigest:string;
  teachingDigest:string|undefined;
@@ -143,39 +203,6 @@ async function runProductionCopyReview({
  const a=doc.clipMentorAnalysis!;
  const authorCriteria=productionAuthorCriteria(task,policy,doc),authorCriteriaDigest=digestValue(authorCriteria);
  const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
- if(task.input.panelDelivery){
-  const issues=productionBoardPhaseIssues(doc);
-  if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues)}`},repair:'blueprint'};
- }
- let prepared:Awaited<ReturnType<typeof createProductionPreparation>>;
- try{prepared=await createProductionPreparation(doc);}
- catch(error){
-  if(!task.input.humanBlueprintReview||!(error instanceof Error))throw error;
-  const findings=blueprintFindings(error.message);
-  if(!findings.length||pictureRepairFindings(error.message).length!==findings.length)throw error;
-  return {artifact:{revision:editor.revision,blueprint_structure_issue:error.message},repair:'blueprint'};
- }
- if(task.input.panelDelivery&&prepared.rawPacket.units.some(unit=>unit.source_context?.scope!=='frozen_task_scope'))
-  return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"source_review_scope_missing","id":"analysis"}]'},repair:'blueprint'};
- if(openingComparison&&prepared.rawPacket.delivery_sections?.filter(section=>section.kind==='performance_opening').length!==1)
-  return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_comparison_section_missing_or_duplicate","id":"delivery"}]'},repair:'blueprint'};
- const openingSection=prepared.rawPacket.delivery_sections?.find(section=>section.kind==='performance_opening');
- if(openingComparison?.results&&openingSection&&!confirmedOpeningResultsMatch(openingSection,openingComparison.results))
-  return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:[{"code":"opening_results_missing_or_changed","id":"delivery"}]'},repair:'blueprint'};
- try{assertVisualCriteriaPlan(criteria,prepared.rawPacket.delivery_sections,prepared.rawPacket.units.map(u=>u.unit_id),doc.activeTimelineId);}catch(e){
-  const [code,...specific]=String((e as Error).message).split(':');
-  return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify([{code,id:'delivery',targets:specific}])}`},repair:'blueprint'};
- }
- if(task.input.panelDelivery){
-  const content=await currentCreatorDocument(doc);
-  const issues=panelDeliveryIssues(doc,{...task.input.panelDelivery,bookends:'layered-v1'},content);
-  if(!issues.length){
-   const partnerIssue=await panelPartnerCardIssue(doc,task.input.panelDelivery,content,undefined,stage.signal);
-   if(partnerIssue==='existing_partner_composition_verifier_unavailable')throw Error(partnerIssue);
-   if(partnerIssue)issues.push(partnerIssue);
-  }
-  if(issues.length)return {artifact:{revision:editor.revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(issues.map(code=>({code,id:'delivery'})))}`},repair:'blueprint'};
- }
  const digest=prepared.reviewed.subject.digest;
  if(task.input.humanBlueprintReview){
   const pictures=panelScope?deliveryPictureBindings(doc,prepared.rawPacket.delivery_sections):undefined;
@@ -608,7 +635,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(!copyPreparationReady(doc)||a.source_breakdown?.review_scope?.kind!=='full_source')
     return repairBaseline('原片教学基线的范围、重点或来源引用不完整。');
    if(task.stage==='copy_review'){
-    const invalidReplay=checkSourceBreakdown(doc).issues.filter(issue=>issue.code==='picture_plan_replay_outside_evidence');
+    const invalidReplay=checkSourceBreakdown(doc).issues.filter(issue=>issue.code==='picture_plan_replay_outside_evidence'
+     ||issue.code==='copy_picture_outside_explanation');
     if(invalidReplay.length)return {artifact:{revision:editor.revision,
      blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(invalidReplay)}`},repair:'blueprint'};
    }
@@ -694,7 +722,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }
   if(task.stage==='copy_review'){
    // Keep the editor lease through review and receipt publication.
-   return await runProductionCopyReview({task,stage,editor,doc,policy,criteria,openingComparison,teachingBriefDigest,
+   const copyInput=await prepareProductionCopyReview(task,doc,editor.revision,criteria,openingComparison,stage.signal);
+   if(!('prepared' in copyInput))return copyInput;
+   return await runProductionCopyReview({task,stage,editor,doc,policy,criteria,prepared:copyInput.prepared,teachingBriefDigest,
     baselinePolicyDigest,teachingDigest,panelScope,panelDraft,strictEditorial,executeWithRecovery,operation});
   }
   if(['audio','edit','export','self_check'].includes(task.stage)){
@@ -767,7 +797,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const goal=finalScope??(operatorRevision?'按网页提交的现行原话逐项返修，并复核整套仍适用的交付要求。使用原片和当前中马稿、实际画面找对应缺口。既有审核指出的问题仍需保留及核对。用户明确要求修改的片头、片尾和教学组纳入本轮，保留其余已通过内容。先保存再回读新候选，按现有自检和审核继续。不能补写未确认事实或覆盖原审核回执。':reflowBaseline?'修复现存横版误用：先只读现有工程和已审蓝图，再用原set_aspect_ratio将活动画布设为9:16；第一笔保存起就必须满足竖版。随后逐段重新安排原生实例，不能仅裁横片或只改画布尺寸交差。保持全部现有实例ID、源窗、时间位置、原声/旁白音量、稿件、字幕原文、短标及9条音频；只调整视觉几何和排版。原片完整竖版主体、讲解参照关系、原片/讲解标识与下方实底字幕区均须在竖版清楚可读。片头仍为压暗原片铺底+成绩前景，片尾完整使用已审商品+Storyboard整卡。图片裁切参数必须在改成竖版后从现行原入口回读，不沿用横版像素换算；不修改蓝图或素材。不要新增配音/审核/观察，不自行导出。用实际组合帧检查片头、每组、片尾后保存，由宿主使用剩余渲染额度导出。':pictureOnlyRepair?'仅修复任务 audio_picture_repair 中的画面承载问题。读取现行稿、原片证据和实测音频，按整组而不是锁死单句短窗安排画面。只用 set_picture_plan 给受影响组登记新画面计划（必须沿用 current_script_candidate），保留原有交付段、结构、口播、字幕与短标文字。可读取或保存原片证据帧，不新增配音或观察。每段必须有实际信息任务，不循环、慢放或空长定格凑秒数。现行稿、音频和实测锚点随任务附带。保存后交现有审核，不自签通过。':repairingIndependent
    ? '只修独立审核回执列出的未通过项；逐项同步口播、字幕、教学重点、画面计划和证据边界。仅换候选版本、改说明或收窄口播却保留旧教学断言不算完成；补证则登记实际来源与支持关系，不把观察等同审核批准。保留原判、已通过单元、片头片尾及实际素材。旁白若在原片和明确登记的短标或关系卡之外没有独立教学损失，撤掉重复旁白和其同文字幕，保留画面承载及教学重点，回读对应计划。当前稿件和画面安排保存后交重新自检及审核。'
    : fixingSelfCheck
-   ? '修订已保存的蓝图，逐项回应任务附带的作者自检。根据已有原片证据核实混色、色号、晕染及促单，证据不足就收窄或标未知；保留未受影响的教学。只修实际缺项。凡同一对象、色号或动作无法从已登记证据确认，就收窄口播和短标，避免反复补证。口播指到的动作必须在当句选材范围实际可见。字幕分卡按意群拆分且保持同文。正文 phases 使用 {mode:"original",source_range_seconds:[起,止],picture:"画面"} 或 {mode:"explanation",line_id:"单句ID",source_range_seconds:[起,止],picture:"画面"}；不用 kind、line_ids 或 source_ranges。每条讲解跟对应原声，先逐个点名现行稿件里的所有 line_id，每句均覆盖，匹配 source_breakdown 已登记的播放窗和回看。viewer_stage_cues.original 用 text/enter/exit，revisit 为逐句关联的 {line_ids,text,enter,exit} 数组。片头片尾留在各自交付段，不塞进正文 phases。字幕分卡不改口播文字。保存后用 read_clipmentor_analysis 的 current_copy/单元 ID 回读。保留现有版本和失败回执，不配音、不剪辑。'
+   ? '修订已保存的蓝图，逐项回应任务附带的作者自检。根据已有原片证据核实混色、色号、晕染及促单，证据不足就收窄或标未知；保留未受影响的教学。只修实际缺项。凡同一对象、色号或动作无法从已登记证据确认，就收窄口播和短标，避免反复补证。口播指到的动作必须在当句选材范围实际可见。字幕分卡按意群拆分且保持同文。正文 phases 使用 {mode:"original",source_range_seconds:[起,止],picture:"画面"} 或 {mode:"explanation",line_id:"单句ID",source_range_seconds:[起,止],picture:"画面"}；不用 kind、line_ids 或 source_ranges。每条讲解跟对应原声，先逐个点名现行稿件里的所有 line_id，每句均覆盖，使用本点原片证据。以画面阶段安排实际播放，宿主会同步回看。viewer_stage_cues.original 用 text/enter/exit，revisit 为逐句关联的 {line_ids,text,enter,exit} 数组。片头片尾留在各自交付段，不塞进正文 phases。字幕分卡不改口播文字。保存后用 read_clipmentor_analysis 的 current_copy/单元 ID 回读。保留现有版本和失败回执，不配音、不剪辑。'
    : task.stage==='analysis'&&rebuild?'按原始反馈及需重选的教学组，先修原片购买关注、手法、作用、证据及前后承接。用 set_source_breakdown 保存基线并逐点填写 change_reason。可重划教学组；合并时沿用已有片头或片尾绑定的组ID。现行稿件和旧回执留作历史，本阶段不得改字幕、口播或画面方案。对未影响教学的版式意见留到蓝图阶段。'
    : goals[task.stage]);
   const beforeExecution=task.stage==='edit'?structuredClone(doc):undefined;
@@ -837,7 +867,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    const plan=review?.[review.current_picture_plan];
    const registered=a.source_breakdown!.units.find(row=>row.unit_id===unit.unit_id);
    return [{unit_id:unit.unit_id,issues:outstanding.filter(issue=>issue.id===unit.unit_id),
-    current_lines:candidate?.lines??[],phases:plan?.phases??[],registered_revisits:registered?.revisits??[],
+    current_lines:candidate?.lines??[],phases:plan?.phases??[],
     registered_segments:a.source_breakdown!.segments.filter(segment=>registered?.original_segment_ids.includes(segment.segment_id)
      ||registered?.explanation_segment_ids.includes(segment.segment_id)).map(({segment_id,source_range_seconds})=>({segment_id,source_range_seconds}))}];
   }):[];
@@ -860,9 +890,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     instruction:'用 read_clipmentor_source_video 回读这次观察。无法取得连续视听时，依靠实际上传素材与本地画面证据完成整份蓝图。无法核实的原声、色号或动作留未知或缩窄稿件，不补写原话。优先用 set_picture_plan 逐组补齐现行稿的 phases，再分别登记片头和两种片尾。沿用已准备好的 Storyboard 及正式图片绑定。'}}:{}),
    ...(pictureOnlyRepair?{measuredExecution:await currentExecutionPreparation(doc,task.input.voice)}:{}),
    ...(fixingSelfCheck?{deliveryContract:'先修复无效旧 delivery_sections：用 set_picture_plan 保存该组的新计划，去掉未成功登记的旧无效段，并保留其口播及历史。之后可用 save_clipmentor_source_frame 保存当前原片中已经核实的商品帧供片头或片尾使用，不能把视频 ID 和秒数塞入图片字段。最终用 set_copy_candidate 同时移出正文的交付句、保留其原文并绑定 plan.delivery_sections。每项是 {section_id,kind:performance_opening 或 creator_invitation,line:{line_id,narration_ms,caption_lines,meaning_zh,labels},evidence_ids:[实际业务事实ID],picture:{asset_id,src,sha256,description},voice:{provider,voiceId,speed:1}}。业务事实必须真实且 source_ids 含实际图片 ID，可登记用户已确认的限制与用途，不能把画面推断写成用户事实。没有销量归属就只做学习过渡。'}:{}),
-   ...(fixingSelfCheck?{phaseSelectionContract:'原声组的 source_range_seconds 与正式回看登记保留；逐句更窄或不相邻的实际选材请在对应解释 phase 写 context_source_ranges:[{segment_id,source_range_seconds:[开始,结束],purpose}]，只能引用登记的同组真实段落。逐句 source_seconds 覆盖所选子窗但不意味着播间隙。不要只把子窗写在 picture 散文里。若两句任务不同，分别写自己的选材和短标。caption_lines 拆成同文的短意群，每项一张卡，并明确分页约定。若计划用关系卡，登记要上屏的确切短标文案；没有依据的绝对说法收窄。'}:{}),
+   ...(fixingSelfCheck?{phaseSelectionContract:'在 phases 安排原声和回看，宿主会把计划投影到回看登记。同一句要用多个镜头时可接连写同一 line_id 的解释阶段。更窄的实际选材可在对应阶段写 context_source_ranges:[{segment_id,source_range_seconds:[开始,结束],purpose}]，只能引用登记的同组真实段落。逐句 source_seconds 覆盖所选子窗但不意味着播间隙。不要只把子窗写在 picture 散文里。若两句任务不同，分别写自己的选材和短标。caption_lines 拆成同文的短意群，每项一张卡，并明确分页约定。若计划用关系卡，登记要上屏的确切短标文案；没有依据的绝对说法收窄。'}:{}),
    ...(task.repairContext?.source_evidence_import?{evidenceRepair:'已从有效原片回执按现行段落登记 source-av 证据。先读 evidence 和 source_breakdown；给确有原话的 original_claim 补准确的中文意思 meaning_zh，引用现有证据，不伪造 transcript 或人工听审。逐句对照同组已登记原话和动作，无法证实的色号、动作完成或购买邀请改成有依据的说法；无法确认的保留未知。同步实际逐句画面范围与原片拆解、画面阶段、字幕分卡。保留已登记片头片尾及实际图片。'}:{}),
-   ...(repairTargets.length?{repairTargets,instruction:'只处理列出的单元。片头过渡和达人行动邀请归 plan.delivery_sections，用真实素材和业务证据绑定；正文只放教学句。无法确认销量归属时省略数字。回看范围与已登记段落一致；若教学确需更窄窗口，先把真实范围与证据登记进源片拆解，再同步 phases。保存后回读，确认列出的缺口实际消失。'}:{}),
+   ...(repairTargets.length?{repairTargets,instruction:'只处理列出的单元。片头过渡和达人行动邀请归 plan.delivery_sections，用真实素材和业务证据绑定；正文只放教学句。无法确认销量归属时省略数字。回看可以在本组现有证据内选更窄的窗。证据确实不够时再补证。保存后回读，确认列出的缺口实际消失。'}:{}),
    ...(priorSourceOperation?{sourceObservation:{operationId:priorSourceOperation,instruction:'读已保存回执，按原片时间核实原话和动作。回执对应旧稿，只可用作同一原片的证据，不能证明现行蓝图或剪辑已通过。'}}:{}),
    ...(recoveredSourceOperation?{sourceObservation:{operationId:recoveredSourceOperation,instruction:'已完成修正后的连续原片观察。用 read_clipmentor_source_video 读取这份回执，核对现有五组；只按证据修正，不重写全部稿件。'}}:{})};
   let exemplarRead:{file:string;sha256:string}|undefined;

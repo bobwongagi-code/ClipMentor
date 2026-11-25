@@ -15,7 +15,7 @@ import type {TeachingPacket} from '../../src/clipmentor/production-gate';
 import {blockingAuthorBlueprintChecks,productionAuthorSelfCheckSource,checkProductionAuthorBlueprint} from './production-author-self-check';
 import { verifyAuthorSelfCheckRecovery } from './production-author-self-check.verify-suite';
 import {createProductionPreparation} from './production-readiness';
-import {isBoundCanvasReflow,assertCanvasReflowPreservation} from './production-worker';
+import {isBoundCanvasReflow,assertCanvasReflowPreservation,prepareProductionCopyReview} from './production-worker';
 import {digestValue} from '../agent-runs/store-values';
 import type {ProductionTask,StageContext} from './production-task';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -80,6 +80,18 @@ for(const entry of saved.cases){
 const planning=await productionAuthorTaskData({...task,stage:'blueprint'},saved.cases[0].doc as unknown as import('../../src/editor/types').ProjectDoc);
 assert.equal(planning.frozenBlueprint,null,'a teaching draft must not pretend to be a frozen executable plan');
 assert(planning.goal.includes('不固定四组'));
+{
+ const {default:grouped}=await import('../../src/clipmentor/fixtures/grouped-registration-v1.json');
+ const candidate=structuredClone(grouped) as unknown as ProjectDoc;
+ const savedUnit=candidate.clipMentorAnalysis!.blueprint[0] as any;
+ const internal=savedUnit.internal_review;
+ internal[internal.current_picture_plan].phases[1].line_id='missing-copy-line';
+ const result=await prepareProductionCopyReview({...task,stage:'copy_review',input:{...task.input,humanBlueprintReview:true}},
+  candidate,'saved-picture',undefined,{kind:'opening_comparison',quote:'Confirmed opening comparison'},new AbortController().signal);
+ assert('repair' in result && result.repair==='blueprint');
+ assert.match(String(result.artifact.blueprint_structure_issue),/picture_plan_phase_line_invalid/);
+ assert.match(String(result.artifact.blueprint_structure_issue),/opening_comparison_section_missing_or_duplicate/);
+}
 const checkDoc=structuredClone(saved.cases[0].doc) as unknown as import('../../src/editor/types').ProjectDoc;
 const beforeCheck=JSON.stringify(checkDoc);
 const requirements=['这么多人拍这款商品，为什么这支视频取得这个成绩？','用我提供的CTA，不自制商品卡'];
