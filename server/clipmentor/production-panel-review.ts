@@ -4,7 +4,7 @@ import {deliverySectionsFromDoc,endingCardLayout,endingCardSources} from '../../
 export type BlueprintReviewGroup = {id:string;label:string};
 type GroupReview = {id:string;decision:string;stance:'accepted'|'changes'|'pending'};
 type ReviewEnding = {id:string;label:string;materials:Array<{id:string;name:string}>};
-export type BlueprintReviewRecord = {revision:string;boardIdentity:string;groups:GroupReview[];endings:ReviewEnding[]};
+export type BlueprintReviewRecord = {revision:string;boardIdentity:string;scope?:'whole_blueprint';groups:GroupReview[];endings:ReviewEnding[]};
 type ReviewIssueKind = 'content'|'gate'|'binding';
 
 export class PanelReviewIssue extends Error {
@@ -18,6 +18,8 @@ export function panelReviewIssue(error:unknown){
  if(error instanceof PanelReviewIssue)return {kind:error.kind,message:error.message};
  if(typeof error!=='string'&&!(error instanceof Error))return;
  const message=typeof error==='string'?error:error.message;
+ const opinionIssue=message.match(/blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\n]+)$/u);
+ if(opinionIssue)return {kind:'content',message:opinionIssue[1]+(message.includes('blueprint_repair_no_progress')?' 同一问题再次出现，已暂停，待维护侧核对。':'')} as const;
  if(/suspected_gate_defect|门禁问题/.test(message))
   return {kind:'gate',message:'制作已暂停，需维护侧核对校验。候选和回执已保存。'} as const;
  if(/binding|_scope_|_stale|_schema_|_format|execution_mapping_repair_no_progress|feedback_(target_missing|unit_placement_missing|execution_targets_required|changed_)|绑定错|版本.*变化|预览.*变化|版本记录不匹配|片尾.*齐备|片尾.*变化|证据.*缺失/i.test(message))
@@ -47,7 +49,12 @@ export function blueprintReviewEndings(doc:ProjectDoc):ReviewEnding[]{
 }
 
 export function bindBlueprintReview(input:unknown,scope:{revision:string;boardIdentity:string;groups:BlueprintReviewGroup[];endings:ReviewEnding[]},confirm:boolean):BlueprintReviewRecord{
- if(input!==undefined&&(!row(input)||!Array.isArray(input.groups)||!Array.isArray(input.endingIds)))
+ const whole=row(input)&&input.scope==='whole_blueprint';
+ if(whole){
+  if(!confirm||Object.keys(input).some(key=>key!=='scope'&&key!=='groups')
+   ||input.groups!==undefined&&!Array.isArray(input.groups))
+   throw new PanelReviewIssue('binding','整份蓝图的确认格式无效。');
+ }else if(input!==undefined&&(!row(input)||!Array.isArray(input.groups)||!Array.isArray(input.endingIds)))
   throw new PanelReviewIssue('binding','表态记录格式不完整，请刷新后重新提交。');
  const supplied=row(input)&&Array.isArray(input.groups)?input.groups:[];
  const entries=new Map<string,GroupReview>();
@@ -60,19 +67,19 @@ export function bindBlueprintReview(input:unknown,scope:{revision:string;boardId
  }
  if(confirm){
   if(!scope.groups.length)throw new PanelReviewIssue('binding','当前蓝图没有可核对的教学组。');
-  const missing=scope.groups.filter(group=>!entries.get(group.id)?.decision).map(group=>group.label);
+  const missing=whole?[]:scope.groups.filter(group=>!entries.get(group.id)?.decision).map(group=>group.label);
   if(missing.length)throw new PanelReviewIssue('content',`请填写${missing.join('、')}教达人改哪个决定，并记录表态。`);
-  const undecided=scope.groups.filter(group=>entries.get(group.id)?.stance!=='accepted').map(group=>group.label);
+  const undecided=scope.groups.filter(group=>whole?entries.get(group.id)?.stance==='changes':entries.get(group.id)?.stance!=='accepted').map(group=>group.label);
   if(undecided.length)throw new PanelReviewIssue('content',`请先处理${undecided.join('、')}的待定或修改意见。`);
  }
  const selected=row(input)&&Array.isArray(input.endingIds)?input.endingIds:[];
  const endingIds=scope.endings.map(ending=>ending.id);
  if(new Set(selected).size!==selected.length||selected.some(id=>!endingIds.includes(id)))
   throw new PanelReviewIssue('binding','片尾确认与当前蓝图不符，请刷新核对。');
- if(confirm&&selected.length!==endingIds.length)
+ if(confirm&&!whole&&selected.length!==endingIds.length)
   throw new PanelReviewIssue('content','请先核对两个片尾各自绑定的素材。');
  return {revision:scope.revision,boardIdentity:scope.boardIdentity,groups:scope.groups.flatMap(({id})=>entries.get(id)??[]),
-  endings:scope.endings.filter(ending=>selected.includes(ending.id))};
+  ...(whole?{scope:'whole_blueprint' as const}:{}),endings:whole?scope.endings:scope.endings.filter(ending=>selected.includes(ending.id))};
 }
 
 export function panelFeedbackTarget(value:unknown,groups:BlueprintReviewGroup[],preview:boolean){

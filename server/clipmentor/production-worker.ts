@@ -7,6 +7,7 @@ import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
 import {teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
+import {guardBlueprintOpinionWrite} from './production-blueprint-opinions';
 import {currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
 import {createHash} from 'node:crypto';
 import {digestValue} from '../agent-runs/store-values';
@@ -393,10 +394,21 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   feedback:task.blueprintFeedback,feedbackRevision:task.blueprintFeedbackRevision,policy:panelBlueprintRequirementsDigest(policy)});
  let analysisCopyDigest:string|undefined;
  let assertQualifiedWrite:((doc:ProjectDoc)=>void)|undefined;
+ const opinions=task.repairContext?.pending_blueprint_feedback?undefined:task.blueprintOpinions;
+ let opinionStop:Error|undefined;
  const editor=await openHeadlessEditor({creatorStoryboardDraft:task.stage==='blueprint'&&!!task.input.panelDelivery,projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
-  ...(task.input.panelDelivery?{assertCanvas:(next:ProjectDoc)=>{
-   assertProductionCanvas(next);if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);
+  ...(task.input.panelDelivery||opinions?{assertCanvas:(next:ProjectDoc)=>{
+   if(task.input.panelDelivery)assertProductionCanvas(next);
+   if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);
    assertConfirmedTeaching(next);
+   if(opinionStop)throw opinionStop;
+   if(opinions){
+    try{guardBlueprintOpinionWrite(opinions,next);}
+    catch(error){
+     if(error instanceof Error&&error.message.startsWith('blueprint_repair_no_progress '))opinionStop=error;
+     throw error;
+    }
+   }
    if(analysisCopyDigest&&teachingDraftPointersDigest(next)!==analysisCopyDigest)throw Error('teaching_baseline_analysis_cannot_write_copy');
    assertQualifiedWrite?.(next);
   }}:{}),
@@ -479,8 +491,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(!teachingAnalysis)await editor.commit();
   }
   // Import saved neutral source evidence before author/self-check/review, not only
-  // after exhausting a repair limit. Never import observer verdicts or approvals.
-  if(task.stage==='blueprint'||task.stage==='copy_review'){
+  // after exhausting a repair limit. Scoped repairs keep the evidence shown to the reviewer.
+  if(!opinions&&(task.stage==='blueprint'||task.stage==='copy_review')){
    const operations=completedSourceEvidenceOperations(task);
    let changed=false;
    for(const id of operations){
@@ -802,6 +814,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      ||registered?.explanation_segment_ids.includes(segment.segment_id)).map(({segment_id,source_range_seconds})=>({segment_id,source_range_seconds}))}];
   }):[];
   const taskData={...await productionAuthorTaskData(task,editor.getDoc(),{policy,references}),goal,
+   ...(opinions?{blueprintOpinions:{
+    entries:opinions.opinions.filter(entry=>entry.edits).map(({unitId,label,text,keep,change})=>({unitId,label,text,keep,change})),
+    instruction:'意见指向由入口绑定。整体意见只改整体内容和片头片尾，组内意见只改对应组。句子按现行口播顺序，确认保留的句子原样收录。用户没有指定的组和整体信息原样保留。'} }:{}),
    ...(panelDraft?{objective:policy?.brief.objective??null,doneCriteria:baselineRequirements}:{}),
    ...(panelDraft&&task.stage==='analysis'?{teachingFeedback:task.blueprintFeedback??null,
     ...(rebuild?{teachingFindings:rebuild.rejected.map(({unitId,reason})=>({unitId,reason})),
@@ -840,10 +855,14 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    host:{signal:stage.signal,maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     normalizeArgs:(name,args)=>name==='load_skill'&&typeof args.limit==='number'&&Number.isSafeInteger(args.limit)&&args.limit>48000
      ?{...args,limit:48000}:args,
-    beforeRequest:()=>stage.effect('model',`author-${task.attempts.model}`,async()=>null).then(()=>undefined),
+    beforeRequest:()=>{
+     if(opinionStop)throw opinionStop;
+     return stage.effect('model',`author-${task.attempts.model}`,async()=>null).then(()=>undefined);
+    },
     execute:productionAuthorToolExecutor({task,editor,panelDraft,panelScope,pictureOnlyRepair,sourceObservationAllowed,
      source:a.source,hasQualifiedTeaching:()=>qualifiedTeaching(editor.getDoc())===teachingDefinition,
      executeWithRecovery,requestObservation,preparePanelAssets})}});
+  if(opinionStop)throw opinionStop;
   if(panelDraft&&task.stage==='blueprint'&&qualifiedTeaching(editor.getDoc())!==teachingDefinition){
    const changed=newlyChangedTeaching(baselineSource(doc),baselineSource(editor.getDoc()),doc,rebuild);
    await editor.commit();

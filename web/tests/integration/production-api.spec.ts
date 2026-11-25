@@ -165,7 +165,8 @@ test.describe('production gateway responses', () => {
       await page.route(`**${apiBasePath}/intake`, route => route.fulfill({ json: { receipt: fixtureReceipt } }))
       await page.route(`**${apiBasePath}/production**`, async route => {
         if (route.request().method() === 'POST') {
-          expect(route.request().postDataJSON()).toMatchObject({ action: 'revise_blueprint', revision, boardIdentity: identity, text: '保留这条意见' })
+          expect(route.request().postDataJSON()).toMatchObject({ action: 'revise_blueprint', revision, boardIdentity: identity,
+            blueprintOpinions:[{unitId:null,text:'保留这条意见'}] })
           posts++
           if (posts === 2) {
             saved = true
@@ -183,10 +184,9 @@ test.describe('production gateway responses', () => {
 
       await page.goto(origin)
       await expect(page.frameLocator('iframe').getByText('当前双结尾蓝图')).toBeVisible()
-      const feedback = page.getByRole('textbox', { name: '修改意见' })
-      const submit = page.getByRole('button', { name: '提交修改' })
+      const feedback = page.getByRole('textbox', { name: '整体意见' })
+      const submit = page.getByRole('button', { name: '提交意见' })
       await feedback.fill('保留这条意见')
-      await acknowledgeOverallFeedback(page)
       await submit.click()
       await expect(submit).toBeEnabled()
       await expect(feedback).toHaveValue('保留这条意见')

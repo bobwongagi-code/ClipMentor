@@ -27,6 +27,7 @@ import {resolveUploadFile,isSafeUploadName} from '../media-dir';
 import {boundPanelSalesEvidence,declaredPanelOpening,panelSalesEvidence} from './production-panel-delivery';
 import {firstSuspectedGateDefect} from './production-gate-probes';
 import {frozenTeachingTopics} from './production-source-policy';
+import type {BlueprintOpinionRecord} from './production-blueprint-opinions';
 
 /** Keep independent findings through intermediate author/structure repairs, never overwrite them with a self-check. */
 export function productionRepairContext(previous:Record<string,unknown>|undefined,artifact:Record<string,unknown>){
@@ -96,6 +97,8 @@ export interface ProductionTask {
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
  status:'queued'|'running'|'blocked'|'awaiting_blueprint'|'awaiting_review'|'completed'|'cancelled';
  blueprintFeedback?:string;
+ blueprintOpinions?:BlueprintOpinionRecord;
+ blueprintOpinionNotes?:BlueprintOpinionRecord;
  blueprintFeedbackEpoch?:number;
  blueprintFeedbackRevision?:string;
  blueprintFeedbackUnitIds?:string[];
@@ -161,7 +164,7 @@ export async function requeuePanelAuthorCheck(task:ProductionTask){
   ||(await productionReviewRequirements(task.projectId))?.digest!==policy?.digest)return false;
  const guards=[{key,digest:digestValue(project.value)},{key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null}];
  const pending=task.repairContext?.pending_blueprint_feedback as {text?:string;revision?:string;unitIds?:string[]}|undefined;
- if(pending)return pending.revision===revision&&(await queueDraftBlueprintFeedback(task,revision,pending.text,productionTaskStore,guards,pending.unitIds))==='queued';
+ if(pending)return pending.revision===revision&&(await queueDraftBlueprintFeedback(task,revision,pending.text,productionTaskStore,guards,pending.unitIds,task.blueprintOpinions))==='queued';
  const next={...structuredClone(task),status:'queued' as const};
  delete next.error;
  delete next.completed.copy_review;
@@ -496,6 +499,19 @@ export interface StageContext {
 }
 export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
+
+async function checkedHumanBlueprint(task:ProductionTask){
+ const key='project:'+task.projectId;
+ const stored=await getStoredEntry(key);
+ const doc=stored.found?runProjectMigrations(stored.value)?.doc:null;
+ if(!doc||revisionOf(doc)!==task.projectRevision||doc.clipMentorAnalysis?.source.asset_id!==task.input.sourceAssetId)
+  throw Error('human_blueprint_narration_revision_changed');
+ if(task.blueprintOpinions&&!task.repairContext?.pending_blueprint_feedback){
+  const {blueprintOpinionDifferences}=await import('./production-blueprint-opinions');
+  task.blueprintOpinions.differences=blueprintOpinionDifferences(task.blueprintOpinions,doc);
+ }
+ return {doc,guard:{key,digest:digestValue(stored.value)}};
+}
 export class ProductionCheckpointSuperseded extends Error {}
 /** Observational context in the existing bounded run log, never a checkpoint or authority.
  * It intentionally has no serverEvent envelope: terminal transport replay stays closed. */
@@ -659,30 +675,29 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
        &&!panelAuthorNeedsHumanReview(task,task.projectRevision,requirementsDigest,result.artifact)))
      throw Error('human_blueprint_draft_binding_missing');
     let teachingGuards:EntryPreconditions|undefined;
-    if(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'){
-     const key='project:'+task.projectId;
-     const stored=await getStoredEntry(key);
-     const doc=stored.found?runProjectMigrations(stored.value)?.doc:null;
-     if(!doc||revisionOf(doc)!==task.projectRevision||doc.clipMentorAnalysis?.source.asset_id!==task.input.sourceAssetId)
-      throw Error('human_blueprint_narration_revision_changed');
-     const {handoffKey}=await import('./handoff');
-     const policyKey=handoffKey(task.projectId),policyEntry=await getStoredEntry(policyKey);
-     const policy=await productionReviewRequirements(task.projectId);
-     if(panelBlueprintRequirementsDigest(policy)!==requirementsDigest
-      ||(policyEntry.found&&digestValue(policyEntry.value)!==digestValue(policy)))
-      throw Error('human_blueprint_narration_requirements_changed');
-     const {panelNarrationPublication}=await import('./production-teaching-baseline');
-     const publication=panelNarrationPublication(doc,task,result.artifact.teaching_baseline_digest,requirementsDigest);
-     const previous=task.previousBlueprintTeaching;
-     let change=!previous?'首份送审蓝图。':!previous.selection||!previous.narration?'上一版缺少可比对的教学审核记录。'
-      :[previous.selection===publication.teachingSelectionDigest?'选题保持原样':'选题或教学判断有调整',
-        previous.narration===publication.teachingNarrationDigest?'已核口播保持原样':'已核口播有调整'].join('，')+'。';
-     if(previous&&(previous.selection!==publication.teachingSelectionDigest||previous.narration!==publication.teachingNarrationDigest)){
-      const decisions=publication.independentNarrationAnswers.flatMap(answer=>answer.decision?[answer.decision]:[]);
-      if(decisions.length)change+='本版讲的拍摄决定包括'+decisions.slice(0,2).join('、').replace(/[。.!！]+$/u,'')+'。';
+    if(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'||task.blueprintOpinions){
+     const {doc,guard}=await checkedHumanBlueprint(task);
+     teachingGuards=[guard];
+     if(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'){
+      const {handoffKey}=await import('./handoff');
+      const policyKey=handoffKey(task.projectId),policyEntry=await getStoredEntry(policyKey);
+      const policy=await productionReviewRequirements(task.projectId);
+      if(panelBlueprintRequirementsDigest(policy)!==requirementsDigest
+       ||(policyEntry.found&&digestValue(policyEntry.value)!==digestValue(policy)))
+       throw Error('human_blueprint_narration_requirements_changed');
+      const {panelNarrationPublication}=await import('./production-teaching-baseline');
+      const publication=panelNarrationPublication(doc,task,result.artifact.teaching_baseline_digest,requirementsDigest);
+      const previous=task.previousBlueprintTeaching;
+      let change=!previous?'首份送审蓝图。':!previous.selection||!previous.narration?'上一版缺少可比对的教学审核记录。'
+       :[previous.selection===publication.teachingSelectionDigest?'选题保持原样':'选题或教学判断有调整',
+         previous.narration===publication.teachingNarrationDigest?'已核口播保持原样':'已核口播有调整'].join('，')+'。';
+      if(previous&&(previous.selection!==publication.teachingSelectionDigest||previous.narration!==publication.teachingNarrationDigest)){
+       const decisions=publication.independentNarrationAnswers.flatMap(answer=>answer.decision?[answer.decision]:[]);
+       if(decisions.length)change+='本版讲的拍摄决定包括'+decisions.slice(0,2).join('、').replace(/[。.!！]+$/u,'')+'。';
+      }
+      Object.assign(result.artifact,publication,{teachingDecisionChange:change});
+      teachingGuards.push({key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null});
      }
-     Object.assign(result.artifact,publication,{teachingDecisionChange:change});
-     teachingGuards=[{key,digest:digestValue(stored.value)},{key:policyKey,digest:policyEntry.found?digestValue(policyEntry.value):null}];
     }
     blueprint.artifact={...blueprint.artifact,...result.artifact};
     if(task.repairContext){
@@ -694,23 +709,28 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    }
    if(task.stage==='copy_review'&&isPanelBlueprintDraft(task)&&task.input.panelDelivery?.editorialPolicy==='exemplar-v1')
     throw Error('human_blueprint_draft_binding_missing');
+   let humanApprovalRequired=false;
+   let reviewGuards:EntryPreconditions|undefined;
+   if(task.input.humanBlueprintReview&&task.stage==='copy_review'){
+    if(!task.projectRevision||result.artifact.revision!==task.projectRevision
+     ||result.artifact.authorSelfCheck!=='passed'||(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed!==true
+     ||task.input.panelDelivery&&result.artifact.panelDeliveryVerified!==true)
+     throw new Error('human_blueprint_verified_receipts_missing');
+    humanApprovalRequired=!task.blueprintApproval||task.blueprintApproval.digest!==result.artifact.blueprint_digest
+     ||typeof task.blueprintApproval.requirementsDigest!=='string'||task.blueprintApproval.requirementsDigest!==result.artifact.requirementsDigest;
+    if(humanApprovalRequired&&task.blueprintOpinions&&!task.repairContext?.pending_blueprint_feedback){
+     const {guard}=await checkedHumanBlueprint(task);
+     reviewGuards=[guard];
+    }
+   }
    task.completed[task.stage]={at:now(),artifact:result.artifact};
    if(task.stage==='edit')delete task.editPublication;
    if(task.stage==='analysis')delete task.teachingAnalysisPublication;
    if(task.stage==='copy_review'&&(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed===true&&task.repairContext){
     delete task.repairContext.pending_review_repair;delete task.repairContext.repair;
    }
-   if(task.input.humanBlueprintReview&&task.stage==='copy_review'){
-    if(!task.projectRevision||result.artifact.revision!==task.projectRevision
-     ||result.artifact.authorSelfCheck!=='passed'||(result.artifact.gate as {allowed?:boolean}|undefined)?.allowed!==true
-     ||task.input.panelDelivery&&result.artifact.panelDeliveryVerified!==true){
-     delete task.completed.copy_review;
-     throw new Error('human_blueprint_verified_receipts_missing');
-    }
-    if(!task.blueprintApproval||task.blueprintApproval.digest!==result.artifact.blueprint_digest
-      ||typeof task.blueprintApproval.requirementsDigest!=='string'||task.blueprintApproval.requirementsDigest!==result.artifact.requirementsDigest){
-     task.status='awaiting_blueprint';await publishStage();break;
-    }
+   if(humanApprovalRequired){
+    task.status='awaiting_blueprint';await publishStage(reviewGuards);break;
    }
    await publishStage();index++;
   }
@@ -789,9 +809,10 @@ function blueprintFeedbackBudgetExhausted(task:ProductionTask){
  return task.attempts.model>=task.input.budget.model||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs;
 }
 
-async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:string,dispatch:boolean,store:TaskStore,guards?:EntryPreconditions,unitIds?:string[]){
+async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:string,dispatch:boolean,store:TaskStore,guards?:EntryPreconditions,unitIds?:string[],opinions?:BlueprintOpinionRecord){
  const next=structuredClone(task);
  next.blueprintFeedback=text;
+ next.blueprintOpinions=opinions;
  next.blueprintFeedbackEpoch=(task.blueprintFeedbackEpoch??0)+1;
  // Clear optional fields explicitly so the live task matches the saved checkpoint on launch.
  next.blueprintFeedbackSummary=undefined;
@@ -833,7 +854,7 @@ async function saveBlueprintFeedback(task:ProductionTask,revision:string,text:st
 }
 
 export async function resolveHumanBlueprint(task:ProductionTask,displayedRevision:unknown,savedRevision:string|undefined,feedback:unknown,
- store=productionTaskStore,guards?:EntryPreconditions,unitIds?:string[],review?:BlueprintReviewRecord){
+ store=productionTaskStore,guards?:EntryPreconditions,unitIds?:string[],review?:BlueprintReviewRecord,opinions?:BlueprintOpinionRecord){
  if(!task.input.humanBlueprintReview||task.status!=='awaiting_blueprint'||task.stage!=='copy_review')throw new Error('蓝图当前不在待确认状态');
  if(typeof displayedRevision!=='string'||displayedRevision!==task.projectRevision||displayedRevision!==savedRevision
   ||task.completed.copy_review?.artifact.revision!==displayedRevision
@@ -842,12 +863,13 @@ export async function resolveHumanBlueprint(task:ProductionTask,displayedRevisio
  if(feedback!==undefined){
   if(typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw new Error('请输入有效的蓝图修改意见');
   if(blueprintFeedbackBudgetExhausted(task))throw new Error('本次制作已达到资源上限');
-  await saveBlueprintFeedback(task,displayedRevision,feedback.trim(),true,store,guards,unitIds);
+  await saveBlueprintFeedback(task,displayedRevision,feedback.trim(),true,store,guards,unitIds,opinions);
   return task;
  }
  if(task.input.panelDelivery&&!task.input.panelDelivery.audience)throw new Error('dual_delivery_execution_requires_variant_selection');
  const next=structuredClone(task);
  next.blueprintFeedback=undefined;
+ next.blueprintOpinions=undefined;
  next.blueprintFeedbackRevision=undefined;
  next.blueprintFeedbackUnitIds=undefined;
  next.blueprintFeedbackRepair=undefined;
@@ -866,16 +888,16 @@ export function acceptsDraftBlueprintFeedback(task:ProductionTask,revision:strin
 }
 
 export async function queueDraftBlueprintFeedback(task:ProductionTask,revision:string,feedback:unknown,store=productionTaskStore,
- guards?:EntryPreconditions,unitIds?:string[]){
+ guards?:EntryPreconditions,unitIds?:string[],opinions?:BlueprintOpinionRecord){
  if(!acceptsDraftBlueprintFeedback(task,revision)
   ||typeof revision!=='string'||!revision.trim()
   ||typeof feedback!=='string'||!feedback.trim()||feedback.length>8000)throw Error('蓝图当前不能接收修改意见');
  const text=feedback.trim(),pending=task.repairContext?.pending_blueprint_feedback;
  if(task.blueprintFeedbackRevision===revision&&task.blueprintFeedback===text
-  &&digestValue(task.blueprintFeedbackUnitIds??[])===digestValue(unitIds??[])&&!pending)return 'already_dispatched';
+  &&digestValue(task.blueprintFeedbackUnitIds??[])===digestValue(unitIds??[])&&task.blueprintOpinions?.token===opinions?.token&&!pending)return 'already_dispatched';
  const exhausted=blueprintFeedbackBudgetExhausted(task);
  const savedOnly=exhausted||!!task.blueprintApproval;
- await saveBlueprintFeedback(task,revision,text,!savedOnly,store,guards,unitIds);
+ await saveBlueprintFeedback(task,revision,text,!savedOnly,store,guards,unitIds,opinions);
  return exhausted?'limit':savedOnly?'saved':'queued';
 }
 

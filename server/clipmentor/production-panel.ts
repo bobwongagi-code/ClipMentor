@@ -35,6 +35,7 @@ import {frozenTeachingTopics} from './production-source-policy';
 import {readPanelSourceCriteria} from './production-panel-source-requirements';
 import type {PublishedNarrationDecision} from './production-teaching-baseline';
 import {bindBlueprintReview,blueprintReviewEndings,blueprintReviewGroups,panelFeedbackTarget,panelReviewIssue,PanelReviewIssue} from './production-panel-review';
+import {prepareBlueprintOpinions,type BlueprintOpinionRecord} from './production-blueprint-opinions';
 import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
@@ -361,7 +362,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             input.embedded=true;
             input.narrationDecisions=narrationDecisions;
             if(isPanelBlueprintDraft(task))input.teachingExcerptUnit=representativeTeachingExcerpt(saved.doc)?.unitId;
-            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel', artifactIdentity), undefined, 'human');
+            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel-opinions-v1', artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
             return result.artifacts[0].path;
           })();
@@ -488,6 +489,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         stage: task.stage, revision: task.projectRevision, sequence: task.sequence,
         active: running,stopReason:outputUnavailable?'service':stopReason,feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
+        ...(task.blueprintOpinions?.differences?{blueprintOpinionDifferences:task.blueprintOpinions.differences}:{}),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
         ...(blueprintRevision?{blueprintRevision,boardIdentity:subject?.identity,canApproveBlueprint,reviewGroups:groups,
           reviewEndings:endings,...(savedReview?{savedReview}:{}),
@@ -568,7 +570,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         } else if (['save_blueprint_review','approve_blueprint','revise_blueprint','produce_versions'].includes(String(body.action))) {
           const recording=body.action==='save_blueprint_review';
           const approving=body.action==='approve_blueprint'||body.action==='produce_versions';
-          if (body.action === 'revise_blueprint' && typeof body.text !== 'string') throw new Error('请填写修改意见');
+          if (body.action === 'revise_blueprint' && typeof body.text !== 'string' && body.blueprintOpinions===undefined) throw new Error('请填写修改意见');
           if (approving && !previewReviewCredential()) throw Error(missingPreviewReviewCredential);
           const draftFeedback=body.action==='revise_blueprint'&&acceptsDraftBlueprintFeedback(existing,saved.revision)
             &&!!saved.doc.clipMentorAnalysis?.blueprint.length;
@@ -616,6 +618,13 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const review=recording||approving?bindBlueprintReview(body.blueprintReview,{
             revision:latest.revision,boardIdentity:subject.identity,groups:reviewGroups,endings:reviewEndings,
           },approving):undefined;
+          if(review?.scope==='whole_blueprint'&&existing.blueprintReview?.boardIdentity===subject.identity){
+            const recorded=existing.blueprintReview.groups;
+            const objections=reviewGroups.filter(group=>recorded.some(entry=>entry.id===group.id&&entry.stance==='changes'));
+            if(objections.length)throw new PanelReviewIssue('content',`请先处理${objections.map(group=>group.label).join('、')}已保存的表态。`);
+            const byId=new Map([...recorded,...review.groups].map(entry=>[entry.id,entry]));
+            review.groups=reviewGroups.flatMap(group=>byId.get(group.id)??[]);
+          }
           if(recording){
             const next={...structuredClone(existing),blueprintReview:review};
             await saveProductionControl(existing,next,productionTaskStore,guards,undefined,existing.sequence);
@@ -627,12 +636,38 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             for(const child of children)if(child.status==='queued')launch(child);
             send({accepted:true});return;
           }
-          const feedback=body.action==='revise_blueprint'&&typeof body.text==='string'?body.text:undefined;
-          const unitIds=feedback!==undefined?panelFeedbackTarget(body.feedbackTarget,reviewGroups,false).unitIds:undefined;
+          let feedback:string|undefined;
+          let unitIds:string[]|undefined;
+          let opinions:BlueprintOpinionRecord|undefined;
+          if(body.action==='revise_blueprint'&&body.blueprintOpinions!==undefined){
+            let prepared:ReturnType<typeof prepareBlueprintOpinions>;
+            // The board may append a read-only sibling ending for display. Bind repairs to the editable document.
+            try{prepared=prepareBlueprintOpinions(latest.doc,body.blueprintOpinions,latest.revision,subject.identity);}
+            catch(error){
+              const message=error instanceof Error?error.message:'';
+              throw new PanelReviewIssue('content',message.includes('请写清')||message.includes('组号不在')?message:'请核对当前蓝图里的意见。');
+            }
+            if(!prepared.record){send({opinionPlacements:prepared.placements});return;}
+            if(prepared.confirmation&&body.opinionConfirmation!==prepared.confirmation.token){
+              send({opinionConfirmation:prepared.confirmation});return;
+            }
+            opinions=prepared.record;
+            opinions.confirmed=!!prepared.confirmation;
+            const changes=opinions.opinions.filter(entry=>entry.edits);
+            if(!changes.length){
+              await saveProductionControl(existing,{...structuredClone(existing),blueprintOpinionNotes:opinions},productionTaskStore,guards,undefined,existing.sequence);
+              send({accepted:true,notesSaved:true});return;
+            }
+            feedback=changes.length===1&&changes[0].unitId===null?changes[0].text:changes.map(entry=>`［${entry.label}］${entry.text}`).join('\n');
+            unitIds=changes.some(entry=>entry.unitId===null)?undefined:changes.flatMap(entry=>entry.unitId?[entry.unitId]:[]);
+          }else if(body.action==='revise_blueprint'&&typeof body.text==='string'){
+            feedback=body.text;
+            unitIds=panelFeedbackTarget(body.feedbackTarget,reviewGroups,false).unitIds;
+          }
           if(draftFeedback){
             if(latest.doc.clipMentorAnalysis?.source.asset_id!==existing.input.sourceAssetId)
               throw Error('蓝图对应的原片已变化，请重新打开审片板');
-            const result=await queueDraftBlueprintFeedback(existing,latest.revision,feedback,productionTaskStore,guards,unitIds);
+            const result=await queueDraftBlueprintFeedback(existing,latest.revision,feedback,productionTaskStore,guards,unitIds,opinions);
             if(result==='queued')launch(existing);
             send({accepted:true,saved:true,dispatched:result==='queued'||result==='already_dispatched',...(result==='limit'?{reason:'limit'}:{})});
             return;
@@ -651,7 +686,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             const issues=panelDeliveryIssues(latest.doc,{...existing.input.panelDelivery,bookends:'layered-v1'},content);
             assertPanelDeliveryReady(issues,issues.length?undefined:await panelPartnerCardIssue(latest.doc,existing.input.panelDelivery,content));
           }
-          await resolveHumanBlueprint(existing,body.revision,saved.revision,feedback,productionTaskStore,guards,unitIds,review);
+          await resolveHumanBlueprint(existing,body.revision,saved.revision,feedback,productionTaskStore,guards,unitIds,review,opinions);
           launch(existing);
         } else if (body.action === 'revise_preview' || body.action === 'accept') {
           if (existing.status !== 'awaiting_review' || body.renderId !== existing.completed.export?.artifact.renderId) throw new Error('预览已变化，请重新核对');

@@ -5,7 +5,7 @@ import {readFile,mkdir,mkdtemp,rm,writeFile,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {readBlueprint,lintBlueprint} from '../../src/clipmentor/blueprint-lint';
-import {currentPicturePhases,blueprintPictureNotices,pictureNoticeRows,stageCueColors} from '../../src/clipmentor/blueprint-picture-notices';
+import {currentPicturePhases,blueprintPictureNotices,pictureNoticeRows,stageCueColors,picturePhaseLineIds} from '../../src/clipmentor/blueprint-picture-notices';
 import {deliverySectionsFromDoc,deliveryPictureBindings,type DeliverySection} from '../../src/clipmentor/delivery-sections';
 import {labelTranslationsConflict} from '../../src/clipmentor/author-translations';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
@@ -143,7 +143,7 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
    if(stage!=='original'&&stage!=='explanation')fail('未知阶段，不猜播放顺序');
    if(phase.source_asset_id!==undefined&&phase.source_asset_id!==source.asset_id)fail('阶段引用的素材不是当前原片');
    const range=window(phase.source_range_seconds??phase.source_seconds);if(!range||range[0]>=duration||range[1]>duration)fail('阶段源窗无效');
-   const ids=[...new Set([txt(phase.line_id),...arr(phase.line_ids).map(txt)].filter(Boolean))];if(stage==='explanation'&&!ids.length)fail('讲解阶段没有现行句ID');
+   const ids=picturePhaseLineIds(phase);if(stage==='explanation'&&!ids.length)fail('讲解阶段没有现行句ID');
    const lines=ids.map(id=>{const l=lineById.get(id);if(!l)fail('阶段引用不存在的句子: '+id);return lineView(l);});
    const cue=obj(operational.viewer_stage_cues),cueRows=stage==='original'?[obj(cue.original)]:arr(cue.revisit).map(obj).filter(r=>arr(r.line_ids).some(id=>ids.includes(txt(id))));
    const colors=stageCueColors(obj(cue.layout)[stage==='original'?'original':'revisit']);

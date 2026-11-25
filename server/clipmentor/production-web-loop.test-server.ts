@@ -125,7 +125,14 @@ function launch(task:any){activeIds.add(task.taskId);void(async()=>{
  workerEvents.push({task:task.taskId,project:task.projectId,stage:task.stage,fixtureWorker:true});
  if(task.projectId===project&&task.stage==='blueprint'){
   assert.equal(task.blueprintFeedback,'把标题改成修订后测试');doc.name='修订后测试';doc.clipMentorAnalysis.product.name='修订后测试';doc.clipMentorAnalysis.revision++;
-  await bindOfflineReview();await setStoredEntry('project:'+project,doc);await readyBlueprint(task);
+  assert(task.blueprintOpinions);
+  await bindOfflineReview();await setStoredEntry('project:'+project,doc);
+  const saved=(await loadOfflineStoredProject(project))!;
+  const gate=await checkCopyProduction(saved.doc,'clipmentor');
+  await advanceProductionTask(task,async item=>{
+   assert(['blueprint','copy_review'].includes(item.stage));
+   return {artifact:{revision:saved.revision,authorSelfCheck:'passed',gate}};
+  });
  }else if(task.projectId===project&&task.stage==='audio'){
   const children=[];
   for(const audience of ['existing_partner','new_contact']){
