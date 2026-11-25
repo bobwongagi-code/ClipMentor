@@ -19,6 +19,134 @@ try{
  assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,root,'all server imports must bind to temporary storage');
  const {deliveryPictureBindings,deliverySectionsFromDoc}=await import('../../src/clipmentor/delivery-sections');
  const {extractOneFrame}=await import('../plugins/extract-frames'),{ffmpegBin}=await import('../media-binaries');
+ await test('Saved blueprint opinions preserve untouched scopes and name the exact confirmed sentence',async()=>{
+  const {prepareBlueprintOpinions,blueprintOpinionDifferences,guardBlueprintOpinionWrite}=await import('./production-blueprint-opinions');
+  const {panelReviewIssue}=await import('./production-panel-review');
+  const doc=clone(c.newBinding) as unknown as ProjectDoc;
+  const units=doc.clipMentorAnalysis!.blueprint;
+  const line=(current:ProjectDoc,index:number)=>{
+   const review=current.clipMentorAnalysis!.blueprint[index].internal_review as Record<string,any>;
+   return review[review.current_script_candidate].lines[0];
+  };
+  Object.assign(line(doc,1),{narration_ms:'Kod kekal. Ayat ini agak panjang.',zh:'编号保留。这句略长。'});
+  const prepare=(entry:{unitId:string|null;text:string;keepPlacement?:true})=>prepareBlueprintOpinions(doc,[entry],'revision','board');
+  const praise=prepare({unitId:units[1].unit_id,text:'这组很好'});
+  assert.equal(praise.confirmation,undefined);
+  assert.equal(praise.record?.opinions[0].edits,false);
+  assert.deepEqual(praise.record?.opinions[0].keep,[]);
+  for(const text of ['好极了','👍','这组挺好']){
+   const note=prepare({unitId:units[1].unit_id,text});
+   assert.equal(note.record?.opinions[0].edits,false,text);
+   assert.equal(note.confirmation,undefined);
+  }
+  assert(prepare({unitId:units[1].unit_id,text:'第一句不要改，第二句再短点'}).confirmation);
+  assert.throws(()=>prepare({unitId:units[1].unit_id,text:'很好，图有点糊'}),/请写清/);
+  assert.throws(()=>prepareBlueprintOpinions(doc,[{unitId:units[1].unit_id,text:'很好',remove:[1]}],'revision','board'),
+   /blueprint_opinion_binding_invalid/);
+  const reversed=clone(doc),last=reversed.clipMentorAnalysis!.blueprint.at(-1)!;
+  const review=last.internal_review as Record<string,any>;
+  const plan=review[review.current_picture_plan];
+  const [original,firstPhase,secondPhase]=plan.phases;
+  plan.phases=[original,secondPhase,firstPhase];
+  const reversedOpinion=prepareBlueprintOpinions(reversed,[{unitId:last.unit_id,text:'第一句保留，第二句改短'}],'revision','board');
+  assert.match(reversedOpinion.confirmation!.rows[0].keep[0],/^第 1 句 Selepas membandingkan warna/u);
+  plan.phases=[original,firstPhase,secondPhase];
+  assert.throws(()=>blueprintOpinionDifferences({...reversedOpinion.record!,confirmed:true},reversed),/第 1 句已确认保留/);
+
+  const bilingual=prepare({unitId:units.at(-1)!.unit_id,text:'第二句保留，第一句改短'});
+  const changedMeaning=clone(doc);
+  const lastReview=changedMeaning.clipMentorAnalysis!.blueprint.at(-1)!.internal_review as Record<string,any>;
+  lastReview[lastReview.current_script_candidate].lines[1].zh='不应改动的整段译文。';
+  assert.throws(()=>blueprintOpinionDifferences({...bilingual.record!,confirmed:true},changedMeaning),/第 2 句已确认保留/);
+  const legacy=clone(c.barelyV5);
+  const legacyOpinion=prepareBlueprintOpinions(legacy as unknown as ProjectDoc,[{unitId:null,text:'标题改短'}],'revision','board').record!;
+  const legacyRow=legacy.estimated_picture_timeline.rows.find(row=>row.kind==='explanation')!;
+  legacyRow.picture='Unrequested legacy picture change.';
+  assert.throws(()=>blueprintOpinionDifferences(legacyOpinion,legacy as unknown as ProjectDoc),/未收到修改意见/);
+  assert.equal(prepare({unitId:units[1].unit_id,text:'第 1 组改短'}).placements[0].unitId,units[0].unit_id);
+  assert.equal(prepare({unitId:null,text:'第 2 组改短'}).placements[0].unitId,units[1].unit_id);
+  assert.equal(prepare({unitId:units[1].unit_id,text:'整体改短'}).placements[0].unitId,null);
+  assert(prepare({unitId:units[1].unit_id,text:'整体改短',keepPlacement:true}).record);
+
+  const group=prepare({unitId:units[1].unit_id,text:'第一句保留，第二句改短'});
+  assert.deepEqual(group.confirmation?.rows[0].keep,['第 1 句 Kod kekal.（编号保留。）']);
+  const next=clone(doc);
+  Object.assign(line(next,1),{narration_ms:'Kod kekal. Ayat pendek.',zh:'编号保留。这句短。'});
+  assert.throws(()=>blueprintOpinionDifferences(group.record!,next),/blueprint_opinion_confirmation_required/);
+  const confirmed={...group.record!,confirmed:true};
+  const differences=blueprintOpinionDifferences(confirmed,next);
+  assert.equal(differences.overall,undefined);
+  assert.deepEqual(differences.groups[0].kept.slice(0,1),['Kod kekal.（编号保留。）']);
+  assert.deepEqual(differences.groups[0].changes,[{before:'Ayat ini agak panjang.（这句略长。）',after:'Ayat pendek.（这句短。）'}]);
+  const lockBroken=clone(next);
+  line(lockBroken,1).zh='保留号码。这句短。';
+  assert.throws(()=>blueprintOpinionDifferences(confirmed,lockBroken),/第 1 句已确认保留/);
+  line(lockBroken,1).narration_ms='Kod berubah. Ayat pendek.';
+  assert.throws(()=>blueprintOpinionDifferences(confirmed,lockBroken),/第 1 句已确认保留/);
+  assert.throws(()=>guardBlueprintOpinionWrite(confirmed,lockBroken),/^Error: blueprint_opinion_scope_locked/);
+  assert.throws(()=>guardBlueprintOpinionWrite(clone(confirmed),lockBroken),error=>{
+   assert.match(String(error),/blueprint_repair_no_progress/);
+   assert.match(panelReviewIssue(error)?.message??'',/第 1 句已确认保留.*待维护侧/);
+   return true;
+  });
+  const otherGroup=clone(next);
+  line(otherGroup,0).narration_ms='Unrequested edit.';
+  assert.throws(()=>blueprintOpinionDifferences(confirmed,otherGroup),/第 1 组未收到修改意见/);
+  const otherPicture=clone(next);
+  const third=otherPicture.clipMentorAnalysis!.blueprint[2].internal_review as Record<string,any>;
+  third[third.current_picture_plan].phases[0].picture='Unrequested picture edit.';
+  assert.throws(()=>blueprintOpinionDifferences(confirmed,otherPicture),/第 3 组未收到修改意见/);
+  const changedSpeech=clone(next);
+  changedSpeech.clipMentorAnalysis!.evidence.push({evidence_id:'fixture-unlinked-claim',kind:'original_claim',text:'New wording in group one.',
+   source_ids:[changedSpeech.clipMentorAnalysis!.source.asset_id],supporting_evidence_ids:[],status:'candidate',source_range_seconds:[1,2]});
+  assert.throws(()=>blueprintOpinionDifferences(confirmed,changedSpeech),/第 1 组未收到修改意见/);
+  assert.throws(()=>prepare({unitId:units[1].unit_id,text:'第一句保留第二句改短'}),/请写清/);
+  assert.equal(prepare({unitId:units[1].unit_id,text:'第一句不要删'}).record?.opinions[0].edits,false);
+  const overall=prepare({unitId:null,text:'改一下标题'}).record!;
+  assert.throws(()=>blueprintOpinionDifferences(overall,next),/第 2 组未收到修改意见/);
+  const titleOnly=clone(doc);
+  titleOnly.clipMentorAnalysis!.product.name='New fixture title';
+  assert.throws(()=>blueprintOpinionDifferences(confirmed,titleOnly),/整体、片头或片尾未收到修改意见/);
+  const global=blueprintOpinionDifferences(overall,titleOnly);
+  assert.equal(global.overall?.label,'整体意见');
+  assert.deepEqual(global.groups,[]);
+  const removal=prepare({unitId:units[1].unit_id,text:'第二句保留，删掉第一句'});
+  const shorter=clone(doc);
+  Object.assign(line(shorter,1),{narration_ms:'Ayat ini agak panjang.',zh:'这句略长。'});
+  assert.deepEqual(blueprintOpinionDifferences({...removal.record!,confirmed:true},shorter).groups[0].changes,
+   [{before:'Kod kekal.（编号保留。）',after:''}]);
+ });
+ await test('Legacy review never checkpoints a rejected scoped revision as complete',async()=>{
+  const {prepareBlueprintOpinions}=await import('./production-blueprint-opinions');
+  const {advanceProductionTask,createProductionTask,productionTaskStore}=await import('./production-task');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {setStoredEntry}=await import('../plugins/project-store');
+  const projectId='scoped-opinion-publication',doc=clone(c.newBinding) as unknown as ProjectDoc;
+  await setStoredEntry('project:'+projectId,doc);
+  const base=(await loadOfflineStoredProject(projectId))!;
+  const sourceAssetId=base.doc.clipMentorAnalysis!.source.asset_id;
+  const api={provider:'openai' as const,model:'fixture',apiMode:'responses' as const};
+  const task=await createProductionTask({projectId,sourceAssetId,product:{name:'Fixture',category:'test'},
+   author:api,reviewer:api,brief:'Fixture',humanBlueprintReview:true,
+   budget:{model:1,observation:0,review:0,tts:0,render:0,maxElapsedMs:60000,maxRepairs:0}});
+  const unitId=base.doc.clipMentorAnalysis!.blueprint[1].unit_id;
+  const prepared=prepareBlueprintOpinions(base.doc,[{unitId,text:'第二句改短'}],base.revision,'fixture-board');
+  task.blueprintOpinions=prepared.record;
+  const bad=clone(base.doc);
+  bad.clipMentorAnalysis!.product.name='Unrequested overall change';
+  await setStoredEntry('project:'+projectId,bad);
+  const changed=(await loadOfflineStoredProject(projectId))!;
+  task.stage='copy_review';task.projectRevision=changed.revision;
+  await productionTaskStore.save(task);
+  await advanceProductionTask(task,async current=>{
+   assert.equal(current.stage,'copy_review');
+   return {artifact:{revision:changed.revision,authorSelfCheck:'passed',gate:{allowed:true}}};
+  });
+  const blocked=await productionTaskStore.load(projectId,task.taskId);
+  assert.equal(blocked.status,'blocked');
+  assert.match(blocked.error??'',/blueprint_opinion_scope_overall/);
+  assert.equal(blocked.completed.copy_review,undefined);
+ });
  await test('A2/A3 real v3 current pointers, exact phases and prose-only frame conflict',async()=>{
   const v=clone(c.green),before=JSON.stringify(v),result=planReviewBoards(input(v,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[]));assert.equal(result.plans.length,2);
   for(const plan of result.plans){assert.equal(plan.rows.length,13);assert.deepEqual(plan.rows.map(r=>r.stage),['opening','original','explanation','original','explanation','original','explanation','original','explanation','original','explanation','explanation','closing']);assert.equal(plan.rows.flatMap(r=>r.lines).length,8);assert.equal(plan.frame_count,35);const g1=plan.rows.find(r=>r.line_ids.includes('GM-L01'))!;assert.deepEqual(g1.range,[0,10.5]);assert.deepEqual(g1.frames.map(f=>f.frame),[0,157,314]);assert(g1.picture.includes('源帧21')&&g1.picture.includes('195'));assert(g1.notices.some(s=>/散文提到具体帧|画面说明提到指定画面/u.test(s)));assert(!g1.frames.some(f=>f.frame===21||f.frame===195));assert.deepEqual(g1.colors,['#FFD83D','#111111']);}
@@ -446,11 +574,24 @@ try{
    const ready=await status();
    const readyBoard=await board(ready.boardIdentity);
    assert.equal(readyBoard.status,200);await readyBoard.arrayBuffer();
-   const approved=await action('produce_versions',ready.boardIdentity,undefined,{...suppliedReview,endingIds:['new_contact','existing_partner']});
+   assert.equal((await action('produce_versions','stale',undefined,{scope:'whole_blueprint'})).status,409);
+   assert.equal((await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint',endingIds:['new_contact']})).status,409);
+   const firstGroup=ready.reviewGroups[0];
+   const stance=(value:'changes'|'accepted')=>({groups:[{id:firstGroup.id,decision:'Fixture decision',stance:value}],endingIds:[]});
+   assert.equal((await action('save_blueprint_review',ready.boardIdentity,undefined,stance('changes'))).status,200);
+   const unchangedBoard=await status();
+   assert.equal(unchangedBoard.boardIdentity,ready.boardIdentity);
+   assert.equal(unchangedBoard.savedReview.groups[0].stance,'changes');
+   assert.equal((await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'})).status,409);
+   assert.equal(launched,0);
+   assert.equal((await action('save_blueprint_review',ready.boardIdentity,undefined,stance('accepted'))).status,200);
+   const approved=await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'});
    assert.equal(approved.status,200,await approved.clone().text());
    const {setTimeout:timeout}=await import('node:timers/promises');
    assert.equal(await Promise.race([dispatched.promise.then(()=>true),timeout(5000,false,{ref:false})]),true,'the approved batch reaches the worker');
    const published=await productionTaskStore.load(projectId,task.taskId);
+   assert.equal(published.blueprintReview?.scope,'whole_blueprint');
+   assert.deepEqual(published.blueprintReview?.groups,stance('accepted').groups,'whole-board confirmation keeps saved stances');
    assert.deepEqual(published.blueprintReview?.endings,ready.reviewEndings);
    assert.deepEqual(published.productionChildren?.map(child=>child.audience),['existing_partner','new_contact']);
    assert.equal(launched,1,'common body starts once and the second ending waits');
@@ -469,6 +610,12 @@ try{
   doc.clipMentorAnalysis!.production_copy_review={...priorReview,verdict:'needs_revision'};
   await withSerializedProjectStore(s=>s.writeEntry('project:'+projectId,doc));
   const snapshot=(await loadOfflineStoredProject(projectId))!;
+  const {assertBlueprintOpinionScope}=await import('./production-blueprint-opinions');
+  const secondUnit=doc.clipMentorAnalysis!.blueprint[1];
+  const secondLine=(current:ProjectDoc)=>{
+   const review=current.clipMentorAnalysis!.blueprint[1].internal_review as Record<string,any>;
+   return review[review.current_script_candidate].lines[0];
+  };
   const app=createMiniConnect(e=>{throw e;}),server=createServer((req,res)=>app.handle(req,res));
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const address=server.address() as {port:number},origin='http://127.0.0.1:'+address.port;
@@ -480,11 +627,19 @@ try{
    entered.resolve();await release.promise;
    const {openHeadlessEditor}=await import('./headless-editor');
    const editor=await openHeadlessEditor({projectId:item.projectId,runId:item.taskId,origin,review:api,
+    assertCanvas:candidate=>{assert(item.blueprintOpinions);assertBlueprintOpinionScope(item.blueprintOpinions,candidate);},
     fetch:async()=>{throw Error('unexpected request');},effect:async()=>{throw Error('unexpected effect');}});
    try{
-    const current=editor.getDoc(),analysis=current.clipMentorAnalysis!;
-    editor.context.commands.applyDoc({...current,clipMentorAnalysis:{...analysis,revision:analysis.revision+1,
-     product:{...analysis.product,name:'Saved fixture feedback revision'}}});
+    const wrong=clone(editor.getDoc());
+    secondLine(wrong).narration_ms='Baris ini tidak patut diubah. Ayat pendek.';
+    editor.context.commands.applyDoc(wrong);
+    await assert.rejects(editor.commit(),/第 1 句已确认保留/);
+    assert.equal((await loadOfflineStoredProject(projectId))!.revision,snapshot.revision);
+    const next=clone(editor.getDoc()),line=secondLine(next);
+    const first=line.caption_lines[0];
+    Object.assign(line,{narration_ms:`${first} Hasil itu memperkenalkan produk.`,caption_lines:[first,'Hasil itu memperkenalkan produk.']});
+    next.clipMentorAnalysis!.revision++;
+    editor.context.commands.applyDoc(next);
     return {artifact:await editor.commit()};
    }finally{await editor.close();}
   }).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
@@ -504,16 +659,26 @@ try{
    const panelHtml=await board.text();
    assert(!panelHtml.includes('id="candidate-file"')&&!panelHtml.includes('id="freshness"')&&!panelHtml.includes('class="version-note"'));
    assert(panelHtml.includes('data-card="group-1"')&&panelHtml.includes("querySelectorAll('[data-zoom]')")&&!panelHtml.includes("getElementById('candidate-file')"));
-   const text='片头保留本片成绩。已合作片尾同屏展示产品和本片 Storyboard。';
-   const submit=(boardIdentity:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({action:'revise_blueprint',revision:snapshot.revision,boardIdentity,text,feedbackTarget:{scope:'whole',confirmed:true}})});
+   const text='第一句保留，第二句改短';
+   const submit=(boardIdentity:string,opinionConfirmation?:string)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
+    action:'revise_blueprint',revision:snapshot.revision,boardIdentity,blueprintOpinions:[{unitId:secondUnit.unit_id,text}],opinionConfirmation,
+   })});
    const stale=await submit('wrong');assert.equal(stale.status,409);assert.equal(received.length,0);
    assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintFeedback,undefined);
-   const action=await submit(visible.boardIdentity);
+   const proposal=await (await submit(visible.boardIdentity)).json();
+   assert.match(proposal.opinionConfirmation.rows[0].keep[0],/第 1 句 Dia bercerita/);
+   const wrongToken=await (await submit(visible.boardIdentity,'old-confirmation')).json();
+   assert.deepEqual(wrongToken,proposal);
+   assert.equal(received.length,0);
+   assert.equal((await productionTaskStore.load(projectId,task.taskId)).sequence,task.sequence);
+   const action=await submit(visible.boardIdentity,proposal.opinionConfirmation.token);
    assert.equal(action.status,200);
    assert.deepEqual(await action.json(),{accepted:true,saved:true,dispatched:true});
    await entered.promise;
    const running=await productionTaskStore.load(projectId,task.taskId);
-   assert.deepEqual(received,[{stage:'blueprint',feedback:text,revision:snapshot.revision}]);
+   assert.deepEqual(received,[{stage:'blueprint',feedback:`［${proposal.opinionConfirmation.rows[0].label}］${text}`,revision:snapshot.revision}]);
+   assert.deepEqual(running.blueprintFeedbackUnitIds,[secondUnit.unit_id]);
+   assert.equal(running.blueprintOpinions?.confirmed,true);
    assert.equal(running.status,'running');assert.equal(running.repairs,task.repairs+1);
    assert.deepEqual(running.attempts,task.attempts);assert.deepEqual(running.effects,task.effects);
    assert.equal(running.blueprintApproval,undefined);
@@ -531,7 +696,9 @@ try{
    assert.equal(final.stage,'copy_review');assert.equal(final.status,'blocked');
    assert.equal(final.projectRevision,revised.revision);
    assert.notEqual(revised.revision,snapshot.revision);
-   assert.equal(revised.doc.clipMentorAnalysis!.product.name,'Saved fixture feedback revision');
+   assert.equal(secondLine(revised.doc).narration_ms,`${secondLine(snapshot.doc).caption_lines[0]} Hasil itu memperkenalkan produk.`);
+   assert.deepEqual(revised.doc.clipMentorAnalysis!.blueprint[0],snapshot.doc.clipMentorAnalysis!.blueprint[0]);
+   assert.deepEqual(revised.doc.clipMentorAnalysis!.product,snapshot.doc.clipMentorAnalysis!.product);
    assert.equal(revised.doc.clipMentorAnalysis!.production_copy_review?.verdict,'needs_revision');
    assert.deepEqual(revised.doc.clipMentorAnalysis!.production_copy_review,snapshot.doc.clipMentorAnalysis!.production_copy_review);
    assert.deepEqual(final.attempts,task.attempts);

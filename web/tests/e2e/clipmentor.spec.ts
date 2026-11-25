@@ -110,7 +110,7 @@ for (const status of ['blocked', 'awaiting_blueprint']) test(`current saved draf
       const body = request.postDataJSON()
       expect(body.action).toBe('revise_blueprint')
       expect(body.revision).toBe('saved-current')
-      feedback = body.text; posts++
+      feedback = body.blueprintOpinions[0].text; posts++
       await route.fulfill({ json: { accepted: true, saved: true, dispatched: false } }); return
     }
     await route.fulfill({ json: { task: { status, stage: 'copy_review', active: false, sequence: posts,
@@ -123,9 +123,8 @@ for (const status of ['blocked', 'awaiting_blueprint']) test(`current saved draf
   await expect(page.getByRole('button', { name: '确认蓝图，开始制作' })).toBeDisabled()
   await expect(page.getByText('蓝图检查尚未完成，暂不能开始制作。')).toBeVisible()
   await expect(page.getByText('INTERNAL_STALE_REVIEW_SENTINEL')).toHaveCount(0)
-  await page.getByRole('textbox', { name: '修改意见' }).fill('保留成绩钩子')
-  await acknowledgeOverallFeedback(page)
-  await page.getByRole('button', {name:'提交修改'}).click()
+  await page.getByRole('textbox', { name: '整体意见' }).fill('保留成绩钩子')
+  await page.getByRole('button', {name:'提交意见'}).click()
   await expect(page.getByRole('region',{name:'上次修改要点'}).getByRole('listitem')).toHaveText(['保留成绩钩子'])
   expect(posts).toBe(1)
 })
@@ -172,7 +171,7 @@ test('saved materials lead to board, preview and download on the same page', asy
       if (body.action === 'revise_blueprint') {
         expect(boardReads).toBe(3)
         expect(body.revision).toBe('r1')
-        expect(body.text).toBe('补清拍法')
+        expect(body.blueprintOpinions).toEqual([{unitId:null,text:'补清拍法'}])
         task = { ...approvedFixtureReview,status: 'awaiting_blueprint', stage: 'blueprint', revision: 'r2', sequence: 2 }
       }
       if (body.action === 'approve_blueprint') {
@@ -203,9 +202,8 @@ test('saved materials lead to board, preview and download on the same page', asy
   await expect(page.frameLocator('iframe[title="人审版蓝图"]').getByText('人审审片板样本')).toBeVisible()
   expect(boardReads).toBe(2)
   await expect(page.getByText(/internal_board_fixture|重新读取/)).toHaveCount(0)
-  await page.getByRole('textbox', { name: '修改意见' }).fill('补清拍法')
-  await acknowledgeOverallFeedback(page)
-  await page.getByRole('button', {name:'提交修改'}).click()
+  await page.getByRole('textbox', { name: '整体意见' }).fill('补清拍法')
+  await page.getByRole('button', {name:'提交意见'}).click()
   await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
   await expect(page.getByRole('heading', { name: '预览与终审' })).toBeVisible()
   await expect(page.getByRole('img', { name: '参照画面' })).toHaveCount(0)
@@ -247,7 +245,7 @@ test('one confirmation starts both outputs without an audience choice',async({pa
     if(request.method()==='POST'){
       expect(request.postDataJSON()).toMatchObject({action:'produce_versions',revision:'current-draft'})
       expect(request.postDataJSON()).not.toHaveProperty('audience')
-      expect(request.postDataJSON().blueprintReview.endingIds).toEqual(reviewEndings.map(ending=>ending.id))
+      expect(request.postDataJSON().blueprintReview).toEqual({scope:'whole_blueprint',groups:[]})
       submitted=true
       await route.fulfill({json:{accepted:true}});return
     }
@@ -255,15 +253,14 @@ test('one confirmation starts both outputs without an audience choice',async({pa
     await route.fulfill({json:submitted
       ?audience?{task:{taskId:audience,sourceTaskId:'original-task',status:audience==='new_contact'?'waiting':'running',stage:'copy_review',active:audience==='existing_partner',sequence:2,blueprintConfirmed:true,audience}}
         :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}
-      :{task:{...approvedFixtureReview,reviewEndings,taskId:'original-task',status:'blocked',stage:'copy_review',active:false,sequence:212,revision:'old-review',blueprintRevision:'current-draft',canApproveBlueprint:false,canConfirmBlueprint:true,dualBlueprint:true}}})
+      :{task:{...approvedFixtureReview,savedReview:undefined,reviewEndings,taskId:'original-task',status:'blocked',stage:'copy_review',active:false,sequence:212,revision:'old-review',blueprintRevision:'current-draft',canApproveBlueprint:false,canConfirmBlueprint:true,dualBlueprint:true}}})
   })
   await page.goto('/')
   await expect(page.frameLocator('iframe').getByText('修改后的蓝图')).toBeVisible()
   const confirm=page.getByRole('button',{name:'确认蓝图，开始制作'})
-  await expect(confirm).toBeDisabled()
-  await page.getByRole('checkbox',{name:/已合作达人版.*Storyboard.pdf.*商品图.png/}).check()
-  await expect(confirm).toBeDisabled()
-  await page.getByRole('checkbox',{name:/新建联达人版.*CTA.png/}).check()
+  await expect(page.getByRole('region',{name:'逐组人审'})).toBeVisible()
+  await expect(page.getByRole('checkbox',{name:/已核对.*达人版/}).first()).not.toBeChecked()
+  await expect(page.getByLabel('反馈位置')).toHaveCount(0)
   await expect(confirm).toBeEnabled()
   await confirm.click()
   await expect(page.getByRole('heading',{name:'新建联达人版'})).toBeVisible()
@@ -361,18 +358,16 @@ test('a late cache reload cannot replace a newer board', async ({ page }) => {
   })
   await page.goto('/')
   await expect(page.frameLocator('iframe').getByText('r1',{exact:true})).toBeVisible()
-  await page.getByRole('textbox',{name:'修改意见'}).fill('update')
-  await acknowledgeOverallFeedback(page)
-  await page.getByRole('button', {name:'提交修改'}).click()
+  await page.getByRole('textbox',{name:'整体意见'}).fill('update')
+  await page.getByRole('button', {name:'提交意见'}).click()
   await expect.poll(()=>boardReads).toBe(2)
   revision='r2'
   await page.clock.fastForward(8000)
   await expect(page.frameLocator('iframe').getByText('r2',{exact:true})).toBeVisible()
   release()
-  await expect(page.getByRole('textbox',{name:'修改意见'})).toHaveValue('')
-  await page.getByRole('textbox',{name:'修改意见'}).fill('revise r2')
-  await acknowledgeOverallFeedback(page)
-  await expect(page.getByRole('button',{name:'提交修改'})).toBeEnabled()
+  await expect(page.getByRole('textbox',{name:'整体意见'})).toHaveValue('')
+  await page.getByRole('textbox',{name:'整体意见'}).fill('revise r2')
+  await expect(page.getByRole('button',{name:'提交意见'})).toBeEnabled()
   await expect(page.frameLocator('iframe').getByText('r2',{exact:true})).toBeVisible()
 })
 
@@ -731,15 +726,14 @@ test('a recovered board can be opened in place after the read retries stop', asy
   const reload = page.getByRole('button', { name: '重新加载审核板' })
   await expect(reload).toBeVisible()
   expect(boardReads).toBe(3)
-  const text = page.getByRole('textbox', { name: '修改意见' })
+  const text = page.getByRole('textbox', { name: '整体意见' })
   await text.fill('保留当前意见')
-  await expect(page.getByRole('button', { name: '提交修改' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '提交意见' })).toBeDisabled()
   healthy = true
   await reload.click()
   await expect(page.frameLocator('iframe').getByText('恢复的原版审核板')).toBeVisible()
   await expect(text).toHaveValue('保留当前意见')
-  await acknowledgeOverallFeedback(page)
-  await expect(page.getByRole('button', { name: '提交修改' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '提交意见' })).toBeEnabled()
 })
 
 test('restore a registered source by its bytes when the browser cannot decode its codec', async ({ page }) => {

@@ -1,3 +1,4 @@
+import {BLUEPRINT_OPINION_MAX_LENGTH} from '../../shared/clipmentor-blueprint-opinions';
 /** Human presentation of the same saved plan. No new source selection or judgment. */
 import type {ReviewBoardPlan,ReviewBoardRow} from './blueprint-review-board';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -62,6 +63,24 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const unknownBlock=(id:string)=>{const unknowns=unitUnknowns(data,id);return `<details class="evidence-boundaries"><summary>证据边界与未知</summary>${unknowns.length?`<ul>${unknowns.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p>本组没有登记未知项，不等于已全部核实。</p>'}</details>`;};
  const opening=board.rows.find(r=>r.stage==='opening');const openingHtml=opening?`<section class="delivery opening${opening.deliveryLayout?' layered-opening':''}" data-card="opening"><h2>片头</h2><div class="delivery-body"><div class="provided">${opening.deliveryLayout?opening.frames.map((frame,i)=>`<figure>${image(opening,i)}<figcaption>${esc(frame.label)}</figcaption></figure>`).join(''):image(opening,0)}</div><div>${visualQuestions(opening.unit_id)}${copy(opening)}${questionHtml(questionKey(opening))}</div></div></section>`:'';
  const excerptUnit=embedded&&unitIds.includes(teachingExcerptUnit??'')?teachingExcerptUnit:undefined;
+ const opinionsScript=`<script>{
+ const origin=new URL(document.baseURI).origin;
+ const fields=[...document.querySelectorAll('[data-blueprint-opinion]')];
+ for(const field of fields)field.addEventListener('input',()=>{
+  parent.postMessage({type:'clipmentor:blueprint-opinion',unitId:field.dataset.blueprintOpinion,text:field.value},origin);
+ });
+ addEventListener('message',event=>{
+  if(event.source!==parent||event.origin!==origin||event.data?.type!=='clipmentor:blueprint-opinion-draft')return;
+  const drafts=Array.isArray(event.data.entries)?new Map(event.data.entries.map(entry=>[entry.unitId,entry.text])):null;
+  for(const field of fields){
+   if(drafts){
+    const value=drafts.get(field.dataset.blueprintOpinion)??'';
+    if(field.value!==value){field.value=value;if(value)field.closest('details').open=true;}
+   }
+   field.disabled=event.data.pending===true;
+  }
+ });
+ }</script>`;
  const excerptHtml='<div class="teaching-excerpt"><button type="button">看回看示意</button><span role="status"></span><video hidden controls playsinline preload="none" tabindex="0" aria-label="本组回看示意"></video><p class="sampling-note">原片对照片段接回看选段，回看无配音。</p></div>';
  const excerptScript=`<script>
  const excerpt=document.querySelector('.teaching-excerpt');
@@ -109,7 +128,8 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   const playback=runs.map((run,position)=>run[0].stage==='original'
    ?`<div class="source-block"><h3>原片</h3>${run.map(r=>strip(r,'source-strip')).join('')}${position===0?excerpt:''}</div>${stageList(run)}`
    :run.flatMap(r=>r.lines.map(l=>`<div class="explanation"><div>${mock(r,l)}</div><div class="explanation-copy"><h3>讲解</h3>${sourceLink(r,index,originals)}${stageList([r])}${copy(r,[l])}<details class="picture-note"><summary>策划画面说明</summary><p>${esc(r.picture)}</p></details></div></div>`)).join('')).join('');
-  return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组 · 教什么</span>${esc(teaching(id))}</h2>${id===excerptUnit?excerptHtml:''}${playback}${check}${speechBlock(index,originals)}${unknownBlock(id)}${questionHtml(id)}</section>`;
+  const opinion=embedded?`<details class="group-opinion"><summary>第 ${index+1} 组意见 · ${esc(teaching(id))}</summary><textarea rows="3" maxlength="${BLUEPRINT_OPINION_MAX_LENGTH}" data-blueprint-opinion="${esc(id)}" aria-label="第 ${index+1} 组意见" placeholder="只针对本组"></textarea></details>`:'';
+  return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组 · 教什么</span>${esc(teaching(id))}</h2>${id===excerptUnit?excerptHtml:''}${playback}${check}${speechBlock(index,originals)}${unknownBlock(id)}${questionHtml(id)}${opinion}</section>`;
  }).join('');
 
  const endings=board.rows.filter(r=>r.stage==='closing');
@@ -139,5 +159,6 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
 @media(max-width:600px){header,main,footer{padding-left:14px;padding-right:14px}.group,.delivery{padding:20px}.source-block{grid-template-columns:1fr}.source-description{grid-column:auto}.explanation,.delivery-body,.delivery-check,.ending-grid{grid-template-columns:1fr}.mock{width:min(100%,300px);margin:auto}.source-strip{max-width:100%}.ending+.ending{border-left:0;border-top:1px solid #e0e4d8;padding-left:0;padding-top:24px}.source-speech{padding:16px}.meaning{font-size:21px}h1{font-size:25px}}
 .layered-opening .delivery-body{grid-template-columns:1fr}.layered-opening .provided{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr));gap:12px}.layered-opening figure{margin:0;text-align:center}
 .teaching-excerpt{margin:0 0 22px}.teaching-excerpt button{font:inherit;color:inherit;background:#fff;border:1px solid #c9d2c4;padding:6px 12px;cursor:pointer}.teaching-excerpt [role=status]{margin-left:10px;font-size:13px}.teaching-excerpt video{display:block;max-width:min(100%,320px);max-height:65vh;background:#101310}.teaching-excerpt video[hidden]{display:none}
-</style></head><body><header><p class="kicker">剪辑蓝图 · 人审版</p><h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解 · ${endings.length}种结尾${durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p><p>给${esc(teachingPurpose.audience)}看的拆解。${esc(teachingPurpose.review_question)}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main><footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer><dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded)}${excerptUnit?excerptScript:''}</body></html>`;
+.group-opinion{border-top:1px solid #d9ded4;padding-top:12px;margin-top:22px}.group-opinion textarea{box-sizing:border-box;width:100%;display:block;resize:vertical;margin-top:8px;padding:8px;border:1px solid #d2d8ce;border-radius:6px;font:inherit}
+</style></head><body><header><p class="kicker">剪辑蓝图 · 人审版</p><h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解 · ${endings.length}种结尾${durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p><p>给${esc(teachingPurpose.audience)}看的拆解。${esc(teachingPurpose.review_question)}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main><footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer><dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded)}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
 }

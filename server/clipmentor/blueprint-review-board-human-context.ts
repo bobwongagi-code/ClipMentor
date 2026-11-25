@@ -9,7 +9,7 @@ export const array=(v:unknown):unknown[]=>Array.isArray(v)?v:[];
 export const string=(v:unknown)=>typeof v==='string'?v:'';
 const range=(v:unknown):v is [number,number]=>Array.isArray(v)&&v.length===2&&v.every(n=>typeof n==='number'&&Number.isFinite(n))&&v[0]>=0&&v[1]>v[0];
 export const overlaps=(a:[number,number],b:[number,number])=>a[0]===a[1]?b[0]<=a[0]&&a[0]<b[1]:b[0]===b[1]?a[0]<=b[0]&&b[0]<a[1]:a[0]<b[1]&&b[0]<a[1];
-export function sourceSpeech(data:Data,rows:ReviewBoardRow[]){
+export function sourceSpeech(data:Data,rows:ReadonlyArray<Pick<ReviewBoardRow,'range'>>){
  return array(data.analysis.evidence).map(object).filter(e=>e.kind==='original_claim'&&string(e.text)&&range(e.source_range_seconds)
   && rows.some(r=>r.range&&overlaps(r.range,e.source_range_seconds as [number,number])))
   .sort((a,b)=>(a.source_range_seconds as number[])[0]-(b.source_range_seconds as number[])[0])

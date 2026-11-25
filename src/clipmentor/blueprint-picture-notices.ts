@@ -26,7 +26,7 @@ export function currentPicturePhases(plan: Row, timeline: unknown, unitId: unkno
   const raw = arr(operational.phases), issues: Array<{ path: string; message: string; kind:'missing'|'binding'|'shape' }> = [];
   let phases = raw.map(obj), locations = phases.map((_, i) => `${prefix}[${i}]`);
   let pictureLocations = locations.map(path => path + '.picture'), legacyMissing = false;
-  const ids = (p: Row) => [...new Set([text(p.line_id), ...arr(p.line_ids).map(text)].filter(Boolean))];
+  const ids = picturePhaseLineIds;
   if (!Array.isArray(operational.phases) || !raw.length) issues.push({ path: prefix, kind:operational.phases==null||Array.isArray(operational.phases)?'missing':'shape', message: 'Current picture phases missing, empty or not an array.' });
   for (const [i, p] of raw.entries()) if (p === null || typeof p !== 'object' || Array.isArray(p)) issues.push({ path: `${prefix}[${i}]`, kind:'shape', message: 'Picture phase must be an object.' });
   // Only explicit, meaningful old explanation records may use old timeline rows.
@@ -143,4 +143,9 @@ export function verifyPictureNoticeSources(input: unknown, notices: PictureNotic
     if (valid) verified.push(notice);
   }
   return { notices: verified, issues };
+}
+
+export function picturePhaseLineIds(phase: Record<string,unknown>): string[] {
+ const references=Array.isArray(phase.line_ids)?phase.line_ids:[];
+ return [...new Set([phase.line_id,...references].filter((id):id is string=>typeof id==='string'&&!!id))];
 }

@@ -67,6 +67,8 @@
 .cm-feedback-summary { margin-bottom: 18px; max-width: 70ch; }
 .cm-feedback-summary ul { list-style: disc; padding-left: 1.25em; margin-top: 8px; display: grid; gap: 6px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .cm-feedback-summary p { margin-top: 8px; color: #5c5c5c; font-size: 14px; }
+.cm-opinion-action { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.cm-opinion-confirmation { margin: 12px 0; }
 
 .cm-output-list { display: grid; gap: 24px; }
 .cm-output-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
