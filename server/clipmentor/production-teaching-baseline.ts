@@ -519,8 +519,19 @@ export function wholeFilmIssue(whole:WholeFilmDecision|undefined){
 
 export function validateTeachingBaselineReview(value: unknown, source: BaselineSource): BaselineReview {
  const invalid = () => Error('teaching_baseline_review_invalid');
- if (!row(value) || !Array.isArray(value.units) || value.units.length !== source.units.length
-  || (source.feedback ? value.feedback_scope!=='copy'&&value.feedback_scope!=='baseline' : value.feedback_scope !== 'none')) throw invalid();
+ if (!row(value) || !Array.isArray(value.units) || value.units.length !== source.units.length) throw invalid();
+ const hasFeedback=!!source.feedback;
+ let requiresBaseline=false;
+ if(hasFeedback){
+  if(Object.hasOwn(value,'feedback_requires_baseline')){
+   if(typeof value.feedback_requires_baseline!=='boolean')throw invalid();
+   requiresBaseline=value.feedback_requires_baseline;
+  }else{
+   // Read completed reviews produced before the host owned feedback_scope.
+   if(value.feedback_scope!=='copy'&&value.feedback_scope!=='baseline')throw invalid();
+   requiresBaseline=value.feedback_scope==='baseline';
+  }
+ }
  const decisions = value.units;
  const whole_film=source.pointReview?readWholeFilmDecision(value.whole_film,source):undefined;
  const wholeFilmResult={...(whole_film?{whole_film}:{}),...(source.narrationTargets?.length
@@ -555,13 +566,14 @@ export function validateTeachingBaselineReview(value: unknown, source: BaselineS
    return {feedback_scope:'baseline',units:rejected,...wholeFilmResult};
   }
  }
- if (value.feedback_scope==='baseline' && !source.rebuilding && (!whole_film||whole_film.status==='ok')&&units.every(unit=>unit.status==='ok')){
+ const hasBaselineIssue=(whole_film&&whole_film.status!=='ok')||units.some(unit=>unit.status!=='ok');
+ if (requiresBaseline && !source.rebuilding && !hasBaselineIssue){
   if(wholeFilmResult.narration_checks?.some(check=>check.status!=='ok'))
    return {feedback_scope:'copy',units,...wholeFilmResult};
   throw invalid();
  }
- return {feedback_scope:source.feedback&&whole_film&&whole_film.status!=='ok'?'baseline':value.feedback_scope as BaselineReview['feedback_scope'],
-  units,...wholeFilmResult};
+ const feedback_scope=!hasFeedback?'none':hasBaselineIssue||source.rebuilding?'baseline':'copy';
+ return {feedback_scope,units,...wholeFilmResult};
 }
 
 type PriorTeachingMaterial=Omit<ReturnType<typeof currentTeachingMaterial>,'spoken'|'voice'>&{voice?:string};
@@ -690,32 +702,49 @@ export function staleRebuiltTeaching(source:BaselineSource, doc:ProjectDoc, rebu
  }).map(unit=>unit.unit_id);
 }
 
-const instructions = `只读核验教学选题，不审稿。先从任务要求、按原片时间排列的动作与原话候选判断原作者在做什么，再看 units 的作者基线。逐组判：是否保留了该段承担的原片功能、观众想判断的具体问题、原作者让这个信息可见或可听的手法、拿掉本组后达人会少学的做法。动作顺序、泛泛形容或作者备注不够。开场与衔接可承担核心任务，按本片证据判断，不套固定顺序或组数。机器听写与画面只支持各自能确认的关系；不据此证明成交、配方功效或人群适用，也不要求把资料所有卖点写进片。未知不影响当前有依据的选题时，保留该边界。引用必须是本组可回读的 source evidence ID，不能把听写当人工听审。若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。
+const reviewInstructions = (opening:string,feedbackInstructions:string,feedbackOutput:string) => `${opening}先从任务要求、按原片时间排列的动作与原话候选判断原作者在做什么，再看 units 的作者基线。逐组判：是否保留了该段承担的原片功能、观众想判断的具体问题、原作者让这个信息可见或可听的手法、拿掉本组后达人会少学的做法。动作顺序、泛泛形容或作者备注不够。开场与衔接可承担核心任务，按本片证据判断，不套固定顺序或组数。机器听写与画面只支持各自能确认的关系；不据此证明成交、配方功效或人群适用，也不要求把资料所有卖点写进片。未知不影响当前有依据的选题时，保留该边界。引用必须是本组可回读的 source evidence ID，不能把听写当人工听审。${feedbackInstructions}
 按 sourceClosing 核对原片收尾与选题处置。
-仅输出 JSON {feedback_scope:"none"|"copy"|"baseline",units:[{unit_id,status:"ok"|"fix"|"unresolved",source_role,takeaway,evidence_ids:[...],reason}]}。每组恰好一条，ok 必须引用证据。禁止改稿或调用工具。`;
+仅输出 JSON {${feedbackOutput}units:[{unit_id,status:"ok"|"fix"|"unresolved",source_role,takeaway,evidence_ids:[...],reason}]}。每组恰好一条，ok 必须引用证据。禁止改稿或调用工具。`;
 
 const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。用本点原片证据核对作者的卖点、买家顾虑和拍法。按 purpose 作答。learner_takeaway 写达人拍同类内容时会改的具体决定，connection 写原作者的这个选择让观众多得到哪一项判断依据。只说能看到、能比较、能认出，没说明具体依据时同样判 fix。选题或答案只复述动作时，即使换了词或问题带「为什么」，也判 fix。只列功能、混淆原片促单与达人CTA、照搬别片形式同样判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
 const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画面证据独立找最有解释力的教学主线及一个合理备选。比较两条主线各自会让达人改哪个决定，说明为何选这条、放弃备选会少教什么，以及前后各组怎样服务主线。核对有无漏掉会改变买家判断的内容。不要把多段相似演示当多个购买理由，也不要因为强证据更容易截图就让辅助点变主线。另在同一 JSON 增加 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。各项简洁具体。ok 时 main_point_id 是实际承载主线的主讲重点，evidence_id 属于该点，affected_unit_ids 为空。整片重点选错、排序影响理解或有重要遗漏，即使各组单独成立也标 fix，引用能说明问题的全片原证据，可来自未选中的段落。证据决定当前关键结论却无法核清，标 unresolved；仅当无可引用证据时 evidence_id 和 source_quote 均填 null。fix 或 unresolved 要列出受影响的现行组 ID，主线未成立时 main_point_id 可为 null。';
-const baselineInstructions=(source:BaselineSource)=>(source.narrationTargets?.length
- ?instructions.replace('只读核验教学选题，不审稿。','先独立阅读输入首部的 narrationTargets，判断实际口播能教达人改变哪个拍摄决定。再核对选题与原片依据。')
- :instructions)+(source.pointReview?wholeFilmInstructions+(source.sourceClosing.factOnly?'':'收尾处置与 sourceClosing 不一致判 fix，证据决定结论且无法核清则判 unresolved。')+pointInstructions:'')
+function baselineInstructions(source:BaselineSource,legacyReceipt=false){
+ const feedbackInstructions=legacyReceipt
+  ?'若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。'
+  :source.feedback?'按 feedback 原话判断是否必须重做选题、功能或购买理由；须重做时将 feedback_requires_baseline 填 true，并列出有原片依据的退回项。仅改措辞或版式填 false。rebuilding=true 时核对已重选的教学能否兑现意见；保留其中其他要求。':'';
+ const feedbackOutput=legacyReceipt?'feedback_scope:"none"|"copy"|"baseline",':source.feedback?'feedback_requires_baseline:true|false,':'';
+ const opening=source.narrationTargets?.length
+  ?'先独立阅读输入首部的 narrationTargets，判断实际口播能教达人改变哪个拍摄决定。再核对选题与原片依据。'
+  :'只读核验教学选题，不审稿。';
+
+ return reviewInstructions(opening,feedbackInstructions,feedbackOutput)+(source.pointReview?wholeFilmInstructions+(source.sourceClosing.factOnly?'':'收尾处置与 sourceClosing 不一致判 fix，证据决定结论且无法核清则判 unresolved。')+pointInstructions:'')
  +(source.sourceClosing.factOnly?' 任务声明已记录原片弱促单事实。whole_film.frozen_topic_checks 只填 {main_scope:"pass"|"fail"}。如实登记已完成，缺少重复注记、回放或讲解时仍按教学内容作答。核对实际稿件和证据；主线越界，或把弱促单改判、升格为教学或补写推荐时，main_scope 判 fail，并指出当前内容和依据。'
  :source.frozenTopics?' frozenTopics 是本片已确认的选题范围。无论总评如何，whole_film 须填 frozen_topic_checks:{main_scope:"pass"|"fail",closing_status:"pass"|"fail"}。main_scope 核对实际提交的标题、问题、讲解任务和证据。超出 frozenTopics.main 或将 frozenTopics.background 当成教学依据时判 fail。closing_status 按 sourceClosing 核对已核定的档位、处置及注记位置。处置或注记不符时判 fail。总评在 reason 中说明具体问题。'
  :source.sourceClosingRegistration?' whole_film 必须含 frozen_topic_checks:{main_scope:"pass",closing_status:"pass"|"fail"}。main_scope 由原有整片评审负责。closing_status 复核 sourceClosing 的档位、原片依据和实际处置。':'')
  +(source.selection?' 先从全片证据独立判断哪里支持想试、比较或跟着操作，再核对教学选点。盘点和选组文字是待核陈述。selection.gaps、角色和备选都是审阅提示，依据是实际选点、原片和稿件。仅有一层、缺备选或资料填写不全时，沿用现行判据。若确实漏掉会改变买家判断的内容，或两组实质重复，引用原片并说明损失。合组核对真实先后，每句引用本句供给的一个或多个实际窗口。把推断的动机、观众反应或功效当事实时，基线写进 point_checks 的 fix，口播写进 narration_checks 的 fix 并引用该句。编辑实看时点是回看线索。仅在当前结论依赖无法核实的证据时判 unresolved。selection.timingRisks 是逐句估计。若缺处置，引用相关句并指出待实测的声画风险。估算、单纯短窗或处置字段缺失不决定通过状态。':'')
  +(source.narrationTargets?.length?' 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?,quote?}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并逐字引用能让他领会该决定的某句。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id 和逐字 quote。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。':'');
+}
 
-export function teachingBaselineDigest(source:BaselineSource) {
- return digestValue({source,instructions:baselineInstructions(source)});
+export function teachingBaselineDigest(source:BaselineSource,legacyReceipt=false) {
+ return digestValue({source,instructions:baselineInstructions(source,legacyReceipt)});
 }
 
 export async function checkTeachingBaseline(task:ProductionTask,stage:StageContext,source:BaselineSource,requirementsDigest?:string) {
  const narrationSubject=source.narrationTargets?narrationReviewSubject(task,source.narrationTargets,source.evidenceBinding,requirementsDigest,source,source.selection?.timingRisks):undefined;
- const baselineDigest=teachingBaselineDigest(source);
- const digest=narrationSubject?digestValue({baselineDigest,narrationSubject}):baselineDigest;
+ const reviewDigest=(baselineDigest:string)=>narrationSubject?digestValue({baselineDigest,narrationSubject}):baselineDigest;
+ const currentDigest=reviewDigest(teachingBaselineDigest(source));
+ const priorReviews=Object.entries(task.effects).filter(([id,effect])=>effect.kind==='model'&&id.includes(':teaching-baseline:'));
+ const effectsFor=(digest:string)=>priorReviews.filter(([id])=>id.endsWith(':teaching-baseline:'+digest));
+ const current=effectsFor(currentDigest);
+ // Keep a previously submitted review bound to its original effect key.
+ const legacyDigest=priorReviews.length>current.length&&!current.some(([,effect])=>effect.status==='completed')
+  ?reviewDigest(teachingBaselineDigest(source,true)):undefined;
+ const legacy=legacyDigest?effectsFor(legacyDigest):[];
+ const digest=legacyDigest&&(legacy.some(([,effect])=>effect.status==='completed')||!current.length&&legacy.length)
+  ?legacyDigest:currentDigest;
  const bind=(runId:string,review:BaselineReview)=>({digest,runId,review,...(narrationSubject?{narrationSubject}:{})});
  const key = 'teaching-baseline:'+digest;
- const effects = Object.entries(task.effects).filter(([id,effect]) => id.endsWith(':'+key) && effect.kind==='model');
+ const effects=digest===currentDigest?current:legacy;
  const saved = effects.find(([,effect])=>effect.status==='completed')?.[1];
  const read = (value:unknown,operationId:string) => {
   if (!row(value) || value.digest!==digest || value.runId!==operationId) throw Error('teaching_baseline_receipt_binding_mismatch');
