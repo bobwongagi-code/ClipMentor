@@ -1480,6 +1480,12 @@ try{
   assert(prompt.includes(teachingPurpose.audience)&&prompt.includes(teachingPurpose.review_question),`${stage} must receive the shared purpose`);
   for(const boundary of teachingPurpose.boundaries)assert(prompt.includes(boundary));
   for(const label of cardLabels)assert(prompt.includes(label),`${stage} author missing ${label}`);
+  if(stage==='blueprint'){
+   assert.match(prompt,/planning\.md 的 Before drafting the narration/);
+   assert.match(prompt,/只读实际马来语.*拍摄选择.*观众当场得到的具体信息或想弄清的问题/);
+   assert(prompt.includes('What does that choice immediately let the viewer notice, understand or want to find out?'),
+    'the live author request includes the fact-card drafting method');
+  }
  }
  assert(independentPrompts.length>0,'the fake service must receive a real independent review request');
  for(const prompt of independentPrompts){
@@ -1487,6 +1493,8 @@ try{
    assert(prompt.includes(teachingPurpose.review_question),'independent baseline and narration requests must receive the shared purpose');
   for(const boundary of teachingPurpose.boundaries)assert(prompt.includes(boundary));
   assert(!prompt.includes('人工拆解单元：同一主题怎样讲得具体'));
+  assert(!prompt.includes('What does that choice immediately let the viewer notice, understand or want to find out?'),
+   'independent review reads the candidate without the author’s drafting instructions');
   for(const label of cardLabels)assert(!prompt.includes(label));
   for(const sample of humanTeachingCalibration){
    for(const answer of [sample.useful,sample.actionOnly,sample.overclaim])assert(!prompt.includes(answer));
