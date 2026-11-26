@@ -1,4 +1,5 @@
 export const BLUEPRINT_OPINION_MAX_LENGTH=4000;
+export const BLUEPRINT_OPINION_TOTAL_MAX_LENGTH=7200;
 export type BlueprintOpinion = {unitId:string|null;text:string;keepPlacement?:true};
 export type BlueprintOpinionPlacement = {index:number;unitId:string|null;label:string;multiple?:true};
 export type BlueprintOpinionConfirmation = {token:string;rows:Array<{label:string;keep:string[];change:string}>};

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {executeRun} from './executor';
+import {sourceBreakdownFailures} from '../clipmentor/production-analysis-recovery';
 import {createRun,resetServerRunStoreForTest,flushServerRunPersistence,recoverServerRun,pushRunEvent} from './store';
 import {canonicalServerRunToolCatalog,resolveServerRunToolCatalog} from './tool-policy';
 import {runtimeEvent} from './store-values';
@@ -14,7 +15,7 @@ assert.throws(()=>resolveServerRunToolCatalog([serverFrame],false),/Non-canonica
 assert.equal(resolveServerRunToolCatalog([serverFrame],false,true)[0].name,serverFrame.name);
 assert(!canonicalServerRunToolCatalog(true,true).some(t=>t.name===serverFrame.name),'ask mode remains read-only');
 resetAgentRuntimeStoreMemory();resetServerRunStoreForTest();
-let requests=0,fail=false,failTool=false,throwTool=false,largeTool=false,toolCalls=0,reservations=0;
+let requests=0,fail=false,failTool=false,throwTool=false,largeTool=false,repeatBreakdown=false,toolCalls=0,reservations=0;
 const server=createServer(async(req,res)=>{
  assert(req.url?.startsWith('/llm/'),'no real model endpoint is reachable');
  let raw='';for await(const part of req)raw+=part;
@@ -23,7 +24,13 @@ const server=createServer(async(req,res)=>{
  const hasTool=body.messages.some((m:{role:string})=>m.role==='tool');
  res.writeHead(200,{'Content-Type':'text/event-stream'});
  const emit=(delta:unknown,finish_reason:string|null)=>res.write(`data: ${JSON.stringify({id:'fixture-chat',object:'chat.completion.chunk',created:0,model:'fixture',choices:[{index:0,delta,finish_reason}]})}\n\n`);
- if(hasTool){assert(JSON.stringify(body.messages).includes(largeTool?'read_agent_artifact':throwTool?'fixture host failure':failTool?'actual_source_binding_missing':'server-owned-read'));emit({role:'assistant',content:'Done.'},null);emit({},'stop');}
+ if(repeatBreakdown){
+  const args={action:'set_source_breakdown',expectedRevision:8,reason:'Attempt '+requests,record:{},
+   actor:{operator:'fixture',executor:'fixture',instruction:'Fixture only',identity:'local_declared_not_authenticated'}};
+  emit({role:'assistant',tool_calls:[{index:0,id:'call_breakdown_'+requests,type:'function',
+   function:{name:'revise_clipmentor_analysis',arguments:JSON.stringify(args)}}]},null);
+  emit({},'tool_calls');
+ }else if(hasTool){assert(JSON.stringify(body.messages).includes(largeTool?'read_agent_artifact':throwTool?'fixture host failure':failTool?'actual_source_binding_missing':'server-owned-read'));emit({role:'assistant',content:'Done.'},null);emit({},'stop');}
  else{emit({role:'assistant',tool_calls:[{index:0,id:'call_read',type:'function',function:{name:'read_project',arguments:'{}'}}]},null);emit({},'tool_calls');}
  res.end('data: [DONE]\n\n');
 });server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();assert(address&&typeof address==='object');
@@ -54,6 +61,18 @@ try{
  assert.match(JSON.stringify(thrownReceipt),/fixture host failure/);assert.equal(runtimeEvent(thrownReceipt).outcome?.kind,'outcome_unknown');throwTool=false;
  failTool=true;const refused=run();await executeRun(refused,input);assert.equal(refused.status,'failed');assert(refused.events.some(e=>e.type==='server-tool-diagnostic'&&JSON.stringify(e.data).includes('actual_source_binding_missing')),'machine-readable issue survives the host failure path');failTool=false;
  assert.equal(runtimeEvent(refused.events.find(e=>e.type==='server-tool-result')!).outcome?.kind,'terminal_failure');
+ repeatBreakdown=true;requests=0;
+ const stopRepeated=new AbortController();
+ const repeated=run();
+ const writeSchema=canonicalServerRunToolCatalog(false,true).find(t=>t.name==='revise_clipmentor_analysis')!;
+ await executeRun(repeated,{...input,tools:[writeSchema],host:{...input.host,signal:stopRepeated.signal,afterFailure:sourceBreakdownFailures(stopRepeated),
+  async execute(){return {error:'Invalid source breakdown; nothing changed',
+   issues:[{point_id:'P1',field:'teaching_basis.exemplar',code:'expected_one_principle_id'}]};},
+ }});
+ assert.equal(requests,2,'the host must stop before requesting a third model response');
+ assert.match(stopRepeated.signal.reason?.message??'',/production_source_breakdown_no_progress/);
+ assert.equal(repeated.events.filter(e=>e.type==='server-tool-result').length,2,'both original failed results stay in the run');
+ repeatBreakdown=false;
  fail=true;requests=0;const failed=run();await executeRun(failed,input);assert.equal(failed.status,'failed');assert.equal(requests,1,'no automatic retry or desktop fallback');
  requests=0;const zero=run();await executeRun(zero,{...input,host:{...input.host,async beforeRequest(){throw Error('model budget exhausted');}}});assert.equal(zero.status,'failed');assert.equal(requests,0);
  const desktop=run();await executeRun(desktop,{...input,backend:'codex'});assert.equal(desktop.status,'failed');assert.match(desktop.error??'',/API backend/);assert.equal(requests,0);

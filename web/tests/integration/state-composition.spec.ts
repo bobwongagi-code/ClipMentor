@@ -1,4 +1,4 @@
-import {acceptGroups,acknowledgeOverallFeedback,checkFinalReview} from '../review-controls'
+import {acknowledgeOverallFeedback,checkFinalReview} from '../review-controls'
 import { test, expect, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
@@ -84,7 +84,6 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       for (const [label, key] of [['爆款原片', 'source'], ['商品图', 'product'], ['销量截图', 'sales'], ['CTA 行动号召图', 'cta']]) await page.getByLabel(label, { exact: true }).setInputFiles(inputs[key])
       await page.getByRole('button', { name: '上传素材' }).click()
       await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
-      await acceptGroups(page)
     await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
       await expect.poll(async () => (await state()).task?.status, { timeout: 20_000 }).toBe('awaiting_review')
       await page.reload()
@@ -137,7 +136,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       const releasedResponse = page.waitForResponse(r => r.request().method() === 'POST' && r.request().postDataJSON()?.action === action && r.request().postDataJSON()?.renderId === old.renderId && r.url().includes('audience=existing_partner'), { timeout: 10_000 })
       gate.release()
       await releasedResponse
-      if (timing === 'request') await expect(partner(page).getByText(/绑定或格式问题/)).toBeVisible()
+      if (timing === 'request') await expect(partner(page).getByText(/当前版本不可用/)).toBeVisible()
       else await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)))
       await expect.poll(async () => (await audit()).actions.filter((a: { action: string; renderId?: string }) => a.action === action && a.renderId === old.renderId).length).toBe(action === 'revise_preview' && replacement === 'render' ? 2 : 1)
       await expect.poll(async () => (await audit()).actions.at(-1)?.status).toBe(timing === 'request' ? 409 : 200)

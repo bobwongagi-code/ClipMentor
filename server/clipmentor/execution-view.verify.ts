@@ -137,8 +137,13 @@ const weakClosing=structuredClone(project);
 const breakdown=weakClosing.clipMentorAnalysis!.source_breakdown!;
 breakdown.source_closing={status:'weak_candidate',segment_id:breakdown.segments.at(-1)!.segment_id,note:'无已确认促单组，仅有弱促单待核'};
 assert.deepEqual(blueprintReviewGroups(weakClosing),blueprintReviewGroups(project),'a weak closing note adds no review obligation');
-assert.throws(()=>bindBlueprintReview({groups:[{id:fixtureGroup.id,decision:'同时展示两个编号',stance:'changes'}],endingIds:[]},
- {revision:'fixture',boardIdentity:'fixture-board',groups:[fixtureGroup],endings:[]},true),/第 1 组/);
+const reviewScope={revision:'fixture',boardIdentity:'fixture-board',groups:[fixtureGroup],endings:[]};
+assert.deepEqual(bindBlueprintReview({scope:'whole_blueprint'},reviewScope),{
+ revision:'fixture',boardIdentity:'fixture-board',scope:'whole_blueprint',groups:[],endings:[],
+});
+for(const input of [undefined,{scope:'whole_blueprint',groups:[]},{scope:'whole_blueprint',endingIds:['new_contact']}])
+ assert.throws(()=>bindBlueprintReview(input,reviewScope),/刷新蓝图/);
+assert.throws(()=>bindBlueprintReview({scope:'whole_blueprint'},{...reviewScope,groups:[]}),/没有可审核的讲解/);
 assert.deepEqual(panelFeedbackTarget({scope:'group',unitId:fixtureGroup.id},[fixtureGroup],false).unitIds,[fixtureGroup.id]);
 assert.throws(()=>panelFeedbackTarget({scope:'group',unitId:'wrong-group'},[fixtureGroup],true),/反馈位置/);
 assert.throws(()=>panelFeedbackTarget({scope:'whole'},[fixtureGroup],true),/确认/);

@@ -5,7 +5,7 @@ import { checkSourceBreakdown, copyLineSourceBinding, isSourceBreakdown, type So
 import { teachingReplayRisks } from '../../src/clipmentor/blueprint-lint';
 import { validatePicturePlanProjection } from '../../src/clipmentor/production-gate';
 import { teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
-import { confirmedTeachingDigest, teachingBaselineSource, validateTeachingBaselineReview } from './production-teaching-baseline';
+import { confirmedTeachingDigest, qualifiedTeachingDigest, teachingBaselineSource, teachingPointGaps, validateTeachingBaselineReview } from './production-teaching-baseline';
 import type { ProductionTask } from './production-task';
 import fixture from './fixtures/judydoll-teaching-selection.json';
 
@@ -162,6 +162,49 @@ export function verifyTeachingSelections(template: ProjectDoc, templateTask: Pro
  assert.equal(negative.whole_film!.status,'ok');
  assert.equal(negative.narration_checks!.filter(check=>check.status==='fix')[0].quote,fixture.inferenceDraft);
  assert.throws(()=>validateTeachingBaselineReview(receipt(inferred,true),source),/teaching_final_narration_receipt_invalid/);
+ const withBrief=structuredClone(doc);
+ installDraft(withBrief,[{...captionLines[0],narration_ms:'Dia buka dengan solekan dan reaksi. Terus nak tahu dia guna apa.'},
+  ...captionLines.slice(1)],true);
+ const writingTask=structuredClone(task);
+ writingTask.input.panelDelivery!.firstGlanceWriting=true;
+ const briefSource=()=>teachingBaselineSource(withBrief,writingTask,[]);
+ assert(briefSource().firstGlanceWriting);
+ assert.equal(briefSource().firstGlanceWriting?.filter(unit=>!unit.first_glance).length,2);
+ assert(teachingPointGaps(briefSource(),withBrief).some(issue=>issue.includes('缺一眼效果')));
+ const writingUnits=withBrief.clipMentorAnalysis!.source_breakdown!.units;
+ writingUnits[0].teaching_selection!.first_glance='她先用妆效和表情让人好奇用了什么，再让双盘和编号同框，颜色对回编号。';
+ writingUnits[1].teaching_selection!.first_glance='她分部位留住工具和脸同框的短镜头，达人能认出落点。';
+ writingUnits[0].teaching_selection!.hook_curiosity={point_id:'hook',question:'她用了什么？'};
+ assert.notEqual(qualifiedTeachingDigest(withBrief),qualifiedTeachingDigest(doc),'a changed writing brief needs requalification');
+ const checkedSource=briefSource();
+ assert.deepEqual(checkedSource.narrationTargets?.filter(target=>target.hook_curiosity).map(target=>target.point_id),['hook']);
+ assert(!teachingPointGaps(checkedSource,withBrief).some(issue=>issue.includes('缺一眼效果')));
+ const withoutChecks=receipt(checkedSource,false);
+ assert.throws(()=>validateTeachingBaselineReview(withoutChecks,checkedSource),/teaching_first_glance_checks_invalid/);
+ const reviewed={...withoutChecks,narration_checks:withoutChecks.narration_checks.map(entry=>({...entry,
+  first_glance_checks:entry.point_id==='hook'?{hook:'ok',hook_line_id:'hook',explanation:'ok'}:{explanation:'ok'},
+ }))};
+ const findings=validateTeachingBaselineReview(reviewed,checkedSource);
+ assert.deepEqual(findings.narration_checks?.find(entry=>entry.point_id==='hook')?.first_glance_checks,
+  {hook:'ok',hook_line_id:'hook',explanation:'ok'});
+ for(const hook_line_id of [undefined,'palettes']){
+  const unbound={...reviewed,narration_checks:reviewed.narration_checks.map(entry=>entry.point_id==='hook'
+   ?{...entry,first_glance_checks:{...entry.first_glance_checks,hook_line_id}}:entry)};
+  assert.throws(()=>validateTeachingBaselineReview(unbound,checkedSource),/teaching_first_glance_checks_invalid/);
+ }
+ const wrongHook={...reviewed,narration_checks:reviewed.narration_checks.map(entry=>entry.point_id==='hook'
+  ?{...entry,first_glance_checks:{explanation:'ok',hook:'fix'}}:entry)};
+ assert.throws(()=>validateTeachingBaselineReview(wrongHook,checkedSource),/teaching_first_glance_checks_invalid/);
+ const enumerated={...reviewed,narration_checks:reviewed.narration_checks.map(entry=>entry.point_id==='nose'
+  ?{...entry,first_glance_checks:{explanation:'fix'}}:entry)};
+ assert.throws(()=>validateTeachingBaselineReview(enumerated,checkedSource),/teaching_first_glance_checks_invalid/);
+ const optionalDetail={...reviewed,narration_checks:reviewed.narration_checks.map(entry=>entry.point_id==='nose'
+  ?{...entry,status:'fix',reason:'建议在口播逐个念画面已交代的部位。',baseline_criterion:{field:'method',
+   quote:checkedSource.units.find(unit=>unit.unit_id===entry.unit_id)!.points[0].teaching_basis!.method}}:entry)};
+ assert.throws(()=>validateTeachingBaselineReview(optionalDetail,checkedSource),/teaching_first_glance_checks_invalid/);
+ writingUnits[0].teaching_selection!.hook_curiosity!.point_id='nose';
+ assert(teachingPointGaps(briefSource(),withBrief).some(issue=>issue.includes('本组主讲口播')));
+ console.log('PASS first-glance brief is required and bound to the spoken group; hook and explanation receipts cannot be waived by overall pass');
  console.log('PASS full inventory, unselected interest, duplicate decision, timing disposal, two source-bound lines, and a quoted inference rejection');
  return {doc,reassurance,missingRole,inference};
 

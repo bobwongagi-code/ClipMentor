@@ -669,8 +669,8 @@ try{
   assert.equal(board.status,200,board.ok?'':html);
   assert.equal(board.headers.get('x-clipmentor-board-identity'),boardIdentity);
   assert(!html.includes(teachingPurpose.review_question),'the internal review question stays out of the human board');
-  assert.match(html,/<section class="group"[^>]*data-unit-id="fixture-group".*达人把刷头退开后的结果留在镜头中。观众能判断无遮挡时鼻侧色痕有多明显。.*data-quote-line-id="fixture-line"/su);
-  assert.match(html,/data-source-evidence-id="fixture-visual">原片依据 刷子与鼻侧同框。/u);
+  assert.match(html,/<section class="group"[^>]*data-unit-id="fixture-group"/u);
+  assert(!/独立口播审核|data-quote-line-id|达人把刷头退开后的结果留在镜头中/u.test(html),'independent review is stored without exposing its receipt on the business board');
   assert(html.includes(actionable));
   assert(!html.includes('Ignored worker claim'));
   const published=task.completed.blueprint!.artifact;
@@ -968,12 +968,16 @@ try{
  assert.equal(realCorrection.clipMentorAnalysis!.source_breakdown!.points[0].teaching_question,b.points[0].teaching_question);
  assert.equal(teachingDraftPointersDigest(realCorrection),teachingDraftPointersDigest(old),'analysis rewrite leaves old candidates for the draft phase');
  assert.equal(correctionTask.teachingAnalysisPublication,undefined,'analysis publication body is cleared once its stage settles');
- for(const [size,complete] of [['small',true],['archived',true],['archived',false]] as const){
+ for(const [size,complete,duplicateConcern] of [['small',true,false],['archived',true,true],['archived',false,false]] as const){
   rejectSupplement=size;
   supplementArchiveId=undefined;
   const item=await taskFor('teaching-supplement-'+size+'-'+complete,firstCopyDoc,0,'exemplar-v1');
   item.stage='analysis';delete item.completed.analysis;
   analysisCorrection=structuredClone(breakdown);
+  if(duplicateConcern){
+   const point=analysisCorrection.points[0];
+   Object.assign(point.teaching_basis!,{buying_concern:point.buying_concern});
+  }
   if(!complete){
    delete analysisCorrection.points[0].teaching_basis;
    analysisCorrection.points[0].change_reason='Fixture registers an incomplete editorial choice';
@@ -983,7 +987,9 @@ try{
   if(complete){
    const result=await productionStageWorker(item,context);
    assert.ok(result.artifact.recoveredAnalysisWrite,'worker cites the two real tool calls');
-   assert.equal(result.artifact.revision,(await loadOfflineStoredProject(item.projectId))?.revision);
+   const readback=await loadOfflineStoredProject(item.projectId);
+   assert.equal(result.artifact.revision,readback?.revision);
+   assert(!Object.hasOwn(readback!.doc.clipMentorAnalysis!.source_breakdown!.points[0].teaching_basis!,'buying_concern'));
   }else{
    await assert.rejects(productionStageWorker(item,context),/tool failed/i);
    assert.equal((await loadOfflineStoredProject(item.projectId))?.revision,original.revision);
@@ -1129,6 +1135,20 @@ try{
   await productionTaskStore.save(task);
   return task;
  };
+ const missingBrief=await selectionWorkerTask('teaching-first-glance-missing',selectionFixtures.doc);
+ missingBrief.input.panelDelivery!.firstGlanceWriting=true;
+ missingBrief.stage='blueprint';
+ await productionTaskStore.save(missingBrief);
+ const briefResult=await productionStageWorker(missingBrief,noEffect);
+ assert.equal(briefResult.repair,'analysis');
+ assert.match(String(briefResult.artifact.teaching_baseline_issue),/缺一眼效果/);
+ assert.equal(missingBrief.attempts.model,0,'missing brief never dispatches the writer');
+ const withBrief=structuredClone(selectionFixtures.doc);
+ for(const unit of withBrief.clipMentorAnalysis!.source_breakdown!.units)
+  unit.teaching_selection!.first_glance='让实物和参照同时入画，观众马上能把两者对上。';
+ const authorData=await productionAuthorTaskData(missingBrief,withBrief,{policy:null,references:[]});
+ assert(authorData.narrationBrief?.groups.every(group=>group.first_glance));
+ assert.match(authorData.narrationBrief!.instruction,/先替换弱句/);
  const missingRole=await selectionWorkerTask('teaching-selection-missing-role',selectionFixtures.missingRole);
  const overrun=await selectionWorkerTask('teaching-selection-overrun',selectionFixtures.reassurance);
  const repaired=await selectionWorkerTask('teaching-selection-recorded',selectionFixtures.doc);

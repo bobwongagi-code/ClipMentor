@@ -8,6 +8,7 @@ import {readBlueprint,lintBlueprint} from '../../src/clipmentor/blueprint-lint';
 import {currentPicturePhases,blueprintPictureNotices,pictureNoticeRows,stageCueColors,picturePhaseLineIds} from '../../src/clipmentor/blueprint-picture-notices';
 import {deliverySectionsFromDoc,deliveryPictureBindings,type DeliverySection} from '../../src/clipmentor/delivery-sections';
 import {labelTranslationsConflict} from '../../src/clipmentor/author-translations';
+import {copyLineSourceBinding} from '../../src/clipmentor/source-breakdown';
 import type {ProjectDoc,MediaAsset} from '../../src/editor/types';
 import {isSafeUploadName,resolveUploadFile} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
@@ -38,6 +39,7 @@ export interface ReviewBoardRow {
  stage_text:string;colors:string[];notices:string[];lint:ReturnType<typeof lintBlueprint>['findings'];
  crop?:{left:number;top:number;right:number;bottom:number};tool_crop_px?:unknown;
  frames:Array<{key:string;frame:number;seconds:number;label:string;jpeg?:string}>;sheet?:string;reuse:string[];ending_variant?:string;
+ replayFrames?:ReviewBoardRow['frames'];
  full_picture?:{key:string;jpeg?:string};
  deliveryLayout?:DeliverySection['picture'];
 }
@@ -152,7 +154,21 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
    if(!colors.length)notices.push('未声明可显示的阶段标识色值');
    for(const group of lint.groups.filter(g=>ids.some(id=>g.line_ids.includes(id))))notices.push(`B05 整组参考（估算）：${group.group_id}，${group.estimated_seconds===null?'声长未知':group.estimated_seconds.toFixed(2)+'秒声音'} / ${group.picture_seconds===null?'画面时长未知':group.picture_seconds.toFixed(2)+'秒计划画面'}；不能当实测或承载通过。`);
    const last=Math.max(0,frameFloor(duration*fps-1)),frames=[...new Set((range[0]===range[1]?[range[0]]:[range[0],(range[0]+range[1])/2,Math.max(range[0],range[1]-1/fps)]).map(s=>Math.min(last,frameFloor(s*fps))))];
-   body.push({key:`${txt(selected.unit.unit_id)}/${index}`,unit_id:txt(selected.unit.unit_id),stage,line_ids:ids,lines,range,asset_id:txt(source.asset_id),asset_hash:sourceHash,picture,stage_text:cueRows.map(r=>txt(r.text)).filter(Boolean).join(' / ')||'未登记阶段标识',colors,notices,lint:lint.findings.filter(f=>['B04','B05','B07'].includes(f.rule_id)&&(ids.some(id=>f.location.includes(id))||f.location.includes(selected.path)||f.location.includes(txt(selected.unit.unit_id)))),frames:frames.map(frame=>({key:hash(sourceHash+':'+frame),frame,seconds:frame/fps,label:formatFrameLabel(frame,fps)})),reuse:[]});
+   const samples=(frames:number[])=>frames.map(frame=>({key:hash(sourceHash+':'+frame),frame,seconds:frame/fps,label:formatFrameLabel(frame,fps)}));
+   const breakdown=rootDoc.clipMentorAnalysis?.source_breakdown;
+   const selectedRanges=arr(phase.context_source_ranges);
+   const unit=input.embedded&&stage==='explanation'&&ids.length===1&&selectedRanges.length
+    ?breakdown?.units.find(unit=>unit.unit_id===selected.unit.unit_id):undefined;
+   const binding=unit&&breakdown&&copyLineSourceBinding(breakdown,unit,lineById.get(ids[0])!.raw,operational);
+   const picks=binding?selectedRanges.flatMap(value=>{
+    const slice=window(obj(value).source_range_seconds);
+    if(!slice||slice[1]>duration)return [];
+    const frame=Math.min(last,Math.ceil(slice[0]*fps-1e-8));
+    return slice[0]===slice[1]?[frameFloor(slice[0]*fps)]:frame/fps>=slice[0]-1e-8&&frame/fps<slice[1]?[frame]:[];
+   }):[];
+   const replay=[...new Set(picks)];
+   // Read separately registered excerpts from their own frames, never from the gap in the phase envelope.
+   body.push({key:`${txt(selected.unit.unit_id)}/${index}`,unit_id:txt(selected.unit.unit_id),stage,line_ids:ids,lines,range,asset_id:txt(source.asset_id),asset_hash:sourceHash,picture,stage_text:cueRows.map(r=>txt(r.text)).filter(Boolean).join(' / ')||'未登记阶段标识',colors,notices,lint:lint.findings.filter(f=>['B04','B05','B07'].includes(f.rule_id)&&(ids.some(id=>f.location.includes(id))||f.location.includes(selected.path)||f.location.includes(txt(selected.unit.unit_id)))),frames:samples(frames),...(replay.length>1?{replayFrames:samples(replay)}:{}),reuse:[]});
   }
  }
  if(!body.length)fail('没有可读的阶段');
@@ -181,6 +197,13 @@ export async function renderReviewBoards(input:BoardInput,outDir:string,variant?
    full_picture:r.crop&&Object.values(r.crop).some(edge=>edge>0)?{key:hash(JSON.stringify({asset:r.asset_hash}))}:undefined,
   })));
   const rows=[...common,...endings];
+  let availableFrames=REVIEW_BOARD_FRAME_LIMIT-rows.reduce((sum,row)=>sum+row.frames.length+(row.full_picture?1:0),0);
+  for(const row of rows){
+   if(!row.replayFrames)continue;
+   const selected=row.replayFrames.slice(0,row.frames.length+Math.max(0,availableFrames));
+   availableFrames+=row.frames.length-selected.length;
+   row.frames=selected;
+  }
   const frameKeys=rows.flatMap(r=>[...r.frames.map(f=>f.key),...(r.full_picture?[r.full_picture.key]:[])]);
   if(frameKeys.length>REVIEW_BOARD_FRAME_LIMIT)fail('合并人审版帧数超限');
   plans=[{...first,variant:'human',rows,frame_count:frameKeys.length,unique_frame_count:new Set(frameKeys).size}];

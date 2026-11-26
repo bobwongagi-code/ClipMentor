@@ -40,6 +40,13 @@ try{
    assert.equal(note.confirmation,undefined);
   }
   assert(prepare({unitId:units[1].unit_id,text:'第一句不要改，第二句再短点'}).confirmation);
+  assert.equal(prepare({unitId:units[1].unit_id,text:'第一句写得很清楚'}).record?.opinions[0].edits,false);
+  for(const text of ['第一句我觉得讲得很清楚，第二句改短','第一句写得很清楚但 第二句太长'])
+   assert(prepare({unitId:units[1].unit_id,text}).confirmation,text);
+  assert.throws(()=>prepare({unitId:units[1].unit_id,text:'第一句比较特别，第二句改短'}),/请写清/);
+  assert.throws(()=>prepareBlueprintOpinions(doc,[
+   {unitId:null,text:'改'.repeat(4000)},{unitId:units[1].unit_id,text:'补'.repeat(4000)},
+  ],'revision','board'),/blueprint_opinion_total_too_long/);
   assert.throws(()=>prepare({unitId:units[1].unit_id,text:'很好，图有点糊'}),/请写清/);
   assert.throws(()=>prepareBlueprintOpinions(doc,[{unitId:units[1].unit_id,text:'很好',remove:[1]}],'revision','board'),
    /blueprint_opinion_binding_invalid/);
@@ -68,7 +75,7 @@ try{
   assert.equal(prepare({unitId:units[1].unit_id,text:'整体改短'}).placements[0].unitId,null);
   assert(prepare({unitId:units[1].unit_id,text:'整体改短',keepPlacement:true}).record);
 
-  const group=prepare({unitId:units[1].unit_id,text:'第一句保留，第二句改短'});
+  const group=prepare({unitId:units[1].unit_id,text:'第一句写得很清楚，第二句改短'});
   assert.deepEqual(group.confirmation?.rows[0].keep,['第 1 句 Kod kekal.（编号保留。）']);
   const next=clone(doc);
   Object.assign(line(next,1),{narration_ms:'Kod kekal. Ayat pendek.',zh:'编号保留。这句短。'});
@@ -86,7 +93,7 @@ try{
   assert.throws(()=>guardBlueprintOpinionWrite(confirmed,lockBroken),/^Error: blueprint_opinion_scope_locked/);
   assert.throws(()=>guardBlueprintOpinionWrite(clone(confirmed),lockBroken),error=>{
    assert.match(String(error),/blueprint_repair_no_progress/);
-   assert.match(panelReviewIssue(error)?.message??'',/第 1 句已确认保留.*待维护侧/);
+   assert.match(panelReviewIssue(error)?.message??'',/第 1 句已确认保留.*修改已暂停/);
    return true;
   });
   const otherGroup=clone(next);
@@ -175,6 +182,15 @@ try{
   const html=humanReviewBoardPage(plans[0],data,report);
   assert.doesNotMatch(html,/估算可能偏长|是否偏紧|缺独立 Storyboard PDF 交付绑定|画面说明相同，是否/);
   assert.match(html,/模型听写，未经人工听审/);
+  const explanation=plans[0].rows.find(row=>row.stage==='explanation')!;
+  const answers=[{unit_id:explanation.unit_id,line_id:explanation.line_ids[0],status:'ok' as const,
+   decision:'PRIVATE_REVIEW_DECISION',viewer_basis:'PRIVATE_REVIEW_REASON',quote:'PRIVATE_REVIEW_QUOTE'}];
+  assert.match(humanReviewBoardPage(plans[0],data,report,[],[],false,undefined,answers),/PRIVATE_REVIEW_DECISION/);
+  const legacyData={...data,analysis:{...data.analysis,product:{name:'422f63f1-f6bb-4219-9714-61b11c2104ee'}}};
+  const embedded=humanReviewBoardPage(plans[0],legacyData,report,[],[],true,undefined,answers);
+  assert.match(embedded,/<h1>剪辑蓝图<\/h1>/);
+  assert.doesNotMatch(embedded,/422f63f1|PRIVATE_REVIEW_|existing_partner_pdf_binding|证据边界与未知/);
+  assert.match(embedded,/<details class="source-speech"[^>]*><summary>附录 · 原片听写<\/summary>/);
  });
  await test('A4 actual four-group middle and historical full v5 reuse retain separate source facts',async()=>{
   const four=planReviewBoards(input(c.barelyFour)).plans[0];assert.equal(four.rows.filter(r=>r.stage==='original').length,4);assert(four.reuse.some(r=>r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L04'))&&r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L06'))));
@@ -293,8 +309,8 @@ try{
   const board={...prepared.plans[0],rows:[...prepared.plans[0].rows,second]};
   const page=()=>humanReviewBoardPage(board,prepared.data,prepared.lint);
   assert(page().includes('同一张原图与同一裁切'));
-  assert(page().includes('活动价、佣金等合作条件'));
-  assert(page().includes('本商品的原片 Storyboard'));
+  assert(page().includes('请核对佣金等合作数字是否正确。'));
+  assert(page().includes('产品图＋Storyboard'));
   second.asset_hash='a'.repeat(64);
   assert(!page().includes('同一张原图与同一裁切'));
   second.asset_hash=first.asset_hash;
@@ -303,8 +319,8 @@ try{
   board.rows.pop();
   assert(!page().includes('同一张原图与同一裁切'));
   first.unit_id='unclassified';
-  assert(!page().includes('活动价、佣金等合作条件'));
-  assert(!page().includes('本商品的原片 Storyboard'));
+  assert(!page().includes('请核对佣金等合作数字是否正确。'));
+  assert(!page().includes('产品图＋Storyboard'));
   const output=await renderReviewBoards(await generateInput(),join(root,'ending-source-proof'),undefined,'human');
   const html=await readFile(output.artifacts[0].path,'utf8');
   const reference=join(root,'original-closing-proof.jpg');
@@ -415,6 +431,9 @@ try{
    const url=base+'/?'+new URLSearchParams({view:'panel_board',revision:saved.revision,boardIdentity:checked.boardIdentity});
    const html=await (await realFetch(url)).text();
    assert.equal((html.match(/看回看示意/g)??[]).length,1);
+   const boundStrip=html.match(/class="thumb-strip explanation-strip">([\s\S]*?)<\/div>/u)?.[1];
+   assert(boundStrip);
+   assert.deepEqual([...boundStrip.matchAll(/<figcaption>原片 ([^<]+)<\/figcaption>/gu)].map(match=>match[1]),['0秒','9秒']);
    assert(!html.includes('data:video')&&!html.includes('fixture-preview'));
    assert.equal(renders,0);
    assert.equal((await realFetch(url.replace(checked.boardIdentity,'wrong')+'&excerpt=1')).status,409);
@@ -515,29 +534,45 @@ try{
    assert.equal(checked.canApproveBlueprint,false,'an author check cannot count as independent approval');
    const opened=await board(checked.boardIdentity);
    assert.equal(opened.status,200,await (opened.ok?Promise.resolve(''):opened.text()));
-   assert.match(await opened.text(),/data-card="group-1"/);
-   assert.deepEqual(checked.reviewEndings.map((ending:{id:string})=>ending.id).sort(),['existing_partner','new_contact']);
+   const page=await opened.text();
+   assert.match(page,/data-card="group-1"/);
+   assert.match(page,/<h3>新建联达人<\/h3>/);
+   assert.match(page,/<h3>已合作达人<\/h3>/);
+   assert.equal(checked.reviewEndings,undefined,'ending assets are displayed, not submitted as choices');
+   assert.equal((page.match(/请核对佣金等合作数字是否正确。/gu)??[]).length,1);
+   assert.doesNotMatch(page,/内部审稿使用|需要你看一眼|独立口播审核|证据边界与未知|共用片头与教学主体/);
+   assert.equal(checked.manualNarrationReview,undefined);
+   assert.match(page,/data-blueprint-opinion=/);
+   assert.doesNotMatch(page,/type="checkbox"|选择表态|保存表态/);
    const suppliedReview={groups:checked.reviewGroups.map((group:{id:string})=>({id:group.id,decision:'先展示上嘴效果',stance:'accepted'})),endingIds:['new_contact']};
    const partialEnding=await action('produce_versions',checked.boardIdentity,undefined,suppliedReview);
    assert.equal(partialEnding.status,409);
-   assert.match((await partialEnding.json()).issue.message,/两个片尾/);
+   assert.equal((await partialEnding.json()).issue.kind,'binding');
    assert.equal((await productionTaskStore.load(projectId,task.taskId)).productionChildren,undefined);
    const pass=structuredClone(task.completed.blueprint.artifact);
    task.completed.blueprint.artifact={...pass,authorSelfCheck:'needs_human_review',
-    authorSelfCheckNotice:'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对'};
+    authorSelfCheckNotice:'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对',
+    authorSelfCheckFinding:{id:'S7',status:'unresolved',reason:'需要核对片头已经引用的数字'},
+    authorSelfCheckReferenceIssues:[{field:'S1.reference_ids[0]',material:'current_author_check_source'}]};
    await productionTaskStore.save(task);
    const needsBusiness=await status();
    assert.equal(needsBusiness.canConfirmBlueprint,false);
-   assert.equal(needsBusiness.blueprintMessage,'片尾合作条款待核实。');
-   assert.doesNotMatch(JSON.stringify(needsBusiness),/PRIVATE_S7_SENTINEL|片尾有待确认|authorSelfCheckNotice/);
-   assert.equal((await action('produce_versions',needsBusiness.boardIdentity)).status,409);
+   assert.doesNotMatch(JSON.stringify(needsBusiness),/PRIVATE_S7_SENTINEL|片尾合作条款待核实|片尾有待确认|authorSelfCheckNotice/);
+   const unresolved=await action('produce_versions',needsBusiness.boardIdentity,undefined,{scope:'whole_blueprint'});
+   assert.equal(unresolved.status,409);
+   assert.doesNotMatch(await unresolved.text(),/PRIVATE_S7_SENTINEL|待核实|自检|回执/);
+   assert.equal((await productionTaskStore.load(projectId,task.taskId)).productionChildren,undefined);
+   task.createdAt=Date.now()-task.input.budget.maxElapsedMs-1;
+   await productionTaskStore.save(task);
+   assert.match((await status()).blueprintMessage,/处理上限/,'the CTA prompt does not hide an expired task');
+   task.createdAt=originalCreatedAt;
    assert.equal(task.completed.blueprint.artifact.authorSelfCheckNotice,'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对');
    task.completed.blueprint.artifact=structuredClone(pass);
    // A saved but unprocessed edit invalidates confirmation even at the same revision.
    task.repairContext={pending_blueprint_feedback:{text:'核对本组卖点',revision:snapshot.revision}};
    await productionTaskStore.save(task);
    assert.equal((await status()).canConfirmBlueprint,false);
-   assert.equal((await action('produce_versions',checked.boardIdentity)).status,409);
+   assert.equal((await action('produce_versions',checked.boardIdentity,undefined,{scope:'whole_blueprint'})).status,409);
    task.completed.blueprint.artifact.requirementsDigest='d'.repeat(64);
    await productionTaskStore.save(task);
    assert.equal((await status()).blueprintRevision,undefined);
@@ -568,32 +603,50 @@ try{
    assert.deepEqual(savedFeedback.attempts,originalAttempts);
    assert.equal(launched,0);
    savedFeedback.createdAt=originalCreatedAt;
-   savedFeedback.completed.blueprint!.artifact=pass;
+   const referenceIssues=[{field:'S7.reference_ids[0]',material:'current_author_check_source'}];
+   savedFeedback.completed.blueprint!.artifact={...pass,authorSelfCheck:'pending',
+    authorSelfCheckReferenceIssues:referenceIssues};
    delete savedFeedback.repairContext;
    await productionTaskStore.save(savedFeedback);
+   assert.equal((await status()).canConfirmBlueprint,true,'an incomplete author attachment does not prevent whole-board approval');
+   // Exact legacy checkpoint shape from an invalid attachment with no bound business finding.
+   Object.assign(savedFeedback.completed.blueprint!.artifact,{authorSelfCheck:'needs_human_review',
+    authorSelfCheckNotice:'片尾素材中的合作条款还需核实。'});
+   await productionTaskStore.save(savedFeedback);
+   const previous=await status();
+   assert.equal(previous.canConfirmBlueprint,true,'a previously misclassified attachment is readable without a new review');
+   savedFeedback.blueprintReview={
+    revision:snapshot.revision,boardIdentity:previous.boardIdentity,
+    groups:[{id:checked.reviewGroups[0].id,decision:'旧版表态',stance:'changes'}],endings:[],
+   };
+   await productionTaskStore.save(savedFeedback);
    const ready=await status();
+   assert.equal(ready.boardIdentity,previous.boardIdentity);
    const readyBoard=await board(ready.boardIdentity);
    assert.equal(readyBoard.status,200);await readyBoard.arrayBuffer();
    assert.equal((await action('produce_versions','stale',undefined,{scope:'whole_blueprint'})).status,409);
+   assert.equal((await action('approve_blueprint',ready.boardIdentity,undefined,{scope:'whole_blueprint'})).status,409);
    assert.equal((await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint',endingIds:['new_contact']})).status,409);
-   const firstGroup=ready.reviewGroups[0];
-   const stance=(value:'changes'|'accepted')=>({groups:[{id:firstGroup.id,decision:'Fixture decision',stance:value}],endingIds:[]});
-   assert.equal((await action('save_blueprint_review',ready.boardIdentity,undefined,stance('changes'))).status,200);
-   const unchangedBoard=await status();
-   assert.equal(unchangedBoard.boardIdentity,ready.boardIdentity);
-   assert.equal(unchangedBoard.savedReview.groups[0].stance,'changes');
-   assert.equal((await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'})).status,409);
+   assert.equal(ready.savedReview,undefined);
+   const legacyWrite=await action('save_blueprint_review',ready.boardIdentity,undefined,suppliedReview);
+   assert.equal(legacyWrite.status,409);
+   assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintReview?.groups[0]?.stance,'changes');
    assert.equal(launched,0);
-   assert.equal((await action('save_blueprint_review',ready.boardIdentity,undefined,stance('accepted'))).status,200);
    const approved=await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'});
    assert.equal(approved.status,200,await approved.clone().text());
    const {setTimeout:timeout}=await import('node:timers/promises');
    assert.equal(await Promise.race([dispatched.promise.then(()=>true),timeout(5000,false,{ref:false})]),true,'the approved batch reaches the worker');
    const published=await productionTaskStore.load(projectId,task.taskId);
    assert.equal(published.blueprintReview?.scope,'whole_blueprint');
-   assert.deepEqual(published.blueprintReview?.groups,stance('accepted').groups,'whole-board confirmation keeps saved stances');
-   assert.deepEqual(published.blueprintReview?.endings,ready.reviewEndings);
+   assert.deepEqual(published.completed.blueprint?.artifact.authorSelfCheckReferenceIssues,referenceIssues);
+   assert.equal(published.completed.blueprint?.artifact.authorSelfCheck,'needs_human_review','the human review does not rewrite the original checkpoint');
+   assert.deepEqual(published.blueprintReview?.groups,[],'empty opinions and no stances can confirm');
+   const {blueprintReviewEndings}=await import('./production-panel-review');
+   assert.deepEqual(published.blueprintReview?.endings,blueprintReviewEndings(doc),'the host binds both actual endings');
    assert.deepEqual(published.productionChildren?.map(child=>child.audience),['existing_partner','new_contact']);
+   assert.equal((await action('produce_versions','stale',undefined,{scope:'whole_blueprint'})).status,409);
+   assert.equal((await action('produce_versions',ready.boardIdentity,undefined,suppliedReview)).status,409);
+   assert.equal((await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'})).status,200);
    assert.equal(launched,1,'common body starts once and the second ending waits');
   }finally{await new Promise<void>(r=>server.close(()=>r()));}
  });
@@ -676,7 +729,8 @@ try{
    assert.deepEqual(await action.json(),{accepted:true,saved:true,dispatched:true});
    await entered.promise;
    const running=await productionTaskStore.load(projectId,task.taskId);
-   assert.deepEqual(received,[{stage:'blueprint',feedback:`［${proposal.opinionConfirmation.rows[0].label}］${text}`,revision:snapshot.revision}]);
+   assert.match(proposal.opinionConfirmation.rows[0].label,/^第 2 组 · /u);
+   assert.deepEqual(received,[{stage:'blueprint',feedback:`［第 2 组］${text}`,revision:snapshot.revision}]);
    assert.deepEqual(running.blueprintFeedbackUnitIds,[secondUnit.unit_id]);
    assert.equal(running.blueprintOpinions?.confirmed,true);
    assert.equal(running.status,'running');assert.equal(running.repairs,task.repairs+1);

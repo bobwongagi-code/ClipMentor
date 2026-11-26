@@ -16,7 +16,7 @@ import { requestPreviewReview } from '../../clipmentor/request-preview-review';
 import { requestClipMentorCopyReview } from '../../clipmentor/request-copy-review';
 import { AnalysisEvidenceInputError, appendAnalysisFindings } from '../../clipmentor/append-findings';
 import { checkCopyProduction, copyReviewSubject, isCopyProductionReview, validatePicturePlanProjection } from '../../clipmentor/production-gate';
-import { checkSourceBreakdown, copyPreparationReady, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys, currentUnitPointIds, picturePlanCopyError, PicturePlanIssue, registerGroupedPlayback } from '../../clipmentor/source-breakdown';
+import { checkSourceBreakdown, copyPreparationReady, prepareSourceBreakdownWrite, isSourceBreakdown, breakdownRevisionError, blueprintRevisionError, selectedPointChanges, copyLineKeys, currentUnitPointIds, picturePlanCopyError, PicturePlanIssue, registerGroupedPlayback } from '../../clipmentor/source-breakdown';
 import { deliveryPictureBindings } from '../../clipmentor/delivery-sections';
 import {deliveryOpeningTextIssue,deliverySectionFieldIssues,deliverySectionsFromDoc,missingDeliverySectionKinds}from'../../clipmentor/delivery-bindings';
 import {readClipMentorStoryboard} from '../../clipmentor/read-storyboard';
@@ -354,7 +354,11 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         internal.current_picture_plan = input.plan_id;
         unit.line_guidance = input.line_guidance;
       } else if (args.action === 'set_source_breakdown') {
-        if (!isSourceBreakdown(args.record)) return { error: 'Invalid source breakdown; nothing changed' };
+        const { record, issues } = prepareSourceBreakdownWrite(args.record);
+        if (issues.length || !isSourceBreakdown(record)) return {
+          error: 'Invalid source breakdown; nothing changed',
+          ...(issues.length ? { issues, next_step: '只修列出的 point_id 和字段。buying_concern 只写在 point；exemplar 填单个 principle ID。' } : {}),
+        };
         const confirmed = new Set<string>();
         for (const review of a.reviews) {
           if (review.state==='needs_revision'||review.source_hash !== a.source.sourceContentHash
@@ -365,10 +369,10 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
           if (decision?.action==='confirmed'||(review.state==='confirmed'
             &&review.content_digest===await pointDigest(a,review.point_id))) confirmed.add(review.point_id);
         }
-        const error = breakdownRevisionError(a.source_breakdown, args.record, confirmed);
+        const error = breakdownRevisionError(a.source_breakdown, record, confirmed);
         if (error) return { error };
-        const changes = selectedPointChanges(a.source_breakdown, args.record);
-        a.source_breakdown = structuredClone(args.record);
+        const changes = selectedPointChanges(a.source_breakdown, record);
+        a.source_breakdown = structuredClone(record);
         const check = checkSourceBreakdown({ ...doc, clipMentorAnalysis: a });
         // Incomplete coverage is saved as pending so the Agent can read and repair it; invalid references are not evidence.
         if (check.issues.some((i) => ['source_hash_missing_or_changed', 'segment_time_out_of_bounds', 'segment_evidence_kind_or_reference', 'segment_evidence_outside_range', 'point_segment_missing', 'unit_segment_missing', 'breakdown_unit_missing', 'coverage_point_missing', 'supporting_primary_missing', 'unrecognized_unit_field', 'original_playback_out_of_bounds', 'original_segment_outside_playback'].includes(i.code))) return { error: 'Resolve breakdown source/reference issues before saving', breakdown_check: check };

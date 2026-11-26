@@ -195,7 +195,7 @@ export async function verifyProductionColdStart(
   const parentUrl=`http://127.0.0.1:${coldAddress.port}/api/clipmentor/production-task?view=panel&projectId=${partialParent.projectId}`;
   const replay=await fetch(parentUrl,{method:'POST',headers:{Origin:`http://127.0.0.1:${coldAddress.port}`,
    'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
-   body:JSON.stringify({action:'produce_versions',revision:liveOutput.blueprintApproval!.sourceRevision})});
+   body:JSON.stringify({action:'produce_versions',revision:liveOutput.blueprintApproval!.sourceRevision,blueprintReview:{scope:'whole_blueprint'}})});
   assert.equal(replay.status,200,'retrying the parent action also tolerates the confirmed deletion');
   assert.deepEqual(new Set(visited),new Set([queued.taskId,resumed.taskId,unknown.taskId,supersededRetry.taskId,legacyOutput.taskId,liveOutput.taskId]));
  }finally{await new Promise<void>((r,e)=>coldServer.close(err=>err?e(err):r()));}

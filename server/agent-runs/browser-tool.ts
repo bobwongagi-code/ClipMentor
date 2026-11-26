@@ -25,6 +25,7 @@ import {
 
 export interface ServerToolHost {
   normalizeArgs?(name:string,args:Record<string,unknown>):Record<string,unknown>;
+  afterFailure?(name:string,args:Record<string,unknown>,result:unknown):void;
   execute(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;
   beforeRequest():Promise<void>;
   signal?:AbortSignal;
@@ -120,6 +121,7 @@ export async function executeBrowserTool(
       activation.toolFailures.record(schema.name,{success:false,result:shaped.result});
       const r=shaped.result as Record<string,unknown>;
       pushRunEvent(run,'server-tool-diagnostic',{toolCallId,name:schema.name,...(structuredToolFailure(r)??{error:toolFailureReason(r),production_gate:r.production_gate,issues:r.issues,breakdown_check:r.breakdown_check})});
+      activation.host.afterFailure?.(schema.name, args, delivered);
       return shaped.result;
     }
     activation.toolFailures.record(schema.name, { success: true, result: shaped.result });

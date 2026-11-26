@@ -79,11 +79,50 @@ const range = (v: unknown): v is [number, number] => Array.isArray(v) && v.lengt
   && v.every((n) => typeof n === 'number' && Number.isFinite(n)) && v[0] >= 0 && v[1] > v[0];
 const unique = (ids: string[]) => new Set(ids).size === ids.length;
 
-function teachingBasis(value:unknown):value is NonNullable<SourceBreakdown['points'][number]['teaching_basis']>{
- return row(value)&&Object.keys(value).length===8
-  &&['selling_point','method','connection','must_capture','claim_limit','difference'].every(k=>text(value[k])&&(value[k] as string).length<=500)
-  &&strings(value.evidence_ids)&&value.evidence_ids.length>0&&value.evidence_ids.length<=8&&unique(value.evidence_ids)
-  &&teachingPrinciples.some(id=>id===value.exemplar);
+const basisTextFields = ['selling_point', 'method', 'connection', 'must_capture', 'claim_limit', 'difference'];
+const basisFields = [...basisTextFields, 'evidence_ids', 'exemplar'];
+
+function teachingBasisIssues(basis: Row, add: (field: string, code: string) => void) {
+  for (const field of basisTextFields) {
+    const entry = basis[field];
+    if (!text(entry) || entry.length > 500) add(field, 'expected_nonempty_text_up_to_500_chars');
+  }
+  const ids = basis.evidence_ids;
+  if (!strings(ids) || ids.length < 1 || ids.length > 8 || !unique(ids)) add('evidence_ids', 'expected_one_to_eight_unique_ids');
+  if (!teachingPrinciples.some(id => id === basis.exemplar)) add('exemplar', 'expected_one_principle_id');
+  for (const field of Object.keys(basis)) {
+    if (!basisFields.includes(field)) add(field, field === 'buying_concern' ? 'conflicts_with_point_buying_concern' : 'unexpected_field');
+  }
+}
+
+function teachingBasis(value: unknown): value is NonNullable<SourceBreakdown['points'][number]['teaching_basis']> {
+  if (!row(value)) return false;
+  let valid = true;
+  teachingBasisIssues(value, () => { valid = false; });
+  return valid;
+}
+
+/** The point owns buying_concern. Only discard a verbatim copy at the write boundary. */
+export function prepareSourceBreakdownWrite(value: unknown) {
+  if (!row(value) || !Array.isArray(value.points)) return { record: value, issues: [] };
+  const issues: Array<{ point_id: string; field: string; code: string }> = [];
+  const points = value.points.map((point: unknown, index: number) => {
+    if (!row(point) || point.teaching_basis === undefined) return point;
+    const basis = point.teaching_basis;
+    const point_id = text(point.point_id) ? point.point_id : String(index);
+    if (!row(basis)) {
+      issues.push({ point_id, field: 'teaching_basis', code: 'expected_record' });
+      return point;
+    }
+    const { buying_concern: duplicate, ...rest } = basis;
+    const hasDuplicate = Object.hasOwn(basis, 'buying_concern');
+    const redundant = hasDuplicate && text(duplicate) && duplicate === point.buying_concern;
+    const prepared = redundant ? rest : basis;
+    const add = (field: string, code: string) => issues.push({ point_id, field: 'teaching_basis.' + field, code });
+    teachingBasisIssues(prepared, add);
+    return redundant ? { ...point, teaching_basis: prepared } : point;
+  });
+  return { record: { ...value, points }, issues };
 }
 
 export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
