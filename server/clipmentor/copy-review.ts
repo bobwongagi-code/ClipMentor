@@ -1,6 +1,6 @@
 import {externalCall,readSavedExternalResponse} from './external-call';
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
-import {deliveryReview} from '../../src/clipmentor/delivery-sections';
+import {deliveryReview,deliveryReviewCriteria} from '../../src/clipmentor/delivery-sections';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -54,6 +54,7 @@ export interface CopyReviewDependencies {
   frame(file: string, seconds: number, output: string, crop?: FrameCrop): Promise<string>;
   visualCriteria?(projectId:string):Promise<BoundVisualCriteria|undefined>;
   requirements?(projectId:string):Promise<{policy:HandoffPolicy|null;opening?:OpeningComparisonCriterion;teachingBrief?:FrozenTeachingBrief;endingPictures?:boolean}>;
+  sharedBodyReview?(projectId:string):ReturnType<typeof import('./production-continuation').loadSharedCopyReview>;
   run(prompt: string, frames: ReviewFrame[], runId: string, projectId: string, signal: AbortSignal, preparationIdentity?:string): Promise<unknown>;
 }
 
@@ -152,10 +153,20 @@ export function fitReviewSourceSamples<T extends {unit_id:string;phase:'context'
   return packed;
 }
 
-type ContentReview = {opening?:OpeningComparisonCriterion;openingDigest?:string;teachingBrief?:FrozenTeachingBrief;teachingDigest?:string;endingPictures?:true};
-async function reviewRequirements(deps:CopyReviewDependencies,projectId:string){
+type ReusedBody = {
+  producerReviewId:string;producerDigest:string;
+  units:CopyProductionReview['units'];teaching:TeachingEnvelope['review']['units'];
+  openingChecks:unknown[];visualChecks:NonNullable<CopyProductionReview['visual_criteria_checks']>;
+};
+type ContentReview = {reusedBody?:ReusedBody;opening?:OpeningComparisonCriterion;openingDigest?:string;teachingBrief?:FrozenTeachingBrief;teachingDigest?:string;endingPictures?:true};
+async function reviewRequirements(deps:CopyReviewDependencies,projectId:string,operationId?:string){
   if(!deps.requirements)return {visual:await deps.visualCriteria?.(projectId),content:undefined};
-  const {policy,opening,teachingBrief,endingPictures}=await deps.requirements(projectId);
+  const {policy,opening,teachingBrief,endingPictures}=await deps.requirements(projectId).catch(error=>{
+    const code=error instanceof Error?error.message:undefined;
+    if(code==='production_confirmed_groups_missing'||code==='production_confirmed_groups_changed')
+      throw failure(code,0,operationId);
+    throw error;
+  });
   const content:ContentReview={...(opening?{opening,openingDigest:await handoffDigest(opening)}:{}),
     ...(teachingBrief?{teachingBrief,teachingDigest:await handoffDigest(teachingBrief)}:{}),
     ...(endingPictures?{endingPictures:true}:{})};
@@ -169,7 +180,70 @@ async function currentReviewContractMatches(deps:CopyReviewDependencies,projectI
     &&content?.teachingDigest===teachingDigest&&content?.endingPictures===endingPictures;
 }
 
+async function reusableBody(request:CopyReviewRequest,deps:CopyReviewDependencies,
+ criteria:BoundVisualCriteria|undefined,content:ContentReview|undefined):Promise<ReusedBody|undefined>{
+ if(!content?.teachingBrief?.confirmedGroups?.length)return;
+ const former=await deps.sharedBodyReview?.(request.projectId);
+ if(!former)return;
+ const {receipt,briefing,source,sourceSrc}=former;
+ const previous=receipt.teaching_review;
+ const shared=({delivery_sections,...packet}:CopyReviewRequest['packet'])=>({
+  ...packet,delivery_sections:delivery_sections?.filter(section=>section.kind==='performance_opening'),
+ });
+ const sections=request.packet.delivery_sections??[];
+ const endings=sections.filter(section=>section.kind==='creator_invitation');
+ if(!previous||receipt.verdict!=='pass'||receipt.teaching_brief_digest!==content.teachingDigest
+  ||digestValue(briefing)!==digestValue(content.teachingBrief)||receipt.opening_comparison_digest!==content.openingDigest
+  ||request.source.hash!==source.sourceContentHash||request.source.src!==sourceSrc
+  ||request.source.fps!==source.fps||request.source.duration!==source.duration_seconds
+  ||digestValue(shared(previous.packet))!==digestValue(shared(request.packet))
+  ||endings.length!==1||endings[0].section_id!=='new_contact'||sections.length!==2)return;
+ const opening=sections.find(section=>section.kind==='performance_opening')!;
+ const reusedVisual=criteria?.entries.filter(({criterion})=>criterion.sectionId===opening.section_id)??[];
+ const visualChecks=reusedVisual.flatMap(entry=>{
+  if(!former.visual?.entries.some(candidate=>digestValue(candidate)===digestValue(entry)))return [];
+  const check=receipt.visual_criteria_checks?.find(check=>check.id===entry.criterion.id&&check.answer==='yes');
+  return check?[check]:[];
+ });
+ if(visualChecks.length!==reusedVisual.length)return;
+ const bindings=[opening.picture,...(opening.voice.existing_audio?[opening.voice.existing_audio]:[]),
+  ...reusedVisual.map(entry=>({src:entry.src,sha256:entry.sha}))];
+ for(const binding of bindings){
+  const file=deps.resolve(decodeURIComponent(binding.src.slice('/media/uploads/'.length)));
+  if(!file||await deps.hash(file).catch(()=>null)!==binding.sha256)
+   throw failure('source_unavailable_or_changed',0,request.operationId);
+ }
+ return {producerReviewId:receipt.reviewer_run_id,producerDigest:receipt.content_digest,
+  units:receipt.units,teaching:previous.review.units,visualChecks,
+  openingChecks:receipt.delivery_checks?.filter(check=>object(check)&&check.section_id===opening.section_id)??[]};
+}
+
+function endingReviewCriteria(criteria:BoundVisualCriteria|undefined,reused:ReusedBody|undefined){
+ if(!reused||!criteria)return criteria;
+ const entries=criteria.entries.filter(entry=>!reused.visualChecks.some(check=>check.id===entry.criterion.id));
+ return entries.length?{...criteria,entries}:undefined;
+}
+
+function endingReviewPrompt(request:CopyReviewRequest,criteria:BoundVisualCriteria|undefined,reused:ReusedBody,
+ confirmedGroups:FrozenTeachingBrief['confirmedGroups'],inlineFrames:boolean){
+ const scoped=request.packet.delivery_sections!.filter(section=>section.kind==='creator_invitation');
+ const projected=buildCopyTeachingReviewRequest([{case_id:'current',packet:request.packet}]).input.cases[0].packet;
+ return '本轮只独立复核新建联片尾。共用正文和片头已有与现行材料一致的独立回执。\n'
+  +(inlineFrames?'片尾计划合成帧附在本请求。':'先用 read_review_frames 读取全部片尾图像批次。')
+  +'核对片尾当前文案、字幕、事实边界和所附计划合成帧。不重新审核正文，不写替换稿。只返回 JSON。'
+  +'顶层仅填 delivery_checks'+(criteria?' 和 visual_criteria_checks':'')+'。'
+  +deliveryReviewCriteria(scoped)
+  +' 必须返回 ending_picture:{asset_id:实际观察的片尾素材ID,view:"planned_composition",both_visible:yes/no/unknown,observation:可辨内容}。只核绑定填 unknown。'
+  +(criteria?'逐项比较参照和片尾计划合成图，填写 visual_criteria_checks:[{id,answer:yes/no/unknown,observation,picture_stage}]。picture_stage 原样填写。'
+   +JSON.stringify(criteria.entries.map(entry=>entry.criterion)):'')
+  +' 已确认组选题只用于限定范围。数据：'+JSON.stringify({confirmedGroups,product:projected.product,
+   source_evidence:projected.source_evidence.filter(evidence=>scoped.some(section=>section.evidence_ids.includes(evidence.evidence_id))),
+   delivery_sections:projected.delivery_sections?.filter(section=>section.kind==='creator_invitation')})
+  +' 共用回执绑定：'+digestValue(reused);
+}
+
 function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,mode:false|'legacy-selection'|'selection-v1'=false): string {
+  if(content?.reusedBody)return endingReviewPrompt(request,endingReviewCriteria(criteria,content.reusedBody),content.reusedBody,content.teachingBrief?.confirmedGroups,inlineFrames);
   const selection=mode==='selection-v1';
   const confirmed=content?.teachingBrief?.confirmedGroups;
   const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }],selection,!!confirmed);
@@ -242,6 +316,21 @@ function receiptFromRaw(input: unknown, request: CopyReviewRequest,criteria?:Bou
     if(!(error instanceof ReviewReferenceIssues))throw error;
     throw new CopyReviewError({code:'response_receipt_invalid',stage:'response_validation',requestsAttempted:1,retryable:false},JSON.stringify(error.issues));
   }
+  const reused=content?.reusedBody;
+  if(reused){
+    const ending=request.packet.delivery_sections!.find(section=>section.kind==='creator_invitation')!;
+    const scoped=endingReviewCriteria(criteria,reused);
+    const visual=object(raw)?raw.visual_criteria_checks:undefined;
+    if(!object(raw)||Object.keys(raw).some(key=>!['delivery_checks','visual_criteria_checks'].includes(key))
+      ||!Array.isArray(raw.delivery_checks)||raw.delivery_checks.length!==1
+      ||!object(raw.delivery_checks[0])||raw.delivery_checks[0].section_id!==ending.section_id
+      ||(scoped?(!Array.isArray(visual)||visual.length!==scoped.entries.length
+       ||scoped.entries.some(({criterion})=>visual.filter(check=>object(check)&&check.id===criterion.id).length!==1)):visual!==undefined))
+      throw failure('response_scope_invalid',1);
+    raw={cases:[{case_id:'current',units:reused.teaching}],copy_units:reused.units,
+      delivery_checks:[...reused.openingChecks,...raw.delivery_checks],
+      ...(criteria?{visual_criteria_checks:[...reused.visualChecks,...(Array.isArray(visual)?visual:[])]}:{})};
+  }
   if (!object(raw) || !Array.isArray(raw.cases) || raw.cases.length !== 1 || !object(raw.cases[0])
     || raw.cases[0].case_id !== 'current' || !Array.isArray(raw.copy_units)
     || raw.copy_units.length !== request.subject.units.length
@@ -293,6 +382,7 @@ function receiptFromRaw(input: unknown, request: CopyReviewRequest,criteria?:Bou
   const receipt = { scope: 'copy_and_planned_picture_only', protocol: COPY_REVIEW_PROTOCOL,
     analysis_revision: request.subject.revision, content_digest: request.subject.digest,
     author_run_id: request.authorRunId, reviewer_run_id: `clipmentor-review:${request.operationId}`,
+    ...(reused?{shared_body_review:{reviewer_run_id:reused.producerReviewId,content_digest:reused.producerDigest}}:{}),
     reviewed_at: Date.now(), verdict, units, ...(Array.isArray(raw.delivery_checks)?{delivery_checks:raw.delivery_checks}:{}),
     ...(content?{l1_evidence_contract:'v1' as const}:{}),...(content?.openingDigest?{opening_comparison_digest:content.openingDigest}:{}),
     ...(content?.endingPictures?{ending_picture_contract:'v1' as const}:{}),
@@ -559,19 +649,24 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
     if(prior)return prior;
     if(!preparing)throw failure('operation_unavailable',0,request.operationId);
   }
-  const {visual,content}=await reviewRequirements(deps,request.projectId);
+  const {visual,content:liveContent}=await reviewRequirements(deps,request.projectId,request.operationId);
   assertVisualCriteriaPlan(visual,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
   const criteria=plannedVisualCriteria(visual);
-  if(prior&&prior.receipt.teaching_brief_digest!==content?.teachingDigest)
+  const groups=liveContent?.teachingBrief?.confirmedGroups;
+  if(groups&&!prior&&digestValue(groups.map(group=>[group.id,group.points.map(point=>[point.id,point.question,point.treatment])]))
+    !==digestValue(request.packet.units.map(unit=>[unit.unit_id,unit.points.map(point=>
+      [point.point_id,point.question,point.treatment??'explain'])])))
+    throw failure('production_confirmed_groups_changed',0,request.operationId);
+  if(prior&&prior.receipt.teaching_brief_digest!==liveContent?.teachingDigest)
     throw failure('review_requirements_changed',prior.requestsAttempted===0||prior.requestsAttempted===1?prior.requestsAttempted:null,request.operationId);
   if(prior&&(prior.receipt.visual_criteria_digest!==criteria?.digest
-    ||prior.receipt.opening_comparison_digest!==content?.openingDigest
-    ||(prior.receipt.ending_picture_contract==='v1')!==!!content?.endingPictures
-    ||!!prior.receipt.l1_evidence_contract!==!!content))throw failure('operation_unavailable',1,request.operationId);
-  if(prior?.receipt.verdict==='pass'&&content?.opening?.results
-    &&deliveryReview(request.packet.delivery_sections??[],prior.receipt.delivery_checks,content.opening,!!content.endingPictures).verdict!=='pass')
+    ||prior.receipt.opening_comparison_digest!==liveContent?.openingDigest
+    ||(prior.receipt.ending_picture_contract==='v1')!==!!liveContent?.endingPictures
+    ||!!prior.receipt.l1_evidence_contract!==!!liveContent))throw failure('operation_unavailable',1,request.operationId);
+  if(prior?.receipt.verdict==='pass'&&liveContent?.opening?.results
+    &&deliveryReview(request.packet.delivery_sections??[],prior.receipt.delivery_checks,liveContent.opening,!!liveContent.endingPictures).verdict!=='pass')
     throw failure('review_requirements_changed',1,request.operationId);
-  if(!prior&&content?.opening&&(request.packet.delivery_sections??[]).filter(section=>section.kind==='performance_opening').length!==1)
+  if(!prior&&liveContent?.opening&&(request.packet.delivery_sections??[]).filter(section=>section.kind==='performance_opening').length!==1)
     throw failure('opening_comparison_section_missing',0,request.operationId);
   if (!prior && request.packet.units.some(u => u.source_context?.scope !== 'frozen_task_scope')) throw failure('source_review_scope_missing', 0, request.operationId);
   let file: string | null;
@@ -580,12 +675,16 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
     if (!file || await deps.hash(file) !== request.source.hash) throw new Error();
   } catch { throw failure('source_unavailable_or_changed', prior ? 1 : 0, request.operationId); }
   if (prior) return prior;
+  const reusedBody=await reusableBody(request,deps,criteria,liveContent);
+  const content=reusedBody?{...liveContent,reusedBody}:liveContent;
+  const scopedCriteria=endingReviewCriteria(criteria,reusedBody);
+  const scopedDelivery=request.packet.delivery_sections?.filter(section=>!reusedBody||section.kind==='creator_invitation')??[];
   let positions: ReturnType<typeof reviewSourceSamples>;
-  try { positions = reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
+  try { positions = reusedBody?[]:reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
   const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content,false,'selection-v1');
   const reviewContract=content?{review_contract:{visual:criteria,content}}:{};
   const criteriaDigest=content?digest(JSON.stringify(['l1-evidence-v1',criteria?.digest,content.openingDigest,
-    ...(content.teachingBrief?[content.teachingBrief]:[]),...(content.endingPictures?['ending-picture-v1']:[])])):criteria?.digest??null;
+    ...(content.teachingBrief?[content.teachingBrief]:[]),...(content.endingPictures?['ending-picture-v1']:[]),...(reusedBody?[digestValue(reusedBody)]:[])])):criteria?.digest??null;
   if(preparing&&preparing.criteria_digest!==criteriaDigest)
     throw failure(content?'review_requirements_changed':'operation_unavailable',0,request.operationId);
   if(outerSignal?.aborted)throw failure('review_cancelled_or_timed_out',0,request.operationId);
@@ -616,12 +715,12 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
     temporary=workspace;
     stage = 'frames_unavailable';
     const frames: ReviewFrame[] = [];
-    const packedPositions=fitReviewSourceSamples(positions,(criteria?.entries.length??0)+(request.packet.delivery_sections??[]).reduce((n,s)=>n+(s.picture.layout?deliveryLayoutStages(s.picture).length:s.picture.crop?2:1),0));
+    const packedPositions=fitReviewSourceSamples(positions,(scopedCriteria?.entries.length??0)+scopedDelivery.reduce((n,s)=>n+(s.picture.layout?deliveryLayoutStages(s.picture).length:s.picture.crop?2:1),0));
     for (const [i, p] of packedPositions.entries()) {
       outerSignal?.throwIfAborted();
       frames.push({ ...p, base64: await capture(p,file!,join(temporary, `${i}.jpg`)) });
     }
-    for(const section of request.packet.delivery_sections??[]){
+    for(const section of scopedDelivery){
       const picture=section.picture;let assetFile:string|null=null;
       const meta={unit_id:section.section_id,phase:'delivery' as const,source_seconds:0,asset_id:picture.asset_id};
       try{assetFile=deps.resolve(decodeURIComponent(picture.src.slice('/media/uploads/'.length)));if(!assetFile||await deps.hash(assetFile)!==picture.sha256)throw new Error('Delivery asset unavailable or changed');}
@@ -640,7 +739,7 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
       }
       try{if(await deps.hash(assetFile!)!==picture.sha256)throw new Error('Delivery asset changed');}catch(error){frameFailure={...meta,reason:'asset_unavailable_or_changed'};throw error;}
     }
-    if(criteria)for(const frame of await visualReferenceFrames(criteria,deps))frames.push({unit_id:frame.criterion.id,phase:'reference',source_seconds:frame.criterion.reference.seconds,base64:frame.base64});
+    if(scopedCriteria)for(const frame of await visualReferenceFrames(scopedCriteria,deps))frames.push({unit_id:frame.criterion.id,phase:'reference',source_seconds:frame.criterion.reference.seconds,base64:frame.base64});
     stage = 'source_unavailable_or_changed';
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed');
     stage = 'review_storage_failed';
@@ -653,6 +752,8 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
       Object.assign(error,{preparationConfigurationChanged:true});throw error;
     }
     if(content&&!await currentReviewContractMatches(deps,request.projectId,criteria?.digest,content))
+      throw failure('review_requirements_changed',0,request.operationId);
+    if(reusedBody&&digestValue(reusedBody)!==digestValue(await reusableBody(request,deps,criteria,content)??null))
       throw failure('review_requirements_changed',0,request.operationId);
     outerSignal?.throwIfAborted();
     attempts = 1;
@@ -748,6 +849,7 @@ export async function runIsolatedCodexReview(prompt: string, frames: ReviewFrame
 export function copyReviewDependencies(): CopyReviewDependencies {
   return { directory: join(runtimeProfile().rootDir, 'clipmentor-copy-review'), resolve: resolveUploadFile, hash: sha256File,
     async requirements(projectId){const {productionCopyRequirements}=await import('./production-task');return productionCopyRequirements(projectId);},
+    async sharedBodyReview(projectId){const {loadSharedCopyReview}=await import('./production-continuation');return loadSharedCopyReview(projectId);},
     // Source samples are snapped to frame starts. Rounding milliseconds upward can select
     // the next frame, or EOF for the last frame; seek no later than the requested instant.
     async frame(file, seconds, output, crop) { await extractOneFrame(file, sourceFrameSeekMs(seconds * 1000), output, true, crop); return (await readFile(output)).toString('base64'); },

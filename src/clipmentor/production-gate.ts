@@ -83,6 +83,7 @@ export interface CopyProductionReview {
   verdict: Verdict;
   units: CopyUnitJudgment[];
   teaching_review?: TeachingEnvelope;
+  shared_body_review?:{reviewer_run_id:string;content_digest:string};
   delivery_checks?: unknown[];
   l1_evidence_contract?: 'v1';
   opening_comparison_digest?: string;
@@ -239,6 +240,9 @@ export function assessGroupReview(v: unknown, unit?: TeachingPacket['units'][num
 }
 export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
   return row(v) && v.scope === 'copy_and_planned_picture_only' && text(v.protocol)
+    && (v.shared_body_review===undefined||row(v.shared_body_review)&&text(v.shared_body_review.reviewer_run_id)
+      &&v.shared_body_review.reviewer_run_id!==v.reviewer_run_id
+      &&typeof v.shared_body_review.content_digest==='string'&&/^[a-f0-9]{64}$/.test(v.shared_body_review.content_digest))
     && (v.l1_evidence_contract === undefined || v.l1_evidence_contract === 'v1')
     && (v.opening_comparison_digest === undefined || typeof v.opening_comparison_digest === 'string' && /^[a-f0-9]{64}$/.test(v.opening_comparison_digest))
     && (v.ending_picture_contract === undefined || v.ending_picture_contract === 'v1')

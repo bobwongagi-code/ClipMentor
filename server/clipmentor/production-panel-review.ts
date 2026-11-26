@@ -22,7 +22,7 @@ export function panelReviewIssue(error:unknown){
   return {kind:'binding',message:'原片分析已暂停，已上传素材仍在。'} as const;
  const opinionIssue=message.match(/blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\n]+)$/u);
  if(opinionIssue)return {kind:'content',message:opinionIssue[1]+(message.includes('blueprint_repair_no_progress')?' 同一问题再次出现，修改已暂停。':'')} as const;
- if(/suspected_gate_defect|门禁问题/.test(message))
+ if(/suspected_gate_defect|门禁问题|teaching_confirmed_scope_requires_maintenance|teaching_whole_film_confirmed_criterion_invalid|production_confirmed_groups_(missing|changed)/.test(message))
   return {kind:'gate',message:'制作已暂停，当前进度已保存。'} as const;
  if(/^(?:Error: )?copy_review_confirmed_selection_conflict$/.test(message))
   return {kind:'gate',message:'审核提出了已确认范围外的内容，现有讲解已保留。'} as const;

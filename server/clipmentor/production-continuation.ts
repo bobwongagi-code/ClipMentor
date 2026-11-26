@@ -15,23 +15,12 @@ import {runProjectMigrations} from '../../src/persist/migrations';
 import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
 import {productionFeedbackAnchor} from './production-feedback';
 import {confirmedTeachingDigest} from './production-teaching-baseline';
+import {boundVisualCriteria,plannedVisualCriteria,visualCriteriaPlanApproved} from './visual-done-criteria';
 import type {ProjectDoc} from '../../src/editor/types';
-import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
-import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,type FrozenTeachingBrief,type ProductionTask} from './production-task';
+import {HANDOFF_TEMPLATE_VERSION,handoffDigest,type HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {createProductionTask,latestPanelProductionTask,productionCopyRequirements,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,confirmedGroupsFromBlueprint,type ProductionTask} from './production-task';
 
 export type ProductionAudience='new_contact'|'existing_partner';
-
-export function confirmedGroupsFromBlueprint(doc:ProjectDoc):FrozenTeachingBrief['confirmedGroups']{
- const breakdown=doc.clipMentorAnalysis?.source_breakdown;
- return breakdown?.units.map(unit=>({id:unit.unit_id,
-  ...(unit.teaching_selection?.decision?{decision:unit.teaching_selection.decision}:{}),
-  ...(unit.teaching_selection?.first_glance?{firstGlance:unit.teaching_selection.first_glance}:{}),
-  points:unit.coverage.flatMap(({point_id,treatment})=>{
-   const point=breakdown.points.find(p=>p.point_id===point_id);
-   return point?[{id:point_id,question:point.teaching_question,treatment,
-    ...(point.teaching_basis?.claim_limit?{boundary:point.teaching_basis.claim_limit}:{})}]:[];
-  })}));
-}
 
 /** The current production command is generated from the confirmed mode, never appended to a past repair command. */
 export function continuationBrief(productName:string,audience:ProductionAudience){
@@ -77,6 +66,8 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
   return existing;
  }
  const doc=selectProductionAudience(source.doc,audience);
+ const confirmedGroups=parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?confirmedGroupsFromBlueprint(doc):undefined;
+ if(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&!confirmedGroups?.length)throw Error('production_confirmed_groups_missing');
  const remainingModels=parent.input.budget.model-parent.attempts.model;
  if(remainingModels<1)throw Error('本次制作已达到处理上限');
  const selectedRequirements=requirements?structuredClone(requirements):undefined;
@@ -98,12 +89,11 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  const saved=await loadOfflineStoredProject(projectId);
  if(!saved)throw Error('制作副本未保存');
  const teachingCriteria=selectedRequirements?.brief.doneCriteria.filter((criterion):criterion is string=>typeof criterion==='string')??[];
- const confirmedGroups=parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?confirmedGroupsFromBlueprint(doc):undefined;
  const approval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
   digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),
   ...(selectedRequirements?{requirements:selectedRequirements}:{}),
   ...(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{confirmedTeachingDigest:confirmedTeachingDigest(doc)}:{}),
-  ...(parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
+  ...(confirmedGroups?.length||parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
    objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback,sourceAdviceSeparated:true as const,
    ...(confirmedGroups?.length?{confirmedGroups}:{}),
    ...(teachingCriteria.length?{doneCriteria:teachingCriteria}:{})}}:{})};
@@ -221,6 +211,35 @@ export async function publishedProductionParent(task:ProductionTask){
  if(parent?.taskId!==approval.sourceTaskId||!(await readProductionOutputs(parent)).some(child=>child.taskId===task.taskId&&child.projectId===task.projectId))
   throw Error('production_outputs_binding_invalid');
  return parent;
+}
+
+/** Borrow only an independently accepted review from this batch's body producer. */
+export async function loadSharedCopyReview(projectId:string){
+ const follower=await latestPanelProductionTask(projectId);
+ if(follower?.input.panelDelivery?.audience!=='new_contact'||!follower.sharedProduction?.prepared)return;
+ const {projectId:producerId,taskId}=follower.sharedProduction;
+ const parent=await publishedProductionParent(follower);
+ if(!parent?.productionChildren?.some(child=>child.projectId===producerId&&child.taskId===taskId&&child.audience==='existing_partner'))
+  throw Error('shared_copy_review_producer_invalid');
+ const producer=await productionTaskStore.load(producerId,taskId);
+ const checkpoint=producer.completed.copy_review?.artifact;
+ const producerReview=checkpoint?.receipt as {operationId?:string}|undefined;
+ if(!checkpoint||!producerReview?.operationId||producer.blueprintApproval?.sourceRevision!==follower.blueprintApproval?.sourceRevision)return;
+ const saved=await loadOfflineStoredProject(producerId);
+ const doc=saved?.doc,receipt=doc?.clipMentorAnalysis?.production_copy_review;
+ if(!saved||!doc||!receipt||saved.revision!==producer.projectRevision
+  ||receipt.content_digest!==checkpoint.blueprint_digest||receipt.reviewer_run_id!=='clipmentor-review:'+producerReview.operationId
+  ||producer.sharedProduction?.digest!==follower.sharedProduction.digest)return;
+ assertSharedProduction(producer,doc);
+ const requirement=await productionCopyRequirements(producerId);
+ const criteria=boundVisualCriteria(requirement.policy);
+ if(criteria&&!visualCriteriaPlanApproved(criteria,receipt))return;
+ const briefing=requirement.teachingBrief;
+ if(!briefing?.confirmedGroups?.length)return;
+ const gate=await checkCopyProduction(doc,'clipmentor',undefined,requirement.opening,!!requirement.endingPictures,await handoffDigest(briefing));
+ if(!gate.allowed||!receipt.teaching_review)return;
+ return {receipt,visual:plannedVisualCriteria(criteria),briefing,source:doc.clipMentorAnalysis!.source,
+  sourceSrc:doc.assets.find(asset=>asset.id===doc.clipMentorAnalysis!.source.asset_id)?.src};
 }
 
 /** Bind a child control to the same parent publication and session at commit. */

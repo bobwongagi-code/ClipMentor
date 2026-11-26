@@ -281,12 +281,46 @@ export async function productionReviewRequirements(projectId:string){
  const {readHandoffPolicy}=await import('./handoff');
  return await readHandoffPolicy(projectId)??(await latestPanelProductionTask(projectId))?.blueprintApproval?.requirements??null;
 }
+export function confirmedGroupsFromBlueprint(doc:ProjectDoc):FrozenTeachingBrief['confirmedGroups']{
+ const analysis=doc.clipMentorAnalysis,breakdown=analysis?.source_breakdown;
+ if(!breakdown)return;
+ const units=analysis.blueprint.map(entry=>breakdown.units.find(unit=>unit.unit_id===entry.unit_id));
+ if(units.length!==breakdown.units.length||!units.every(unit=>unit!==undefined)||new Set(units).size!==units.length)return;
+ return units.map(unit=>({id:unit.unit_id,
+  ...(unit.teaching_selection?.decision?{decision:unit.teaching_selection.decision}:{}),
+  ...(unit.teaching_selection?.first_glance?{firstGlance:unit.teaching_selection.first_glance}:{}),
+  points:unit.coverage.flatMap(({point_id,treatment})=>{
+   const point=breakdown.points.find(p=>p.point_id===point_id);
+   return point?[{id:point_id,question:point.teaching_question,treatment,
+    ...(point.teaching_basis?.claim_limit?{boundary:point.teaching_basis.claim_limit}:{})}]:[];
+  })}));
+}
+
+/** A confirmed output cannot be reviewed against a fresh or partial selection. */
+export function assertConfirmedReviewGroups(task:ProductionTask|undefined,approvedDoc?:ProjectDoc){
+ if(!task?.blueprintApproval||!task.input.panelDelivery?.audience||
+  task.input.panelDelivery.editorialPolicy!=='exemplar-v1')return;
+ const groups=task.blueprintApproval.teachingBrief?.confirmedGroups;
+ if(!Array.isArray(groups)||!groups.length)throw Error('production_confirmed_groups_missing');
+ if(approvedDoc&&digestValue(groups)!==digestValue(confirmedGroupsFromBlueprint(approvedDoc)))
+  throw Error('production_confirmed_groups_changed');
+}
+
 export async function productionCopyRequirements(projectId:string){
  const {readHandoffPolicy}=await import('./handoff');
  const saved=await readHandoffPolicy(projectId),task=await latestPanelProductionTask(projectId);
+ assertConfirmedReviewGroups(task);
+ if(task?.blueprintApproval?.teachingBrief?.confirmedGroups?.length){
+  const original=await loadOfflineStoredProject(task.blueprintApproval.sourceProjectId);
+  if(original?.revision!==task.blueprintApproval.sourceRevision)throw Error('production_confirmed_blueprint_source_stale');
+  assertConfirmedReviewGroups(task,original.doc);
+ }
  const policy=saved??task?.blueprintApproval?.requirements??null;
  const doc=task?.input.panelDelivery
   ?(await loadOfflineStoredProject(projectId))?.doc:undefined;
+ if(task?.blueprintApproval?.teachingBrief?.confirmedGroups?.length&&!doc)
+  throw Error('production_confirmed_groups_changed');
+ assertConfirmedReviewGroups(task,doc);
  const opening=productionOpeningComparison(task,policy,doc);
  return {policy,opening,teachingBrief:productionTeachingBrief(task,policy,doc),
   endingPictures:task?.input.panelDelivery?.editorialPolicy==='exemplar-v1'};

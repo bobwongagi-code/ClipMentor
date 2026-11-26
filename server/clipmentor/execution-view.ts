@@ -1,6 +1,6 @@
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import type {ProjectDoc} from '../../src/editor/types';
-import {assessGroupReview,copyTeachingPacketFromDoc,copyReviewSubject,type TeachingPacket} from '../../src/clipmentor/production-gate';
+import {assessGroupReview,copyTeachingPacketFromDoc,copyReviewSubject,checkCopyFindingQuotes,type CopyProductionReview,type TeachingPacket} from '../../src/clipmentor/production-gate';
 import {deliveryAudio,deliveryPictureBindings,deliveryReview} from '../../src/clipmentor/delivery-sections';
 import {handoffAssetsOf} from '../../shared/clipmentor-handoff';
 import {matchMeasuredNarration,createProductionPreparation} from './production-readiness';
@@ -21,6 +21,42 @@ export function confirmedCopyReviewScopeConflict(doc:ProjectDoc,packet:TeachingP
      point.teaching_basis?.evidence_ids.includes(evidence)||point.evidence_ids.includes(evidence));
    })));
  })??false;
+}
+
+/** Offline maintenance projection for one adjudicated historical suggestion.
+ * A relation and a finding are independent reviewer answers. Bind both before
+ * removing either from the repair list. The verdict is not re-adjudicated here. */
+export function replayConfirmedCopySuggestion(receipt:CopyProductionReview,expectedReceiptDigest:string,unitId:string,
+ groupId:string,relationIndex:number,findingIndex:number){
+ if(digestValue(receipt)!==expectedReceiptDigest)throw Error('copy_review_suggestion_receipt_changed');
+ const packet=receipt.teaching_review?.packet;
+ const unit=packet?.units.find(unit=>unit.unit_id===unitId);
+ const reviewed=receipt.units.find(unit=>unit.unit_id===unitId);
+ const group=reviewed?.group_checks?.group_reviews?.find(group=>group.group_id===groupId);
+ const relation=group?.source_relations?.[relationIndex],finding=reviewed?.findings[findingIndex];
+ if(!packet||!unit||!reviewed||!group||relation?.assessment!=='material_gap'||relation.point_ids.length||relation.line_ids.length
+  ||relation.claim_impact||!relation.evidence_ids.every(id=>packet.source_evidence.some(item=>item.evidence_id===id)
+   &&packet.units.every(owner=>owner.points.every(point=>point.treatment==='omit'||
+    !point.evidence_ids.includes(id)&&!point.teaching_basis?.evidence_ids.includes(id))))
+  ||finding?.severity!=='blocking'||!checkCopyFindingQuotes(unit.lines,[finding]).valid)
+  throw Error('copy_review_suggestion_scope_invalid');
+ const suggestion={unit_id:unitId,group_id:groupId,disposition:'not_adopted' as const,relation,originalFinding:finding};
+ return {
+  originalVerdict:receipt.verdict,
+  suggestion,
+  remaining:receipt.units.map(entry=>{
+   const current=packet.units.find(unit=>unit.unit_id===entry.unit_id);
+   const checks=entry.group_checks;
+   // Drop only the adjudicated source relation for repair diagnostics; retain
+   // the captured L1/L2 judgments and all independent findings.
+   const groups=entry===reviewed?checks?.group_reviews?.map(row=>row===group
+    ?{...row,source_relations:row.source_relations!.filter((_,index)=>index!==relationIndex)}:row):undefined;
+   const scoped=groups?{...checks,group_reviews:groups,source_relations:groups.flatMap(row=>row.source_relations!)}:checks;
+   return {unit_id:entry.unit_id,verdict:entry.verdict,
+    findings:entry===reviewed?entry.findings.filter((_,index)=>index!==findingIndex):entry.findings,
+    groupValidation:assessGroupReview(scoped,current,receipt.l1_evidence_contract==='v1',packet.source_evidence)};
+  }),
+ };
 }
 
 /** Current operational facts for the EXECUTOR. This must never replace the independent-review projection. */

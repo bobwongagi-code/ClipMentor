@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {digestValue} from '../agent-runs/store-values';
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
-import {confirmedCopyReviewScopeConflict,currentExecutionView,currentReviewRepair} from './execution-view';
+import {confirmedCopyReviewScopeConflict,currentExecutionView,currentReviewRepair,replayConfirmedCopySuggestion} from './execution-view';
 import {matchMeasuredNarration,registeredAudioBindings} from './production-readiness';
 import {productionAuthorTaskData} from './production-worker';
 import phased from '../../src/agent/tools/fixtures/barely-there-mg-replacement-20261030.json';
@@ -59,6 +61,28 @@ groupChecks.source_relations=[{...unselected,assessment:'material_gap',point_ids
 assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),true,'a selected point ID alone cannot authorize a proposed new topic');
 groupChecks.source_relations=[{...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id],evidence_ids:[scopedEvidence]} as never];
 assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),false,'a real, bound omission still follows the existing review gate');
+// The real historical receipt is optional in CI and never copied into git.
+const archived=process.env.CLIPMENTOR_SWATCH_REVIEW;
+if(archived){
+ const before=await readFile(archived,'utf8'),receipt=JSON.parse(before).result.receipt as NonNullable<ProjectDoc['clipMentorAnalysis']>['production_copy_review'];
+ assert(receipt);
+ const proof=digestValue(receipt);
+ const projection=replayConfirmedCopySuggestion(receipt,proof,'U-cheek','G1',1,0);
+ assert.equal(projection.suggestion.disposition,'not_adopted');
+ assert.match(projection.suggestion.originalFinding.reason,/手背试色/);
+ assert.equal(projection.originalVerdict,'needs_revision');
+ assert.equal(projection.remaining.find(unit=>unit.unit_id==='U-cheek')?.findings.length,0);
+ for(const group of ['U-hook','U-use']){
+  const item=projection.remaining.find(unit=>unit.unit_id===group)!;
+  assert.deepEqual(item.findings,receipt.units.find(unit=>unit.unit_id===group)?.findings);
+  assert.equal(item.groupValidation.verdict,'insufficient_evidence');
+  assert.deepEqual('issues' in item.groupValidation?item.groupValidation.issues:[],['G1:l1_evidence_does_not_match_group']);
+ }
+ assert.throws(()=>replayConfirmedCopySuggestion(receipt,proof,'U-cheek','G1',0,0),/scope_invalid/);
+ assert.throws(()=>replayConfirmedCopySuggestion({...receipt,verdict:'pass'},proof,'U-cheek','G1',1,0),/receipt_changed/);
+ assert.equal(await readFile(archived,'utf8'),before);
+ console.log('Historical swatch review: one proposal removed, both independent L1 failures and original receipt retained.');
+}
 const approvedCopy=structuredClone(project);
 const approvedGroup=approvedCopy.clipMentorAnalysis!.production_copy_review!.units[0].group_checks!;
 approvedGroup.source_relations!.push({...unselected,evidence_ids:[view.packet.units[0].source_context!.evidence_ids[0]]});

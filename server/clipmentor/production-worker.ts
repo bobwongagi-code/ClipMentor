@@ -49,7 +49,7 @@ import {productionPreviewFacts,previewFactsDigest,assertPreviewExportBinding,pro
 import {previewBlueprintAlignmentDigest} from './preview-review';
 import {productionDeliverables} from './production-deliverables';
 import {collectSavedPreviewVisualEvidence} from './preview-visual-evidence';
-import {productionOpeningComparison,productionReviewRequirements,productionTeachingBrief} from './production-task';
+import {productionOpeningComparison,productionReviewRequirements,productionTeachingBrief,assertConfirmedReviewGroups} from './production-task';
 import {assertSharedProduction,publishedProductionParent,selectProductionAudience} from './production-continuation';
 import {confirmedOutputCopyLocks,productionBlueprintDifferences} from './production-blueprint-opinions';
 import {readApprovedOutputSource} from './production-approved-source';
@@ -433,9 +433,11 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  const approvedOutput=strictEditorial&&task.input.panelDelivery?.audience?task.blueprintApproval:undefined;
  let frozenTeaching=approvedOutput?.confirmedTeachingDigest;
  let approvedDraft:ProjectDoc|undefined,assertLockedCopy:((doc:ProjectDoc)=>void)|undefined;
+ if(task.stage==='copy_review')assertConfirmedReviewGroups(task);
  if(approvedOutput?.teachingBrief?.confirmedGroups&&task.input.panelDelivery?.audience){
   const source=await loadOfflineStoredProject(approvedOutput.sourceProjectId);
   if(source?.revision===approvedOutput.sourceRevision){
+   assertConfirmedReviewGroups(task,source.doc);
    const parent=await publishedProductionParent(task);
    approvedDraft=selectProductionAudience(source.doc,task.input.panelDelivery.audience);
    assertLockedCopy=confirmedOutputCopyLocks(parent?.blueprintOpinions,source.doc,approvedDraft);
@@ -713,7 +715,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     !unit.point_checks?.some(point=>point.status!=='ok')))
      throw Error('teaching_final_narration_unit_finding_unbound');
    const unitIssues=checked.review.units.filter(unit=>unit.status!=='ok').map(unit=>unit.unit_id+' '+unit.reason);
-   const topicIssues=[wholeFilmIssue(checked.review.whole_film),confirmedTeachingIssue(checked.review)]
+   const wholeIssue=wholeFilmIssue(checked.review.whole_film),confirmedIssue=confirmedTeachingIssue(checked.review);
+   if(confirmedIssue&&!wholeIssue)throw Error('teaching_confirmed_scope_requires_maintenance:'+confirmedIssue);
+   const topicIssues=[wholeIssue,confirmedIssue]
     .filter(issue=>!!issue).map(issue=>'整片选题 '+issue);
    const issues=[...topicIssues,...unitIssues];
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
