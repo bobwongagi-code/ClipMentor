@@ -480,11 +480,12 @@ try{
  const {bindBlueprintReview,blueprintReviewGroups,blueprintReviewEndings}=await import('../clipmentor/production-panel-review');
  const reviewScope={revision:sourceSnapshot.revision,boardIdentity:'dual-fixture-board',
   groups:blueprintReviewGroups(full),endings:blueprintReviewEndings(full)};
- const reviewInput={groups:reviewScope.groups.map(({id})=>({id,decision:'把两种商品的实际大小并置',stance:'accepted'})),
-  endingIds:['existing_partner','new_contact']};
- assert.throws(()=>bindBlueprintReview({...reviewInput,endingIds:['existing_partner']},reviewScope,true),/两个片尾/);
- assert.throws(()=>bindBlueprintReview({...reviewInput,endingIds:['existing_partner','old_project_ending']},reviewScope,true),/当前蓝图不符/);
- const confirmationReview=bindBlueprintReview(reviewInput,reviewScope,true);
+ const reviewInput={scope:'whole_blueprint'};
+ assert.throws(()=>bindBlueprintReview({...reviewInput,endingIds:['existing_partner']},reviewScope),/刷新蓝图/);
+ assert.throws(()=>bindBlueprintReview({...reviewInput,groups:[{id:reviewScope.groups[0].id,stance:'accepted'}]},reviewScope),/刷新蓝图/);
+ const confirmationReview=bindBlueprintReview(reviewInput,reviewScope);
+ assert.equal(confirmationReview.boardIdentity,reviewScope.boardIdentity);
+ assert.deepEqual(confirmationReview.groups,[]);
  assert.equal(confirmationReview.endings.length,2);
  for(const ending of confirmationReview.endings){
   assert(ending.materials.length>0);
@@ -621,7 +622,8 @@ try{
  assert.deepEqual(batchView.outputs,[{audience:'existing_partner'},{audience:'new_contact'}]);
  const outputView=await (await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}&audience=new_contact`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}})).json();
  assert.equal(outputView.task.status,'waiting');assert.equal(outputView.task.stopReason,undefined);
- const repeated=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},body:JSON.stringify({action:'produce_versions',revision:'wrong'})});
+ const repeated=await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{method:'POST',headers:{Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json'},
+  body:JSON.stringify({action:'produce_versions',revision:'wrong',boardIdentity:reviewScope.boardIdentity,blueprintReview:reviewInput})});
  assert.equal(repeated.status,409,'stale duplicate confirmation remains rejected');
  // Exercise actual timeline reuse: media records are shared, the old ending is removed,
  // and a changed common item is rejected even if both output copy strings are identical.
