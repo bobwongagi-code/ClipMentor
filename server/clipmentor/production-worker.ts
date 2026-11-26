@@ -100,7 +100,7 @@ export function productionStageToolAllowed(stage:ProductionTask['stage'],name:st
 }
 const goals={
  analysis:'完整观察原片，理解商品购买理由及结构，登记证据、重点与蓝图基线。登记完整分析基线供下阶段连续视听；抽帧只证明可见画面。读取当前项目中的商品图和销量截图。不能听清的留未知。用 source_breakdown 回读登记；人审版由后续蓝图阶段处理。不得配音或剪辑。',
- blueprint:'先回读已保存的 source_breakdown 和 current_copy。逐个保留组用 revise_clipmentor_analysis 的 set_copy_candidate 一次登记马来语口播、同文字幕、中文与画面计划；首稿在 record 内写 source_candidate_id:null，已有稿用现行 ID。两种情况都给新的 script_candidate_ 和 picture_plan_ ID，不用 revise 手写指针。全部保留组登记后再用 observe_clipmentor_source_video 补核关键原声和动作，需要时局部修订。成绩与学习过渡缺资料时明确记录原因，不静默删掉；按完整话意和动作决定看一组讲一组或其他组织，不固定四组。把卖点、怎么拍、为什么这样拍讲清，原消费者促单与达人阶段邀请分开。每组用既有unit表达原声与解释，必要条件、画面承担、回看进出和视觉继承明确。未配音仅填语义锚点，不编实测秒数；先检查最终审核投影。不得自签审核或剪辑。',
+ blueprint:'先回读已保存的 source_breakdown 和 current_copy。逐个保留组用 revise_clipmentor_analysis 的 set_copy_candidate 一次登记马来语口播、同文字幕、中文与画面计划；首稿在 record 内写 source_candidate_id:null，已有稿用现行 ID。两种情况都给新的 script_candidate_ 和 picture_plan_ ID，不用 revise 手写指针。全部保留组登记后再用 observe_clipmentor_source_video 补核关键原声和动作，需要时局部修订。成绩与学习过渡缺资料时明确记录原因，不静默删掉；按完整话意和动作决定看一组讲一组或其他组织，不固定四组。按 planning.md 的 Before drafting the narration 从本组事实与回看安排起稿。对有口播的主讲，只读实际马来语，达人就能听出原作者的拍摄选择，以及观众当场得到的具体信息或想弄清的问题。原消费者促单与达人阶段邀请分开。每组用既有unit表达原声与解释，必要条件、画面承担、回看进出和视觉继承明确。未配音仅填语义锚点，不编实测秒数；先检查最终审核投影。不得自签审核或剪辑。',
  audio:'只处理已审现行稿。先找同文、同音色现有音频；仅合成缺少的句子，保留实测声长及来源。按整组核承载，缺素材或需改稿时说明冲突，不赶读、慢放、循环或长定格凑时长。',
  edit:'按当前已审蓝图和真实音频执行。edit_item 的 adds 用于从真实素材创建尚不存在的实例；fixed_native_edits 只是已有实例的差异补丁，空数组不代表禁止创建。空时间线应按已审阶段顺序创建；输出帧位由实测音频长度及有效词级锚点落实，不能把无绝对摆放位置误判成没有音频锚点，不得把估算当实测。保留已定源窗，声画无法承载时返回具体句和冲突，不把整项交回用户。读取 current_copy 的 summary/candidate/picture_plan 必须带实际 unitId。按已审逐句 evidence_source_ranges 落回看，每个所讲重点都要用到自己的证据；context_source_ranges 只补充。短标跟随本组约定的原声、回看或讲解句。完成原生实例组装后回读；宿主根据真实音频实例、原声播放和已审逐句选材核对实际摆放，不要求执行者改写蓝图或补production_rows，不自行调用revise_clipmentor_analysis登记。原声实例保留正常声音，讲解回看视频静音；源片参照图用save_clipmentor_source_frame保留来源，不用无关素材。保留教学重点和必要拍法，原片/讲解强区分、字幕实底可读且无阴影。源片对象、阶段与讲解意群对应。用实际合成帧自查，保存后停止，不自行导出。'
 };
@@ -1111,7 +1111,7 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
      :'沿核验过的决定及各自源窗写句。用 current_copy 回读 teaching_replay_risks，明确需要实测或补参照的地方。'
     :task.stage==='analysis'
     ?'先按证据盘点完整原片的表达选择和对应的买家顾虑，再从有出处的卖点里选值得达人学的单元。比较最强的另一个讲法：如果选它，达人会少学或多学哪个决定？选中这条主线后，他拍同类内容时具体会改哪一步？各组怎样一起解释这个决定，哪些只作支持？根据选中的单元概括本片可学的价值，把决定、可回读的取舍及放弃备选的损失写进现有主讲点 coverage.reason，买家多得到的具体判断依据写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；按 sourceClosing 处理收尾。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'
-    :'先按核验通过的选题说明每组需要保住的证据：静态细节、完整动作及结果、共同参照或套装与价格。先估保留这些信息所需的最短完整时段，再找逐句窗口。设想换成最接近的另一段会少哪一项判断；实际解释画面保住这个关系。原声给事实和反应，讲解说明拍法为什么有用，短标指向判断对象。优先合理回看；仍无足够画面就说明具体缺口，别靠缩讲解或合组填平。普通做法与她的差异、声画配合、同框比较、先后承接可按实际证据组织。',
+    :'先按核验通过的选题说明每组需要保住的证据：静态细节、完整动作及结果、共同参照或套装与价格。先估保留这些信息所需的最短完整时段，再找逐句窗口。设想换成最接近的另一段会少哪一项判断；实际解释画面保住这个关系。原声给事实和反应，讲解说明拍法为什么有用，短标指向判断对象。优先合理回看。画面能交代的细节让画面承担，压缩口播时保留拍法成立的条件和具体效果。仍无法承载就说明缺口。普通做法与她的差异、声画配合、同框比较、先后承接可按实际证据组织。',
    teachingExemplars:'每个 source_breakdown.points 的 teaching_question 说明为什么这个拍法帮助买家判断。teaching_basis={selling_point,evidence_ids,method,connection,must_capture,claim_limit,exemplar,difference}；证据来自本点关联的原话候选或可见动作，范例资料只供思考。exemplar 登记本片证据适用的 principle ID，difference 说明本片成立条件与范例的差异，或说明为何本片不宜套用范例做法。清楚的听写候选可以支持原话转述，但注明未听审。纯画面例外须在 coverage.reason 说明为什么成立。',
    exemplarApplication:task.stage==='analysis'
     ?'在现有 difference 里写明借用的推理、本片的原片依据和它改变的具体教学取舍。无法迁移时交代本片缺少的成立条件。'
