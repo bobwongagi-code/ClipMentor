@@ -558,6 +558,16 @@ const halted=fresh();
 await runProductionWithRecovery(halted,async()=>{throw Error('fixture no progress');},async()=>{},store);
 assert.equal(halted.status,'blocked');
 assert.match(halted.error!,/no progress/);
+const sourceStopped=fresh();
+sourceStopped.status='blocked';
+sourceStopped.error='Error: production_source_breakdown_no_progress';
+let sourceDispatches=0;
+await runProductionWithRecovery(sourceStopped,async()=>{
+ sourceDispatches++;
+ return {artifact:{saved:true}};
+},async()=>{},store);
+assert.equal(sourceDispatches,0,'a repeated analysis format error remains stopped on resume');
+assert.equal(sourceStopped.status,'blocked');
 const {isSettledSiblingReview}=await import('./production-task');
 const staleReview=fresh();
 staleReview.stage='copy_review';staleReview.status='blocked';staleReview.sequence=12;

@@ -121,6 +121,11 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const overallOpinion=page.getByRole('textbox', { name:'整体意见' })
     await expect(groupOpinion).toBeHidden()
     await blueprint.locator('[data-card="group-1"] .group-opinion summary').click()
+    await overallOpinion.fill('改'.repeat(4000))
+    await groupOpinion.fill('补'.repeat(4000))
+    await page.getByRole('button', { name:'提交意见' }).click()
+    await expect(page.getByText('意见总字数太多，请缩短后再提交。')).toBeVisible()
+    expect((await audit()).workerEvents).toHaveLength(0)
     const longOverall='改'.repeat(3000)
     const longMisplaced='整体'+'补'.repeat(3000)
     await overallOpinion.fill(longOverall)
@@ -180,7 +185,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const withheld=await fetch(origin+'/api/clipmentor/production',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({action:'approve_blueprint',revision:revised.blueprintRevision,boardIdentity:revised.boardIdentity})})
     expect(withheld.status).toBe(409)
-    expect((await withheld.json()).issue).toMatchObject({kind:'content',message:expect.stringContaining('第 1 组')})
+    expect((await withheld.json()).issue).toMatchObject({kind:'binding',message:expect.stringContaining('刷新蓝图')})
     await page.screenshot({ path: join(proof, '01-revised-board.png'), fullPage: true })
     await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
     await expect.poll(async () => (await state()).outputs?.length).toBe(2)
@@ -214,7 +219,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     // Stay in the same page: a prior checkbox must not approve a new render.
     await expect(partner.getByLabel('看过成片',{exact:true})).not.toBeChecked()
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
-    await expect(partner.getByText('本次成片的集中返修已提交。', {exact:false})).toBeVisible()
+    await expect(partner.getByText('本版修改机会已用完。', {exact:true})).toBeVisible()
     const staleRender = await page.evaluate(async renderId => (await fetch('/api/clipmentor/production?audience=existing_partner', { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'accept',renderId,languageConfirmed:true}) })).status, old.task.renderId)
     expect(staleRender).toBe(409)
     for (const [region,audience] of [[partner,'existing_partner'],[prospect,'new_contact']] as const) {

@@ -1,10 +1,10 @@
-import {recoveredAnalysisWrite} from './production-analysis-recovery';
+import {recoveredAnalysisWrite,sourceBreakdownFailures} from './production-analysis-recovery';
 import {frozenTeachingTopics,sourceClosingPolicy,sourceTeachingAdvice} from './production-source-policy';
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
 import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
 import {pictureRepairWriteError} from './production-capacity-repair';
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
-import {teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
+import {firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
 import {guardBlueprintOpinionWrite} from './production-blueprint-opinions';
@@ -228,7 +228,7 @@ async function runProductionCopyReview({
   const pendingBusinessClaim=incompleteAttachment
    ?businessCheck?.status==='ok'?undefined:businessCheck
    :panelDraft&&issues.length===1&&issues[0].id==='S7'&&issues[0].status==='unresolved'?issues[0]:undefined;
-  const businessNotice=pendingBusinessClaim?.reason??(incompleteAttachment&&!businessCheck?'片尾素材中的合作条款还需核实。':undefined);
+  const businessNotice=pendingBusinessClaim?.reason;
   if(issues.length&&!pendingBusinessClaim&&!incompleteAttachment)return {artifact:{revision:editor.revision,blueprint_digest:digest,author_self_check_source_digest:check.sourceDigest,author_self_check:issues},repair:'blueprint'};
   if(panelDraft){
    const currentPolicy=await productionReviewRequirements(task.projectId);
@@ -913,12 +913,15 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const sourceObservationAllowed=!panelDraft&&productionSourceObservationAllowed(task,recoveredSourceOperation);
   const tools=canonicalServerRunToolCatalog(false,true).filter(s=>(hostNames.has(s.name)||isExternalServerDirectTool(s.name))&&productionStageToolAllowed(task.stage,s.name)
    &&(sourceObservationAllowed||s.name!=='observe_clipmentor_source_video'));
+  const breakdownStop=new AbortController();
   await executeRun(run,{backend:task.input.authorBackend??'api',provider:task.input.author.provider,model:task.input.author.model,openAiApiMode:task.input.author.apiMode,cacheMode:'short',maxOutputTokens:8192,
    autonomousAcceptance:false,maxAcceptanceIterations:1,origin:task.input.author.origin,tools,
    messages:[{role:'user',content:JSON.stringify(taskData)}],
    instructions:`${guidance}\n服务端制作任务；只使用可用工具。临时网关故障由系统在额度内处理；不要自行换服务或重提同一技术故障。不要等待逐阶段人工指令，不能调用本机Codex、文件脚本或自签审核。先读当前工程与现行稿，不读旧稿替代当前指针。阶段目标：${goal}${recoveredSourceOperation?' 本轮已经完成连续观察，直接使用任务所附的只读回执。':''}${feedbackSource?' 完成本轮后，在最终回复末尾附 <feedback_summary>["位置：用户希望的效果", "另一位置：另一项要求"]</feedback_summary>。用中文归并本次意见的独立修改目标，通常2至5点，每点短句；保留范围、否定和条件，不逐句照抄口语，不添加要求或声称已解决。只用于页面显示，原始意见始终是修改与审核依据。不要为摘要追加模型调用或工具。':''}`,
    ...(task.input.humanBlueprintReview&&task.input.authorBackend==='codex'?{localProductionCodex:true as const}:{}),
-   host:{signal:stage.signal,maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
+   host:{signal:teachingAnalysis?AbortSignal.any([stage.signal,breakdownStop.signal]):stage.signal,
+    ...(teachingAnalysis?{afterFailure:sourceBreakdownFailures(breakdownStop)}:{}),
+    maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
     normalizeArgs:(name,args)=>name==='load_skill'&&typeof args.limit==='number'&&Number.isSafeInteger(args.limit)&&args.limit>48000
      ?{...args,limit:48000}:args,
     beforeRequest:()=>{
@@ -928,6 +931,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     execute:productionAuthorToolExecutor({task,editor,panelDraft,panelScope,pictureOnlyRepair,sourceObservationAllowed,
      source:a.source,hasQualifiedTeaching:()=>qualifiedTeachingDigest(editor.getDoc())===teachingDefinition,
      executeWithRecovery,requestObservation,preparePanelAssets})}});
+  breakdownStop.signal.throwIfAborted();
   if(opinionStop)throw opinionStop;
   if(panelDraft&&task.stage==='blueprint'&&qualifiedTeachingDigest(editor.getDoc())!==teachingDefinition){
    const changed=newlyChangedTeaching(baselineSource(doc),baselineSource(editor.getDoc()),doc,rebuild);
@@ -1095,6 +1099,12 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    findings:task.repairContext.narration_repair_findings,
    instruction:'对照现行口播和独立审核，逐项修正列出的口播及其同文字幕，核对当句回看是否仍匹配。保留已核选题、未点名的教学组和片头片尾。版本号、标题和短标的改动不能代替口播修订。'} }:{}),
   ...(['analysis','blueprint'].includes(task.stage)?{teachingPurpose,sourceClosing:sourceClosingPolicy(frozenTopics,doc)}:{}),
+  ...(task.input.panelDelivery?.firstGlanceWriting&&['analysis','blueprint'].includes(task.stage)?{narrationBrief:{
+   groups:firstGlanceWritingUnits(doc.clipMentorAnalysis?.source_breakdown),
+   instruction:task.stage==='analysis'
+    ?'在各有主讲口播的组选题 teaching_selection.first_glance 写一条白话，讲她怎么拍、达人一眼得到什么。确实拆解原片钩子时，另填 hook_curiosity:{point_id,question}，指到本组负责钩子的主讲点，写清观众具体想弄明白什么。'
+    :'直接从已核 first_glance 写马来语。hook_curiosity 只负责留下这个具体问题，讲解兑现拍法和效果。返修用审核定位哪句话漏了这个意思，先替换弱句，避免把审核备注、部位或动作清单写进口播。改选题走现有分析和独立核验，写稿时不改卡迁就返修。'
+  }}:{}),
   ...(task.input.panelDelivery?.selectionPolicy==='v1'&&['analysis','blueprint'].includes(task.stage)
    ?{teachingSelectionContract:'v1'}:{}),
   ...(frozenTopics?{selectionAdvice:sourceTeachingAdvice(frozenTopics),

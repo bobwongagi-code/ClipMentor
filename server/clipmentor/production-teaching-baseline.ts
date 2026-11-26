@@ -3,7 +3,7 @@ import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
 import { breakdownPointEvidence,contiguousPlaybackRuns,originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-sections';
 import { readBlueprint, teachingReplayRisks } from '../../src/clipmentor/blueprint-lint';
-import { teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
+import { firstGlanceWritingUnits, teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
 import {reviewReferenceResolver} from './review-references';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { currentAgentSessionGeneration } from '../../src/persist/agentSessionGeneration';
@@ -189,6 +189,7 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   ?closingEvidenceSegments(baseline,closingUnit,analysis.source,topics.closingEvidenceRange):[];
  const closingSegment=topics&&closingTails.find(segment=>hasClosingNote(segment.unknowns,topics.closing));
  const reviewNarration=task.stage==='copy_review'&&task.input.panelDelivery?.editorialPolicy==='exemplar-v1';
+ const requireFirstGlance=task.input.panelDelivery?.firstGlanceWriting===true;
  const selectionRationale=reviewNarration?baseline.units.flatMap(unit=>unit.coverage.flatMap(coverage=>
   coverage.reason?.trim()&&baseline.points.some(point=>point.point_id===coverage.point_id&&point.role==='primary')
    ?[{unit_id:unit.unit_id,point_id:coverage.point_id,reason:coverage.reason}]:[])):[];
@@ -201,7 +202,8 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   ...(referenceBinding?{referenceBinding}:{}),
   rebuilding:!!task.repairContext?.teaching_rebuild,
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
-  ...(reviewNarration?{narrationTargets:finalNarrationTargets(doc,baseline),...(selectionRationale.length?{selectionRationale}:{})}:{}),
+  ...(requireFirstGlance?{firstGlanceWriting:firstGlanceWritingUnits(baseline)}:{}),
+  ...(reviewNarration?{narrationTargets:finalNarrationTargets(doc,baseline,requireFirstGlance),...(selectionRationale.length?{selectionRationale}:{})}:{}),
   ...(task.input.panelDelivery?.selectionPolicy==='v1'?{selection:{
    inventory:baseline.segments.filter(segment=>segment.inventory),
    unselectedBuyerRoles:baseline.unselected_buyer_roles??{},
@@ -219,16 +221,19 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
 }
 
 type BaselineSource = ReturnType<typeof teachingBaselineSource>;
-export function finalNarrationTargets(doc:ProjectDoc,baseline:SourceBreakdown) {
+export function finalNarrationTargets(doc:ProjectDoc,baseline:SourceBreakdown,requireFirstGlance=false) {
  return baseline.units.flatMap(unit=>{
   const internal=teachingUnitReview(doc,unit.unit_id);
   const candidateId=typeof internal?.current_script_candidate==='string'?internal.current_script_candidate:null;
   const candidate=candidateId?internal?.[candidateId]:undefined;
   const lines=row(candidate)&&Array.isArray(candidate.lines)?candidate.lines.filter(row):[];
+  const brief=unit.teaching_selection;
   return unit.coverage.filter(c=>c.treatment==='explain').flatMap(coverage=>{
    const point=baseline.points.find(item=>item.point_id===coverage.point_id&&item.role==='primary');
    if(!point)return [];
-   return [{unit_id:unit.unit_id,point_id:point.point_id,candidate_id:candidateId,lines:lines.flatMap(line=>
+   return [{unit_id:unit.unit_id,point_id:point.point_id,candidate_id:candidateId,
+    ...(requireFirstGlance?{first_glance:brief?.first_glance??'',...(brief?.hook_curiosity?.point_id===point.point_id?{hook_curiosity:brief.hook_curiosity.question}:{})}:{}),
+    lines:lines.flatMap(line=>
     typeof line.id==='string'&&typeof line.narration_ms==='string'&&Array.isArray(line.point_ids)&&line.point_ids.includes(point.point_id)
      ?[{line_id:line.id,narration:line.narration_ms}]:[])}];
   });
@@ -238,6 +243,7 @@ export type NarrationDecision={
  unit_id:string;point_id:string;status:'ok'|'fix'|'unresolved';reason:string;
  decision?:string;viewer_basis?:string;line_id?:string;quote?:string;
  baseline_criterion?:{field:'method'|'connection'|'claim_limit';quote:string};
+ first_glance_checks?:{explanation:'ok'|'fix'|'unresolved';hook?:'ok'|'fix'|'unresolved';hook_line_id?:string};
 };
 export type PublishedNarrationDecision=NarrationDecision&{source_evidence_id:string;source_quote:string};
 export function boundNarrationCriterion(criterion:unknown,basis:SourceBreakdown['points'][number]['teaching_basis']):NarrationDecision['baseline_criterion']{
@@ -255,6 +261,21 @@ export function checkedNarration(value:unknown,targets:NonNullable<BaselineSourc
   const entry=matches[0];
   if(matches.length!==1||!shortText(entry.reason)||!['ok','fix','unresolved'].includes(entry.status))throw invalid();
   const result:NarrationDecision={unit_id:target.unit_id,point_id:target.point_id,status:entry.status,reason:entry.reason};
+  if(target.first_glance!==undefined){
+   const verdict=(value:unknown):value is 'ok'|'fix'|'unresolved'=>value==='ok'||value==='fix'||value==='unresolved';
+   const checks=entry.first_glance_checks;
+   if(!target.first_glance||!row(checks)||!verdict(checks.explanation)
+    ||(target.hook_curiosity?!verdict(checks.hook):checks.hook!==undefined)
+    ||(checks.hook==='ok'?!target.lines.some(line=>line.line_id===checks.hook_line_id):checks.hook_line_id!==undefined)
+    ||entry.status==='ok'&&(checks.explanation!=='ok'||target.hook_curiosity&&checks.hook!=='ok'))
+    throw Error('teaching_first_glance_checks_invalid');
+   if(entry.status!=='ok'&&checks.explanation==='ok'&&(!target.hook_curiosity||checks.hook==='ok')
+    &&(!row(entry.baseline_criterion)||entry.baseline_criterion.field!=='claim_limit'))
+    throw Error('teaching_first_glance_checks_invalid');
+   result.first_glance_checks={explanation:checks.explanation,...(verdict(checks.hook)?{hook:checks.hook}:{}),
+    ...(checks.hook==='ok'&&typeof checks.hook_line_id==='string'?{hook_line_id:checks.hook_line_id}:{})};
+  }
+
   if(confirmedUnits&&entry.status!=='ok'){
    const basis=confirmedUnits.find(unit=>unit.unit_id===target.unit_id)?.points.find(point=>point.point_id===target.point_id)?.teaching_basis;
    const criterion=boundNarrationCriterion(entry.baseline_criterion,basis);
@@ -282,7 +303,7 @@ function narrationReviewSubject(task:ProductionTask,targets:NonNullable<Baseline
 export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,digest:unknown,requirementsDigest:string){
  const baseline=doc.clipMentorAnalysis?.source_breakdown;
  if(!baseline||typeof digest!=='string')throw Error('human_blueprint_narration_receipt_missing');
- const targets=finalNarrationTargets(doc,baseline);
+ const targets=finalNarrationTargets(doc,baseline,task.input.panelDelivery?.firstGlanceWriting===true);
  const timingRisks=task.input.panelDelivery?.selectionPolicy==='v1'?teachingReplayRisks(doc):undefined;
  const narrationSubject=narrationReviewSubject(task,targets,confirmedTeachingDigest(doc),requirementsDigest,undefined,timingRisks);
  const receipt=Object.entries(task.effects).find(([key,effect])=>
@@ -421,7 +442,11 @@ export function teachingPointGaps(source:BaselineSource,doc:ProjectDoc){
    return [point.point_id+' 缺纯画面承载理由'];
   return [];
  });
- return [...points,...declaredClosingIssues(source)];
+ const missing=(source.firstGlanceWriting??[]).filter(group=>!group.first_glance)
+  .map(group=>group.unit_id+' 缺一眼效果。用一句白话写出她怎么拍，以及达人马上能明白什么。');
+ const wrongHook=(source.firstGlanceWriting??[]).filter(group=>group.invalid_hook_point)
+  .map(group=>group.unit_id+' 原片钩子所指教学点缺少本组主讲口播。');
+ return [...points,...missing,...wrongHook,...declaredClosingIssues(source)];
 }
 
 function teachingDirectionGroups(feedback:string|undefined){
@@ -687,7 +712,10 @@ function teachingMeaning(unit:BaselineSource['units'][number],meaning:TeachingRe
     evidence_ids:[...teaching_basis.evidence_ids].sort(),
    }}:{}),
   }));
-  return digestValue({points,coverage:unit.coverage,decision:normalized(unit.teaching_selection?.decision)});
+  const selection=unit.teaching_selection;
+  return digestValue({points,coverage:unit.coverage,decision:normalized(selection?.decision),
+    ...(selection?.first_glance?{firstGlance:normalized(selection.first_glance)}:{}),
+    ...(selection?.hook_curiosity?{hookCuriosity:{point:selection.hook_curiosity.point_id,question:normalized(selection.hook_curiosity.question)}}:{})});
  }
  const points=unit.points.map(input=>{
   const point=pointForIndependentReview(input);
@@ -835,6 +863,11 @@ function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireN
  :source.frozenTopics?' whole_film.frozen_topic_checks 填 {closing_status:"pass"|"fail"}。按 sourceClosing 核对实际收尾、证据和处置。总评在 reason 中说明具体问题。'
  :source.sourceClosingRegistration?' whole_film 必须含 frozen_topic_checks:{main_scope:"pass",closing_status:"pass"|"fail"}。main_scope 由原有整片评审负责。closing_status 复核 sourceClosing 的档位、原片依据和实际处置。':'')
  +(source.selection?' 先从全片证据独立判断哪里支持想试、比较或跟着操作，再核对教学选点。盘点和选组文字是待核陈述。selection.gaps、角色和备选都是审阅提示，依据是实际选点、原片和稿件。仅有一层、缺备选或资料填写不全时，沿用现行判据。若确实漏掉会改变买家判断的内容，或两组实质重复，引用原片并说明损失。合组核对真实先后，每句引用本句供给的一个或多个实际窗口。把推断的动机、观众反应或功效当事实时，基线写进 point_checks 的 fix，口播写进 narration_checks 的 fix 并引用该句。编辑实看时点是回看线索。仅在当前结论依赖无法核实的证据时判 unresolved。selection.timingRisks 是逐句估计。若缺处置，引用相关句并指出待实测的声画风险。估算、单纯短窗或处置字段缺失不决定通过状态。':'')
+ +(source.firstGlanceWriting?.length
+  ?source.narrationTargets?.length
+   ?'first_glance 是整组的写作目标。对每条 narration_checks，只按当前点承担的部分检查它的口播，不要求一句或一点重复整组。另填 first_glance_checks:{explanation:"ok"|"fix"|"unresolved"}。目标有 hook_curiosity 时另填 hook，同样三档，单独检查具体好奇及其原片依据。hook 为 ok 时在 first_glance_checks 内选择本点的 hook_line_id。它可与讲解的 line_id 不同。当前点只承担钩子时，讲解核对这个开场安排怎样让人想继续看。逐个报部位或动作却漏掉效果时，指出这个点少了的结论。画面能交代的细节留给画面。已兑现的选择只按有证据的事实边界退回。'
+   :'核对 firstGlanceWriting 是否按本组原片证据说明她怎么拍、达人当场明白什么。若教原片钩子，另核它引起的具体好奇。只按已有证据和教学问题裁决。'
+  :'')
  +(source.narrationTargets?.length?` 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?${selection?'':',quote?'}}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并${selection?'选择能让他领会该决定的现行句子编号':'逐字引用能让他领会该决定的某句'}。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id${selection?'':' 和逐字 quote'}。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。`
   +(requireNarrationCriterion?` 每条 fix 或 unresolved 必须另填 baseline_criterion:{field:"method"|"connection"|"claim_limit"${selection?'':',quote:当前组当前点 teaching_basis 对应字段的完整原文'}}。reason 写明引用的判据和现行口播在哪一点不符。只按已经核定的判断和边界裁决。想加的细节或新标准仅作审阅建议，不能用来退回。必须拍到的内容不因此变成必须逐项念到的内容。引用 claim_limit 时，还须给出现行口播中受该边界影响的 line_id${selection?'':' 和逐字 quote'}。实质漏讲而没有可引句子时，说明缺失的内容。逐组基线退回须有对应的 point_checks 问题，口播问题留在 narration_checks。`:''):'');
 }

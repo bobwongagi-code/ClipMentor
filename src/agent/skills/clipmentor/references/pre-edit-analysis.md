@@ -65,6 +65,8 @@ The request excludes historical observations and self-evaluation. Read its concr
 }
 ```
 
+`buying_concern` 写在教学点本身。`teaching_basis.connection` 写清拍法给买家补上什么判断依据。`teaching_basis.exemplar` 用一个原则 ID。写入返回字段诊断时，按对应点修正再提交。
+
 `primary` 要讲清拍法与具体商品关注，`supporting` 提供上下文并用 `supports_point_id` 指向同组primary，`auxiliary` 可简短交代衔接。意义可由整组几句/短标共同承担，不机械每句重复全套公式。具体内容与事实仍须独立语义审核，`structurally_ready` 只证明登记/引用/范围可对照。
 
 当前没有自动签发“删掉已选教学任务”的独立范围豁免入口。`omit`可记录为待审提案，不代表已有制作许可；证据不足保留未知，不能写空洞解说凑覆盖。先分析清楚再选择值得讲的任务，不把所有动作都登记成必讲项。

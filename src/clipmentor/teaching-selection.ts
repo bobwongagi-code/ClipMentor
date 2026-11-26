@@ -12,6 +12,10 @@ export interface SourceInventory {
 export interface TeachingSelection {
   decision: string;
   omission_loss: string;
+  /** Plain-language synthesis of the filming choice and its immediate teaching payoff. */
+  first_glance?: string;
+  /** The specific question raised by an original hook taught by this unit. */
+  hook_curiosity?: { point_id: string; question: string };
   buyer_roles: BuyerRole[];
   basis: 'observed' | 'inferred';
   alternative?: { decision: string; reason: string; segment_ids: string[] };
@@ -32,6 +36,9 @@ export function isSourceInventory(value: unknown): value is SourceInventory {
 
 export function isTeachingSelection(value: unknown): value is TeachingSelection {
   return row(value) && note(value.decision) && note(value.omission_loss)
+    && (value.first_glance === undefined || note(value.first_glance))
+    && (value.hook_curiosity === undefined || note(value.first_glance) && row(value.hook_curiosity)
+      && note(value.hook_curiosity.point_id) && note(value.hook_curiosity.question))
     && notes(value.buyer_roles) && value.buyer_roles.length > 0
     && value.buyer_roles.every(role => buyerRoles.some(item => item === role))
     && (value.basis === 'observed' || value.basis === 'inferred')
@@ -43,6 +50,19 @@ export function isTeachingSelection(value: unknown): value is TeachingSelection 
 export function isUnselectedBuyerRoles(value: unknown): value is Partial<Record<BuyerRole, string>> {
   return row(value) && Object.entries(value).every(([role, reason]) =>
     buyerRoles.some(item => item === role) && note(reason));
+}
+
+/** Only main points carried by narration require a writing brief. */
+export function firstGlanceWritingUnits(breakdown: SourceBreakdown | undefined) {
+  if (!breakdown) return [];
+  const primary = new Set(breakdown.points.filter(point => point.role === 'primary').map(point => point.point_id));
+  return breakdown.units.flatMap(unit => {
+    if (!unit.coverage.some(entry => entry.treatment === 'explain' && primary.has(entry.point_id))) return [];
+    const hook = unit.teaching_selection?.hook_curiosity;
+    return [{ unit_id: unit.unit_id, first_glance: unit.teaching_selection?.first_glance, hook_curiosity: hook,
+      ...(hook && !unit.coverage.some(entry => entry.treatment === 'explain' && entry.point_id === hook.point_id && primary.has(entry.point_id))
+        ? { invalid_hook_point: true } : {}) }];
+  });
 }
 
 /** Author and reviewer prompts. Selection quality is decided in the existing evidence review. */

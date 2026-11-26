@@ -1,6 +1,6 @@
 import type {ProjectDoc} from '../../src/editor/types';
 import type {BlueprintOpinion,BlueprintOpinionConfirmation,BlueprintOpinionDifference,BlueprintOpinionPlacement} from '../../shared/clipmentor-blueprint-opinions';
-import {BLUEPRINT_OPINION_MAX_LENGTH} from '../../shared/clipmentor-blueprint-opinions';
+import {BLUEPRINT_OPINION_MAX_LENGTH,BLUEPRINT_OPINION_TOTAL_MAX_LENGTH} from '../../shared/clipmentor-blueprint-opinions';
 import {picturePhaseLineIds} from '../../src/clipmentor/blueprint-picture-notices';
 import {readBlueprint} from '../../src/clipmentor/blueprint-lint';
 import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
@@ -29,6 +29,7 @@ const ordinal=(value:string)=>{
 };
 const namedGroups=new RegExp(`第\\s*(${basicNumber})\\s*组`,'gu');
 const namedSentences=new RegExp(`第\\s*(${basicNumber})\\s*句`,'gu');
+const positiveSentence=new RegExp(`^(?:我(?:觉得|认为)\\s*)?第\\s*${basicNumber}\\s*句\\s*(?:我(?:觉得|认为)\\s*)?(?:(?:写|讲|说|读)得|听起来)?\\s*(?:很|挺|够|相当|比较)?(?:清楚|顺口|到位)[。！!]*$`,'u');
 const wholeWords=/(?:整体|全片|整份蓝图)/u;
 const negativeChange=/不(?:要|用)?(?:改|动|删|换|重写|调整)|别(?:动|改|删|换|重写|调整)/gu;
 const keepWords=/(?<!不要)(?<!别)(?<!不)保留|不(?:要|用)?(?:改|动|删|换|重写|调整)|别(?:动|改|删|换|重写|调整)|原样|不变|维持/u;
@@ -37,7 +38,7 @@ const praiseOnly=/^(?:(?:这|本)组|整体|全片|整份蓝图|第?\s*[0-9０-�
 const changeWords=/改|重做|重写|调整|删|去掉|去除|补|换|增加|缩短|压短|精简|简化|润色|有点绕|太绕|过长|太长|短一点|短点|啰[唆嗦]|不顺/u;
 const mentions=(pattern:RegExp,text:string)=>[...text.matchAll(pattern)].map(m=>ordinal(m[1]));
 const wantsChange=(text:string)=>changeWords.test(text.replace(negativeChange,''));
-const isPraise=(text:string)=>praiseWords.test(text)&&praiseOnly.test(text);
+const isPraise=(text:string)=>positiveSentence.test(text)||praiseWords.test(text)&&praiseOnly.test(text);
 const deletesSentence=new RegExp(`^(?:请)?(?:删掉|删除|去掉|去除)\\s*第\\s*${basicNumber}\\s*句$|^第\\s*${basicNumber}\\s*句\\s*(?:删掉|删除|去掉|去除)$`,'u');
 
 function captureBlueprintOpinions(doc:ProjectDoc,useCurrentPoints:boolean){
@@ -93,13 +94,15 @@ export function prepareBlueprintOpinions(doc:ProjectDoc,input:unknown,revision:s
  const seen=new Set<string|null>();
  let total=0;
  for(const entry of input){
-  if(!row(entry)||typeof entry.text!=='string'||!entry.text.trim()||entry.text.length>BLUEPRINT_OPINION_MAX_LENGTH||(total+=entry.text.length)>7200
+  if(!row(entry)||typeof entry.text!=='string'||!entry.text.trim()||entry.text.length>BLUEPRINT_OPINION_MAX_LENGTH
    ||Object.keys(entry).some(key=>key!=='unitId'&&key!=='text'&&key!=='keepPlacement')
    ||entry.unitId!==null&&(typeof entry.unitId!=='string'||!labels.some(unit=>unit.id===entry.unitId))
    ||seen.has(entry.unitId as string|null)||entry.keepPlacement!==undefined&&entry.keepPlacement!==true)
    throw Error('blueprint_opinion_binding_invalid');
+  total+=entry.text.length;
   seen.add(entry.unitId as string|null);
  }
+ if(total>BLUEPRINT_OPINION_TOTAL_MAX_LENGTH)throw Error('blueprint_opinion_total_too_long');
  const opinions=input as BlueprintOpinion[];
  const placements=opinions.flatMap<BlueprintOpinionPlacement>((entry,index)=>{
   const targets=[...new Set(mentions(namedGroups,entry.text))];
@@ -116,16 +119,20 @@ export function prepareBlueprintOpinions(doc:ProjectDoc,input:unknown,revision:s
  if(placements.length)return {placements};
  const compiled:Compiled[]=opinions.map(entry=>{
   const label=labels.find(unit=>unit.id===entry.unitId)?.label??'整体意见';
-  const clauses=entry.text.split(/[，,。；;\n]+|但是|不过|但(?=第)/u).map(text=>text.trim()).filter(Boolean);
+  const clauses=entry.text.split(/[，,。；;\n]+|但是|不过|但(?=\s*第)/u).map(text=>text.trim()).filter(Boolean);
   const changes=clauses.filter(wantsChange);
   const retained=(text:string)=>keepWords.test(text)||isPraise(text);
   const saysKeep=clauses.some(retained);
   const mixed=saysKeep&&changes.length>0;
+  const changeTargets=new Set(changes.flatMap(text=>mentions(namedSentences,text)));
+  if(changeTargets.size&&clauses.some(text=>!wantsChange(text)&&!retained(text)
+   &&mentions(namedSentences,text).some(number=>!changeTargets.has(number))))
+   throw Error(`${label}，请写清希望保留和修改的内容。`);
   if(saysKeep&&clauses.some(text=>wantsChange(text)?retained(text):!retained(text)))
    throw Error(`${label}，请写清希望保留和修改的内容。`);
   const edits=changes.length>0||!saysKeep;
   const actual=before.units.find(unit=>unit.id===entry.unitId)?.lines??before.overall.lines;
-  const change=changes.join('，')||entry.text;
+  const change=mixed?changes.join('，'):entry.text;
   if(!mixed)return {...entry,label,edits,change,keep:[]};
   const revise=[...new Set(changes.flatMap(text=>mentions(namedSentences,text)))];
   const explicitKeep=clauses.filter(text=>retained(text)&&!wantsChange(text)).flatMap(text=>mentions(namedSentences,text));

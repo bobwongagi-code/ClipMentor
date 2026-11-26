@@ -231,7 +231,10 @@ try{
   ends[0].unit_id='new_contact';ends[1].unit_id='existing_partner';
   const html=humanReviewBoardPage(merged,p.data,p.lint,materials);
   assert(html.includes('上传的 CTA 素材'));assert(html.includes('产品图＋Storyboard'));
-  assert(html.includes('共用片头与教学主体，按达人阶段生成两个片尾版本。'));
+  assert.match(html,/<h2>片尾<\/h2>/);
+  assert.equal((html.match(/class="ending"/g)??[]).length,2);
+  assert.equal((html.match(/请核对佣金等合作数字是否正确。/g)??[]).length,1);
+  assert.doesNotMatch(html,/共用片头与教学主体，按达人阶段生成两个片尾版本|片尾合作条款待核实/);
  });
  await test('P2 interval overlap oracle includes every original claim, sorts by time and excludes touching endpoints',()=>{
   for(const id of ['GM-G1','GM-G2','GM-G3','GM-G4','GM-G5']){

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Check, Download, Play, Send } from 'lucide-react'
-import { BLUEPRINT_OPINION_MAX_LENGTH, type BlueprintOpinion, type BlueprintOpinionConfirmation, type BlueprintOpinionDifference, type BlueprintOpinionPlacement } from '../../../shared/clipmentor-blueprint-opinions'
+import { BLUEPRINT_OPINION_MAX_LENGTH, BLUEPRINT_OPINION_TOTAL_MAX_LENGTH, type BlueprintOpinion, type BlueprintOpinionConfirmation, type BlueprintOpinionDifference, type BlueprintOpinionPlacement } from '../../../shared/clipmentor-blueprint-opinions'
 
 import { ProgressNode } from '../components/processing/ProgressNode'
 import { productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
@@ -13,11 +13,8 @@ type Task = {
   visualCriteria?: { digest: string }; downloadName?:string
   attachments?: {assetId:string;fileName:string}[]; deliveryUnavailable?:boolean
   boardIdentity?:string; blueprintRevision?: string; canApproveBlueprint?: boolean; blueprintMessage?: string
-  teachingDecisionChange?:string
   blueprintOpinionDifferences?:{overall?:BlueprintOpinionDifference;groups:BlueprintOpinionDifference[]}
   reviewGroups?:Array<{id:string;label:string}>
-  reviewEndings?:Array<{id:string;label:string;materials:Array<{id:string;name:string}>}>
-  savedReview?:{groups:GroupReview[];endings:Array<{id:string}>}
   canAcceptPreview?:boolean; reviewIssue?:ReviewIssue
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
 }
@@ -25,12 +22,10 @@ type Audience = 'new_contact' | 'existing_partner'
 type State = { task: Task | null; unavailable?: string; outputs?: {audience:Audience}[]; outputOwner?:{taskId:string;sequence:number} }
 type ActionReceipt = { accepted?: boolean; reason?: string; issue?:ReviewIssue; notesSaved?:boolean;
   opinionConfirmation?:BlueprintOpinionConfirmation;opinionPlacements?:BlueprintOpinionPlacement[] }
-type GroupReview = {id:string;decision:string;stance:'accepted'|'changes'|'pending'}
 type ReviewIssue = {kind:'content'|'gate'|'binding';message:string}
-const issueLabel={content:'内容缺口',gate:'疑似门禁误判',binding:'绑定或格式问题'}
+const issueLabel={content:'内容缺口',gate:'检查暂停',binding:'当前版本不可用'}
 type FeedbackDraft = {key:string;text:string;target?:string;confirmed?:boolean;start?:string;end?:string;kind?:'content'|'execution'}
 const noGroups:NonNullable<Task['reviewGroups']>=[]
-const noEndings:NonNullable<Task['reviewEndings']>=[]
 const serviceUnavailable = '制作服务暂时不可用。'
 const materialsUnavailable = '所需素材不齐全或无法读取，请重新核对上传素材。'
 
@@ -81,7 +76,6 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const [error, setError] = useState('')
   const [readError, setReadError] = useState('')
   const [actionIssue,setActionIssue]=useState<{key:string;issue:ReviewIssue}>()
-  const [savedGroupNotice,setSavedGroupNotice]=useState<string>()
   const [pendingAction, setPendingAction] = useState<{key:string;controller:AbortController}>()
   const [board, setBoard] = useState<{ key:string; revision: string; identity?:string; html: string }>()
   const [boardError, setBoardError] = useState('')
@@ -91,7 +85,6 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const [opinionReview,setOpinionReview]=useState<{key:string;entries:BlueprintOpinion[];confirmation?:BlueprintOpinionConfirmation;placement?:BlueprintOpinionPlacement}>()
   const [opinionNotice,setOpinionNotice]=useState<string>()
   const [confirmation, setConfirmation] = useState<{key:string;watched?:boolean;language?:boolean;acknowledged?:boolean}>()
-  const [groupDraft,setGroupDraft]=useState<{key:string;groups:GroupReview[];endingIds:string[]}>()
   const boardFrame = useRef<HTMLIFrameElement>(null)
   const nextRead = useRef(0)
   const latestRead = useRef(0)
@@ -138,9 +131,6 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const draft:FeedbackDraft=feedbackDraft?.key===actionKey?feedbackDraft:{key:actionKey,text:''}
   const feedback=draft.text
   const groups=task?.reviewGroups??noGroups
-  const endings=task?.reviewEndings??noEndings
-  const review=groupDraft?.key===boardKey?groupDraft:{key:boardKey,groups:task?.savedReview?.groups??[],
-    endingIds:task?.savedReview?.endings.map(ending=>ending.id)??[]}
   const opinionEntries=opinionDraft?.key===boardKey?opinionDraft.entries:undefined
   const pendingOpinion=opinionReview?.key===boardKey?opinionReview:undefined
   const hasOpinionDraft=opinionEntries?.some(entry=>entry.text.trim())===true
@@ -150,11 +140,6 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       :groups.some(group=>group.id===draft.target?.slice(6))&&draft.target?.startsWith('group:')
         ?{scope:'group',unitId:draft.target.slice(6),kind:draft.kind??'content'}:undefined
   const reviewIssue=(actionIssue?.key===actionKey?actionIssue.issue:undefined)??task?.reviewIssue
-  function changeReview(id:string,change:Partial<Omit<GroupReview,'id'>>){
-    const prior=review.groups.find(entry=>entry.id===id)??{id,decision:'',stance:'pending' as const}
-    setSavedGroupNotice(undefined)
-    setGroupDraft({...review,groups:[...review.groups.filter(entry=>entry.id!==id),{...prior,...change}]})
-  }
   const currentAction=useRef({key:actionKey,sequence:task?.sequence})
   currentAction.current={key:actionKey,sequence:task?.sequence}
   const actionController=useRef<AbortController>()
@@ -302,8 +287,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
         body: JSON.stringify({action:name,revision,boardIdentity:identity,renderId:task?.renderId,
           ...(name==='accept'?{previewWatched,languageConfirmed,visualCriteriaDigest:visual?.digest}:{}),
-          ...(name==='save_blueprint_review'?{blueprintReview:{groups:review.groups,endingIds:review.endingIds}}:{}),
-          ...(['approve_blueprint','produce_versions'].includes(name)?{blueprintReview:{scope:'whole_blueprint',groups:review.groups}}:{}),
+          ...(['approve_blueprint','produce_versions'].includes(name)?{blueprintReview:{scope:'whole_blueprint'}}:{}),
           ...(name==='revise_preview'?{text:feedback,feedbackTarget}:{}),
           ...(name==='revise_blueprint'?{blueprintOpinions:opinions,opinionConfirmation}:{})}),
       })
@@ -311,7 +295,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       let result = await readApiJson<ActionReceipt>(response)
       if(!stillCurrent())return
       if (response.status === 409 && result?.reason === 'review_board_reload' && revision
-        && (['approve_blueprint','revise_blueprint','produce_versions','save_blueprint_review'].includes(name))) {
+        && (['approve_blueprint','revise_blueprint','produce_versions'].includes(name))) {
         // This response is returned before any mutation. Restore exactly the
         // board the reviewer acted on before sending the same action once.
         if(!stillCurrent())return
@@ -358,7 +342,6 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       const confirmed = latest?.task?.status === 'completed' && !latest.task.deliveryUnavailable
         && !!task?.taskId && latest.task.taskId === task.taskId && latest.task.renderId === task.renderId
         && latest.task.sequence >= (currentAction.current.sequence ?? task.sequence)
-      if(name==='save_blueprint_review'&&latest?.task?.savedReview)setSavedGroupNotice(boardKey)
       if(name==='revise_blueprint'||name==='revise_preview'){
         setFeedbackDraft(current=>current?.key===actionKey&&current.text===feedback?undefined:current)
         setConfirmation(current=>current?.key===visualKey?undefined:current)
@@ -391,6 +374,10 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   function submitBlueprintOpinions(event:FormEvent) {
     event.preventDefault()
     const entries=opinionEntries?.filter(entry=>entry.text.trim())
+    if((entries?.reduce((total,entry)=>total+entry.text.length,0)??0)>BLUEPRINT_OPINION_TOTAL_MAX_LENGTH){
+      setError('意见总字数太多，请缩短后再提交。')
+      return
+    }
     if(entries?.length&&!pendingOpinion)void action('revise_blueprint',entries)
   }
 
@@ -405,7 +392,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const sharedBlueprint = showSharedBlueprint(sharedProgress)
   if(!state)return <p className="cm-caption" role="status">{readError || '正在读取制作状态…'}</p>
   if(state.outputs)return <>
-    <div className="cm-heading"><h1>{productionPageTitle(sharedProgress)}</h1><p>{sharedBlueprint?'共用片头与教学主体，片尾分别面向新建联和已合作达人。':'共用主体只制作一次，再生成两个片尾版本。'}</p></div>
+    <div className="cm-heading"><h1>{productionPageTitle(sharedProgress)}</h1></div>
     <div className="cm-output-list">
     {state.outputs.filter(output=>!sharedBlueprint || output.audience==='existing_partner').map(output=><section key={output.audience} aria-label={sharedBlueprint?'共用蓝图':output.audience==='new_contact'?'新建联达人版':'已合作达人版'}>
       <ProductionPanel assets={assets} onRecheck={onRecheck} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint} outputAudience={output.audience} sharedTask={sharedProgress} onTask={output.audience==='existing_partner'?reportSharedProgress:undefined} />
@@ -428,33 +415,11 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     </> : boardRevision || awaitingPreview || completed ? <>
       {!unifiedBlueprint && <div className={outputAudience?"cm-output-heading":"cm-heading"}><h1>{outputAudience?audienceTitle:reviewTitle}</h1></div>}
       <section className="cm-panel cm-work">
-        {boardRevision && currentBoard?.revision === boardRevision && task.teachingDecisionChange && <p>{task.teachingDecisionChange}</p>}
         {boardRevision && (currentBoard?.revision === boardRevision
           ? <iframe key={boardKey} ref={boardFrame} title="人审版蓝图" className="cm-review-board" sandbox="allow-scripts" srcDoc={currentBoard.html} onLoad={syncGroupOpinions} />
           : boardError ? <div className="cm-footer"><p role="status">{boardError}</p>
             <button className="cm-button secondary" onClick={() => setBoardReload(attempt => attempt + 1)}>重新加载审核板</button>
           </div> : <p role="status">正在生成审片板…</p>)}
-        {boardRevision && currentBoard?.revision===boardRevision && groups.length>0 && <section className="cm-feedback" aria-label="逐组人审">
-          <h2>逐组确认</h2>
-          {groups.map(group=>{
-            const entry=review.groups.find(row=>row.id===group.id)
-            return <fieldset key={group.id} className="cm-review-field" disabled={pending}>
-              <legend>{group.label}</legend>
-              <label>{group.label}教达人改哪个决定<input type="text" maxLength={500} value={entry?.decision??''} onChange={event=>changeReview(group.id,{decision:event.target.value})} /></label>
-              <label>{group.label}表态<select value={entry?.stance??''} onChange={event=>changeReview(group.id,{stance:event.target.value as GroupReview['stance']})}>
-                <option value="" disabled>选择表态</option><option value="accepted">认可</option><option value="changes">不认可</option><option value="pending">待定</option>
-              </select></label>
-            </fieldset>
-          })}
-          {endings.length>0&&<fieldset className="cm-review-field" disabled={pending}><legend>两种片尾</legend>
-            {endings.map(ending=><label key={ending.id}><input type="checkbox" checked={review.endingIds.includes(ending.id)} onChange={event=>{
-              setSavedGroupNotice(undefined)
-              setGroupDraft({...review,endingIds:event.target.checked?[...review.endingIds,ending.id]:review.endingIds.filter(id=>id!==ending.id)})
-            }} /> 已核对{ending.label} · {ending.materials.map(asset=>asset.name).join('、')}</label>)}
-          </fieldset>}
-          <button type="button" className="cm-button secondary" disabled={pending || !groupDraft || groupDraft.key!==boardKey} onClick={()=>void action('save_blueprint_review')}>保存表态</button>
-          {savedGroupNotice===boardKey&&<p role="status">表态已保存。</p>}
-        </section>}
         {(awaitingPreview || completed) && (task.renderId
           ? <video className="cm-final-video" controls preload="metadata" src={assetUrl('panel_video', 'renderId', task.renderId)} />
           : <p role="alert">预览暂时无法播放。</p>)}
@@ -505,14 +470,13 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
           </>
           <button className="cm-button secondary" disabled={pending || !feedbackTarget || !feedback.trim() || !task.renderId}><Send size={16} /> 提交修改</button>
         </form>}
-        {awaitingPreview&&task.feedbackUsed&&<p role="status">本次成片的集中返修已提交。如仍需修改，请联系维护侧或另开制作。</p>}
+        {awaitingPreview&&task.feedbackUsed&&<p role="status">本版修改机会已用完。</p>}
         <div className="cm-footer">
           {boardRevision && <button className="cm-button" disabled={pending || !!pendingOpinion || hasOpinionDraft || currentBoard?.revision !== boardRevision || !canConfirm} onClick={() => void action(task.canConfirmBlueprint?'produce_versions':'approve_blueprint')}>确认蓝图，开始制作</button>}
-          {boardRevision && !canConfirm && <p>{task.blueprintMessage ?? stopMessage ?? '蓝图检查尚未完成，暂不能开始制作。'}</p>}
+          {boardRevision && !canConfirm && (task.blueprintMessage ?? stopMessage) && <p>{task.blueprintMessage ?? stopMessage}</p>}
           {awaitingPreview && <>
             <fieldset className="cm-review-field" disabled={pending||!task.renderId}>
               <legend>终审确认</legend>
-              <p>系统已核对当前预览与审核回执。请实际看完并听审马来语后确认。</p>
               <label><input type="checkbox" checked={previewWatched} onChange={event => setPreviewConfirmation('watched',event.target.checked)} /> 看过成片</label>
               <label><input type="checkbox" checked={languageConfirmed} onChange={event => setPreviewConfirmation('language',event.target.checked)} /> 核过马来语</label>
             </fieldset>

@@ -677,6 +677,27 @@ for (const executor of [executeTool]) {
   for (const evidenceIds of [[], ['missing'], Array.from({ length: 9 }, (_, i) => 'F' + i)]) {
     assert((await executor('read_clipmentor_analysis', { view: 'evidence', evidenceIds }, context(base).ctx) as { error?: string }).error);
   }
+  const concernDraft = context(base);
+  const concernRecord = structuredClone(b);
+  const concern = concernRecord.points[0].buying_concern;
+  concernRecord.points[0].change_reason = 'Register the teaching evidence';
+  concernRecord.points[0].teaching_basis = {
+    selling_point: 'Demonstrated use', method: 'Keep the tool and target visible', connection: 'Locate the use position',
+    must_capture: 'Visible contact', claim_limit: 'No scent claim', difference: 'This source shows a location',
+    exemplar: 'complete-demo', evidence_ids: ['F1'],
+  };
+  const concernArgs = { action: 'set_source_breakdown', expectedRevision: 1, record: concernRecord, actor, reason: 'Check one concern owner' };
+  Object.assign(concernRecord.points[0].teaching_basis, {buying_concern: 'Different concern'});
+  const deniedConcern = await executor('revise_clipmentor_analysis', concernArgs, concernDraft.ctx) as { issues?: unknown };
+  assert.deepEqual(deniedConcern.issues,[{point_id:'P1',field:'teaching_basis.buying_concern',code:'conflicts_with_point_buying_concern'}]);
+  assert.equal(concernDraft.draft.getDoc().clipMentorAnalysis!.revision,1);
+  Object.assign(concernRecord.points[0].teaching_basis, {buying_concern:concern});
+  const acceptedConcern = await executor('revise_clipmentor_analysis', concernArgs, concernDraft.ctx) as { ok?: boolean };
+  assert(acceptedConcern.ok,JSON.stringify(acceptedConcern));
+  const savedConcern = concernDraft.draft.getDoc().clipMentorAnalysis!.source_breakdown!.points[0];
+  assert.equal(savedConcern.buying_concern,concern);
+  assert(!Object.hasOwn(savedConcern.teaching_basis!,'buying_concern'));
+  assert(Object.hasOwn(concernRecord.points[0].teaching_basis,'buying_concern'),'the input receipt remains untouched');
   const unknownDraft = context(base);
   const unknownWrite = await executor('revise_clipmentor_analysis', { action: 'set_source_breakdown', expectedRevision: 1,
     record: ignoredEntry.clipMentorAnalysis!.source_breakdown, actor, reason: 'Unknown playback field must be rejected' }, unknownDraft.ctx) as { error?: string };

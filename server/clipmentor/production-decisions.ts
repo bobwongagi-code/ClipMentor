@@ -85,11 +85,14 @@ export function pictureRepairStopped(task:Pick<ProductionTask,'status'|'error'>)
 }
 const narrationRepairStopped=(task:Pick<ProductionTask,'status'|'error'>)=>
  task.status==='blocked'&&task.error?.startsWith('Error: teaching_final_narration_repair_no_progress:');
+const sourceAnalysisStopped=(task:Pick<ProductionTask,'status'|'error'>)=>
+ task.status==='blocked'&&task.error==='Error: production_source_breakdown_no_progress';
 
 export function blueprintRepairStopped(task:Pick<ProductionTask,'status'|'error'>){
- return pictureRepairStopped(task)||narrationRepairStopped(task);
+ return pictureRepairStopped(task)||narrationRepairStopped(task)||sourceAnalysisStopped(task);
 }
 export function blueprintRepairNotice(task:Pick<ProductionTask,'status'|'error'|'repairContext'>){
+ if(sourceAnalysisStopped(task))return '原片分析已暂停，同一个填写问题再次出现。已上传素材仍在。';
  return narrationRepairStopped(task)?'讲解返修已暂停。候选与审核记录已保存，待核对同一缺口。':pictureRepairNotice(task);
 }
 export function pictureRepairNotice(task:Pick<ProductionTask,'status'|'error'|'repairContext'>){

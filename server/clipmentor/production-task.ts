@@ -89,7 +89,7 @@ export interface ProductionInput {
  humanBlueprintReview?:true;
  gatewayRecovery?:'bounded'|'none';
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
-  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
+  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';firstGlanceWriting?:true;salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
  reviewerBackend?:'codex';
  budget:EffectCounts&{maxElapsedMs:number;maxRepairs:number;routine?:EffectCounts};
@@ -146,14 +146,22 @@ export function panelAuthorCheckMatches(task:ProductionTask,revision:string,requ
  return artifact?.authorSelfCheck==='passed'&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
 }
 
+function incompletePanelAuthorAttachment(artifact:Record<string,unknown>|undefined){
+ // Earlier checkpoints used needs_human_review for a damaged attachment even
+ // when no business finding survived reference validation.
+ return artifact?.authorSelfCheckFinding===undefined
+  &&Array.isArray(artifact?.authorSelfCheckReferenceIssues)&&artifact.authorSelfCheckReferenceIssues.length>0;
+}
+
 export function panelAuthorNeedsHumanReview(task:ProductionTask,revision:string,requirementsDigest:string,artifact=task.completed.blueprint?.artifact){
  return artifact?.authorSelfCheck==='needs_human_review'&&typeof artifact.authorSelfCheckNotice==='string'
-  &&!!artifact.authorSelfCheckNotice.trim()&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
+  &&!!artifact.authorSelfCheckNotice.trim()&&!incompletePanelAuthorAttachment(artifact)
+  &&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
 }
 
 export function panelAuthorCheckPending(task:ProductionTask,revision:string,requirementsDigest:string,artifact=task.completed.blueprint?.artifact){
- return artifact?.authorSelfCheck==='pending'&&Array.isArray(artifact.authorSelfCheckReferenceIssues)
-  &&artifact.authorSelfCheckReferenceIssues.length>0&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
+ return (artifact?.authorSelfCheck==='pending'||artifact?.authorSelfCheck==='needs_human_review')
+  &&incompletePanelAuthorAttachment(artifact)&&panelAuthorCheckBound(task,revision,requirementsDigest,artifact);
 }
 
 
@@ -467,6 +475,7 @@ export function validateProductionInput(v:ProductionInput){
    ||(v.panelDelivery.bookends!==undefined&&v.panelDelivery.bookends!=='layered-v1')
    ||(v.panelDelivery.editorialPolicy!==undefined&&v.panelDelivery.editorialPolicy!=='exemplar-v1')
    ||(v.panelDelivery.selectionPolicy!==undefined&&(v.panelDelivery.selectionPolicy!=='v1'||v.panelDelivery.editorialPolicy!=='exemplar-v1'))
+   ||(v.panelDelivery.firstGlanceWriting!==undefined&&(v.panelDelivery.firstGlanceWriting!==true||v.panelDelivery.selectionPolicy!=='v1'))
    ||(v.panelDelivery.partnerEnding!==undefined&&v.panelDelivery.partnerEnding!=='product_storyboard_pdf')
    ||((v.panelDelivery.salesEvidenceId!==undefined||v.panelDelivery.salesEvidenceSha256!==undefined)
     &&(v.panelDelivery.bookends!=='layered-v1'||typeof v.panelDelivery.salesEvidenceId!=='string'||!v.panelDelivery.salesEvidenceId.trim()

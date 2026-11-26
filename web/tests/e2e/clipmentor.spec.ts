@@ -115,7 +115,7 @@ for (const status of ['blocked', 'awaiting_blueprint']) test(`current saved draf
     }
     await route.fulfill({ json: { task: { status, stage: 'copy_review', active: false, sequence: posts,
       revision: 'old-task', blueprintRevision: 'saved-current', hasBlueprintFeedback:!!feedback, blueprintFeedbackSummary:feedback?[feedback]:[],
-      canApproveBlueprint: false, dualBlueprint: true, approvalUnavailable: 'INTERNAL_STALE_REVIEW_SENTINEL' } } })
+      canApproveBlueprint: false, dualBlueprint: true, blueprintMessage:'蓝图检查尚未完成，暂不能开始制作。', approvalUnavailable: 'INTERNAL_STALE_REVIEW_SENTINEL' } } })
   })
   await page.goto('/')
   await expect(page.frameLocator('iframe').getByText('现行正式蓝图')).toBeVisible()
@@ -245,7 +245,7 @@ test('one confirmation starts both outputs without an audience choice',async({pa
     if(request.method()==='POST'){
       expect(request.postDataJSON()).toMatchObject({action:'produce_versions',revision:'current-draft'})
       expect(request.postDataJSON()).not.toHaveProperty('audience')
-      expect(request.postDataJSON().blueprintReview).toEqual({scope:'whole_blueprint',groups:[]})
+      expect(request.postDataJSON().blueprintReview).toEqual({scope:'whole_blueprint'})
       submitted=true
       await route.fulfill({json:{accepted:true}});return
     }
@@ -258,8 +258,8 @@ test('one confirmation starts both outputs without an audience choice',async({pa
   await page.goto('/')
   await expect(page.frameLocator('iframe').getByText('修改后的蓝图')).toBeVisible()
   const confirm=page.getByRole('button',{name:'确认蓝图，开始制作'})
-  await expect(page.getByRole('region',{name:'逐组人审'})).toBeVisible()
-  await expect(page.getByRole('checkbox',{name:/已核对.*达人版/}).first()).not.toBeChecked()
+  await expect(page.getByRole('region',{name:'逐组人审'})).toHaveCount(0)
+  await expect(page.getByRole('checkbox',{name:/已核对.*达人版/})).toHaveCount(0)
   await expect(page.getByLabel('反馈位置')).toHaveCount(0)
   await expect(confirm).toBeEnabled()
   await confirm.click()
@@ -305,6 +305,44 @@ test('both previews keep feedback, approval and downloads bound to their own end
   expect(actions).toEqual(['new_contact:revise_preview','existing_partner:accept','new_contact:accept'])
 })
 
+
+test('blueprint approval has optional opinions even when the server returns legacy review fields',async({page})=>{
+  await page.route('**/api/clipmentor/intake',route=>route.fulfill({json:{receipt:{projectId:'fixture',assets:['source','product','sales','cta'].map(id=>({id,name:id}))}}}))
+  const writes:unknown[]=[]
+  await page.route('**/api/clipmentor/production*',route=>{
+    if(route.request().method()==='POST'){
+      writes.push(route.request().postDataJSON())
+      return route.fulfill({json:{accepted:true}})
+    }
+    return new URL(route.request().url()).searchParams.get('view')==='panel_board'
+      ?route.fulfill({contentType:'text/html',headers:{'X-ClipMentor-Board-Identity':'current-board'},body:
+        '<h2>审核蓝图</h2><label>第 1 组意见<textarea data-blueprint-opinion="u"></textarea></label><section><h2>片尾</h2><h3>新建联达人</h3><h3>已合作达人</h3><p>请核对佣金等合作数字是否正确。</p></section>'})
+      :route.fulfill({json:{task:{status:'awaiting_blueprint',stage:'copy_review',active:false,sequence:1,
+        blueprintRevision:'r1',boardIdentity:'current-board',canConfirmBlueprint:true,dualBlueprint:true,manualNarrationReview:true,
+        reviewGroups:[{id:'u',label:'第 1 组'}],reviewEndings:[{id:'new_contact',label:'新建联达人',materials:[]}],
+        savedReview:{groups:[{id:'u',stance:'changes',decision:'历史表态'}],endings:[]},
+      }}})
+  })
+  await page.goto('/')
+  const board=page.frameLocator('iframe')
+  await expect(board.getByRole('textbox',{name:'第 1 组意见'})).toHaveValue('')
+  await expect(page.getByRole('textbox',{name:'整体意见'})).toHaveValue('')
+  for(const surface of [page,board]){
+    await expect(surface.getByRole('checkbox')).toHaveCount(0)
+    await expect(surface.getByRole('combobox')).toHaveCount(0)
+    await expect(surface.getByText(/逐组确认|人工口播确认|两种片尾|片尾合作条款待核实|教达人改哪个决定|反馈位置/)).toHaveCount(0)
+  }
+  await expect(board.getByRole('heading',{name:'新建联达人'})).toBeVisible()
+  await expect(board.getByRole('heading',{name:'已合作达人'})).toBeVisible()
+  await expect(page.getByRole('button',{name:'提交意见'})).toBeDisabled()
+  const confirm=page.getByRole('button',{name:'确认蓝图，开始制作'})
+  await expect(confirm).toBeEnabled()
+  expect(writes).toHaveLength(0)
+  await confirm.click()
+  expect(writes).toEqual([{
+    action:'produce_versions',revision:'r1',boardIdentity:'current-board',blueprintReview:{scope:'whole_blueprint'},
+  }])
+})
 
 test('long spoken feedback is presented as concise points without exposing the raw monologue',async({page})=>{
   const points=['片头：展示成绩，用同款成绩提问引入拆解。','双结尾：新建联用本品CTA，已合作用本品Storyboard。','人审板：精简技术信息，补齐原片口播中文。']
