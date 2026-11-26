@@ -21,6 +21,24 @@ const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){ret
  assert.equal(task.status,'blocked');
  assert.match(saved.error??'',/execution_mapping_repair_no_progress/);
 }
+for(const finish of ['MAX_TOKENS','STOP']){
+ const task=fresh();task.stage='self_check';
+ task.completed.export={at:1,artifact:{revision:'rendered',renderId:'kept-render'}};
+ const receipt={result:{finish_reasons:[finish],issues:['invalid_judgment_schema']},
+  effective_review:{can_use_as_pass:false,blockers:['invalid_judgment_schema']}};
+ const visited:string[]=[];
+ await advanceProductionTask(task,async current=>{
+  visited.push(current.stage);
+  return {artifact:{receipt},repair:'edit'};
+ },store);
+ assert.deepEqual(visited,['self_check'],'a broken receipt must not dispatch editing or export');
+ assert.equal(task.status,'blocked');
+ assert.equal(task.stage,'self_check');
+ assert.equal(saved.completed.export?.artifact.renderId,'kept-render');
+ assert.deepEqual(saved.repairContext?.receipt,receipt);
+ assert.equal(saved.error,finish==='STOP'?'Error: preview_review_invalid_judgment_schema':'Error: preview_review_incomplete_generation');
+ assert.deepEqual(saved.attempts,{model:0,review:0,observation:0,tts:0,render:0});
+}
 for(const mode of ['missing-evidence','same-finding','same-group-finding','intervening-edit-error','changed-finding'] as const){
  const task=fresh();task.stage='self_check';task.input.budget.maxRepairs=3;
  let checks=0,edits=0;

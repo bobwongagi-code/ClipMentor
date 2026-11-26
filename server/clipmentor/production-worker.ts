@@ -2,7 +2,7 @@ import {recoveredAnalysisWrite,sourceBreakdownFailures} from './production-analy
 import {frozenTeachingTopics,sourceClosingPolicy,sourceTeachingAdvice} from './production-source-policy';
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
 import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
-import {pictureRepairWriteError} from './production-capacity-repair';
+import {openingUnderlayShortfall,pictureRepairWriteError} from './production-capacity-repair';
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
 import {firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
@@ -50,7 +50,7 @@ import {previewBlueprintAlignmentDigest} from './preview-review';
 import {productionDeliverables} from './production-deliverables';
 import {collectSavedPreviewVisualEvidence} from './preview-visual-evidence';
 import {productionOpeningComparison,productionReviewRequirements,productionTeachingBrief,assertConfirmedReviewGroups} from './production-task';
-import {assertSharedProduction,publishedProductionParent,selectProductionAudience} from './production-continuation';
+import {assertSharedProduction,priorAuthorCheckForOpeningAdjustment,publishedProductionParent,selectProductionAudience} from './production-continuation';
 import {confirmedOutputCopyLocks,productionBlueprintDifferences} from './production-blueprint-opinions';
 import {readApprovedOutputSource} from './production-approved-source';
 import {assertVisualCriteriaPlan,visualCriteriaPlanReceiptMatches,boundVisualCriteria,visualCriteriaPlanApproved,teachingReferenceInputs} from './visual-done-criteria';
@@ -208,7 +208,9 @@ async function runProductionCopyReview({
  const authorCriteria=productionAuthorCriteria(task,policy,doc),authorCriteriaDigest=digestValue(authorCriteria);
  const repairRequirements=()=>({artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:'copy_review' as const});
  const digest=prepared.reviewed.subject.digest;
- if(task.input.humanBlueprintReview){
+ const priorAuthorCheck=task.input.humanBlueprintReview&&!panelDraft
+  ?await priorAuthorCheckForOpeningAdjustment(task,doc,prepared.rawPacket,teachingBriefDigest):undefined;
+ if(task.input.humanBlueprintReview&&!priorAuthorCheck){
   const pictures=panelScope?deliveryPictureBindings(doc,prepared.rawPacket.delivery_sections):undefined;
   const hostDeliveryEvidence:Record<string,unknown>|undefined=pictures?{
    pictureBindings:pictures,
@@ -279,16 +281,22 @@ async function runProductionCopyReview({
   if('delivery_issues' in gate&&gate.delivery_issues?.some(issue=>['opening_comparison_review_missing_or_stale','ending_picture_review_missing_or_stale'].includes(issue)))
    return {artifact:{revision:editor.revision,receipt:result,review_contract_recheck:true},repair:'copy_review'};
   const repair=await currentReviewRepair(editor.getDoc());
+  if(confirmedSelection&&repair.status==='bound'&&repair.units.some(unit=>unit.group_validation?.layer==='L1'
+   &&'issues' in unit.group_validation&&unit.group_validation.issues?.some(issue=>issue.endsWith(':l1_evidence_does_not_match_group'))))
+   throw Error('confirmed_copy_review_reference_binding_invalid');
+
   if(task.input.humanBlueprintReview&&(repair.status!=='bound'||
    !/^copy_(?:(?:group|teaching|narration|delivery)_)?review_not_passed$/.test(gate.code))){
    throw new Error(`独立审核门禁无法推进：${gate.code}`);
   }
   if(task.input.budget.routine&&needsVisualReviewCompletion(repair))
    return {artifact:{receipt:result,revision:editor.revision,blueprint_digest:digest,repair,review_contract_recheck:true},repair:'copy_review'};
+  if(priorAuthorCheck)throw Error('opening_picture_adjustment_review_not_passed:'+gate.code);
   return {artifact:{receipt:result,revision:editor.revision,blueprint_digest:digest,repair},repair:'blueprint'};
  }
  const productionDifferences=approvedDraft?productionBlueprintDifferences(approvedDraft,editor.getDoc()):undefined;
  return {artifact:{revision:editor.revision,gate,receipt:result,blueprint_digest:digest,requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),...(task.input.humanBlueprintReview?{authorSelfCheck:'passed'}:{}),
+  ...(priorAuthorCheck?{priorAuthorCheck}:{}),
   ...(productionDifferences?{productionDifferences}:{}),
   ...(task.input.panelDelivery?{panelDeliveryVerified:true}:{})}};
 }
@@ -565,7 +573,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }
   // Import saved neutral source evidence before author/self-check/review, not only
   // after exhausting a repair limit. Scoped repairs keep the evidence shown to the reviewer.
-  if(!opinions&&(task.stage==='blueprint'||task.stage==='copy_review')){
+  // A saved observation remains readable on a confirmed continuation. Importing
+  // it into segment registration would change what the editor already approved.
+  if(!approvedOutput&&!opinions&&(task.stage==='blueprint'||task.stage==='copy_review')){
    const operations=completedSourceEvidenceOperations(task);
    let changed=false;
    for(const id of operations){
@@ -792,6 +802,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      blueprintReadiness:await productionBlueprintReadiness(saved.doc,task.input.voice),semantic_quality:'not_certified_by_structure'}};
    }
   }
+  if(task.stage==='edit'){
+   const shortfall=openingUnderlayShortfall(doc);
+   if(shortfall)throw Error(`production_opening_underlay_shortfall:${shortfall.sectionId}:${shortfall.measured}:${shortfall.available}`);
+  }
   if(task.stage==='export')return await runProductionExport(task,editor,doc,stage.signal);
   if(task.stage==='self_check'){
    const exported=task.completed.export?.artifact,src=exported?.path??exported?.downloadUrl;
@@ -863,7 +877,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     }
    }
   }
-  const recoveryTask=task.stage==='blueprint'&&!pictureOnlyRepair&&!task.sourceObservationUnavailableOperation?(task.repairContext?.source_observation_recovery
+  const recoveryTask=!approvedOutput&&task.stage==='blueprint'&&!pictureOnlyRepair&&!task.sourceObservationUnavailableOperation?(task.repairContext?.source_observation_recovery
    ??(!currentSourceOperation&&productionSourceObservationAllowed(task)?evidenceTask:undefined)):undefined;
   let recoveredSourceOperation:string|undefined=currentSourceOperation;
   if(recoveryTask){
@@ -938,7 +952,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   const feedbackSource=task.stage==='blueprint'?task.blueprintFeedback:undefined;
   const run=createRun({projectId:task.projectId,sessionGeneration:await currentAgentSessionGeneration(task.projectId),backend:task.input.authorBackend??'api',provider:task.input.author.provider,model:task.input.author.model,context:{productionTaskId:task.taskId,stage:task.stage}});
   await flushRunPersistence(run);
-  const sourceObservationAllowed=!panelDraft&&productionSourceObservationAllowed(task,recoveredSourceOperation);
+  const sourceObservationAllowed=!approvedOutput&&!panelDraft&&productionSourceObservationAllowed(task,recoveredSourceOperation);
   const tools=canonicalServerRunToolCatalog(false,true).filter(s=>(hostNames.has(s.name)||isExternalServerDirectTool(s.name))&&productionStageToolAllowed(task.stage,s.name)
    &&(sourceObservationAllowed||s.name!=='observe_clipmentor_source_video'));
   const breakdownStop=new AbortController();

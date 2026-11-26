@@ -19,7 +19,7 @@ import type {ReviewApiConfig} from './copy-review-api';
 import {openingComparisonCriterion,openingComparisonShape,parseProductionSourceCriteria,sourcePerformanceCriterion,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {frozenTeachingTopics} from './production-source-policy';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
-import {previewAlignmentFindingKeys,previewAlignmentRepairPause} from './preview-review';
+import {previewAlignmentFindingKeys,previewAlignmentRepairPause,previewReceiptFailure} from './preview-review';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest,matchesExportedPreviewProject} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
@@ -99,7 +99,7 @@ export interface ProductionTask {
  productionChild?:{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'};
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
  sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
- blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;confirmedAt:number};
+ blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;openingPictureAdjustment?:{before:string;after:string};confirmedAt:number};
  blueprintReview?:BlueprintReviewRecord;
  finalAcceptance?:{renderId:string;watched:true;malayReviewed:true;confirmedAt:number};
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
@@ -702,7 +702,8 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      pause=await structuralRepairPause(task,issue,source?.asset_id===task.input.sourceAssetId&&saved?.revision===task.projectRevision
       ?source.sourceContentHash:undefined);
     }
-    if(task.stage==='self_check')pause=previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt);
+    if(task.stage==='self_check')pause=previewReceiptFailure(result.artifact.receipt)
+     ??previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt);
     const executionError=result.artifact.execution_validation_error;
     if(task.stage==='edit'&&typeof executionError==='string'&&executionError===task.repairContext?.execution_validation_error)
      pause='execution_mapping_repair_no_progress 待维护侧核对 '+executionError;
@@ -777,6 +778,13 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      throw new Error('human_blueprint_verified_receipts_missing');
     humanApprovalRequired=!task.blueprintApproval||task.blueprintApproval.digest!==result.artifact.blueprint_digest
      ||typeof task.blueprintApproval.requirementsDigest!=='string'||task.blueprintApproval.requirementsDigest!==result.artifact.requirementsDigest;
+    if(humanApprovalRequired&&task.blueprintApproval?.requirementsDigest===result.artifact.requirementsDigest
+     &&task.blueprintApproval?.teachingBrief?.confirmedGroups?.length){
+     const {doc,guard}=await checkedHumanBlueprint(task);
+     const {confirmedProductionRefinement}=await import('./production-continuation');
+     const approvalGuard=await confirmedProductionRefinement(task,doc);
+     if(approvalGuard){humanApprovalRequired=false;reviewGuards=[guard,approvalGuard];}
+    }
     if(humanApprovalRequired&&task.blueprintOpinions&&!task.repairContext?.pending_blueprint_feedback){
      const {guard}=await checkedHumanBlueprint(task);
      reviewGuards=[guard];
@@ -794,7 +802,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    if(humanApprovalRequired){
     task.status='awaiting_blueprint';await publishStage(reviewGuards);break;
    }
-   await publishStage();index++;
+   await publishStage(reviewGuards);index++;
   }
   if(task.status==='running'){task.status='awaiting_review';await publishStage();}
   if(abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user'))abort.signal.throwIfAborted();

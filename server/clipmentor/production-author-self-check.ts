@@ -426,6 +426,19 @@ export async function checkProductionAuthorBlueprint(
  const formatRetry=task.effects?.[effectKey(currentName+':format-retry')];
  if(formatRetry&&(first?.kind!=='model'||formatRetry.kind!=='model'))
   throw new Error('blueprint_author_self_check_recovery_binding_mismatch');
+ // A repaired review contract may use another review operation on the same
+ // subject. Reuse the exact author attachment, without borrowing a verdict
+ // from a different draft, guide, requirement or repair input.
+ if(!first&&!formatRetry&&task.blueprintApproval?.teachingBrief?.confirmedGroups?.length){
+  const earlier=Object.entries(task.effects).findLast(([key,effect])=>
+   key.startsWith('copy_review:')&&key.endsWith(':'+currentName)&&effect.kind==='model'&&effect.status==='completed');
+  if(earlier){
+   const effect=earlier[1],result=effect.result as AuthorCheckResult|undefined;
+   if(result?.digest!==reviewed.subject.digest||result.sourceDigest!==sourceDigest||result.runId!==effect.operationId)
+    throw Error('blueprint_author_self_check_recovery_binding_mismatch');
+   return {...result,checks:validateAuthorSelfCheck(JSON.stringify(result.checks),source)};
+  }
+ }
  const legacy=task.effects?.[effectKey(legacyName)];
  const useLegacy=!panelDraft&&!exemplarPolicy&&!first&&!formatRetry&&legacy?.kind==='model';
  const effectBase=useLegacy?legacyName:currentName;

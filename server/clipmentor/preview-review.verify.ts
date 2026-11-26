@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   assertExternalVideoUrlSize, buildPreviewReviewRequest, evaluatePreviewTeachingJudgment,
-  reviewClipMentorPreview, validatePreviewReviewInput,
+  reviewClipMentorPreview, validatePreviewReviewInput, previewReceiptFailure,
 } from './preview-review.ts';
 import type { PreviewReviewInput, PreviewTeachingJudgment, ReviewReceipt } from './preview-review.ts';
 
@@ -37,10 +37,20 @@ assert.doesNotThrow(() => assertExternalVideoUrlSize(14_525_235));
 assert.throws(() => assertExternalVideoUrlSize(42_647_784), /15MB/);
 assert.doesNotThrow(() => assertExternalVideoUrlSize(15_000_000));
 assert.throws(() => assertExternalVideoUrlSize(15_000_001));
+assert.equal(previewReceiptFailure({result:{finish_reasons:['MAX_TOKENS'],issues:['invalid_judgment_schema']}}),'preview_review_incomplete_generation');
+assert.equal(previewReceiptFailure({result:{finish_reasons:['STOP'],issues:['invalid_judgment_schema']}}),'preview_review_invalid_judgment_schema');
+assert.equal(previewReceiptFailure({result:{finish_reasons:['STOP'],issues:['U1:teaching:not_supported']}}),undefined);
+assert.equal(previewReceiptFailure({result:{finish_reasons:['STOP'],issues:[]}}),undefined);
+
 const video = new Uint8Array([1, 2, 3, 4]);
 const built = buildPreviewReviewRequest(video, input);
 assert.equal(buildPreviewReviewRequest(video, input).request_sha256, built.request_sha256);
 assert.notEqual(buildPreviewReviewRequest(new Uint8Array([1, 2, 3, 5]), input).request_sha256, built.request_sha256);
+const originalRequest=buildPreviewReviewRequest(video,input,'original');
+assert.equal(built.input_sha256,originalRequest.input_sha256);
+assert.notEqual(built.request_sha256,originalRequest.request_sha256);
+assert.match(JSON.parse(built.body).contents[0].parts[1].text,/先完成全部 coverage、continuity/);
+assert.doesNotMatch(JSON.parse(originalRequest.body).contents[0].parts[1].text,/先完成全部 coverage、continuity/);
 const request = JSON.parse(built.body);
 assert.deepEqual(Buffer.from(request.contents[0].parts[0].inlineData.data, 'base64'), Buffer.from(video));
 assert.equal(request.contents[0].parts[0].fileData, undefined);

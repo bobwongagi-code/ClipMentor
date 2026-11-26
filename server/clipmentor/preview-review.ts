@@ -169,6 +169,15 @@ export function previewAlignmentFindingKeys(receipt:unknown){
   ];
 }
 
+export function previewReceiptFailure(receipt:unknown):string|undefined{
+ if(!object(receipt)||!object(receipt.result))return;
+ const result=receipt.result;
+ if(Array.isArray(result.finish_reasons)&&(result.finish_reasons.length!==1||result.finish_reasons[0]!=='STOP'))
+  return 'preview_review_incomplete_generation';
+ if(Array.isArray(result.issues)&&result.issues.includes('invalid_judgment_schema'))
+  return 'preview_review_invalid_judgment_schema';
+}
+
 export function previewAlignmentRepairPause(previous:unknown,current:unknown):string|undefined{
   if(!object(current)||!object(current.effective_review)||!text(current.effective_review.blueprint_alignment_input_sha256)
     ||!Array.isArray(current.effective_review.blockers))return;
@@ -179,7 +188,9 @@ export function previewAlignmentRepairPause(previous:unknown,current:unknown):st
   if(Array.isArray(previous)&&previewAlignmentFindingKeys(current).some(key=>previous.includes(key)))return 'preview_blueprint_alignment_no_progress';
 }
 
-function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: PreviewReviewInput) {
+export type PreviewReviewFormat='compact'|'original';
+
+function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: PreviewReviewInput, format:PreviewReviewFormat) {
   const clean = validatePreviewReviewInput(input);
   const {visual_criteria:criteria,...material}=clean;
   const visualInstruction=criteria?.some(c=>c.pictureStage!==undefined)?'用实际导出视频指定pictureStage的画面回答问题；同一point的多个单元逐个核对，每段给定位在本单元窗口内的视觉证据，不能以一组代全部，缺该阶段填insufficient_evidence。参照图仅用于对比。':'用实际导出视频的本段画面回答每个问题，参照图仅用于对比。';
@@ -194,7 +205,8 @@ function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: 
  ?'\n以 delivery/ 开头的是交付验收。根据实际导出像素和口播判断所列要求，逐项给时间证据；teaching 字段在这里填交付效果，无需教学知识。coverage 的每项正向结论（包括 delivery/criterion/ 项）都必须在自己的teaching.evidence中给至少一条与本段相交的visual_organization证据；口播提问标准也要另附实际画面证据，不能只给narration或借用其他coverage行。片头可用本段和相邻画面核承接。'
  :''}${criteria?'\n用户原话、问题和参照另附。'+visualInstruction+'无法在实际导出中定位时填 insufficient_evidence。':''}${clean.check_blueprint_alignment?
  '\n逐点用本组实际画面、字幕或口播核对 approved_connection 和 filming_conditions：具体说出实际内容怎样兑现已审手法和购买判断依据，没兑现填 not_supported，证据不清填 insufficient_evidence。逐组 continuity.teaching 核对已审原声与讲解顺序、approved_narration 和 approved_cues 是否在对应阶段或句子出现且指向本组。短标附 output_ranges 时，在给定阶段时窗内引用。教学证据必须落在 approved_teaching_ranges 内（没有时用 output_range_seconds），跨段则分条。逐项短标给本组 visual_organization 证据，quote 逐字记录实际看到的文字，同一短标在本组可共用一条证据。reference_text 是工程记录，不可充当实际听到或看到的证明，也不代表额外文字已获批准。\n顶层另必填 blueprint_alignment（同“判断”结构）：连续检查整片（含组间及片尾），核查是否有未审新增、替换的教学论断、口播、短标或视觉主张。发现则填 not_supported 并给成片位置；无法核清填 insufficient_evidence；确认兑现已审范围且无此类新增才填 supported，简述检查范围并给实际时间证据。允许已审原声、背景、片头片尾和正常画面组织。':''
- }`;
+ }`+(format==='compact'?
+  '\n先完成全部 coverage、continuity 和要求的全片判断，再检查 JSON 闭合。observed 与 reasoning 只写短句，指出当前判断所需的对象和位置，避免重述任务或复制一整段画面。相同承接证据可以引用同一实际区间。只保留足以支撑当前判断的证据，必须的单元、时间、引文和独立视觉证据仍逐项填写。':'');
   const shell = { contents: [{ role: 'user', parts: [
     part, { text: instruction },
   ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json' } };
@@ -204,15 +216,15 @@ function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: 
 }
 
 /** Pure bounded preflight without reading/base64-encoding the whole file or minting an unverified URL. */
-export function previewReviewIdentity(sha256:string, bytes:number, input:PreviewReviewInput) {
+export function previewReviewIdentity(sha256:string, bytes:number, input:PreviewReviewInput, format:PreviewReviewFormat='compact') {
   if(!/^[a-f0-9]{64}$/.test(sha256)||!Number.isSafeInteger(bytes)||bytes<=0)throw Error('Invalid preview media identity');
-  const {shell,clean,instruction}=previewReviewShell({inlineData:{mimeType:'video/mp4',data:''},videoMetadata:{fps:5}},input);
+  const {shell,clean,instruction}=previewReviewShell({inlineData:{mimeType:'video/mp4',data:''},videoMetadata:{fps:5}},input,format);
   if(Buffer.byteLength(JSON.stringify(shell))+4*Math.ceil(bytes/3)>INLINE_REQUEST_MAX_BYTES)throw Error('Preview exceeds bounded inline request size');
   return {input:clean,video_sha256:sha256,input_sha256:hash(JSON.stringify(clean)),instruction_sha256:hash(instruction),version:PREVIEW_REVIEW_VERSION,
     logical_request_sha256:videoRequestDigest(shell,{sha256,bytes})};
 }
-export function buildPreviewReviewRequest(video: VideoInput, input: PreviewReviewInput) {
-  const media=videoInput(video),{shell,clean,instruction}=previewReviewShell(media.part,input);
+export function buildPreviewReviewRequest(video: VideoInput, input: PreviewReviewInput, format:PreviewReviewFormat='compact') {
+  const media=videoInput(video),{shell,clean,instruction}=previewReviewShell(media.part,input,format);
   const body = JSON.stringify(shell);
   if (Buffer.byteLength(body) > INLINE_REQUEST_MAX_BYTES) throw new Error('Inline request exceeds size limit');
   return { body, input: clean, video_sha256: media.sha256, input_sha256: hash(JSON.stringify(clean)),
@@ -366,10 +378,10 @@ export function parsePreviewTeachingJudgment(raw: string): unknown {
 /** One call, no hidden repair/retry/provider switch. Errors never echo keys or upstream bodies. */
 export async function reviewClipMentorPreview(
   video: VideoInput, input: PreviewReviewInput,
-  deps: { key: string; signal?: AbortSignal; post: (body: string, key: string, signal: AbortSignal) => Promise<{ status: number; body: unknown }> },
+  deps: { key: string; signal?: AbortSignal; format?:PreviewReviewFormat; post: (body: string, key: string, signal: AbortSignal) => Promise<{ status: number; body: unknown }> },
 ) {
   if (!deps.key.trim() || /[\r\n]/.test(deps.key)) throw new Error('Preview review server credential unavailable');
-  const request = buildPreviewReviewRequest(video, input);
+  const request = buildPreviewReviewRequest(video, input, deps.format);
   let response: { status: number; body: unknown };
   const signal=deps.signal ? AbortSignal.any([deps.signal,AbortSignal.timeout(PREVIEW_REVIEW_TIMEOUT_MS)]) : AbortSignal.timeout(PREVIEW_REVIEW_TIMEOUT_MS);
   signal.throwIfAborted();

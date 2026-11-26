@@ -184,30 +184,52 @@ function groupL1EvidenceIssues(review: GroupReview, unit: TeachingPacket['units'
           ? [line.caption_lines.join(' ')] : ref.channel === 'label' ? line.labels : [];
         return matchesCopyQuote(ref.quote, candidates);
       }
-      if (ref.kind !== 'visual' || (ref.phase !== 'original' && ref.phase !== 'explanation') || typeof ref.source_seconds !== 'number') return false;
-      const time = ref.source_seconds;
-      if (ref.phase === 'original') {
-        const windows = window ? window.originals : unit.picture_plan?.original_source_ranges;
-        if (!windows?.some(range => l1SourceAt(time,range))) return false;
-      } else {
-        const parts = window?.explanations ?? unit.picture_plan?.line_source_ranges.map(line => ({lineId:line.line_id,source:line.source_range_seconds}));
-        if (!parts?.some(part => {
-          const line = unit.picture_plan?.line_source_ranges.find(line => line.line_id === part.lineId);
-          if (time===part.source[1]&&line?.context_source_ranges?.some(({source_range_seconds:[start,end]})=>time===start&&time===end)) return true;
-          if (!l1SourceAt(time,part.source)) return false;
-          const selected = [...(line?.evidence_source_ranges??[]),...(line?.context_source_ranges??[])];
-          return !selected.length || selected.some(slice => l1SourceAt(time,slice.source_range_seconds));
-        })) return false;
-      }
-      const item = source.find(evidence => evidence.evidence_id === ref.evidence_id);
-      // The observation header is generated from the registered evidence kind.
-      if (!item?.time_seconds?.length || !/^\[(?:source_frame|visible_action); /u.test(item.observation)) return false;
-      const [start, end] = item.time_seconds;
-      if (!(end === undefined || start === end ? time === start : time >= start && time < end)) return false;
-      return unit.points.some(point => point.treatment !== 'omit' && point.evidence_ids.includes(item.evidence_id));
+      return ref.kind==='visual'&&typeof ref.source_seconds==='number'&&
+        groupVisualEvidenceValid(unit,source,window,ref.phase,ref.source_seconds,ref.evidence_id);
     });
     return valid ? [] : [id + ':l1_evidence_does_not_match_group'];
   });
+}
+
+function groupVisualEvidenceValid(unit:TeachingPacket['units'][number],source:TeachingPacket['source_evidence'],
+ window:ReturnType<typeof playbackGroups>[number]|undefined,phase:unknown,time:number,evidenceId:unknown){
+ if(phase!=='original'&&phase!=='explanation')return false;
+  if (phase === 'original') {
+    const windows = window ? window.originals : unit.picture_plan?.original_source_ranges;
+    if (!windows?.some(range => l1SourceAt(time,range))) return false;
+  } else {
+    const parts = window?.explanations ?? unit.picture_plan?.line_source_ranges.map(line => ({lineId:line.line_id,source:line.source_range_seconds}));
+    if (!parts?.some(part => {
+      const line = unit.picture_plan?.line_source_ranges.find(line => line.line_id === part.lineId);
+      if (time===part.source[1]&&line?.context_source_ranges?.some(({source_range_seconds:[start,end]})=>time===start&&time===end)) return true;
+      if (!l1SourceAt(time,part.source)) return false;
+      const selected = [...(line?.evidence_source_ranges??[]),...(line?.context_source_ranges??[])];
+      return !selected.length || selected.some(slice => l1SourceAt(time,slice.source_range_seconds));
+    })) return false;
+  }
+  const item = source.find(evidence => evidence.evidence_id === evidenceId);
+  // The observation header is generated from the registered evidence kind.
+  if (!item?.time_seconds?.length || !/^\[(?:source_frame|visible_action); /u.test(item.observation)) return false;
+  const [start, end] = item.time_seconds;
+  if (!(end === undefined || start === end ? time === start : time >= start && time < end)) return false;
+  return unit.points.some(point => point.treatment !== 'omit' && point.evidence_ids.includes(item.evidence_id));
+}
+
+/** Offer only references that the gate can bind to these sampled frames. */
+export function plannedGroupVisualReferences(packet:TeachingPacket,samples:readonly {unit_id:string;phase:string;source_seconds:number}[]){
+ const labels=[];
+ for(const unit of packet.units){
+  const groups=playbackGroups(unit);
+  for(const [index,group] of (groups.length?groups:[undefined]).entries()){
+   const evidence=[...new Set(unit.points.filter(point=>point.treatment!=='omit').flatMap(point=>point.evidence_ids))];
+   const picks=samples.filter(frame=>frame.unit_id===unit.unit_id&&frame.phase!=='context').flatMap(frame=>{
+    const ids=evidence.filter(id=>groupVisualEvidenceValid(unit,packet.source_evidence,group,frame.phase,frame.source_seconds,id));
+    return ids.length?[{phase:frame.phase,source_seconds:frame.source_seconds,evidence_ids:ids}]:[];
+   });
+   labels.push({unit_id:unit.unit_id,group_id:'G'+(index+1),picks});
+  }
+ }
+ return labels;
 }
 
 function l1SourceAt(time:number,[start,end]:[number,number]) {

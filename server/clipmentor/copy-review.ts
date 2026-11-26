@@ -7,7 +7,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CopyReviewRequest, CopyReviewResult, CopyReviewFailure } from '../../shared/clipmentor-copy-review';
 import { COPY_REVIEW_INPUT_POLICY, COPY_REVIEW_FAILURES, isCopyReviewFailure } from '../../shared/clipmentor-copy-review';
-import { assessTeachingReview, buildCopyTeachingReviewRequest, COPY_REVIEW_PROTOCOL, isCopyProductionReview,
+import { plannedGroupVisualReferences, assessTeachingReview, buildCopyTeachingReviewRequest, COPY_REVIEW_PROTOCOL, isCopyProductionReview,
   type CopyProductionReview, type TeachingEnvelope, assessNarrationChecks, assessGroupReview, normalizeGroupReview, GroupReviewContractError, checkCopyFindingQuotes } from '../../src/clipmentor/production-gate';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from './local-operation-lock';
@@ -242,9 +242,9 @@ function endingReviewPrompt(request:CopyReviewRequest,criteria:BoundVisualCriter
   +' 共用回执绑定：'+digestValue(reused);
 }
 
-function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,mode:false|'legacy-selection'|'selection-v1'=false): string {
+function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,mode:false|'legacy-selection'|'selection-v1'|'bound-selection-v1'=false): string {
   if(content?.reusedBody)return endingReviewPrompt(request,endingReviewCriteria(criteria,content.reusedBody),content.reusedBody,content.teachingBrief?.confirmedGroups,inlineFrames);
-  const selection=mode==='selection-v1';
+  const selection=mode==='selection-v1'||mode==='bound-selection-v1';
   const confirmed=content?.teachingBrief?.confirmedGroups;
   const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }],selection,!!confirmed);
   const copyReference=selection?'line_id,channel,caption_index?,label_index?':'line_id,channel,quote:逐字引文';
@@ -285,6 +285,9 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
       (content.opening.results?'固定三项 '+JSON.stringify(content.opening.results)+` 须在同一个成绩问句内。另填 ${selection?'opening_comparison.invitation_words 选择唯一的看拍法邀请的词窗':'opening_comparison.invitation_quote 逐字引用唯一的看拍法邀请'}。三条引文按前提、问句、邀请覆盖整段口播和同文字幕，连接词随所属引文，问句保留问号。创作者人数、额外结果陈述、错误指标或把 Revenue 说成佣金、商品 GMV 均退回。`:''):'')+
     (content?.endingPictures||content?.opening?.results?'各达人片尾的 delivery_checks 必须返回 ending_picture:{asset_id:实际查看的合成图标签中的素材ID,view:"planned_composition",both_visible:yes/no/unknown,observation:指出看到的图及实际可辨内容}。已合作核商品和Storyboard同屏；新建联核商品及任务已确认的合作条件，只有已确认佣金时才要求其同屏可辨。只核绑定填unknown。':'')
     +(mode?' 引用协议 selection-v1：在顶层填 reference_protocol:"selection-v1"。稿件引文统一用 {line_id,channel}，channel 为 narration/caption/label；'+(selection?'label 填从 0 起的 label_index；claim_impact 引用多卡字幕时，以从 0 起的 caption_index 选择一张。':'label 另填从 0 起的 label_index。')+'省略 quote 或引文的 text，由宿主回填。findings 照样提供 severity 和 reason，L1、source_relations、claim_impact 保留原有判定，引用同样只选编号。source_quote 仅填 evidence_id，必须已登记给本点。'+(openingReferences?openingReferences+JSON.stringify(openingReferenceWords(request.packet)??[]):''):'')
+    +(mode==='bound-selection-v1'?' L1视觉引证只选下列本组的 phase、source_seconds、evidence_id 组合。全片原片证据用于理解，但不替代本组可选视觉引用；若引同帧，只用本组可选编号。真实新增断言、错误素材或未兑现的决定仍退回。'
+      +JSON.stringify(plannedGroupVisualReferences(request.packet,reviewSourceSamples(request)))
+      +(content?.opening?' 片头的同款比较前提来自宿主登记的操作者原话。只核现行问句是否忠实保留这个给定前提。缺其他视频或对照截图不构成此给定前提缺失；独立核实仅限现行随附材料。若稿件额外加入「只有这条」、数量、其他视频表现或销量因果，仍须证据。只有登记的本片成绩能作为已提供的数字。':''):'')
     +'只返回JSON。';
 }
 
@@ -292,7 +295,7 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
 async function recordedReviewContract(request:CopyReviewRequest,deps:CopyReviewDependencies,prior:Row){
   const promptHash=prior.prompt_sha256;
   const matches=(visual?:BoundVisualCriteria,content?:ContentReview)=>[false,true].some(legacy=>
-    ([false,'legacy-selection','selection-v1'] as const).some(mode=>promptHash===digest(reviewPrompt(request,deps.runtime?.inlineFrames,visual,content,legacy,mode))));
+    ([false,'legacy-selection','selection-v1','bound-selection-v1'] as const).some(mode=>promptHash===digest(reviewPrompt(request,deps.runtime?.inlineFrames,visual,content,legacy,mode))));
   if(object(prior.review_contract)){
     const saved=prior.review_contract as {visual?:BoundVisualCriteria;content:ContentReview};
     if(!object(saved.content)||!matches(saved.visual,saved.content))return;
@@ -681,7 +684,7 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
   const scopedDelivery=request.packet.delivery_sections?.filter(section=>!reusedBody||section.kind==='creator_invitation')??[];
   let positions: ReturnType<typeof reviewSourceSamples>;
   try { positions = reusedBody?[]:reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
-  const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content,false,'selection-v1');
+  const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content,false,groups?.length?'bound-selection-v1':'selection-v1');
   const reviewContract=content?{review_contract:{visual:criteria,content}}:{};
   const criteriaDigest=content?digest(JSON.stringify(['l1-evidence-v1',criteria?.digest,content.openingDigest,
     ...(content.teachingBrief?[content.teachingBrief]:[]),...(content.endingPictures?['ending-picture-v1']:[]),...(reusedBody?[digestValue(reusedBody)]:[])])):criteria?.digest??null;

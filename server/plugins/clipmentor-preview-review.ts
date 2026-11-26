@@ -92,9 +92,14 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
         const input=validatePreviewReviewInput(JSON.parse(await readFile(join(directory,'input.json'),'utf8')));
         const info=saved.requestInfo;
         if(!info||info.video_sha256!==binding.videoSha256||info.input_sha256!==binding.inputSha256||digest(input)!==binding.inputSha256)throw Error('Saved raw binding mismatch');
-        const identity=previewReviewIdentity(binding.videoSha256,info.media_transfer?.bytes,input);
-        const expected=createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+identity.version+identity.logical_request_sha256).digest('hex');
-        if(saved.fingerprint!==expected||info.version!==identity.version||info.instruction_sha256!==identity.instruction_sha256)throw Error('Saved raw method mismatch');
+        const valid=(['compact','original'] as const).some(format=>{
+          try{
+            const identity=previewReviewIdentity(binding.videoSha256,info.media_transfer?.bytes,input,format);
+            const expected=createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+identity.version+identity.logical_request_sha256).digest('hex');
+            return saved.fingerprint===expected&&info.version===identity.version&&info.instruction_sha256===identity.instruction_sha256;
+          }catch{return false;}
+        });
+        if(!valid)throw Error('Saved raw method mismatch');
         if(!/^[a-f0-9]{64}$/.test(info.request_sha256)||info.media_transfer?.sha256!==binding.videoSha256)throw Error('Saved wire/media binding missing');
         result=interpretPreviewResponse(saved.response,{...info,input} as Parameters<typeof interpretPreviewResponse>[1],getKey('ROOTIFY_GATEWAY_API_KEY'));locallyRecovered=true;
       }catch{/* Missing/invalid raw is never a new submission or an approval. */}
