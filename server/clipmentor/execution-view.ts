@@ -1,12 +1,27 @@
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import type {ProjectDoc} from '../../src/editor/types';
-import {assessGroupReview,copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
+import {assessGroupReview,copyTeachingPacketFromDoc,copyReviewSubject,type TeachingPacket} from '../../src/clipmentor/production-gate';
 import {deliveryAudio,deliveryPictureBindings,deliveryReview} from '../../src/clipmentor/delivery-sections';
 import {handoffAssetsOf} from '../../shared/clipmentor-handoff';
 import {matchMeasuredNarration,createProductionPreparation} from './production-readiness';
 import {digestValue} from '../agent-runs/store-values';
 import {createSpeechAnchorReader} from './word-anchors';
 import {NATIVE_TEXT_STYLE_VERSION,NATIVE_TEXT_PROPS} from '../../shared/native-text-style';
+import {sourceRelationsShape} from '../../src/clipmentor/source-alignment';
+
+/** A contradictory audit is retained, but cannot give an author a new assignment. */
+export function confirmedCopyReviewScopeConflict(doc:ProjectDoc,packet:TeachingPacket){
+ return doc.clipMentorAnalysis?.production_copy_review?.units.some(review=>{
+  const unit=packet.units.find(candidate=>candidate.unit_id===review.unit_id);
+  const relations=review.group_checks?.source_relations;
+  return sourceRelationsShape(relations)&&relations.some(relation=>relation.assessment==='material_gap'
+   &&(!relation.point_ids.length||relation.point_ids.some(id=>{
+    const point=unit?.points.find(candidate=>candidate.point_id===id&&candidate.treatment!=='omit');
+    return !point||!relation.evidence_ids.some(evidence=>
+     point.teaching_basis?.evidence_ids.includes(evidence)||point.evidence_ids.includes(evidence));
+   })));
+ })??false;
+}
 
 /** Current operational facts for the EXECUTOR. This must never replace the independent-review projection. */
 export async function currentExecutionView(doc:ProjectDoc,voice?:{provider:string;voiceId:string}){

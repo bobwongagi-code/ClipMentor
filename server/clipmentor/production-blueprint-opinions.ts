@@ -196,16 +196,72 @@ export function guardBlueprintOpinionWrite(record:BlueprintOpinionRecord,doc:Pro
  }
 }
 
+export function confirmedOutputCopyLocks(record:BlueprintOpinionRecord|undefined,original:ProjectDoc,selected:ProjectDoc){
+ const entries=record?.confirmed?record.opinions.filter(entry=>entry.keep.length):[];
+ if(!entries.length)return;
+ const orderedSections=(doc:ProjectDoc)=>deliverySectionsFromDoc(doc).sort((a,b)=>
+  Number(b.kind==='performance_opening')-Number(a.kind==='performance_opening'));
+ const selectedSections=new Set(orderedSections(selected).map(section=>section.section_id));
+ const originalSections=orderedSections(original);
+ const sectionOfSentence=originalSections.flatMap(section=>spokenWithMeaning([section.line]).map(()=>section.section_id));
+ const frozen=captureBlueprintOpinions(original,true);
+ return (doc:ProjectDoc)=>{
+  const actual=captureBlueprintOpinions(doc,true);
+  for(const entry of entries){
+   const baseline=entry.unitId===null?frozen.overall.lines:frozen.units.find(unit=>unit.id===entry.unitId)?.lines??[];
+   const remove=entry.remove??[];
+   const offset=(number:number)=>number-1-remove.filter(removed=>removed<number).length;
+   for(const sentence of entry.keep){
+    const index=offset(sentence.number);
+    const section=entry.unitId===null?sectionOfSentence[index]:undefined;
+    if(section&&!selectedSections.has(section))continue;
+    const same=(line:Snapshot['overall']['lines'][number])=>line.text===sentence.text
+     &&(sentence.meaning===undefined||line.meaning===sentence.meaning)
+     &&(sentence.blockMeaning===undefined||line.blockMeaning===sentence.blockMeaning);
+    const lines=entry.unitId===null?spokenWithMeaning(orderedSections(doc).filter(value=>value.section_id===section).map(value=>value.line))
+     :actual.units.find(unit=>unit.id===entry.unitId)?.lines??[];
+    const amount=entry.keep.filter(other=>other.text===sentence.text&&other.meaning===sentence.meaning
+     &&other.blockMeaning===sentence.blockMeaning&&(!section||sectionOfSentence[offset(other.number)]===section)).length;
+    if(!baseline[index]||!same(baseline[index])||lines.filter(same).length<amount)
+     throw Error(`blueprint_opinion_scope_locked: ${entry.label}第 ${sentence.number} 句已确认保留。`);
+   }
+  }
+ };
+}
+
+type SpokenLine=Snapshot['overall']['lines'][number];
+function compareBlueprintLines(before:SpokenLine[],after:SpokenLine[],remove:number[]=[]){
+ const sameLine=(line:SpokenLine|undefined)=>line?line.text+((line.meaning??line.blockMeaning)?'（'+(line.meaning??line.blockMeaning)+'）':''):'';
+ const afterAt=(index:number)=>remove.includes(index+1)?undefined:after[index-remove.filter(number=>number<=index).length];
+ const changes=Array.from({length:Math.max(before.length,after.length)},(_,index)=>({
+  before:sameLine(before[index]),after:sameLine(afterAt(index)),
+ })).filter(line=>line.before!==line.after);
+ return {changes,kept:before.flatMap((line,index)=>sameLine(line)===sameLine(afterAt(index))?[sameLine(line)]:[])};
+}
+
+/** Cumulative production diff, anchored to the confirmed delivery variant. */
+export function productionBlueprintDifferences(before:ProjectDoc,after:ProjectDoc){
+ const original=captureBlueprintOpinions(before,true),current=captureBlueprintOpinions(after,true);
+ type Material=Pick<Snapshot['overall'],'lines'|'digest'>;
+ const diff=(label:string,base:Material,next:Material):BlueprintOpinionDifference=>{
+  const {changes}=compareBlueprintLines(base.lines,next.lines);
+  if(!changes.length&&base.digest!==next.digest)changes.push({before:'确认时的画面安排',after:'已调整画面安排'});
+  return {label,changes,kept:[]};
+ };
+ const groups=original.units.flatMap((unit,index)=>{
+  const next=current.units.find(value=>value.id===unit.id);
+  return next&&unit.digest!==next.digest?[diff(`第 ${index+1} 组`,unit,next)]:[];
+ });
+ const overall=original.overall.digest!==current.overall.digest?diff('片头与片尾',original.overall,current.overall):undefined;
+ if(groups.length||overall)return {groups,...(overall?{overall}:{})};
+}
+
 export function blueprintOpinionDifferences(record:BlueprintOpinionRecord,doc:ProjectDoc){
  const after=assertBlueprintOpinionScope(record,doc);
- const readable=(line:Snapshot['overall']['lines'][number]|undefined)=>line?line.text+((line.meaning??line.blockMeaning)?'（'+(line.meaning??line.blockMeaning)+'）':''):'';
  const difference=(label:string,before:Snapshot['overall']['lines'],next:Snapshot['overall']['lines'],structural:boolean,remove:number[]=[]):BlueprintOpinionDifference=>{
-  const afterAt=(index:number)=>remove.includes(index+1)?undefined:next[index-remove.filter(number=>number<=index).length];
-  const changes=Array.from({length:Math.max(before.length,next.length)},(_,index)=>({
-   before:readable(before[index]),after:readable(afterAt(index)),
-  })).filter(line=>line.before!==line.after);
+  const {changes,kept}=compareBlueprintLines(before,next,remove);
   if(!changes.length&&structural)changes.push({before:'原画面或安排',after:'已更新画面或安排'});
-  return {label,changes,kept:before.flatMap((line,index)=>readable(line)===readable(afterAt(index))?[readable(line)]:[])};
+  return {label,changes,kept};
  };
  const groups=record.before.units.flatMap((unit,index)=>{
   const next=after.units[index];

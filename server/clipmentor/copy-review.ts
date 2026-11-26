@@ -171,7 +171,8 @@ async function currentReviewContractMatches(deps:CopyReviewDependencies,projectI
 
 function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,mode:false|'legacy-selection'|'selection-v1'=false): string {
   const selection=mode==='selection-v1';
-  const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }],selection);
+  const confirmed=content?.teachingBrief?.confirmedGroups;
+  const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }],selection,!!confirmed);
   const copyReference=selection?'line_id,channel,caption_index?,label_index?':'line_id,channel,quote:逐字引文';
   const openingReferences=mode==='legacy-selection'
     ?'片头三段分别填 same_product_words、outcome_question_words、invitation_words，以对应词表的首尾编号组成 [起,止]，两端都计入，不抄 quote。'
@@ -193,10 +194,12 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
     '作者取舍理由仅保留在宿主绑定包，不作为通过依据；不能因选择了visual_only就通过，也不能因没有旁白引文就自动退稿。' +
     '画面问题用visual_check.sufficiency/evidence_refs/observed_relation/omission_loss及point.reason记录，copy_units.findings仍只引用真实口播/字幕/短标，不伪造表情句。' +
     '每条 source_relations 的 point_ids 和 line_ids 只允许引用当前 unit 的 points 和 lines。原始 evidence_ids 可引用该 unit 的 source_context 允许的全任务证据。covered 必须有本组 point_ids，且每个重点须由本组关联句子或已登记的 visual_only 重点实际承载。其他组的重点或句子 ID 不填入本组数组。' +
-    '原片关系如果只在别组展开，先独立判断它在本组是否必要。若本组无需单独讲解且省略不损失关键教学，可记 optional_depth，point_ids 和 line_ids 可空，在 reason 说明取舍和跨组承接；若本组确实缺少关键落点则记 material_gap，证据不足则记 uncertain。勿将没有本组落点的关系标为 covered。' +
+    (confirmed?'本轮按已确认的组选题验收。对每组核实际口播和回看是否兑现决定及一眼效果，事实越界照常退回。其他可教的购买判断只作选题建议，记 optional_depth 且 point_ids 和 line_ids 均为空，附原片证据及理由。建议不写入 findings，不改变组或文案总评。':
+     '原片关系如果只在别组展开，先独立判断它在本组是否必要。若本组无需单独讲解且省略不损失关键教学，可记 optional_depth，point_ids 和 line_ids 可空，在 reason 说明取舍和跨组承接；若本组确实缺少关键落点则记 material_gap，证据不足则记 uncertain。勿将没有本组落点的关系标为 covered。') +
     `source_relations中的uncertain保留未知，不自动代表现行主张有误。每条uncertain另给claim_impact:{status:affects_current_claim/does_not_affect_current_claim/unresolved,unknown_detail:具体未知,reason:为什么影响或不影响本稿,claims:[{${selection?copyReference:'line_id:受核对的现行句ID,channel:narration/caption/label,quote:该渠道逐字引文'}}]}。` +
     `记does_not_affect_current_claim时，该条source_relation的point_ids和line_ids均须非空：逐一写实际核对的现行重点和句子ID，claims中的line_id必须包含在外层line_ids，每个line_id有该渠道的${selection?'现行引用编号':'逐字quote'}，且关联当前point；不能只在reason或claims里提到ID而把外层数组留空。当前主张须分别有共享原始证据的covered关系支持，不要求不同主张挤在同一条covered中；不要填整组所有ID凑数。` +
-    '只有未知未进入当前主张、当前关系另有covered证据、并核对相关现行原句后，才能记does_not_affect_current_claim；不能仅因同一个point或文字听着安全就通过。影响当前主张或影响不明继续阻断；无法定位现行句就保留unresolved并说明缺口，不强造引用。未选关系的material_gap/uncertain仍可无现行ID，但不能豁免。不得将未选的关键教学缺口伪装成无关未知。' +
+    '只有未知未进入当前主张、当前关系另有covered证据、并核对相关现行原句后，才能记does_not_affect_current_claim；不能仅因同一个point或文字听着安全就通过。影响当前主张或影响不明继续阻断；无法定位现行句就保留unresolved并说明缺口，不强造引用。'+
+    (confirmed?'未选关系的未知可随建议记录，只有影响已确认决定或本稿主张的未知能退回。':'未选关系的material_gap/uncertain仍可无现行ID，但不能豁免。不得将未选的关键教学缺口伪装成无关未知。') +
     'delivery图片带supplied_full或planned_crop标签；存在裁切时两者都提供，planned_crop是宿主按冻结边距在原图上实际生成的裁后图，裁切效果以该图判断，不让文字描述代替实际裁后图。图片仍不是最终排版或成片。' +
     (criteria?'以下为宿主锁定的用户原话、参照与问题，独立于作者的计划。逐项比较参照图和对应段实际合成的计划画面，不能用计划文字、参照图本身或作者解释当作本方案的画面依据。顶层另返回 visual_criteria_checks，每项一次 {id,answer:yes/no/unknown,observation:图中实际所见,picture_stage:对应本方案的画面阶段标签}。picture_stage 必须逐字复制对应 criterion 的 pictureStage，不加 section_id、前缀或说明；说明只写 observation。缺图或无法判断填 unknown。\n'+
       JSON.stringify(criteria.entries.map(e=>e.criterion))+'\n':'')+

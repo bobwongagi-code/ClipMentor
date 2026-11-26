@@ -76,7 +76,8 @@ export interface TeachingAnalysisPublication {
  baseRevision:string;revision:string;repairEpoch:number;inputDigest:string;outputDigest:string;artifact:Record<string,unknown>;
  analysis:NonNullable<ProjectDoc['clipMentorAnalysis']>;
 }
-export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[];sourceAdviceSeparated?:true};
+export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[];sourceAdviceSeparated?:true;
+ confirmedGroups?:Array<{id:string;decision?:string;firstGlance?:string;points:Array<{id:string;question:string;boundary?:string;treatment:string}>}>};
 type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
@@ -117,6 +118,7 @@ export interface ProductionTask {
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
+ approvedSourceReadRecovered?:true;
  editPublication?:EditPublication;
  teachingAnalysisPublication?:TeachingAnalysisPublication;
 }
@@ -300,8 +302,10 @@ export function productionTeachingBrief(task:ProductionTask|undefined,policy:Han
  // approvals freeze the viewed teaching without importing advice as criteria.
  const historicalRequest=doc&&!frozen.sourceAdviceSeparated?frozenTeachingTopics(doc,task)?.quote:undefined;
  const doneCriteria=[...new Set(historicalRequest?[historicalRequest,...criteria]:criteria)];
+ const confirmedGroups=frozen.confirmedGroups;
  return {instruction:frozen.instruction,...(objective!==undefined?{objective}:{}),
-  ...(frozen.feedback!==undefined?{feedback:frozen.feedback}:{}),...(doneCriteria.length?{doneCriteria}:{})};
+  ...(frozen.feedback!==undefined?{feedback:frozen.feedback}:{}),...(doneCriteria.length?{doneCriteria}:{}),
+  ...(confirmedGroups?.length?{confirmedGroups}:{})};
 }
 
 export function productionOpeningComparison(task:ProductionTask|null|undefined,policy:HandoffPolicy|null|undefined,doc:ProjectDoc|undefined){

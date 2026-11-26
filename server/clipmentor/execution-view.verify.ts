@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
-import {currentExecutionView,currentReviewRepair} from './execution-view';
+import {confirmedCopyReviewScopeConflict,currentExecutionView,currentReviewRepair} from './execution-view';
 import {matchMeasuredNarration,registeredAudioBindings} from './production-readiness';
 import {productionAuthorTaskData} from './production-worker';
 import phased from '../../src/agent/tools/fixtures/barely-there-mg-replacement-20261030.json';
@@ -12,7 +12,7 @@ import {revisionOf} from '../../src/agent/external-edit-session';
 import {productionFeedbackAnchor,bindProductionFeedback,assertLocalFeedbackPreservation,feedbackProjectDigest} from './production-feedback';
 import {productionFeedback,type ProductionTask} from './production-task';
 import {reusableVoiceForRequest} from './audio-reuse';
-import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest} from '../../src/clipmentor/production-gate';
+import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest,checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {executeCoreEditItem} from './headless-edit-item';
 import {makeDraft} from '../../src/editor/store';
 const project=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
@@ -46,6 +46,25 @@ receipt.verdict='needs_revision';receipt.units[0].verdict='needs_revision';recei
 const repair=await currentReviewRepair(reviewProject);
 assert.equal(repair.status,'bound');assert.equal(repair.original_receipt!.content_digest,receipt.content_digest);assert.equal(repair.original_receipt!.verdict,receipt.verdict);assert.equal(repair.units![0].context!.unit_id,receipt.units[0].unit_id);
 assert.equal(repair.review_approved,false);
+const scopedUnit=view.packet.units[0],scopedPoint=scopedUnit.points.find(point=>point.treatment!=='omit')!;
+const scopedEvidence=(scopedPoint.teaching_basis?.evidence_ids??scopedPoint.evidence_ids)[0];
+const unselected={relation:'Another source teaching choice',evidence_ids:['other-source-evidence'],point_ids:[],line_ids:[],
+ assessment:'optional_depth' as const,reason:'Different choice beyond the confirmed group'};
+const groupChecks={...receipt.units[0].group_checks!,source_relations:[unselected]};
+receipt.units[0].group_checks=groupChecks;
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),false,'optional source suggestions do not trigger repairs');
+groupChecks.source_relations=[{...unselected,assessment:'material_gap'} as never];
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),true,'the same extra lesson cannot trigger a blueprint rework');
+groupChecks.source_relations=[{...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id]} as never];
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),true,'a selected point ID alone cannot authorize a proposed new topic');
+groupChecks.source_relations=[{...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id],evidence_ids:[scopedEvidence]} as never];
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),false,'a real, bound omission still follows the existing review gate');
+const approvedCopy=structuredClone(project);
+const approvedGroup=approvedCopy.clipMentorAnalysis!.production_copy_review!.units[0].group_checks!;
+approvedGroup.source_relations!.push({...unselected,evidence_ids:[view.packet.units[0].source_context!.evidence_ids[0]]});
+assert.equal((await checkCopyProduction(approvedCopy,'clipmentor')).allowed,true,'a saved optional suggestion preserves a valid release');
+approvedGroup.source_relations!.push({...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id],evidence_ids:[scopedEvidence]});
+assert.equal((await checkCopyProduction(approvedCopy,'clipmentor')).allowed,false,'a passing overall verdict cannot clear a bound missing decision');
 assert.deepEqual(buildCopyTeachingReviewRequest([{case_id:'same',packet:await copyTeachingPacketFromDoc(reviewProject)}]),reviewBefore);
 const stale=structuredClone(reviewProject);stale.clipMentorAnalysis!.production_copy_review!.content_digest='f'.repeat(64);assert.equal((await currentReviewRepair(stale)).status,'receipt_stale');
 // Actual shared edit engine: resolved frozen style, not just a helper return value.

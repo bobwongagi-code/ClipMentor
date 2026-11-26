@@ -937,7 +937,7 @@ function reviewableDeliverySections(sections: DeliverySection[]): DeliverySectio
 }
 
 /** Only the current material and neutral criteria enter the independent request. */
-export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>, selection=false) {
+export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>, selection=false, confirmedSelection=false) {
   if (!cases.length || !distinct(cases.map((c) => c.case_id)) || cases.some((c) => !text(c.case_id) || !teachingPacket(c.packet))) throw new Error('Invalid teaching review packet');
   for (const { packet } of cases) for (const unit of packet.units) checkGroupedReviewHandoff(unit);
   const hasTeachingBasis = cases.some(({ packet }) => packet.units.some(unit => unit.points.some(point => point.teaching_basis)));
@@ -948,7 +948,10 @@ export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; p
   const visualReview=selection?VISUAL_REVIEW_CRITERIA.replace('口播点原有的逐字引文要求不变。','口播点沿用现行编号。'):VISUAL_REVIEW_CRITERIA;
   const basisReview=selection?teachingBasisCriteria.replace('source_quote:{evidence_id,quote}，从本点 teaching_basis.evidence_ids 的一条原片动作或原话正文逐字摘录',
     'source_quote:{evidence_id}，从本点 teaching_basis.evidence_ids 选择一条原片动作或原话的编号'):teachingBasisCriteria;
-  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${pointReview}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${visualReview}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${basisReview}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
+  const groupCriteria=confirmedSelection?GROUP_REVIEW_CRITERIA
+    .replace('先在任务范围还原，再分配各组，范围内无任何组承担的关键关系仍报缺口。局部范围外的钩子/收尾不强制加回。','全片背景用于验证已选关系和识别事实越界。审核是否兑现已确认的各组，不重选、不要求补讲其他位置。')
+    .replace('material_gap可发现清单未选的关系，point_ids/line_ids可空；没有ID不等于没有问题。','material_gap 只记已确认重点的实质遗漏，必须填写该组的已选 point_ids 及其登记证据。新选题用 optional_depth，point_ids 和 line_ids 留空。'):GROUP_REVIEW_CRITERIA;
+  return { instructions: `${groupCriteria}\n\n${pointReview}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${visualReview}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${basisReview}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
     ...(packet.delivery_sections?.length?{delivery_sections:reviewableDeliverySections(packet.delivery_sections)}:{}),
     audience: packet.audience,
     product: { name: packet.product.name, purchase_concerns: [...packet.product.purchase_concerns], unknowns: [...packet.product.unknowns] },

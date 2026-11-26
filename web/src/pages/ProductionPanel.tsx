@@ -14,6 +14,7 @@ type Task = {
   attachments?: {assetId:string;fileName:string}[]; deliveryUnavailable?:boolean
   boardIdentity?:string; blueprintRevision?: string; canApproveBlueprint?: boolean; blueprintMessage?: string
   blueprintOpinionDifferences?:{overall?:BlueprintOpinionDifference;groups:BlueprintOpinionDifference[]}
+  productionDifferences?:Task['blueprintOpinionDifferences']
   reviewGroups?:Array<{id:string;label:string}>
   canAcceptPreview?:boolean; reviewIssue?:ReviewIssue
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
@@ -38,6 +39,10 @@ function BlueprintOpinionChanges({differences}:{differences:NonNullable<Task['bl
       {section.kept.length>0&&<ul>{section.kept.map((text,index)=><li key={index}>原样 {text}</li>)}</ul>}
     </details>)}
   </div>
+}
+
+function ProductionChanges({differences}:{differences:NonNullable<Task['productionDifferences']>}) {
+  return <details><summary>制作调整</summary><BlueprintOpinionChanges differences={differences} /></details>
 }
 
 function resourceUrl(view: string, key: string, value: string, audience?:Audience) {
@@ -423,6 +428,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         {(awaitingPreview || completed) && (task.renderId
           ? <video className="cm-final-video" controls preload="metadata" src={assetUrl('panel_video', 'renderId', task.renderId)} />
           : <p role="alert">预览暂时无法播放。</p>)}
+        {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
         {boardRevision&&<form className="cm-feedback" onSubmit={submitBlueprintOpinions}>
           {task.hasBlueprintFeedback && <section className="cm-feedback-summary" aria-label="上次修改要点">
             <h3>上次修改要点</h3>
@@ -496,6 +502,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         <div className="cm-production-track" aria-label="制作阶段">
           {productionProgress(task,sharedTask).map(({label,state})=><ProgressNode key={label} label={label} state={state} />)}
         </div>
+        {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
       </section>
     </>}
     {reviewIssue&&<p className="cm-caption cm-upload-error" role="alert"><strong>{issueLabel[reviewIssue.kind]}</strong> {reviewIssue.message}</p>}

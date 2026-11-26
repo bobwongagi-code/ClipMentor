@@ -17,9 +17,21 @@ import {productionFeedbackAnchor} from './production-feedback';
 import {confirmedTeachingDigest} from './production-teaching-baseline';
 import type {ProjectDoc} from '../../src/editor/types';
 import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
-import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,type ProductionTask} from './production-task';
+import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,type FrozenTeachingBrief,type ProductionTask} from './production-task';
 
 export type ProductionAudience='new_contact'|'existing_partner';
+
+export function confirmedGroupsFromBlueprint(doc:ProjectDoc):FrozenTeachingBrief['confirmedGroups']{
+ const breakdown=doc.clipMentorAnalysis?.source_breakdown;
+ return breakdown?.units.map(unit=>({id:unit.unit_id,
+  ...(unit.teaching_selection?.decision?{decision:unit.teaching_selection.decision}:{}),
+  ...(unit.teaching_selection?.first_glance?{firstGlance:unit.teaching_selection.first_glance}:{}),
+  points:unit.coverage.flatMap(({point_id,treatment})=>{
+   const point=breakdown.points.find(p=>p.point_id===point_id);
+   return point?[{id:point_id,question:point.teaching_question,treatment,
+    ...(point.teaching_basis?.claim_limit?{boundary:point.teaching_basis.claim_limit}:{})}]:[];
+  })}));
+}
 
 /** The current production command is generated from the confirmed mode, never appended to a past repair command. */
 export function continuationBrief(productName:string,audience:ProductionAudience){
@@ -86,12 +98,14 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
  const saved=await loadOfflineStoredProject(projectId);
  if(!saved)throw Error('制作副本未保存');
  const teachingCriteria=selectedRequirements?.brief.doneCriteria.filter((criterion):criterion is string=>typeof criterion==='string')??[];
+ const confirmedGroups=parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?confirmedGroupsFromBlueprint(doc):undefined;
  const approval={sourceProjectId:parent.projectId,sourceTaskId:parent.taskId,sourceRevision:source.revision,
   digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),
   ...(selectedRequirements?{requirements:selectedRequirements}:{}),
   ...(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{confirmedTeachingDigest:confirmedTeachingDigest(doc)}:{}),
   ...(parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
    objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback,sourceAdviceSeparated:true as const,
+   ...(confirmedGroups?.length?{confirmedGroups}:{}),
    ...(teachingCriteria.length?{doneCriteria:teachingCriteria}:{})}}:{})};
  const task=await createProductionTask({...parent.input,projectId,
   author:{...parent.input.author,origin},reviewer:{...parent.input.reviewer,origin},

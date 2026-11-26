@@ -140,3 +140,5 @@ Deliver one preview and consolidated remaining intervals, not every structural f
 图片只在本段部分阶段出现时，在同一 `picture.display` 登记 `{fps, ranges:[[起帧,出帧],...]}`，使用相对本段音频起点的半开帧范围；连续、再次出现可列多段。范围随原画面计划进入审核输入和摘要，并从 `delivery_picture_bindings` 原样回读；保存保护和导出使用同一范围。未登记仍按全段保护，不从描述或MG代码猜时点；旧回执不自动批准补写范围，缺音频时也不能借阶段登记删掉原有图片。
 
 原声未知项若声明does_not_affect_current_claim，审核者须在同一source_relation写具体point_ids/line_ids及逐字claims，并由各主张实际关联的covered证据支持；不同主张可各有对应covered。无法定位则留unresolved，不强造ID。原回读和门禁返回缺项及已有引文对应的句/重点诊断，不自动补写原回答、改变原判或生成批准；旧操作的原图证据也不因修复而追认为已见裁后图。
+
+收到已确认的各组决定后，按现行口播和回看检查它们有没有兑现。全片观察仍可用于核实事实、修正错引和找更清楚的同组回看。发现另一个值得教的拍法时，把它留在选题建议，写明来源和理由。只修已确认讲解的实际缺口。措辞或画面调整后，用现有审核核对原意和证据，保留明确锁定的原句。

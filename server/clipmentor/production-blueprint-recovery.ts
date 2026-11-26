@@ -13,6 +13,7 @@ import {createProductionPreparation,productionBlueprintReadiness,productionBoard
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
 import {upgradeContinuationBrief} from './production-continuation';
+import {recoverApprovedOutputSourceRead} from './production-approved-source';
 import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,productionRepairContext,structuralRepairPause,
  grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,type ProductionTask} from './production-task';
 
@@ -31,6 +32,10 @@ async function reconcileBlockedBlueprintState(task:ProductionTask,choose:(route:
  await reconcileLegacyTechnicalRecoveries(task);
  const decision=blockedProductionDecision(task,remainingContentRepairs(task));
  const selected=(route:RecoveryRoute)=>{if(!decision.routes.includes(route))return false;choose(route);return true;};
+ if(selected('approved_source_receipt')){
+  await recoverApprovedOutputSourceRead(task);
+  return;
+ }
  if(await reconcileBlueprintWithCurrentPlan(task,selected))return;
  if(await reconcileFocusedBlueprintRepair(task,selected))return;
  if(selected('author_checkpoint')&&decision.authorCheckpoint)await reconcileBlueprintAuthorCheckpoint(task,decision.authorCheckpoint);

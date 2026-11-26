@@ -285,13 +285,21 @@ test('both previews keep feedback, approval and downloads bound to their own end
     }
     if(url.searchParams.get('view')==='panel_download'){await route.fulfill({contentType:'video/mp4',headers:{'Content-Disposition':'attachment; filename=JUDYDOLL-fixture.mp4'},body:Buffer.from('fixture')});return}
     if(url.searchParams.get('view')==='panel_video'){await route.fulfill({body:Buffer.alloc(0),contentType:'video/mp4'});return}
-    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',stage:'self_check',sequence:accepted.has(audience)?2:1,renderId:`render-${audience}`,active:false,feedbackUsed:false}}
+    const productionDifferences=audience==='existing_partner'?{groups:[
+      {label:'第 1 组',changes:[{before:'原句较长',after:'句子缩短，意思保留'}],kept:[]},
+    ]}:undefined
+    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',stage:'self_check',sequence:accepted.has(audience)?2:1,renderId:`render-${audience}`,active:false,feedbackUsed:false,productionDifferences}}
       :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
   const existing=page.getByRole('region',{name:'已合作达人版'}),fresh=page.getByRole('region',{name:'新建联达人版'})
   await expect(existing.locator('video')).toHaveAttribute('src',/audience=existing_partner/)
   await expect(fresh.locator('video')).toHaveAttribute('src',/audience=new_contact/)
+  await existing.getByText('制作调整',{exact:true}).click()
+  await existing.getByText('第 1 组 · 修改对照',{exact:true}).click()
+  await expect(existing.getByText('句子缩短，意思保留',{exact:true})).toBeVisible()
+  await expect(fresh.getByText('制作调整',{exact:true})).toHaveCount(0)
+  expect(actions).toEqual([])
   await fresh.getByRole('textbox',{name:'修改意见'}).fill('只改新建联结尾')
   await acknowledgeOverallFeedback(fresh)
   await fresh.getByRole('button', {name:'提交修改'}).click()

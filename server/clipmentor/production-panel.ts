@@ -494,6 +494,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         active: running,stopReason:outputUnavailable?'service':stopReason,feedbackUsed: task.feedbackUsed,
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintOpinions?.differences?{blueprintOpinionDifferences:task.blueprintOpinions.differences}:{}),
+        ...(task.blueprintApproval&&task.completed.copy_review?.artifact.productionDifferences
+          ?{productionDifferences:task.completed.copy_review.artifact.productionDifferences}:{}),
         ...(task.blueprintApproval?{blueprintConfirmed:true}:{}),
         ...(blueprintRevision?{blueprintRevision,boardIdentity:subject?.identity,canApproveBlueprint,reviewGroups:groups,
           canConfirmBlueprint,...(blueprintMessage?{blueprintMessage}:{})}:{}),

@@ -81,6 +81,16 @@ if(selected('crop')){
   assert.equal((await reviewClipMentorCopy(request,deps,undefined,true)).cached,true);assert.equal(fakeModelCalls,1);
   const ledger=JSON.parse(await readFile(join(dir,'ledger',request.operationId+'.json'),'utf8'));assert.deepEqual(ledger.raw_review,raw,'saved original failure not repaired into approval');
   const inspection=(result.inspection as any).delivery_images;assert(Array.isArray(inspection)&&inspection.length===3);assert(inspection.some((i:any)=>i.view==='planned_crop'&&i.asset_id===picture.asset_id&&i.sha256===hash(Buffer.from(cropped,'base64'))));
+  const confirmedRequest={...request,operationId:randomUUID()};
+  const scoped={...deps,requirements:async()=>({policy:null,teachingBrief:{instruction:'Fixture',confirmedGroups:[{
+   id:unit.unit_id,decision:'Preserve the approved filming choice',points:unit.points.map(p=>({id:p.point_id,question:p.question,treatment:p.treatment??'explain'})),
+  }]}})};
+  await reviewClipMentorCopy(confirmedRequest,scoped);
+  assert(prompt.includes('Preserve the approved filming choice'));
+  assert(prompt.includes('material_gap 只记已确认重点的实质遗漏'));
+  assert(!prompt.includes('范围内无任何组承担的关键关系仍报缺口'));
+  assert.equal((await reviewClipMentorCopy(confirmedRequest,scoped,undefined,true)).cached,true);
+  assert.equal(fakeModelCalls,2,'the scoped attempt preserves exact receipt replay');
   let apiCalls=0;let apiContent:any[]=[];
   const api=apiCopyReviewDependencies({provider:'openai',model:'fake-never-network',origin:'http://localhost',apiMode:'responses'},(async(opts:any)=>{apiCalls++;apiContent=opts.messages[0].content;return{text:JSON.stringify(raw)};}) as any,{} as any);
   await api.run(prompt,observed,randomUUID(),'synthetic',new AbortController().signal);assert.equal(apiCalls,1);assert.equal(apiContent.filter(i=>i.type==='image').length,observed.length);assert(apiContent.some(i=>i.type==='text'&&i.text.includes('planned_crop')));
