@@ -70,7 +70,7 @@ try {
   assert.equal((await submit(new FormData())).status, 409);
   const corrupt=await submit(body(new Blob(['corrupt'])));
   assert.equal(corrupt.status,409);
-  assert.deepEqual(await corrupt.json(),{reason:'source',error:'原片无法播放或没有声音，请检查后再上传。'});
+  assert.deepEqual(await corrupt.json(),{reason:'source',error:'原片播放不了，或没有声音，请检查后再传。'});
   const missingCta = body();
   missingCta.delete('cta');
   assert.equal((await submit(missingCta)).status, 409);
@@ -86,7 +86,7 @@ try {
   try{
     const unexpected=await submit(body());
     assert.equal(unexpected.status,409);
-    assert.deepEqual(await unexpected.json(),{reason:'unavailable',error:'暂时无法保存素材，请稍后再试。'});
+    assert.deepEqual(await unexpected.json(),{reason:'unavailable',error:'素材暂时存不了，请稍后再试。'});
   }finally{await rm(directory);}
   const good = await submit(body());
   const receipt = await good.json();

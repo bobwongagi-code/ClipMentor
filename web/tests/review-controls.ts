@@ -2,13 +2,13 @@ import type { Locator, Page } from '@playwright/test'
 
 type Surface = Page | Locator
 export async function acknowledgeOverallFeedback(surface:Surface){
-  await surface.getByLabel('反馈位置').selectOption('whole')
-  await surface.getByLabel('确认这条意见作用于整体').check()
+  await surface.getByLabel('意见针对哪里').selectOption('whole')
+  await surface.getByLabel('这条意见针对整支视频').check()
 }
 
 export async function checkFinalReview(surface:Surface){
-  await surface.getByLabel('看过成片',{exact:true}).check()
-  await surface.getByLabel('核过马来语',{exact:true}).check()
+  await surface.getByLabel('我已看过成片',{exact:true}).check()
+  await surface.getByLabel('我已核对马来语口播和字幕',{exact:true}).check()
 }
 
 export const approvedFixtureReview = {

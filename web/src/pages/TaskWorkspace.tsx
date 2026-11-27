@@ -8,11 +8,11 @@ import { projectResource, taskPage, workspaceEndpoint } from './taskNavigation'
 
 type WorkspaceStatus=ClipMentorTaskStatus|'unavailable'
 const statusLabels: Record<WorkspaceStatus, string> = {
-  materials:'待开始', running:'运行中', queued:'等待运行名额', waiting:'等待另一版剪辑', blueprint:'待审蓝图',
-  preview:'预览阶段', paused:'已暂停', completed:'已确认', cancelled:'已取消', unavailable:'暂不可用',
+  materials:'待开始', running:'制作中', queued:'等待空位', waiting:'等另一版剪完', blueprint:'待你审蓝图',
+  preview:'待你看片', paused:'已暂停，进度已保存', completed:'已完成', cancelled:'已取消', unavailable:'暂时无法查看',
 }
 const stages: Record<string,string> = {
-  analysis:'分析', blueprint:'准备蓝图', copy_review:'检查蓝图', audio:'配音', edit:'剪辑', export:'生成预览', self_check:'复核',
+  analysis:'分析原片', blueprint:'生成蓝图', copy_review:'核对蓝图', audio:'配音', edit:'剪辑', export:'生成预览', self_check:'复核成片',
 }
 const taskTime=new Intl.DateTimeFormat('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})
 
@@ -32,7 +32,7 @@ function Status({ status, label }: { status:WorkspaceStatus; label?:string }) {
 function Slots({ workspace }: { workspace?: ClipMentorWorkspace }) {
   if (!workspace) return null
   return <div className="cm-task-slots" role="status">
-    <span>运行名额</span><strong>{workspace.running} / {workspace.limit}</strong>
+    <span>同时制作</span><strong>{workspace.running}/{workspace.limit}</strong>
   </div>
 }
 
@@ -45,11 +45,11 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
       <div className="cm-task-actions"><Slots workspace={workspace}/><a className="cm-button" href={taskPage(undefined,'new')}><Plus size={17}/> 新建任务</a></div>
     </div>
     {needsReview.length>0&&<section className="cm-task-attention" aria-labelledby="cm-needs-you">
-      <h2 id="cm-needs-you">待你处理 <span>{needsReview.length} 项</span></h2>
+      <h2 id="cm-needs-you">待你处理 <span>{needsReview.length}</span></h2>
       <ul>{needsReview.map(task=>{
         const relevant=task.status==='preview'?(task.outputs.find(output=>output.status==='preview'&&output.awaitingConfirmation)
           ??task.outputs.find(output=>output.status==='preview')):undefined
-        const label=task.status==='blueprint'?'审核蓝图':'查看预览'
+        const label=task.status==='blueprint'?'去审蓝图':'去看片'
         return <li key={task.id}>
           <div><strong>{task.name}</strong>{relevant&&<small>{audienceTitleFor(relevant.audience)}</small>}</div>
           <a href={taskPage(task.id,undefined,relevant?.audience)} aria-label={`${label} · ${task.name}${relevant?` · ${audienceTitleFor(relevant.audience)}`:''}`}>
@@ -59,20 +59,20 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
       })}</ul>
     </section>}
     {workspace&&<section aria-label="全部任务">
-      {tasks.length===0?<div className="cm-task-empty"><h2>还没有任务</h2><p>新建任务，上传四份素材开始制作。</p></div>
+      {tasks.length===0?<div className="cm-task-empty"><h2>还没有任务</h2><p>上传四份素材，开始第一个任务。</p></div>
         :<ul className="cm-task-list">{tasks.map(task=>{
           const confirmed=task.outputs.find(output=>output.status==='completed')
           const download=task.status==='completed'||task.status==='paused'&&!!confirmed
-          const action=download?'下载页':task.status==='paused'?'查看进度':'打开'
+          const action=download?'去下载':task.status==='paused'?'看进度':'打开'
           const updated=taskUpdateTime(task.updatedAt)
           return <li className="cm-task-row" key={task.id}>
           <div className="cm-task-row-copy"><h2>{task.name}</h2>
-            <Status status={task.status} label={task.status==='paused'&&confirmed?'部分已确认':undefined}/>
+            <Status status={task.status} label={task.status==='paused'&&confirmed?'一个版本已确认':undefined}/>
             {task.outputs.length>0?<p>{task.outputs.map(output=>`${audienceTitleFor(output.audience)} ${statusLabels[output.status]}`).join(' · ')}</p>
               :task.stage&&<p>{stages[task.stage]}</p>}
           </div>
           <div className="cm-task-row-actions">
-            {updated&&<time dateTime={updated.toISOString()}>{taskTime.format(updated)} 更新</time>}
+            {updated&&<time dateTime={updated.toISOString()}>更新于 {taskTime.format(updated)}</time>}
             <a className="cm-button secondary" href={taskPage(task.id,download?'downloads':undefined,download?confirmed?.audience:undefined)} aria-label={`${action} ${task.name}`}>{action}</a>
           </div>
         </li>})}</ul>}
@@ -95,14 +95,14 @@ function DownloadCard({ projectId, task, audience, unavailable, loading, current
   const url = (view:string) => projectResource(resourceUrl(view,'renderId',render!,audience),projectId)
   const when = task?.confirmedAt ? taskTime.format(task.confirmedAt) : undefined
   const version=audience?audienceTitleFor(audience):'成片'
-  const watchLabel=delivered?'查看成片':ready?'去确认成片':'去看片'
-  const summary = loading ? '正在读取下载状态…'
+  const watchLabel=delivered?'看成片':ready?'去确认':'去看片'
+  const summary = loading ? '正在获取下载状态…'
     : delivered ? (when ? `${when} 确认` : '')
     : ready ? ''
-    : draft ? '预览可播放'
-    : watchable ? (task?.deliveryHeld||task?.previewNeedsChanges ? '可看片，需修改' : '可看片，暂不能确认')
-    : unavailable||task?.deliveryUnavailable||task?.deliveryHeld ? '暂不可下载'
-    : '预览就绪后可在这里查看'
+    : draft ? '可以看片'
+    : watchable ? (task?.deliveryHeld||task?.previewNeedsChanges ? '可以看片，需要修改' : '可以看片，暂时不能确认')
+    : unavailable||task?.deliveryUnavailable||task?.deliveryHeld ? '暂时不能下载'
+    : '预览好了会显示在这里'
   return <article className="cm-task-download" data-current={current||undefined}>
     <header><Film size={19} aria-hidden="true"/><h3>{version}</h3>
       {delivered?<Status status="completed"/>:ready||draft?<Status status="preview" label={previewStatus(task)}/>:!watchable&&task?.status==='blocked'?<Status status="paused"/>:null}
@@ -118,9 +118,9 @@ function DownloadCard({ projectId, task, audience, unavailable, loading, current
         </div>}
       </div>
     </div>
-    {draft&&<details className="cm-draft-download"><summary>需要先下载一份？</summary>
-      <p>这份预览还在等复核。下载的文件名会标明「未复核」。</p>
-      <a href={url('panel_draft_download')} download aria-label={`下载未复核版本 · ${version}`}>下载未复核版本</a>
+    {draft&&<details className="cm-draft-download"><summary>想先拿一份？</summary>
+      <p>这版还没复核，下载的文件名会带「未复核」。</p>
+      <a href={url('panel_draft_download')} download aria-label={`先下未复核版 · ${version}`}>先下未复核版</a>
     </details>}
     {render&&((task?.attachments?.length??0)>0||task?.materialAttachment)&&<ul className="cm-download-attachments">
       {task?.attachments?.map(file=><li key={file.assetId}><span>原片分镜（PDF）</span><a
@@ -128,8 +128,8 @@ function DownloadCard({ projectId, task, audience, unavailable, loading, current
       {task?.materialAttachment&&<li><span>{imageLabel}</span><a
         href={`${url('panel_material')}&${new URLSearchParams({assetId:task.materialAttachment.assetId})}`} aria-label={`下载${imageLabel}`} download>下载</a></li>}
     </ul>}
-    {task?.materialAttachmentUnavailable&&<p>随片图片暂不可下载。</p>}
-    {audience==='new_contact'&&(draft||ready||delivered)&&<p className="cm-download-note">对外发送前，核对片尾里的佣金等合作数字。</p>}
+    {task?.materialAttachmentUnavailable&&<p>随片图片暂时下载不了。</p>}
+    {audience==='new_contact'&&(draft||ready||delivered)&&<p className="cm-download-note">对外发送前，请核对片尾里的佣金等合作数字。</p>}
   </article>
 }
 
@@ -179,16 +179,16 @@ function TaskDownloads({ projectId,audience,onPreviewTask }: { projectId:string;
   const cards=audience&&selected?[selected,...data!.filter(version=>version!==selected)]:data
   return <section className="cm-task-download-page" aria-labelledby="cm-download-title">
     <div className="cm-task-title"><h2 id="cm-download-title">下载</h2></div>
-    {error?<p role="alert">暂时无法读取下载状态，稍后会自动刷新。</p>
-      :!data?<p role="status">正在读取下载状态…</p>
+    {error?<p role="alert">下载状态暂时没更新，稍后自动重试。</p>
+      :!data?<p role="status">正在获取下载状态…</p>
         :showCards?<div className="cm-task-download-grid">{cards?.map(version=><DownloadCard key={version.audience??'single'}
           projectId={projectId} current={!!audience&&version.audience===audience} {...version}/>)}</div>
-        :<p role="status">还没有可下载的版本。预览生成后可在这里查看。</p>}
+        :<p role="status">还没有可下载的版本，预览生成后会出现在这里。</p>}
   </section>
 }
 
 function TaskSteps({ task,preview }: { task:{status:WorkspaceStatus;stage?:string};preview?:Task }) {
-  const steps=['上传素材','蓝图确认','预览与修改','复核','确认成片','下载']
+  const steps=['上传素材','审蓝图','看片改片','复核','确认成片','下载']
   const actions=previewActions(preview)
   const stage=preview?.stage??task.stage
   const status=preview?.status??task.status
@@ -245,11 +245,11 @@ function TaskDetails({ workspace, task, downloads }: { workspace:ClipMentorWorks
       </div>
       <TaskSteps task={currentOutput??task} preview={currentPreview}/>
       {downloadVisible&&<nav className="cm-task-detail-nav" aria-label="任务详情">
-        <a href={taskPage(task.id,undefined,audience)} aria-current={!downloads?'page':undefined}>任务进度</a>
+        <a href={taskPage(task.id,undefined,audience)} aria-current={!downloads?'page':undefined}>进度</a>
         <a href={taskPage(task.id,'downloads',audience)} aria-current={downloads?'page':undefined}>下载</a>
       </nav>}
       {!downloads&&task.status==='materials'&&startState&&<p className="cm-workspace-error" role="status">
-        {startState==='capacity'?'素材已保存。名额空出后，点「开始制作」。':'素材已保存。请在下方查看制作状态。'}
+        {startState==='capacity'?'素材已保存。有空位后，点「开始制作」。':'素材已保存，制作进度见下方。'}
       </p>}
       {downloads?<TaskDownloads projectId={task.id} audience={audience} onPreviewTask={setPreview}/>
         :<ClipMentorPage key={task.id} projectId={task.id} embedded running={workspace.running} limit={workspace.limit}
@@ -275,14 +275,14 @@ export default function TaskWorkspace() {
           if(!controller.signal.aborted){
             setWorkspace(undefined)
             setAccessLost(true)
-            setError('任务列表访问已失效，请刷新页面。')
+            setError('暂时无法访问，请刷新页面。')
           }
           return
         }
         const data=await response.json()
         if(!response.ok||!Array.isArray(data.tasks)||!Number.isSafeInteger(data.running)||!Number.isSafeInteger(data.limit))throw Error('unavailable')
         if(!controller.signal.aborted){setWorkspace(data);setError('');setAccessLost(false)}
-      }catch{if(!controller.signal.aborted)setError('暂时无法更新任务列表，稍后会自动刷新。')}
+      }catch{if(!controller.signal.aborted)setError('列表暂时没更新，稍后自动重试。')}
       finally{if(!controller.signal.aborted)timer=setTimeout(read,5000)}
     }
     void read()
@@ -297,8 +297,8 @@ export default function TaskWorkspace() {
       <ClipMentorPage workspaceNew embedded running={workspace?.running} limit={workspace?.limit}/>
     </main>:projectId
       ? task&&workspace?<TaskDetails workspace={workspace} task={task} downloads={view==='downloads'}/>
-        :<main className="cm-task-main">{workspace?<><h1>找不到这个任务</h1><a className="cm-task-back" href={taskPage()}><ArrowLeft size={16}/> 全部任务</a></>
-          :!error&&<p role="status">正在打开任务…</p>}</main>
+        :<main className="cm-task-main">{workspace?<><h1>找不到这个任务，可能已被删除</h1><a className="cm-task-back" href={taskPage()}><ArrowLeft size={16}/> 全部任务</a></>
+          :!error&&<p role="status">正在打开…</p>}</main>
       :<WorkspaceHome workspace={workspace}/>)}
   </div>
 }

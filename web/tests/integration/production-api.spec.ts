@@ -72,7 +72,7 @@ test('the built business frontend reads only the configured same-origin API', as
 
     exists = false
     await page.reload()
-    await expect(page.getByText('无法读取上传记录，请稍后刷新。')).toBeVisible()
+    await expect(page.getByText('暂时确认不了上传情况，请稍后刷新。')).toBeVisible()
     await expect(page.locator('iframe[title="人审版蓝图"]')).toHaveCount(0)
     expect(requests.at(-1)).toBe('GET /intake')
     const boardUrl = `${origin}${apiBasePath}/production?view=panel_board&revision=${revision}&boardIdentity=${identity}`
@@ -80,7 +80,7 @@ test('the built business frontend reads only the configured same-origin API', as
 
     const requestCount = requests.length
     await page.goto(`${origin}/?demo=1`)
-    await expect(page.getByText('演示流程尚未连接制作服务')).toBeVisible()
+    await expect(page.getByText('演示尚未连接制作服务。')).toBeVisible()
     expect(requests).toHaveLength(requestCount)
   } finally {
     if (server) {
@@ -190,7 +190,7 @@ test.describe('production gateway responses', () => {
       await submit.click()
       await expect(submit).toBeEnabled()
       await expect(feedback).toHaveValue('保留这条意见')
-      await expect(page.getByRole('alert')).toContainText('操作暂未确认')
+      await expect(page.getByRole('alert')).toContainText('还没收到结果，页面会自动刷新，无需重复点。')
       expect(posts).toBe(1)
       expect(redirectedRequests).toBe(redirectCount)
       await submit.click()
@@ -234,7 +234,7 @@ test.describe('production gateway responses', () => {
       await checkFinalReview(page)
       await page.getByRole('button', { name: '确认并下载成片' }).click()
       await expect.poll(() => readFailed).toBe(true)
-      await expect(page.getByText('操作已收到，正在核对最新状态。')).toBeVisible()
+      await expect(page.getByText('已收到，正在更新状态。')).toBeVisible()
       await expect(page.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
       expect(downloadRequests).toBe(beforeDownloads)
       expect(posts).toBe(1)
@@ -309,7 +309,7 @@ test.describe('production gateway responses', () => {
     await expect(page.frameLocator('iframe').getByText('受限人审板')).toBeVisible()
     expired = true
     await page.clock.fastForward(8000)
-    await expect(page.getByRole('alert')).toContainText('访问已失效')
+    await expect(page.getByRole('alert')).toContainText('暂时无法访问，请刷新页面。')
     await expect(page.locator('iframe')).toHaveCount(0)
     await expect(page.getByRole('button', { name: '提交修改' })).toHaveCount(0)
   })
@@ -336,7 +336,7 @@ test.describe('production gateway responses', () => {
       await expect.poll(() => statusReads).toBeGreaterThan(before)
       await expect(board).toBeVisible()
     }
-    await expect(page.getByRole('alert')).toContainText('正在重新连接')
+    await expect(page.getByRole('alert')).toContainText('正在重连')
     malformed = false
     await page.clock.fastForward(8000)
     await expect(page.getByRole('alert')).toHaveCount(0)

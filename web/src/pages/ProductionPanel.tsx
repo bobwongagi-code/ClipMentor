@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Check, Download, Play, Send } from 'lucide-react'
 import { BLUEPRINT_OPINION_MAX_LENGTH, BLUEPRINT_OPINION_TOTAL_MAX_LENGTH, type BlueprintOpinion, type BlueprintOpinionConfirmation, type BlueprintOpinionDifference, type BlueprintOpinionPlacement } from '../../../shared/clipmentor-blueprint-opinions'
-import { blueprintNotices, readReviewIssue, reviewMessages, type ReviewIssue } from '../../../shared/clipmentor-review-feedback'
+import { blueprintNotices, readReviewIssue, reviewIssueDisplayText, reviewMessages, type ReviewIssue } from '../../../shared/clipmentor-review-feedback'
+import { CLIPMENTOR_TASK_LIMIT } from '../../../shared/clipmentor-tasks'
 
 import { ProgressNode } from '../components/processing/ProgressNode'
 import { hasPlayablePreview, previewActions, previewProgress, previewStatus, productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
@@ -48,23 +49,27 @@ const validOpinionDraft=(draft:OpinionDraft)=>Array.isArray(draft.entries)&&draf
   !!entry&&(entry.unitId===null||typeof entry.unitId==='string')&&typeof entry.text==='string')
 const noGroups:NonNullable<Task['reviewGroups']>=[]
 const sameDraft=(first:unknown,second:unknown)=>JSON.stringify(first)===JSON.stringify(second)
-const serviceUnavailable = '制作服务暂时不可用。'
-const materialsUnavailable = '请检查素材是否齐全、能否打开。'
+const serviceUnavailable = '制作暂时不可用，已保存的内容不受影响。'
+const materialsUnavailable = '请确认四份素材都齐全，并且能打开。'
 const publicBlueprintNotices=new Set<string>(Object.values(blueprintNotices))
 
 function BlueprintOpinionChanges({differences}:{differences:NonNullable<Task['blueprintOpinionDifferences']>}) {
   const sections=[...(differences.overall?[differences.overall]:[]),...differences.groups]
   return <div className="cm-feedback-summary">
-    {sections.map(section=><details key={section.label}><summary>{section.label} · 修改对照</summary>
-      {section.changes.length===0&&<p>本次未改动。</p>}
-      {section.changes.map((change,index)=><div key={index}><del>{change.before}</del><p>{change.after}</p></div>)}
-      {section.kept.length>0&&<ul>{section.kept.map((text,index)=><li key={index}>原样 {text}</li>)}</ul>}
+    {sections.map(section=><details key={section.label}><summary>{section.label==='整体意见'?'整体':section.label} · 改动对照</summary>
+      {section.changes.length===0&&<p>这次没有改动。</p>}
+      {section.changes.map((change,index)=>{
+        if(change.before==='确认时的画面安排'&&change.after==='已调整画面安排')return <div key={index}><del>你确认时的画面安排</del><p>现在的画面安排</p></div>
+        if(change.before==='原画面或安排'&&change.after==='已更新画面或安排')return <div key={index}><del>原来的画面</del><p>现在的画面</p></div>
+        return <div key={index}><del>{change.before}</del><p>{change.after}</p></div>
+      })}
+      {section.kept.length>0&&<ul>{section.kept.map((text,index)=><li key={index}>未改：{text}</li>)}</ul>}
     </details>)}
   </div>
 }
 
 function ProductionChanges({differences}:{differences:NonNullable<Task['productionDifferences']>}) {
-  return <details><summary>制作调整</summary><BlueprintOpinionChanges differences={differences} /></details>
+  return <details><summary>制作中的改动</summary><BlueprintOpinionChanges differences={differences} /></details>
 }
 
 function PreviewSteps({task}:{task:Task}) {
@@ -237,10 +242,10 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   const start=Number(draft.start),end=Number(draft.end)
   const startEntered=!!draft.start?.trim(),endEntered=!!draft.end?.trim()
   const rangeIssue=draft.target!=='range'?undefined
-    :startEntered&&(!Number.isFinite(start)||start<0)?'开始时间需为 0 秒或更晚。'
-    :endEntered&&(!Number.isFinite(end)||end<0)?'结束时间需为 0 秒或更晚。'
+    :startEntered&&(!Number.isFinite(start)||start<0)?'开始时间不能早于 0 秒。'
+    :endEntered&&(!Number.isFinite(end)||end<0)?'结束时间不能早于 0 秒。'
     :startEntered&&endEntered&&end<=start?'结束时间要晚于开始时间。'
-    :task?.previewDuration&&(startEntered&&start>=task.previewDuration||endEntered&&end>task.previewDuration)?'时间段要在成片时长内。'
+    :task?.previewDuration&&(startEntered&&start>=task.previewDuration||endEntered&&end>task.previewDuration)?'时间段不能超出视频时长。'
     :undefined
   const feedbackTarget=draft.target==='whole'&&draft.confirmed?{scope:'whole',confirmed:true}
     :draft.target==='range'&&startEntered&&endEntered&&!rangeIssue
@@ -308,7 +313,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     if(!pendingOpinion?.placement)return
     if(!sameDraft(readOpinionDraft(),opinionDraft)){
       setOpinionReview(undefined)
-      setError('草稿在另一页更新了，请核对后再操作。')
+      setError('草稿在另一个页面被改过，请核对后再操作。')
       return
     }
     const {index,unitId}=pendingOpinion.placement
@@ -318,7 +323,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     const target=rest.find(entry=>entry.unitId===unitId)
     const combined=[target?.text,conflicting.text].filter(Boolean).join('\n')
     if(move&&combined.length>BLUEPRINT_OPINION_MAX_LENGTH){
-      setError('合并后意见太长，请缩短后再移动。')
+      setError('合并后太长了，请删减后再移。')
       return
     }
     setError('')
@@ -347,13 +352,13 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
             const mismatched=outputAudience&&!matchesPanelOutput(data.task,outputAudience,sourceTaskId)
             remember(mismatched?{task:null}:data,readId)
             failures=0
-            setReadError(mismatched?'制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。':'')
+            setReadError(mismatched?'进度暂时没更新，正在重连，稍后请再看一下。':'')
           }
           timer = setTimeout(read, data.task?.active ? 2000 : 8000)
         }
       } catch {
         if (!controller.signal.aborted) {
-          if (readId>=latestRead.current&&(++failures === 3 || latestRead.current===0)) setReadError('制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。')
+          if (readId>=latestRead.current&&(++failures === 3 || latestRead.current===0)) setReadError('进度暂时没更新，正在重连，稍后请再看一下。')
           timer = setTimeout(read, 8000)
         }
       }
@@ -435,7 +440,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         ||(approveBlueprint&&latestOpinions?.entries.some(entry=>entry.text.trim()))
       if(blocked){
         setOpinionReview(undefined)
-        setError('草稿在另一页更新了，请核对后再操作。')
+        setError('草稿在另一个页面被改过，请核对后再操作。')
       }
       return !blocked
     }
@@ -485,13 +490,13 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         if(name==='accept')setDownloadAfterConfirmation(undefined)
         const messages: Record<string,string> = {
           materials:materialsUnavailable,
-          capacity:'当前已有五个任务在跑。名额空出后可以继续。',
+          capacity:`同时制作已满 ${CLIPMENTOR_TASK_LIMIT} 个，有空位后可以继续。`,
           review_board_changed:reviewMessages.refreshBoard,
         }
         const issue=readReviewIssue(result?.issue)
         if(issue)setActionIssue({key:actionKey,issue})
         else if(result?.reason==='review_board_changed')setActionIssue({key:actionKey,issue:{kind:'binding',message:messages.review_board_changed}})
-        else setError(messages[result?.reason ?? ''] ?? '操作暂未完成，请稍后查看。')
+        else setError(messages[result?.reason ?? ''] ?? '操作还没完成，请稍后再看。')
 
         return
       }
@@ -536,7 +541,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       }
       if(latest)remember(latest,readId)
     } catch {
-      if(stillCurrent())setError('操作暂未确认，页面会自动刷新状态。')
+      if(stillCurrent())setError('还没收到结果，页面会自动刷新，无需重复点。')
     } finally {
       if(actionController.current===controller){
         actionController.current=undefined
@@ -577,7 +582,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     if(!currentBoard||pending||pendingOpinion)return
     const entries=readOpinionDraft()?.entries?.filter(entry=>entry.text.trim())
     if((entries?.reduce((total,entry)=>total+entry.text.length,0)??0)>BLUEPRINT_OPINION_TOTAL_MAX_LENGTH){
-      setError('意见总字数太多，请缩短后再提交。')
+      setError(reviewMessages.feedbackLength)
       return
     }
     if(entries?.length&&!pendingOpinion)void action('revise_blueprint',entries)
@@ -587,14 +592,13 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   const pendingPreview = task?.previewPending === true
   const completed = task?.status === 'completed'
   const canWritePreviewOpinion=(awaitingPreview||pendingPreview)&&!task.feedbackUsed&&!task.deliveryHeld&&!task.previewNeedsChanges&&!!task.renderId
-  const stopMessage = task?.stopReason === 'materials' ? '无法读取已上传的原片，需要核对素材。'
-    : task?.stopReason === 'limit' ? '本次制作已暂停，进度已保存。'
-    : task?.stopReason === 'maintenance' ? '制作已暂停，已保存的进度会保留。无需重新上传。'
+  const stopMessage = task?.stopReason === 'materials' ? '读不到已上传的原片，请核对素材。'
+    : task?.stopReason === 'limit' || task?.stopReason === 'maintenance' ? reviewMessages.paused
     : task?.stopReason === 'service' ? serviceUnavailable : undefined
   const canConfirm = !!task && (!!task.canConfirmBlueprint || !task.dualBlueprint && task.canApproveBlueprint===true)
-  const reviewTitle = boardRevision ? '审核蓝图' : pendingPreview ? '视频预览' : awaitingPreview ? '预览与终审' : '成片已确认'
+  const reviewTitle = boardRevision ? '审蓝图' : pendingPreview ? '看片' : awaitingPreview ? '看片并确认' : '成片已确认'
   const Title=projectId?'h2':'h1'
-  if(!state)return <p className="cm-caption" role="status">{readError || '正在读取制作状态…'}</p>
+  if(!state)return <p className="cm-caption" role="status">{readError || '正在获取进度…'}</p>
   if(state.outputs){
     const audiences=state.outputs.map(output=>output.audience)
     const primary=audiences.includes('existing_partner')?'existing_partner':audiences[0]
@@ -618,7 +622,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       document.getElementById(`${tabsId}-${audience}`)?.focus()
     }
     return <div className={tabbed?'cm-preview-page':undefined}>
-      <div className={tabbed?'cm-preview-heading':'cm-heading'}><Title>{tabbed?'视频预览':productionPageTitle(sharedProgress)}</Title></div>
+      <div className={tabbed?'cm-preview-heading':'cm-heading'}><Title>{tabbed?'看片':productionPageTitle(sharedProgress)}</Title></div>
       {tabbed&&currentTask&&!projectId&&<PreviewSteps task={currentTask} />}
       {tabbed&&<div className="cm-preview-tabs" role="tablist" aria-label="查看成片版本">
         {audiences.map((audience,index)=><button type="button" role="tab" key={audience} id={`${tabsId}-${audience}`}
@@ -641,14 +645,14 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   }
   return <>
     {!task ? !outputAudience&&intakeReady&&<>
-      <div className="cm-heading"><Title>素材已上传</Title><p>四份素材均已保存到当前工程。</p></div>
+      <div className="cm-heading"><Title>素材已上传</Title><p>四份素材都已保存。</p></div>
       <section className="cm-panel">
         <ul className="cm-saved-assets">{assets.map(asset => <li key={asset.id}>
           <Check size={17} aria-hidden="true" /> <strong>{asset.title}</strong><span>{asset.name}</span>
         </li>)}</ul>
         <div className="cm-footer">
-          <p>{state?.unavailable ? serviceUnavailable : state ? '蓝图准备好后，由你确认再开始剪辑。' : '正在读取制作状态…'}</p>
-          <button className="cm-button" disabled={!state || !!state.unavailable || pending || slotsFull} onClick={() => void action('start')}><Play size={17} /> {slotsFull?'等待名额':'开始制作'}</button>
+          <p>{state?.unavailable ? serviceUnavailable : state ? '蓝图生成后请你审核，确认了才开始剪辑。' : '正在获取进度…'}</p>
+          <button className="cm-button" disabled={!state || !!state.unavailable || pending || slotsFull} onClick={() => void action('start')}><Play size={17} /> {slotsFull?'等待空位':'开始制作'}</button>
         </div>
       </section>
     </> : boardRevision || awaitingPreview || completed || pendingPreview ? <>
@@ -656,29 +660,29 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       {!boardRevision&&!outputAudience&&!projectId&&<PreviewSteps task={task} />}
       {boardRevision&&<section className="cm-panel cm-work">
         <nav className="cm-blueprint-opinion-nav" aria-label="蓝图意见">
-          {(filledGroups.length>0||overallFilled)&&<span>已填写</span>}
+          {(filledGroups.length>0||overallFilled)&&<span>已填意见：</span>}
           {filledGroups.map(group=><button key={group.id} type="button" onClick={()=>{
             const frame=boardFrame.current
             frame?.scrollIntoView({block:'nearest'})
             frame?.contentWindow?.postMessage({type:'clipmentor:open-blueprint-opinion',unitId:group.id},'*')
           }}>{group.label}</button>)}
-          <a href={`#${overallOpinionId}`}>{overallFilled?'整体':'填写整体意见'}</a>
+          <a href={`#${overallOpinionId}`}>{overallFilled?'整体':'写整体意见'}</a>
           <button type="submit" form={blueprintFormId} className="cm-button secondary"
             disabled={pending||!!pendingOpinion||!hasOpinionDraft||!currentBoard}><Send size={16}/> 提交意见</button>
         </nav>
-        {opinionsInMemory&&hasOpinionDraft&&<p role="status">本机未能保存草稿，刷新前请提交或复制。</p>}
+        {opinionsInMemory&&hasOpinionDraft&&<p role="status">草稿没能存在本机，刷新前请先提交或复制。</p>}
         {pendingOpinion&&<div className="cm-opinion-prompt" ref={opinionPrompt} tabIndex={-1}>
           {pendingOpinion.placement&&<div role="status" className="cm-opinion-action">
-            <span>{pendingOpinion.placement.multiple?'这条意见提到多个位置，可分别填写。':`要把这条意见移到${pendingOpinion.placement.label}吗？`}</span>
-            {!pendingOpinion.placement.multiple&&<button type="button" className="cm-button secondary" disabled={pending} onClick={()=>resolvePlacement(true)}>移动</button>}
-            <button type="button" className="cm-button secondary" disabled={pending} onClick={()=>resolvePlacement(false)}>留在原处</button>
+            <span>{pendingOpinion.placement.multiple?'这条意见提到了多个位置，可以拆开分别写。':`这条意见像是针对${pendingOpinion.placement.unitId===null?'整体':pendingOpinion.placement.label}，要移过去吗？`}</span>
+            {!pendingOpinion.placement.multiple&&<button type="button" className="cm-button secondary" disabled={pending} onClick={()=>resolvePlacement(true)}>移过去</button>}
+            <button type="button" className="cm-button secondary" disabled={pending} onClick={()=>resolvePlacement(false)}>不移</button>
           </div>}
           {pendingOpinion.confirmation&&<div className="cm-opinion-confirmation">
             {pendingOpinion.confirmation.rows.map(item=><div key={item.label}>
               <strong>{item.label}</strong>
-              <ul>{item.keep.map(text=><li key={text}>保留 {text}</li>)}<li>修改 {item.change}</li></ul>
+              <ul>{item.keep.map(text=><li key={text}>保留：{text}</li>)}<li>修改：{item.change}</li></ul>
             </div>)}
-            <button type="button" className="cm-button secondary" disabled={pending} onClick={()=>void action('revise_blueprint',pendingOpinion.entries,pendingOpinion.confirmation?.token)}>确认并修改</button>
+            <button type="button" className="cm-button secondary" disabled={pending} onClick={()=>void action('revise_blueprint',pendingOpinion.entries,pendingOpinion.confirmation?.token)}>确认，开始修改</button>
           </div>}
         </div>}
         {opinionNotice?.key===boardKey&&opinionNotice.message!==task.blueprintMessage&&<p role="status">{opinionNotice.message}</p>}
@@ -686,19 +690,19 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         {boardRevision && (currentBoard?.revision === boardRevision
           ? <iframe key={boardKey} ref={boardFrame} title="人审版蓝图" className="cm-review-board" sandbox="allow-scripts" srcDoc={currentBoard.html} onLoad={syncGroupOpinions} />
           : boardError ? <div className="cm-footer"><p role="status">{boardError}</p>
-            <button className="cm-button secondary" onClick={() => setBoardReload(attempt => attempt + 1)}>重新打开蓝图</button>
+            <button className="cm-button secondary" onClick={() => setBoardReload(attempt => attempt + 1)}>重试</button>
           </div> : <p role="status">正在打开蓝图…</p>)}
         {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
         {boardRevision&&<form id={blueprintFormId} className="cm-feedback" onSubmit={submitBlueprintOpinions}>
           {task.hasBlueprintFeedback&&!task.blueprintOpinionDifferences&&!task.blueprintMessage&&<p role="status">上次修改意见已保存。</p>}
           {task.blueprintOpinionDifferences && <BlueprintOpinionChanges differences={task.blueprintOpinionDifferences} />}
           <label htmlFor={overallOpinionId}>整体意见</label>
-          <textarea id={overallOpinionId} disabled={pending} maxLength={BLUEPRINT_OPINION_MAX_LENGTH} placeholder="不属于某一组的意见"
+          <textarea id={overallOpinionId} disabled={pending} maxLength={BLUEPRINT_OPINION_MAX_LENGTH} placeholder="没有可不填。这里写不属于某一组的意见"
             value={opinionEntries?.find(entry=>entry.unitId===null)?.text??''} onChange={event=>writeOpinion(null,event.target.value)} />
         </form>}
         <div className="cm-footer">
           <button className="cm-button" disabled={pending || !!pendingOpinion || hasOpinionDraft || currentBoard?.revision !== boardRevision || !canConfirm || slotsFull} onClick={() => void action(task.canConfirmBlueprint?'produce_versions':'approve_blueprint')}>确认蓝图，开始制作</button>
-          {slotsFull&&canConfirm&&<p>当前已有五个任务在跑，名额空出后可开始制作。</p>}
+          {slotsFull&&canConfirm&&<p>同时制作已满 {CLIPMENTOR_TASK_LIMIT} 个，有空位后可以开始。</p>}
           {!canConfirm && (task.blueprintMessage ?? stopMessage) && <p>{task.blueprintMessage ?? stopMessage}</p>}
         </div>
       </section>}
@@ -734,13 +738,13 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
                 setLoadedVideo(videoKey)
               }} />
             {videoFailure===videoKey&&<div className="cm-preview-media-error" role="alert">
-              <p>预览暂时无法播放。</p><button type="button" className="cm-button secondary" onClick={()=>setVideoReload(n=>n+1)}>重新加载视频</button>
+              <p>视频暂时播不了。</p><button type="button" className="cm-button secondary" onClick={()=>setVideoReload(n=>n+1)}>重新加载</button>
             </div>}
             {!!task.previewChapters?.length&&<nav className="cm-preview-chapters" aria-label="视频章节">
               {task.previewChapters.map(chapter=><button type="button" key={chapter.id} disabled={videoFailure===videoKey}
                 onClick={()=>seek(chapter.seconds)}><span>{chapter.label}</span><time>{playbackTime(chapter.seconds)}</time></button>)}
             </nav>}
-          </> : <p className="cm-preview-placeholder" role="status">预览暂时无法播放。</p>}
+          </> : <p className="cm-preview-placeholder" role="status">视频暂时播不了。</p>}
         </div>
         <div className="cm-preview-side">
           {!outputAudience&&<strong className="cm-preview-status" data-state={task.previewNeedsChanges||task.deliveryHeld?'attention':undefined} role="status">{previewStatus(task)}</strong>}
@@ -748,64 +752,64 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
             <form className="cm-preview-card cm-preview-feedback" onSubmit={revise}>
               <h2><label htmlFor={`${tabsId}-feedback`}>修改意见</label></h2>
               <div className="cm-preview-feedback-tools">
-                <label className="cm-preview-scope"><span>反馈位置</span><select disabled={pending} value={draft.target??''}
+                <label className="cm-preview-scope"><span>意见针对哪里</span><select disabled={pending} value={draft.target??''}
                   onChange={event=>setFeedbackDraft({...draft,target:event.target.value,confirmed:false})}>
-                  <option value="" disabled>选择修改范围</option>
+                  <option value="" disabled>请选择</option>
                   <option value="whole">整体</option>
                   {groups.map(group=><option key={group.id} value={`group:${group.id}`}>{group.label}</option>)}
                   <option value="range">成片时间段</option>
                 </select></label>
                 <button type="button" className="cm-button secondary" disabled={pending||loadedVideo!==videoKey||videoFailure===videoKey}
-                  onClick={()=>setRangeFromPlayback('start')}>用当前时间</button>
+                  onClick={()=>setRangeFromPlayback('start')}>取当前时间</button>
               </div>
               {draft.target==='whole'&&<label className="cm-preview-check"><input type="checkbox" disabled={pending} checked={draft.confirmed===true}
-                onChange={event=>setFeedbackDraft({...draft,confirmed:event.target.checked})} /> 确认这条意见作用于整体</label>}
+                onChange={event=>setFeedbackDraft({...draft,confirmed:event.target.checked})} /> 这条意见针对整支视频</label>}
               {draft.target==='range'&&<fieldset className="cm-review-field cm-preview-range" disabled={pending}><legend>成片时间段</legend>
-                <label>开始秒数<input type="number" min={0} max={task.previewDuration} step="any" value={draft.start??''} onChange={event=>setFeedbackDraft({...draft,start:event.target.value})} /></label>
-                <label>结束秒数<input type="number" min={0} max={task.previewDuration} step="any" value={draft.end??''} onChange={event=>setFeedbackDraft({...draft,end:event.target.value})} /></label>
+                <label>开始（秒）<input type="number" min={0} max={task.previewDuration} step="any" value={draft.start??''} onChange={event=>setFeedbackDraft({...draft,start:event.target.value})} /></label>
+                <label>结束（秒）<input type="number" min={0} max={task.previewDuration} step="any" value={draft.end??''} onChange={event=>setFeedbackDraft({...draft,end:event.target.value})} /></label>
                 {rangeIssue&&<p className="cm-preview-range-error" role="alert">{rangeIssue}</p>}
-                <button type="button" className="cm-button secondary" disabled={loadedVideo!==videoKey||videoFailure===videoKey} onClick={()=>setRangeFromPlayback('end')}>用当前时间作结束</button>
+                <button type="button" className="cm-button secondary" disabled={loadedVideo!==videoKey||videoFailure===videoKey} onClick={()=>setRangeFromPlayback('end')}>取当前时间作结束</button>
               </fieldset>}
-              {draft.target?.startsWith('group:')&&<label className="cm-preview-scope"><span>修改内容</span><select disabled={pending} value={draft.kind??'content'}
+              {draft.target?.startsWith('group:')&&<label className="cm-preview-scope"><span>改什么</span><select disabled={pending} value={draft.kind??'content'}
                 onChange={event=>setFeedbackDraft({...draft,kind:event.target.value as 'content'|'execution'})}>
-                <option value="content">讲解稿与画面方案</option>
-                <option value="execution">成片画面或标注</option>
+                <option value="content">改讲解和画面安排</option>
+                <option value="execution">改成片里的画面或标注</option>
               </select></label>}
               <textarea id={`${tabsId}-feedback`} disabled={pending} value={feedback} onChange={event=>setFeedbackDraft({...draft,text:event.target.value})}
-                maxLength={8000} placeholder="写下哪里要改、希望看到什么" />
+                maxLength={8000} placeholder="写下哪里要改、想改成什么样（可不填）" />
               <div className="cm-preview-actions">
-                {feedbackInMemory&&hasPreviewDraft&&<p role="status">本机未能保存草稿，刷新前请提交或复制。</p>}
-                {task.previewFeedbackUnavailable?<p>意见可先保存为草稿。</p>:pendingPreview&&<p>复核完成后可提交。</p>}
+                {feedbackInMemory&&hasPreviewDraft&&<p role="status">草稿没能存在本机，刷新前请先提交或复制。</p>}
+                {task.previewFeedbackUnavailable?<p>意见可先保存为草稿。</p>:pendingPreview&&<p>复核完成后才能提交。</p>}
                 <button className="cm-button secondary" disabled={pending||!awaitingPreview||task.previewFeedbackUnavailable||!feedbackTarget||!feedback.trim()}><Send size={16} /> 提交修改</button>
               </div>
             </form>}
           {(task.feedbackUsed||task.productionDifferences)&&<section className="cm-preview-card" aria-label="修改记录">
             <h2>修改记录</h2>
-            {task.feedbackUsed&&<><p>修改意见已提交。</p>{task.renderId&&<p>修改后预览已生成。<span>本版修改机会已用完。</span></p>}</>}
+            {task.feedbackUsed&&<><p>意见已提交。</p>{task.renderId&&<p>改后的预览已生成。<span>这一版的修改次数已用完，可联系维护人员。</span></p>}</>}
             {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
           </section>}
           <section className="cm-preview-card" aria-label="确认成片">
             <h2>确认成片</h2>
             {awaitingPreview&&<>
               <fieldset className="cm-preview-confirm" disabled={pending||!task.renderId||task.deliveryHeld} aria-label="终审确认">
-                <label className="cm-preview-check"><input type="checkbox" checked={previewWatched} onChange={event=>setPreviewConfirmation('watched',event.target.checked)} /> 看过成片</label>
-                <label className="cm-preview-check"><input type="checkbox" checked={languageConfirmed} onChange={event=>setPreviewConfirmation('language',event.target.checked)} /> 核过马来语</label>
+                <label className="cm-preview-check"><input type="checkbox" checked={previewWatched} onChange={event=>setPreviewConfirmation('watched',event.target.checked)} /> 我已看过成片</label>
+                <label className="cm-preview-check"><input type="checkbox" checked={languageConfirmed} onChange={event=>setPreviewConfirmation('language',event.target.checked)} /> 我已核对马来语口播和字幕</label>
               </fieldset>
-              {awaitingAcceptance&&<p role="status">操作已收到，正在核对最新状态。</p>}
+              {awaitingAcceptance&&<p role="status">已收到，正在更新状态。</p>}
             </>}
             {awaitingPreview&&hasPreviewDraft&&<div className="cm-draft-options">
-              <p>这条修改意见尚未提交。</p>
+              <p>这条意见还没提交。</p>
               <div className="cm-preview-actions">
-                {canWritePreviewOpinion&&<a href={`#${tabsId}-feedback`}>返回修改意见</a>}
-                <button type="button" className="cm-button secondary" disabled={pending} onClick={discardPreviewDraft}>放弃草稿</button>
+                {canWritePreviewOpinion&&<a href={`#${tabsId}-feedback`}>回去继续写</a>}
+                <button type="button" className="cm-button secondary" disabled={pending} onClick={discardPreviewDraft}>不要了</button>
                 <button type="button" className="cm-button secondary" disabled={!canAccept||feedbackInMemory}
-                  onClick={()=>void action('accept',undefined,undefined,true)}>保留草稿并确认成片</button>
+                  onClick={()=>void action('accept',undefined,undefined,true)}>先留着，继续确认</button>
               </div>
             </div>}
             {completed&&hasPreviewDraft&&<div className="cm-draft-options">
-              <h3>保留的草稿</h3>
+              <h3>留着的草稿</h3>
               <p className="cm-draft-text">{feedback}</p>
-              <button type="button" className="cm-button secondary" onClick={discardPreviewDraft}>放弃草稿</button>
+              <button type="button" className="cm-button secondary" onClick={discardPreviewDraft}>删除草稿</button>
             </div>}
             <div className="cm-preview-actions">
               {!completed&&<button className="cm-button" disabled={!canAccept||hasPreviewDraft}
@@ -813,29 +817,29 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
               {(awaitingPreview||completed)&&task.renderId&&task.attachments?.map(file=><a key={file.assetId} className="cm-button secondary"
                 href={`${assetUrl('panel_attachment','renderId',task.renderId!)}&${new URLSearchParams({assetId:file.assetId})}`}
                 download={file.fileName}><Download size={17} /> 下载原片分镜（PDF）</a>)}
-              {capabilities.canDownloadDraft&&task.renderId&&<a className="cm-button secondary" href={assetUrl('panel_draft_download','renderId',task.renderId)} download><Download size={17} /> 下载未复核版本</a>}
-              {capabilities.canDownload&&task.renderId&&<a className="cm-button" href={projectId?taskPage(projectId,'downloads',outputAudience??task.audience):assetUrl('panel_download','renderId',task.renderId)} download={projectId?undefined:task.downloadName}><Download size={17} /> {projectId?'打开下载页':'下载成片'}</a>}
+              {capabilities.canDownloadDraft&&task.renderId&&<a className="cm-button secondary" href={assetUrl('panel_draft_download','renderId',task.renderId)} download><Download size={17} /> 先下未复核版</a>}
+              {capabilities.canDownload&&task.renderId&&<a className="cm-button" href={projectId?taskPage(projectId,'downloads',outputAudience??task.audience):assetUrl('panel_download','renderId',task.renderId)} download={projectId?undefined:task.downloadName}><Download size={17} /> {projectId?'去下载':'下载成片'}</a>}
             </div>
-            {task.deliveryUnavailable&&reviewIssue?.message!==reviewMessages.deliveryCheckUnavailable&&<p role="alert">随片资料暂时无法下载。</p>}
+            {task.deliveryUnavailable&&reviewIssue?.message!==reviewMessages.deliveryCheckUnavailable&&<p role="alert">随片资料暂时下载不了。</p>}
           </section>
         </div>
       </div>}
     </> : <>
       <section className="cm-panel cm-production-progress" aria-label={outputAudience?audienceTitle:'制作进度'}>
         <div className="cm-output-heading"><h2>{unifiedBlueprint?'蓝图进度':outputAudience?audienceTitle:productionPageTitle(task)}</h2>
-          <span role="status">{stopMessage || (task.status==='cancelled'?'制作已取消':task.status==='waiting'?'等待另一版剪辑':productionActivity(task))}</span>
+          <span role="status">{stopMessage || (task.status==='cancelled'?'制作已取消':task.status==='waiting'?'等另一版剪完':productionActivity(task))}</span>
         </div>
         <div className="cm-production-track" aria-label="制作阶段">
           {productionProgress(task,sharedTask).map(({label,state})=><ProgressNode key={label} label={label} state={state} />)}
         </div>
-        {task.canContinueAnalysis&&<div className="cm-footer"><button className="cm-button" disabled={pending||slotsFull} onClick={()=>void action('continue_analysis')}>{slotsFull?'等待名额':'继续分析'}</button></div>}
-        {task.feedbackUsed&&<p className="cm-caption">修改意见已提交。</p>}
+        {task.canContinueAnalysis&&<div className="cm-footer"><button className="cm-button" disabled={pending||slotsFull} onClick={()=>void action('continue_analysis')}>{slotsFull?'等待空位':'继续分析'}</button></div>}
+        {task.feedbackUsed&&<p className="cm-caption">意见已提交。</p>}
         {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
       </section>
     </>}
     {reviewIssue&&<p className="cm-caption cm-upload-error" data-issue={reviewIssue.kind} role="alert">
       {pendingPreview&&task.renderId&&videoFailure!==videoKey&&reviewIssue.message===reviewMessages.reviewPaused
-        ?'可先观看已保存的成片。':reviewIssue.message}</p>}
+        ?'成片已保存，可以先看。':reviewIssueDisplayText(reviewIssue)}</p>}
     {((!boardRevision&&error) || readError) && <p className="cm-caption cm-upload-error" role="alert">{(!boardRevision&&error) || readError}</p>}
   </>
 }

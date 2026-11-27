@@ -121,24 +121,24 @@ test.afterAll(async()=>{
 
 test('homepage and upload disclose a lost slot and retain the four saved assets',async({page})=>{
   await page.goto(origin)
-  await expect(page.getByText('5 / 5')).toBeVisible()
+  await expect(page.getByText('5/5')).toBeVisible()
   await page.getByRole('link',{name:'新建任务'}).click()
-  await expect(page.getByText('名额已满，可以先选好素材。')).toBeVisible()
-  await page.getByLabel('任务名称（选填）').fill('上传竞争')
+  await expect(page.getByText('同时制作已满 5 个，可以先把素材选好。')).toBeVisible()
+  await page.getByLabel('任务名称（可不填）').fill('上传竞争')
   await page.getByLabel('爆款原片',{exact:true}).setInputFiles(source)
   for(const label of ['商品图','销量截图','合作海报']){
     await page.getByLabel(label,{exact:true}).setInputFiles({...image,name:`${label}.png`})
   }
-  await expect(page.getByText(/四份素材已就绪/)).toBeVisible()
+  await expect(page.getByText(/四份素材已齐/)).toBeVisible()
   await expect(page.locator('.cm-upload[data-state="ready"]')).toHaveCount(4)
-  await expect(page.getByRole('button',{name:'等待运行名额'})).toBeDisabled()
+  await expect(page.getByRole('button',{name:'等待空位'})).toBeDisabled()
   expect(calls.filter(call=>call.route.startsWith('POST'))).toHaveLength(0)
   running=4
   const start=page.getByRole('button',{name:'开始制作'})
   await expect(start).toBeEnabled({timeout:8000})
   await start.click()
-  await expect(page.getByText('素材已保存。名额空出后，点「开始制作」。')).toBeVisible()
-  await expect(page.getByText('四份素材均已保存到当前工程。')).toBeVisible()
+  await expect(page.getByText('素材已保存。有空位后，点「开始制作」。')).toBeVisible()
+  await expect(page.getByText('四份素材都已保存。')).toBeVisible()
   expect(calls.filter(call=>call.route.startsWith('POST')).map(call=>call.route)).toEqual([
     'POST /tasks panel','POST /intake panel','POST /production panel',
   ])
@@ -166,7 +166,7 @@ test('task switching isolates local opinions and a superseded board cannot inher
   await page.reload()
   await expect(overall).toHaveValue('')
   await page.goto(`${origin}/?task=does-not-exist`)
-  await expect(page.getByRole('heading',{name:'找不到这个任务'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'找不到这个任务，可能已被删除'})).toBeVisible()
   expect(calls.some(call=>call.projectId==='does-not-exist')).toBe(false)
 })
 
@@ -180,21 +180,21 @@ test('download eligibility is isolated by version and the pending card links to 
   await expect(contact.locator('img')).toHaveAttribute('src',/view=panel_poster.*renderId=draft-contact/)
   await expect(contact.getByRole('link',{name:'下载成片'})).toHaveCount(0)
   await expect(contact.getByRole('link',{name:'去看片'})).toHaveAttribute('href',/task=outputs&audience=new_contact/)
-  await contact.getByText('需要先下载一份？').click()
-  await expect(contact.getByRole('link',{name:'下载未复核版本'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
+  await contact.getByText('想先拿一份？').click()
+  await expect(contact.getByRole('link',{name:'先下未复核版'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
   await contact.getByRole('link',{name:'去看片'}).click()
   await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
   const preview=page.getByRole('tabpanel',{name:'新建联达人版'})
-  await expect(preview.getByRole('link',{name:'下载未复核版本'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
+  await expect(preview.getByRole('link',{name:'先下未复核版'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
   await expect(preview.getByRole('link',{name:'下载成片'})).toHaveCount(0)
   held=true
   await page.goto(route)
-  await expect(contact.getByText(/可看片，需修改/)).toBeVisible()
+  await expect(contact.getByText(/可以看片，需要修改/)).toBeVisible()
   await expect(contact.getByRole('link',{name:'去看片'})).toBeVisible()
-  await expect(contact.getByText('需要先下载一份？')).toHaveCount(0)
+  await expect(contact.getByText('想先拿一份？')).toHaveCount(0)
   clientFailed=true
   await page.reload()
-  await expect(contact.getByText('暂不可下载')).toBeVisible()
+  await expect(contact.getByText('暂时不能下载')).toBeVisible()
   await expect(partner.getByRole('link',{name:'下载成片'})).toBeVisible()
 })
 
@@ -202,18 +202,18 @@ test('home opens the outstanding version and the two page links retain an explic
   clientFailed=false
   held=false
   await page.goto(origin)
-  await page.getByRole('link',{name:'查看预览 · 成片示例 · 新建联达人版'}).click()
+  await page.getByRole('link',{name:'去看片 · 成片示例 · 新建联达人版'}).click()
   await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
   await expect(page.getByRole('heading',{level:1})).toHaveCount(1)
   await page.getByRole('tab',{name:/已合作达人版/}).click()
   await page.getByRole('link',{name:'下载',exact:true}).click()
   await expect(page.locator('article[data-current="true"]').getByRole('heading')).toHaveText('已合作达人版')
-  await page.getByRole('link',{name:'任务进度'}).click()
+  await page.getByRole('link',{name:'进度'}).click()
   await expect(page.getByRole('tab',{name:/已合作达人版/})).toHaveAttribute('aria-selected','true')
   await page.goto(`${origin}/?task=${b}`)
   await expect(page.getByRole('link',{name:'下载',exact:true})).toHaveCount(0)
   await page.goto(`${origin}/?task=${b}&view=downloads`)
-  await expect(page.getByText('还没有可下载的版本。预览生成后可在这里查看。')).toBeVisible()
+  await expect(page.getByText('还没有可下载的版本，预览生成后会出现在这里。')).toBeVisible()
 })
 
 for(const scenario of ['delayed-read','switched','delayed-ack'])test(`confirmation follows the saved version (${scenario})`,async({page})=>{
@@ -235,12 +235,12 @@ for(const scenario of ['delayed-read','switched','delayed-ack'])test(`confirmati
   await page.clock.install()
   await page.setViewportSize({width:320,height:640})
   await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
-  await page.getByLabel('看过成片').check()
-  await page.getByLabel('核过马来语').check()
+  await page.getByLabel('我已看过成片').check()
+  await page.getByLabel('我已核对马来语口播和字幕').check()
   await page.getByRole('button',{name:'确认成片',exact:true}).click()
   try{
     await expect.poll(()=>accepted).toBe(true)
-    if(scenario!=='delayed-ack')await expect(page.getByText('操作已收到，正在核对最新状态。')).toBeVisible()
+    if(scenario!=='delayed-ack')await expect(page.getByText('已收到，正在更新状态。')).toBeVisible()
     if(scenario==='switched')await page.getByRole('tab',{name:/已合作达人版/}).click()
     await page.clock.fastForward(9000)
     if(scenario==='switched'){
@@ -263,7 +263,7 @@ test('one pending audience request does not delay a second version or change its
   await page.route(gate,async route=>{await paused;await route.continue().catch(()=>{})})
   try{
     await page.goto(`${origin}/?task=${exportsId}&view=downloads`)
-    await expect(contact.getByText('正在读取下载状态…')).toBeVisible()
+    await expect(contact.getByText('正在获取下载状态…')).toBeVisible()
     await expect(partner.getByRole('link',{name:'下载成片'})).toBeVisible()
   }finally{release()}
   await page.unroute(gate)
@@ -276,7 +276,7 @@ test('one pending audience request does not delay a second version or change its
     partnerFailed=true
     await contact.getByRole('link',{name:'去看片'}).click()
     await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
-    await expect(page.getByRole('tab',{name:/已合作达人版/})).toContainText('读取状态失败')
+    await expect(page.getByRole('tab',{name:/已合作达人版/})).toContainText('暂时获取不到状态')
     await expect(page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video')).toHaveCount(1)
   }finally{partnerHeld=false;partnerFailed=false;held=false}
 })
@@ -287,7 +287,7 @@ test('an explicit mismatched response cannot offer another ending’s download',
   }}}))
   await page.goto(`${origin}/?task=${exportsId}&view=downloads&audience=new_contact`)
   const target=page.locator('article[data-current="true"]')
-  await expect(target.getByText('暂不可下载')).toBeVisible()
+  await expect(target.getByText('暂时不能下载')).toBeVisible()
   await expect(target.getByRole('link',{name:/下载成片/})).toHaveCount(0)
   await expect(page.getByRole('link',{name:'下载成片 · 已合作达人版'})).toBeVisible()
 })
@@ -298,7 +298,7 @@ test('a download response for the right audience but a different source task is 
   }}}))
   await page.goto(`${origin}/?task=${exportsId}&view=downloads&audience=new_contact`)
   const target=page.locator('article[data-current="true"]')
-  await expect(target.getByText('暂不可下载')).toBeVisible()
+  await expect(target.getByText('暂时不能下载')).toBeVisible()
   await expect(target.getByRole('link',{name:/下载成片/})).toHaveCount(0)
   await expect(page.getByRole('link',{name:'下载成片 · 已合作达人版'})).toBeVisible()
 })
@@ -311,10 +311,10 @@ test('an explicitly unavailable version loses stale actions without hiding the o
   const partner=page.getByRole('tab',{name:/已合作达人版/})
   const contact=page.getByRole('tab',{name:/新建联达人版/})
   await expect(partner).toContainText('可下载')
-  await expect(contact).toContainText('复核已暂停')
+  await expect(contact).toContainText('复核暂停，可先看片')
   await page.route(versionRead('existing_partner'),route=>route.fulfill({status:409,json:{reason:'output_unavailable'}}))
   await page.clock.fastForward(9000)
-  await expect(partner).toContainText('读取状态失败')
+  await expect(partner).toContainText('暂时获取不到状态')
   await expect(page.getByRole('tabpanel',{name:'已合作达人版'}).locator('video')).toHaveCount(0)
   await expect(page.getByRole('button',{name:'开始制作',exact:true})).toHaveCount(0)
   await contact.click()
@@ -332,8 +332,8 @@ test('a disabled revision can keep its draft and submit only after readback reco
   const panel=page.getByRole('tabpanel',{name:'新建联达人版'})
   const opinion=panel.getByRole('textbox',{name:'修改意见'})
   await opinion.fill('缩短片尾留白')
-  await panel.getByLabel('反馈位置').selectOption('whole')
-  await panel.getByLabel('确认这条意见作用于整体').check()
+  await panel.getByLabel('意见针对哪里').selectOption('whole')
+  await panel.getByLabel('这条意见针对整支视频').check()
   const submit=panel.getByRole('button',{name:'提交修改'})
   await expect(submit).toBeDisabled()
   unavailable=false
@@ -349,7 +349,7 @@ test('a session rejection removes the previously authorized task workspace',asyn
   await expect(oldTask).toBeVisible()
   await page.route(`**${endpoints}/tasks`,route=>route.fulfill({status:401,json:{error:'signed-out'}}))
   await page.clock.fastForward(6000)
-  await expect(page.getByText('任务列表访问已失效，请刷新页面。')).toBeVisible()
+  await expect(page.getByText('暂时无法访问，请刷新页面。')).toBeVisible()
   await expect(oldTask).toHaveCount(0)
 })
 

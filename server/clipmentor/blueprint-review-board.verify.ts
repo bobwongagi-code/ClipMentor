@@ -237,6 +237,7 @@ try{
  await test('Human board keeps capacity estimates and binding repairs out of business decisions',async()=>{
   const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
   const {PanelReviewIssue,panelReviewIssue}=await import('./production-panel-review');
+  const {reviewIssueDisplayText,reviewMessages}=await import('../../shared/clipmentor-review-feedback');
   const {plans,data,lint}=planReviewBoards(input(c.green,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[]));
   const group=lint.groups.find(g=>g.line_ids.includes('GM-L02'))!;
   const report={...lint,groups:[{...group,complete:true,estimated_seconds:13.73,picture_seconds:2.9,empirical_lower_seconds:12.1}],
@@ -264,12 +265,17 @@ try{
   assert(!embedded.includes(plans[0].candidate_sha256));
   assert.match(embedded,/第 1 组意见/);
   assert.match(embedded,/<details class="source-speech"[^>]*><summary>附录 · 原片听写<\/summary>/);
-  assert.equal(panelReviewIssue('blueprint_opinion_scope_locked: 第 1 组第 2 句已确认保留。')?.message,'第 1 组第 2 句已确认保留。');
-  assert.equal(panelReviewIssue('blueprint_opinion_scope_locked: 内部回执 /本地/工程')?.message,'请刷新后查看当前版本。');
-  assert.equal(panelReviewIssue('provider error blueprint_opinion_scope_group: 第 2 组未收到修改意见。')?.message,'请刷新后查看当前版本。');
+  const locked=panelReviewIssue('blueprint_repair_no_progress blueprint_opinion_scope_locked: 第 1 组第 2 句已确认保留。')!;
+  assert.equal(locked.message,'第 1 组第 2 句已确认保留。 同一问题再次出现，修改已暂停。');
+  assert.equal(reviewIssueDisplayText(locked),'第 1 组第 2 句按你的意思保留，没有改动。 同一个问题又出现了，已暂停修改，可联系维护人员。');
+  assert.equal(panelReviewIssue('blueprint_opinion_scope_locked: 内部回执 /本地/工程')?.message,'请刷新页面，查看最新版本。');
+  assert.equal(panelReviewIssue('provider error blueprint_opinion_scope_group: 第 2 组未收到修改意见。')?.message,'请刷新页面，查看最新版本。');
   const clarification='第 2 组，请写清要改的是第几句。';
-  assert.equal(panelReviewIssue(new PanelReviewIssue('content',clarification))?.message,clarification);
-  assert.equal(panelReviewIssue(new PanelReviewIssue('content',clarification+' 内部记录 /本地/目录'))?.message,'请查看当前蓝图，按需提交修改意见。');
+  const validClarification=panelReviewIssue(new PanelReviewIssue('content',clarification))!;
+  assert.equal(validClarification.message,clarification);
+  assert.equal(reviewIssueDisplayText(validClarification),'第 2 组，请写清要改第几句。');
+  const unknownClarification=panelReviewIssue(new PanelReviewIssue('content',clarification+' 内部记录 /本地/目录'))!;
+  assert.equal(reviewIssueDisplayText(unknownClarification),reviewMessages.checkBoard);
  });
  await test('A4 actual four-group middle and historical full v5 reuse retain separate source facts',async()=>{
   const four=planReviewBoards(input(c.barelyFour)).plans[0];assert.equal(four.rows.filter(r=>r.stage==='original').length,4);assert(four.reuse.some(r=>r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L04'))&&r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L06'))));
@@ -514,7 +520,7 @@ try{
    const checked=(await (await realFetch(base+'/?view=panel')).json()).task;
    const url=base+'/?'+new URLSearchParams({view:'panel_board',revision:saved.revision,boardIdentity:checked.boardIdentity});
    const html=await (await realFetch(url)).text();
-   assert.equal((html.match(/播放回看片段/g)??[]).length,1);
+   assert.equal((html.match(/播放回看/g)??[]).length,1);
    const boundStrip=html.match(/class="thumb-strip explanation-strip">([\s\S]*?)<\/div>/u)?.[1];
    assert(boundStrip);
    assert.deepEqual([...boundStrip.matchAll(/<figcaption>原片 ([^<]+)<\/figcaption>/gu)].map(match=>match[1]),['0秒','9秒']);
@@ -648,7 +654,8 @@ try{
    assert.equal((await productionTaskStore.load(projectId,task.taskId)).productionChildren,undefined);
    task.createdAt=Date.now()-task.input.budget.maxElapsedMs-1;
    await productionTaskStore.save(task);
-   assert.match((await status()).blueprintMessage,/蓝图检查已暂停/,'the CTA prompt does not hide an expired task');
+   const {blueprintNotices}=await import('../../shared/clipmentor-review-feedback');
+   assert.equal((await status()).blueprintMessage,blueprintNotices.checkStopped,'the CTA prompt does not hide an expired task');
    task.createdAt=originalCreatedAt;
    assert.equal(task.completed.blueprint.artifact.authorSelfCheckNotice,'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对');
    task.completed.blueprint.artifact=structuredClone(pass);

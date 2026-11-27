@@ -83,7 +83,7 @@ test('workspace dev proxy routes only the selected task to its saved inputs',asy
     if(!origin)throw Error('Workspace development server unavailable')
     await page.goto(origin)
     await page.getByRole('link',{name:'打开 示例任务'}).click()
-    await expect(page.getByText('四份素材均已保存到当前工程。')).toBeVisible()
+    await expect(page.getByText('四份素材都已保存。')).toBeVisible()
     expect(calls).toContain('/api/clipmentor/task-workspace:')
     expect(calls).toContain('/api/clipmentor/material-intake:'+id)
     expect(calls).toContain('/api/clipmentor/production-task:'+id)

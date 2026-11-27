@@ -82,7 +82,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       await page.goto(origin)
       const inputs = (await audit()).inputs
       for (const [label, key] of [['爆款原片', 'source'], ['商品图', 'product'], ['销量截图', 'sales'], ['合作海报', 'cta']]) await page.getByLabel(label, { exact: true }).setInputFiles(inputs[key])
-      await page.getByRole('button', { name: '上传素材' }).click()
+      await page.getByRole('button', { name: '上传' }).click()
       await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
     await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
       await expect.poll(async () => (await state()).task?.status, { timeout: 20_000 }).toBe('awaiting_review')
@@ -137,7 +137,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       gate.release()
       await releasedResponse
       if (replacement === 'render' && timing === 'request') {
-        await expect(partner(page).getByText('请刷新后查看当前版本。')).toBeVisible()
+        await expect(partner(page).getByText('请刷新页面，查看最新版本。')).toBeVisible()
       } else {
         await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)), { timeout: 18_000 })
       }
