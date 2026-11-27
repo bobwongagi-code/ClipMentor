@@ -16,7 +16,7 @@ type Task = {
   blueprintOpinionDifferences?:{overall?:BlueprintOpinionDifference;groups:BlueprintOpinionDifference[]}
   productionDifferences?:Task['blueprintOpinionDifferences']
   reviewGroups?:Array<{id:string;label:string}>
-  canAcceptPreview?:boolean; reviewIssue?:ReviewIssue
+  canAcceptPreview?:boolean; previewPending?:boolean; previewNeedsChanges?:boolean; deliveryHeld?:boolean; reviewIssue?:ReviewIssue
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
 }
 type Audience = 'new_contact' | 'existing_partner'
@@ -387,13 +387,14 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   }
 
   const awaitingPreview = task?.status === 'awaiting_review'
+  const pendingPreview = task?.previewPending === true
   const completed = task?.status === 'completed'
   const stopMessage = task?.stopReason === 'materials' ? '无法读取已上传的原片，需要核对素材。'
     : task?.stopReason === 'limit' ? '本次制作已达到处理上限，已保存的进度会保留。'
     : task?.stopReason === 'maintenance' ? '制作已暂停，已保存的进度会保留。无需重新上传。'
     : task?.stopReason === 'service' ? serviceUnavailable : undefined
   const canConfirm = !!task && (!!task.canConfirmBlueprint || !task.dualBlueprint && task.canApproveBlueprint===true)
-  const reviewTitle = boardRevision ? '审核蓝图' : awaitingPreview ? '预览与终审' : '成片已确认'
+  const reviewTitle = boardRevision ? '审核蓝图' : pendingPreview ? '视频预览' : awaitingPreview ? '预览与终审' : '成片已确认'
   const sharedBlueprint = showSharedBlueprint(sharedProgress)
   if(!state)return <p className="cm-caption" role="status">{readError || '正在读取制作状态…'}</p>
   if(state.outputs)return <>
@@ -417,7 +418,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
           <button className="cm-button" disabled={!state || !!state.unavailable || pending} onClick={() => void action('start')}><Play size={17} /> 开始制作</button>
         </div>
       </section>
-    </> : boardRevision || awaitingPreview || completed ? <>
+    </> : boardRevision || awaitingPreview || completed || pendingPreview ? <>
       {!unifiedBlueprint && <div className={outputAudience?"cm-output-heading":"cm-heading"}><h1>{outputAudience?audienceTitle:reviewTitle}</h1></div>}
       <section className="cm-panel cm-work">
         {boardRevision && (currentBoard?.revision === boardRevision
@@ -425,8 +426,10 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
           : boardError ? <div className="cm-footer"><p role="status">{boardError}</p>
             <button className="cm-button secondary" onClick={() => setBoardReload(attempt => attempt + 1)}>重新加载审核板</button>
           </div> : <p role="status">正在生成审片板…</p>)}
-        {(awaitingPreview || completed) && (task.renderId
-          ? <video className="cm-final-video" controls preload="metadata" src={assetUrl('panel_video', 'renderId', task.renderId)} />
+        {pendingPreview && <p className="cm-caption" role="status">{task.previewNeedsChanges?'预览可播放，内容需修改。'
+          :task.status==='blocked'?'预览可播放，复核已暂停。':task.stage==='self_check'&&task.active?'预览可播放，正在复核。':'预览可播放，内容待复核。'}</p>}
+        {(awaitingPreview || completed || pendingPreview) && (task.renderId
+          ? <video className="cm-final-video" controls controlsList={pendingPreview?'nodownload':undefined} preload="metadata" src={assetUrl('panel_video', 'renderId', task.renderId)} />
           : <p role="alert">预览暂时无法播放。</p>)}
         {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
         {boardRevision&&<form className="cm-feedback" onSubmit={submitBlueprintOpinions}>
@@ -491,7 +494,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
           </>}
           {(awaitingPreview || completed) && task.renderId && task.attachments?.map(file => <a key={file.assetId} className="cm-button secondary" href={`${assetUrl('panel_attachment', 'renderId', task.renderId!)}&${new URLSearchParams({assetId:file.assetId})}`} download={file.fileName}><Download size={17} /> 下载 Storyboard</a>)}
           {task.deliveryUnavailable && <p role="alert">随片资料暂时无法下载。</p>}
-          {completed && task.renderId && <a className="cm-button" href={assetUrl('panel_download', 'renderId', task.renderId)} download={task.downloadName}><Download size={17} /> 下载成片</a>}
+          {completed && task.renderId && !task.deliveryHeld && <a className="cm-button" href={assetUrl('panel_download', 'renderId', task.renderId)} download={task.downloadName}><Download size={17} /> 下载成片</a>}
         </div>
       </section>
     </> : <>

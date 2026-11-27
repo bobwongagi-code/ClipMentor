@@ -1,3 +1,4 @@
+import {productionWorkDeadline} from './production-shared-clock';
 import {failedInitialBreakdownWrite} from './production-analysis-recovery';
 import {panelProductionBudget} from './production-budget';
 import { open, readFile, stat } from 'node:fs/promises';
@@ -28,6 +29,8 @@ import {handoffKey,readHandoffPolicy} from './handoff';
 import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
 import {productionDeliverables,productionAttachmentSlots} from './production-deliverables';
 import {verifyProductionOutput} from './production-format';
+import {pendingProductionPreview,openPendingProductionPreview} from './production-playable-preview';
+import {previewHasBoundContentIssue} from './production-shared-review';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {deliveryFileName,attachmentDisposition} from './delivery-filename';
 import {currentCreatorDocument} from './creator-storyboard-document';
@@ -41,7 +44,7 @@ import {
   acceptProductionTask, createProductionTask, productionFeedback, productionTaskStore, resolveHumanBlueprint, recordTechnicalRecovery,productionOpeningComparison,
   acceptsDraftBlueprintFeedback, queueDraftBlueprintFeedback,
   isPanelBlueprintDraft, panelAuthorCheckMatches,panelAuthorCheckPending,panelAuthorNeedsHumanReview,panelBlueprintRequirementsDigest,
-  latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,saveProductionControl,
+  latestPanelProductionTask,productionReviewRequirements,productionTeachingBrief,saveProductionControl,sharedPreviewDeliveryHeld,
   type ProductionTask,
 } from './production-task';
 
@@ -254,6 +257,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     };
     if (req.method === 'GET') {
       const preview=task&&previewFile(task);
+      const pendingPreview=task&&pendingProductionPreview(task);
       const boundPreviewProject=async()=>{
         const saved=await snapshot(),exported=task?.completed.export?.artifact;
         if(task?.status==='awaiting_review'&&task.completed.self_check?.artifact.receipt===undefined&&exported?.revision===undefined)
@@ -261,6 +265,17 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if(!matchesExportedPreviewProject(exported,saved))
           throw Error('预览已变化，请刷新');
         return saved;
+      };
+      const currentPreviewTask=async()=>{
+        if(!task)throw Error('预览已变化，请刷新');
+        return manifestTask?productionTaskStore.load(task.projectId,task.taskId):currentPanelTask(projectId);
+      };
+      const assertCurrentPendingPreview=async()=>{
+        const current=await currentPreviewTask();
+        const currentBinding=current&&pendingProductionPreview(current);
+        if(!current||current.taskId!==task?.taskId||!currentBinding||!pendingPreview||digestValue(currentBinding)!==digestValue(pendingPreview))
+          throw Error('预览已变化，请刷新');
+        if(current.blueprintApproval)await publishedProductionParent(current);
       };
       const verifyPreview=async()=>{
         if(!task||!preview)throw Error('这个预览已过期或文件缺失');
@@ -396,6 +411,17 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         res.end(Buffer.from(frame.base64,'base64'));return;
       }
       if (view === 'panel_video' || view === 'panel_download') {
+        if(view==='panel_video'&&task&&pendingPreview){
+          if(query.get('renderId')!==pendingPreview.renderId)throw Error('这个预览已过期或文件缺失');
+          await boundPreviewProject();
+          const {file,handle}=await openPendingProductionPreview(pendingPreview);
+          try{
+            await boundPreviewProject();
+            await assertCurrentPendingPreview();
+            await serveDiskFile(req,res,file,handle);
+          }finally{await handle.close();}
+          return;
+        }
         const file = preview;
         if (!file || query.get('renderId') !== task?.completed.export?.artifact.renderId) throw new Error('这个预览已过期或文件缺失');
         if (view === 'panel_download' && task.status !== 'completed') throw new Error('请先完成终审');
@@ -405,7 +431,16 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }
         const handle=task.input.panelDelivery?await openVerifiedPreview(task,file):undefined;
         try{
-          if (view === 'panel_download') res.setHeader('Content-Disposition',attachmentDisposition(deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at)));
+          if (view === 'panel_download'){
+            const current=await currentPreviewTask();
+            if(!current||current.taskId!==task.taskId||current.status!=='completed'
+              ||!current.completed.export||!current.completed.self_check
+              ||digestValue(current.completed.export)!==digestValue(task.completed.export)
+              ||digestValue(current.completed.self_check)!==digestValue(task.completed.self_check))throw Error('预览已变化，请刷新');
+            if(await sharedPreviewDeliveryHeld(current))throw Error('preview_shared_body_requires_reconciliation');
+            if(task.input.panelDelivery)await boundPreviewProject();
+            res.setHeader('Content-Disposition',attachmentDisposition(deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at)));
+          }
           await serveDiskFile(req,res,file,handle);
         }
         finally{await handle?.close();}
@@ -452,7 +487,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         /^(?:Error: )?(?:Production deadline exceeded|(?:model|review|observation|tts|render|preview_review) budget exhausted)$/.test(task.error??'')
         ||task.error?.startsWith('Error: 已用完自动返修额度')
           &&(isPanelBlueprintDraft(task)||task.stage==='copy_review'&&task.attempts.review>=task.input.budget.review)
-        ||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs
+        ||Date.now()>=productionWorkDeadline(task)
         ||uncheckedDraft&&task.attempts.model>=task.input.budget.model);
       const stopReason=stopped||uncheckedDraft
         ? /^(?:Error: )?(?:Original video asset missing|Original upload unavailable|Original source changed)$/.test(task?.error??'')?'materials'
@@ -471,6 +506,16 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       let verifiedProject:Awaited<ReturnType<typeof verifyPreview>>;
       const needPreview=!!task?.input.panelDelivery&&['awaiting_review','completed'].includes(task.status);
       if(needPreview)try{verifiedProject=await verifyPreview();}catch{playablePreview=null;}
+      let pendingPreviewRenderId:string|undefined;
+      if(pendingPreview)try{
+        await boundPreviewProject();
+        const {handle}=await openPendingProductionPreview(pendingPreview);
+        await handle.close();
+        await boundPreviewProject();
+        await assertCurrentPendingPreview();
+        pendingPreviewRenderId=pendingPreview.renderId;
+        if(reviewIssue?.kind==='binding')reviewIssue=undefined;
+      }catch{/* Missing or stale media stays outside the playable preview. */}
       let previewProject=verifiedProject;
       if(task&&playablePreview){
         try{
@@ -483,7 +528,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }catch{deliveryUnavailable=true;}
       }
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
-      const canAcceptPreview=task?.status==='awaiting_review'&&!!playablePreview&&!deliveryUnavailable
+      const sharedDeliveryHeld=needPreview&&!!task&&await sharedPreviewDeliveryHeld(task);
+      if(sharedDeliveryHeld)reviewIssue=panelReviewIssue('preview_shared_body_requires_reconciliation');
+      const canAcceptPreview=task?.status==='awaiting_review'&&!!playablePreview&&!deliveryUnavailable&&!sharedDeliveryHeld
         &&(!task.input.panelDelivery||!!task.completed.self_check?.artifact.receipt);
       if(needPreview&&task?.status==='awaiting_review'&&!canAcceptPreview)
         reviewIssue??={kind:'binding',message:'当前预览或随片资料暂不可用。'};
@@ -506,6 +553,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ...(task.status==='awaiting_review'&&criteria?{visualCriteria:{digest:criteria.digest}}:{}),
         ...(playablePreview&&!outputUnavailable?{downloadName:deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at),
           renderId:task.completed.export?.artifact.renderId}:{}),
+        ...(pendingPreviewRenderId?{renderId:pendingPreviewRenderId,previewPending:true,canAcceptPreview:false,
+          ...(previewHasBoundContentIssue(task)?{previewNeedsChanges:true}:{})}:{}),
+        ...(sharedDeliveryHeld?{deliveryHeld:true}:{}),
         ...(attachments.length?{attachments}:{}),...(deliveryUnavailable?{deliveryUnavailable:true}:{}),
       } : null,
         unavailable: (config && 'unavailable' in config) || (!task && isProjectConnected(projectId)) ? panelServiceUnavailable : undefined,

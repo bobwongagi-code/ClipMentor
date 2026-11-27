@@ -9,14 +9,15 @@ import {productionFeedbackAnchor} from '../clipmentor/production-feedback';
 import type {Plugin} from 'vite';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {editorCredentialAuthorized} from '../editor-auth';
-import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,requeuePanelAuthorCheck,ProductionCheckpointSuperseded,type ProductionInput,type StageWorker} from '../clipmentor/production-task';
+import {createProductionTask,productionTaskStore,runProductionWithRecovery,productionFeedback,acceptProductionTask,cancelProductionTask,productionExecutionActive,saveProductionControl,requeuePanelAuthorCheck,ProductionCheckpointSuperseded,type ProductionInput,type ProductionTask,type StageWorker} from '../clipmentor/production-task';
 import {productionStageWorker,reconcileBlockedBlueprint} from '../clipmentor/production-worker';
 import {productionBlueprintReadiness} from '../clipmentor/production-readiness';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {createStoryboardHandler} from '../clipmentor/storyboard-api';
 import {createBlueprintReviewBoardHandler} from '../clipmentor/blueprint-review-board-api';
-import {prepareSharedProduction,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs} from '../clipmentor/production-continuation';
+import {canSeedSharedProduction,prepareSharedProduction,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs} from '../clipmentor/production-continuation';
 import {authorizePreviewRetry} from '../clipmentor/production-preview-retry';
+import {canLaunchSharedFollower} from '../clipmentor/production-shared-clock';
 import {resolveUploadFile} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
 
@@ -26,9 +27,13 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
  const storyboard=createStoryboardHandler();
  const reviewBoard=createBlueprintReviewBoardHandler();
  const active=new Map<string,Promise<unknown>>();
+ const preparing=new Map<string,Promise<boolean>>();
  const controls=new Set<string>();
- const launch=(task:Awaited<ReturnType<typeof createProductionTask>>,restoring=false)=>{
+ const launch=(task:ProductionTask,restoring=false,pausedProducer?:ProductionTask)=>{
   if(active.has(task.taskId)||productionExecutionActive(task.projectId,task.taskId))throw new Error('Production task already running');
+  const ready=Promise.withResolvers<boolean>();
+  preparing.set(task.taskId,ready.promise);
+  const finishPreparation=(prepared:boolean)=>{preparing.delete(task.taskId);ready.resolve(prepared);};
   const resumeWorker:StageWorker=async(item,context)=>{
    // A dead process can leave an unexpired edit lease. Wait for the normal
    // ownership claim instead of turning a recoverable conflict into a stop.
@@ -75,7 +80,12 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
        signal.throwIfAborted();
        batchValidated=true;
       }
-      return prepareSharedProduction(task,signal);
+      const prepared=await prepareSharedProduction(task,signal,pausedProducer);
+      if(prepared)finishPreparation(true);
+      return prepared;
+     },async published=>{
+      try{await launchSharedFollower(published,true);}
+      catch(error){console.error('ClipMentor shared preview continuation unavailable',published.taskId,error);}
      });
    }catch(error){
     // Failure to read the authoritative checkpoint does not turn a stale launch
@@ -95,19 +105,36 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    }
   })().finally(async()=>{
    active.delete(task.taskId);
+   finishPreparation(false);
    // The second output starts without another browser action, including after recovery.
-   if(task.blueprintApproval&&['awaiting_review','completed'].includes(task.status)){
-    const parent=await publishedProductionParent(task);
-    if(!parent)return;
-    const siblings=parent.productionChildren?.length?await queueBlueprintContinuations(parent):[];
-    for(const sibling of siblings){
-     if(sibling.status==='queued'&&sibling.sharedProduction?.taskId===task.taskId&&!active.has(sibling.taskId))launch(sibling,true);
-    }
-   }
+   await launchSharedFollower(task,false);
   });
   active.set(task.taskId,work);
   void work.catch(error=>console.error('ClipMentor production worker failed',task.taskId,error));
+  return ready.promise;
  };
+ async function launchSharedFollower(task:ProductionTask,waitForBinding:boolean){
+  const pausedProducer=waitForBinding?task:undefined;
+  if(!task.blueprintApproval||task.input.panelDelivery?.audience!=='existing_partner'||!canSeedSharedProduction(task,pausedProducer))return;
+  const parent=await publishedProductionParent(task);
+  if(!parent?.productionChildren?.length)return;
+  const siblings=await queueBlueprintContinuations(parent);
+  for(let sibling of siblings){
+   if(sibling.sharedProduction?.taskId!==task.taskId)continue;
+   // Startup can already be preparing the follower from the durable export.
+   // Wait for that same preparation before the producer enters review.
+   const pending=preparing.get(sibling.taskId);
+   if(pending){
+    if(!waitForBinding||await pending)continue;
+    // The old run could have seen the producer just before export. Its
+    // deferred result releases execution before we try the new checkpoint.
+    sibling=await productionTaskStore.load(sibling.projectId,sibling.taskId);
+   }
+   if(!canLaunchSharedFollower(sibling)||active.has(sibling.taskId)||productionExecutionActive(sibling.projectId,sibling.taskId))continue;
+   const ready=launch(sibling,true,pausedProducer);
+   if(waitForBinding)await ready;
+  }
+ }
  const isActive=(id:string,projectId:string)=>active.has(id)||productionExecutionActive(projectId,id);
  const panel=createProductionPanel(launch,isActive,controls);
  return {name:'clipmentor-production-task',configureServer(server){
@@ -127,7 +154,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
       if(task?.blueprintApproval)continue;
       if(task&&(task.productionChildren?.length||task.productionChild)){
        const children=task.productionChildren?.length?await queueBlueprintContinuations(task):await readProductionOutputs(task);
-       for(const child of children)if(projectIds.has(child.projectId)&&['queued','running'].includes(child.status)&&!active.has(child.taskId)&&!productionExecutionActive(child.projectId,child.taskId)){
+       for(const child of children)if(projectIds.has(child.projectId)&&(child.status==='running'||canLaunchSharedFollower(child))&&!active.has(child.taskId)&&!productionExecutionActive(child.projectId,child.taskId)){
         child.input.author.origin=origin;child.input.reviewer.origin=origin;launch(child,true);
        }
        continue;

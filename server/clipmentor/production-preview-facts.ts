@@ -201,6 +201,7 @@ export function assertFinalPreviewEvidence(task:Pick<import('./production-task')
  if(!row(r))throw Error('final_output_evidence_missing_or_stale');
  const gate=row(r.effective_review)?r.effective_review:{},timeline=row(r.timeline_check)?r.timeline_check:{};
  if(!/^[a-f0-9]{64}$/.test(videoSha256)||revision!==task.projectRevision||exported?.revision!==revision||checked?.preview!==exported?.path
+  ||(exported?.videoSha256!==undefined&&exported.videoSha256!==videoSha256)
   ||r.projectId!==task.projectId||r.videoSha256!==videoSha256||r.status!=='completed'
   ||r.scope!=='rendered_preview_continuous_review'||r.full_film_accepted!==false
   ||gate.can_use_as_pass!==true||gate.status!=='pass'||!Array.isArray(gate.blockers)||gate.blockers.length!==0

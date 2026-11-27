@@ -13,7 +13,9 @@ import {agentSessionGenerationKey} from '../../shared/agent-session-generation';
 import {createHash,randomUUID} from 'node:crypto';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
-import {productionFeedbackAnchor} from './production-feedback';
+import {productionFeedbackAnchor,matchesExportedPreviewProject} from './production-feedback';
+import {pendingProductionPreview,openPendingProductionPreview} from './production-playable-preview';
+import {canLaunchSharedFollower,unstartedSharedFollower} from './production-shared-clock';
 import {confirmedTeachingDigest} from './production-teaching-baseline';
 import {confirmedOutputCopyLocks} from './production-blueprint-opinions';
 import {boundVisualCriteria,plannedVisualCriteria,visualCriteriaPlanApproved} from './visual-done-criteria';
@@ -435,6 +437,13 @@ interface SharedPreparation {
  previous_revision:string;previous_digest:string;approval_digest:string;prepared_digest:string;
  common_digest:string;end_frame:number;rebased:boolean;
 }
+
+export function canSeedSharedProduction(task:ProductionTask,pausedProducer?:ProductionTask){
+ const resumeBarrier=pausedProducer?.projectId===task.projectId&&pausedProducer.taskId===task.taskId
+  &&pausedProducer.sequence===task.sequence&&pausedProducer.updatedAt===task.updatedAt;
+ return !!(['awaiting_review','completed'].includes(task.status)&&task.completed.self_check
+  ||(task.status!=='running'||task.stage==='export'||resumeBarrier)&&pendingProductionPreview(task));
+}
 function savedSharedPreparation(task:ProductionTask):SharedPreparation|undefined{
  const value=task.completed.blueprint?.artifact.shared_preparation as SharedPreparation|undefined;
  if(value===undefined)return;
@@ -446,7 +455,7 @@ function savedSharedPreparation(task:ProductionTask):SharedPreparation|undefined
 }
 /** Merge only the shared marker into a current producer checkpoint. An acceptance
  * arriving during preparation must not be overwritten by an older task clone. */
-async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;revision:string},target:ProductionTask,endFrame:number,digest:string,check:()=>void,authority?:()=>Promise<NonNullable<EntryPreconditions>>){
+async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;revision:string},target:ProductionTask,endFrame:number,digest:string,check:()=>void,authority:()=>Promise<NonNullable<EntryPreconditions>>,pausedProducer?:ProductionTask){
  for(let attempt=0;attempt<3;attempt++){
   check();
   await compactProductionCheckpoints(first);check();
@@ -455,7 +464,7 @@ async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;re
   const current=await productionTaskStore.load(first.projectId,first.taskId);check();
   const doc=project.found?runProjectMigrations(project.value)?.doc:null;
   if(!runtime.found||!doc||digestValue(doc)!==digestValue(source.doc)||current.projectRevision!==source.revision
-   ||!['awaiting_review','completed'].includes(current.status)||!current.completed.self_check
+   ||!current.completed.export||!canSeedSharedProduction(current,pausedProducer)
    ||digestValue(current.completed.export)!==digestValue(first.completed.export))throw Error('shared_producer_changed_during_preparation');
   if(current.sharedProduction){
    if(current.sharedProduction.prepared&&current.sharedProduction.projectId===target.projectId&&current.sharedProduction.taskId===target.taskId
@@ -463,15 +472,15 @@ async function markSharedProducer(first:ProductionTask,source:{doc:ProjectDoc;re
    throw Error('shared_producer_binding_changed');
   }
   current.sharedProduction={projectId:target.projectId,taskId:target.taskId,prepared:true,endFrame,digest};
-  const guards=await authority?.()??[];check();
+  const guards=await authority();check();
    try{await saveProductionCheckpoint(productionTaskStore,current,[...guards,{key,digest:digestValue(runtime.value)},{key:'project:'+first.projectId,digest:digestValue(project.value)}]);check();return current;}
   catch(error){if(!(error instanceof Error)||!error.message.includes('agent_runtime_precondition_changed'))throw error;}
  }
  throw Error('shared_producer_checkpoint_contended');
 }
 
-/** Returns false while the first output is unfinished; no model or media request is made. */
-export async function prepareSharedProduction(task:ProductionTask,signal?:AbortSignal){
+/** Read the verified first export and bind its common body without a provider request. */
+export async function prepareSharedProduction(task:ProductionTask,signal?:AbortSignal,pausedProducer?:ProductionTask){
  const check=()=>signal?.throwIfAborted();check();
  const initialGuards=await productionParentControlGuards(task);check();
  const sessions=initialGuards.filter(guard=>guard.key.startsWith('agent-session-generation:'));
@@ -486,10 +495,17 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
  const shared=task.sharedProduction;if(!shared)return true;
  if(shared.prepared){const saved=await loadOfflineStoredProject(task.projectId);if(!saved)throw Error('shared_output_missing');assertSharedProduction(task,saved.doc);return true;}
  const first=await productionTaskStore.load(shared.projectId,shared.taskId);check();
- if(!['awaiting_review','completed'].includes(first.status)||!first.completed.self_check)return false;
+ if(!canSeedSharedProduction(first,pausedProducer))return false;
  if(task.stage!=='copy_review'||task.completed.copy_review)throw Error('shared_output_already_started');
  const [source,next]=await Promise.all([loadOfflineStoredProject(first.projectId),loadOfflineStoredProject(task.projectId)]);check();
  if(!source||!next)throw Error('shared_output_missing');
+ const playable=pendingProductionPreview(first);
+ if(playable){
+  if(!matchesExportedPreviewProject(first.completed.export?.artifact,source))throw Error('shared_producer_changed_during_preparation');
+  const {handle}=await openPendingProductionPreview(playable);
+  await handle.close();
+  check();
+ }
  await productionFeedbackAnchor(first,source.doc);check();
  let prepared:Awaited<ReturnType<typeof sharedProductionDocument>>,rebased=false;
  const prior=savedSharedPreparation(task);
@@ -505,7 +521,7 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
   try{prepared=await sharedProductionDocument(source.doc,next.doc);}catch(error){
    check();
    if(!(error instanceof Error)||!['shared_body_blueprint_changed','shared_opening_blueprint_changed'].includes(error.message))throw error;
-   if(!task.input.humanBlueprintReview||!first.input.humanBlueprintReview||(task.status!=='queued'&&!(prior&&task.status==='blocked'))||Object.values(task.attempts).some(n=>n!==0)||Object.keys(task.effects).length
+   if(!task.input.humanBlueprintReview||!first.input.humanBlueprintReview||(!canLaunchSharedFollower(task)&&!(prior&&task.status==='blocked'))||Object.values(task.attempts).some(n=>n!==0)||Object.keys(task.effects).length
     ||next.revision!==task.projectRevision||!(await checkCopyProduction(source.doc,'clipmentor')).allowed)throw Error('shared_rebase_not_authorized_for_started_or_unreviewed_output');
    const current=await copyReviewSubject(source.doc);
    if((first.completed.edit?.artifact.executionReport as {blueprint?:{digest?:string}}|undefined)?.blueprint?.digest!==current.digest)throw Error('shared_rebase_producer_execution_not_bound');
@@ -545,8 +561,14 @@ export async function prepareSharedProduction(task:ProductionTask,signal?:AbortS
  });
  check();
  const saved=await loadOfflineStoredProject(task.projectId);if(!saved||digestValue(saved.doc)!==proposal.prepared_digest)throw Error('shared_preparation_result_mismatch');check();
- const currentProducer=await markSharedProducer(first,source,task,prepared.endFrame,prepared.digest,check,authority);check();
- task.projectRevision=saved.revision;task.sharedProduction={...shared,prepared:true,endFrame:prepared.endFrame,digest:prepared.digest};
+ const currentProducer=await markSharedProducer(first,source,task,prepared.endFrame,prepared.digest,check,authority,pausedProducer);check();
+ const workStartedAt=unstartedSharedFollower(task)?Date.now():undefined;
+ const resumeUnstarted=task.status==='blocked'&&canLaunchSharedFollower(task);
+ task.projectRevision=saved.revision;task.sharedProduction={...shared,prepared:true,endFrame:prepared.endFrame,digest:prepared.digest,
+  ...(workStartedAt===undefined?{}:{workStartedAt})};
+ if(workStartedAt!==undefined&&resumeUnstarted){
+  task.status='queued';delete task.error;
+ }
  if(rebased)task.completed.blueprint={at:Date.now(),artifact:{revision:saved.revision,sharedFromProject:first.projectId,
   sharedFromTask:first.taskId,sharedSourceRevision:source.revision,ownEndingPreserved:true,formalReviewRequired:true,shared_preparation:proposal}};
  task.input.budget.model=Math.min(task.input.budget.model,Math.max(0,currentProducer.input.budget.model-currentProducer.attempts.model));

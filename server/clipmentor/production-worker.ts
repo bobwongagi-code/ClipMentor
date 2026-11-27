@@ -1,3 +1,4 @@
+import {productionWorkDeadline} from './production-shared-clock';
 import {recoveredAnalysisWrite,sourceBreakdownFailures} from './production-analysis-recovery';
 import {frozenTeachingTopics,sourceClosingPolicy,sourceTeachingAdvice} from './production-source-policy';
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
@@ -49,6 +50,7 @@ import type {ProjectDoc} from '../../src/editor/types';
 import {productionPreviewFacts,previewFactsDigest,assertPreviewExportBinding,productionPreviewReviewInput} from './production-preview-facts';
 import {previewBlueprintAlignmentDigest,previewReviewRepairBlock} from './preview-review';
 import {previewRetryReadback,unavailablePreviewReceiptReason} from './production-preview-retry';
+import {localSharedEndingRepair,sharedPreviewReviewPause} from './production-shared-review';
 import {productionDeliverables} from './production-deliverables';
 import {collectSavedPreviewVisualEvidence} from './preview-visual-evidence';
 import {productionOpeningComparison,productionReviewRequirements,productionTeachingBrief,assertConfirmedReviewGroups} from './production-task';
@@ -316,13 +318,15 @@ async function runProductionExport(task:ProductionTask,editor:Awaited<ReturnType
   signal.throwIfAborted();const snapshot=await editor.readExport(result.renderId,result) as {status:string;result?:Record<string,unknown>;error?:string};
   if(['succeeded','completed'].includes(snapshot.status)&&snapshot.result){
    let outputDimensions:{width:number;height:number}|undefined;
+   let videoSha256:string|undefined;
    if(task.input.panelDelivery){
     const src=snapshot.result.path??snapshot.result.downloadUrl;
     const file=typeof src==='string'?resolveUploadFile(src.replace(/^\/media\/uploads\//,'')):null;
     if(!file)throw Error('Preview missing');
     outputDimensions=await verifyProductionOutput(file,signal);
+    videoSha256=await sha256File(file);
    }
-   return {artifact:{renderId:result.renderId,...snapshot.result,...(outputDimensions?{outputDimensions}:{}),revision:exportedRevision,facts_digest:factsDigest,blueprint_alignment_input_sha256:alignmentDigest,feedback_project_digest:feedbackProjectDigest(doc)}};
+   return {artifact:{renderId:result.renderId,...snapshot.result,...(outputDimensions?{outputDimensions,videoSha256}:{}),revision:exportedRevision,facts_digest:factsDigest,blueprint_alignment_input_sha256:alignmentDigest,feedback_project_digest:feedbackProjectDigest(doc)}};
   }
   if(['failed','cancelled'].includes(snapshot.status))throw new Error(snapshot.error??'Render failed; committed editing retained');
   await new Promise<void>((resolve,reject)=>{const stop=()=>{clearTimeout(timer);reject(signal.reason);};const timer=setTimeout(()=>{signal.removeEventListener('abort',stop);resolve();},1000);signal.addEventListener('abort',stop,{once:true});});
@@ -828,6 +832,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(alignedInput&&previewBlueprintAlignmentDigest(alignedInput)!==alignmentDigest)throw Error('preview_blueprint_alignment_binding_stale');
    const input=alignedInput??facts.input;
    const videoSha256=await sha256File(file);
+   if(exported?.videoSha256!==undefined&&exported.videoSha256!==videoSha256)throw Error('preview_export_file_changed');
    const retry=task.previewReviewRetry?.renderId===exported?.renderId?task.previewReviewRetry:undefined;
    const reviewOperation=retry?.operationId??operation('independent-review');
    let reviewed:Record<string,unknown>|undefined;
@@ -850,7 +855,11 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(alignmentDigest!==undefined&&gate?.blueprint_alignment_input_sha256!==alignmentDigest)throw Error('preview_blueprint_alignment_receipt_missing_or_stale');
    if(!gate?.can_use_as_pass){
     const artifact={receipt:result,revision:editor.revision};
-    const reason=previewReviewRepairBlock(result);
+    const reason=previewReviewRepairBlock(result)??sharedPreviewReviewPause(task,result);
+    if(reason==='preview_shared_ending_requires_local_repair'&&!retry){
+     const scope=await localSharedEndingRepair(task,doc,result);
+     if(scope)return {artifact:{...artifact,final_feedback:scope},repair:'edit'};
+    }
     return reason||retry?{artifact,pause:reason??'preview_retry_content_review_required'}:{artifact,repair:'edit'};
    }
    return {artifact:{receipt:result,preview:src,deliverables,requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),...(criteria?{visualCriteriaDigest:criteria.digest}:{}),executionReport:task.completed.edit?.artifact.executionReport??null,language_review:'final_operator_required',complete_film_accepted:false}};
@@ -987,7 +996,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    ...(task.input.humanBlueprintReview&&task.input.authorBackend==='codex'?{localProductionCodex:true as const}:{}),
    host:{signal:teachingAnalysis?AbortSignal.any([stage.signal,breakdownStop.signal]):stage.signal,
     ...(teachingAnalysis?{afterFailure:sourceBreakdownFailures(breakdownStop)}:{}),
-    maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
+    maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:productionWorkDeadline(task),
     normalizeArgs:(name,args)=>name==='load_skill'&&typeof args.limit==='number'&&Number.isSafeInteger(args.limit)&&args.limit>48000
      ?{...args,limit:48000}:args,
     beforeRequest:()=>{

@@ -42,6 +42,7 @@ test('page phase follows human approval, not internal repair stage',()=>{
  assert.equal(productionPageTitle(initial),'准备蓝图')
  assert.deepEqual(productionProgress(initial).map(p=>p.label),['分析原片','整理蓝图','检查蓝图'])
  assert.equal(productionPageTitle({stage:'self_check',status:'awaiting_review',blueprintConfirmed:true}),'预览与下载')
+ assert.equal(productionPageTitle({stage:'self_check',status:'blocked',blueprintConfirmed:true,previewPending:true}),'视频预览')
 })
 
 import {productionActivity} from '../src/pages/productionPanelState.js'

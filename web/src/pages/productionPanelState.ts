@@ -1,4 +1,4 @@
-type BoardTask={status:string;stage:string;revision?:string;blueprintRevision?:string;blueprintConfirmed?:boolean}
+type BoardTask={status:string;stage:string;revision?:string;blueprintRevision?:string;blueprintConfirmed?:boolean;previewPending?:boolean}
 export function reviewableBlueprintRevision(task?:BoardTask|null){
  if(!task || !['blueprint','copy_review'].includes(task.stage))return undefined
  if(task.status!=='awaiting_blueprint' && (task.blueprintConfirmed || task.status!=='blocked'))return undefined
@@ -22,6 +22,7 @@ export function showSharedBlueprint(task?:BoardTask){
 }
 
 export function productionPageTitle(task?:BoardTask){
+ if(task?.previewPending)return '视频预览'
  if(task?.status==='awaiting_review'||task?.status==='completed')return '预览与下载'
  if(task?.status==='awaiting_blueprint'||reviewableBlueprintRevision(task))return '审核蓝图'
  return task?.blueprintConfirmed?'视频制作':'准备蓝图'

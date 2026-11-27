@@ -28,6 +28,8 @@ export function panelReviewIssue(error:unknown){
   return {kind:'gate',message:'审核提出了已确认范围外的内容，现有讲解已保留。'} as const;
  if(/production_opening_underlay_shortfall/.test(message))
   return {kind:'binding',message:'片头配音长于现有画面安排，已暂停制作。'} as const;
+ if(message.includes('preview_shared_body_requires_reconciliation'))
+  return {kind:'content',message:'两个版本的共用片段需要一起核对。'} as const;
  if(/preview_review_(?:receipt_unavailable|timeout_unconfirmed|incomplete_generation|invalid_judgment_schema|evidence_unverified)|preview_retry_original_outcome_unavailable/.test(message))
   return {kind:'binding',message:'成片已保存，复核暂未完成。'} as const;
  if(/production_confirmed_teaching_baseline_changed/.test(message))

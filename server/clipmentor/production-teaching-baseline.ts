@@ -1,3 +1,4 @@
+import {productionWorkDeadline} from './production-shared-clock';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
 import { breakdownPointEvidence,contiguousPlaybackRuns,originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
@@ -1001,7 +1002,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
     +(source.confirmedDecisions?' confirmedDecisions 是本次编辑确认的教学决定。顶层 confirmed_teaching_checks 每项返回 {id:confirmedDecisionId,status:covered/missing,reason,unit_id?,point_id?,evidence_id?}。covered 要选择实际讲到该决定的现行点和本点的原片证据。只出现相关画面、属于同一商品，或者藏在备注中时标 missing。missing 说明切实漏掉的教学决定，不要求特定用词或旧窗口。':'')
     +' 引用协议 selection-v1：输出 reference_protocol:"selection-v1"。选已有 point_id、source_evidence_id、evidence_id、line_id 和 baseline_criterion.field。不要输出 question_quote、source_quote、quote 或 baseline_criterion.quote，宿主从本版材料按编号还原。判断和理由仍按以上要求。没有可引落点的实质遗漏仍可只说明缺失和相应判据。' ,
    messages:[{role:'user',content:JSON.stringify(baselineReviewInput(source))}],
-   host:{signal:stage.signal,maxTurns:1,deadlineAt:task.createdAt+task.input.budget.maxElapsedMs,
+   host:{signal:stage.signal,maxTurns:1,deadlineAt:productionWorkDeadline(task),
     async beforeRequest(){if(attempts++!==0)throw Error('teaching_baseline_single_request');},
     async execute(){throw Error('teaching_baseline_read_only');}}});
   if(run.status!=='completed')throw Error(run.error??'teaching_baseline_check_failed');
