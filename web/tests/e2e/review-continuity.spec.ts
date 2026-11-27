@@ -133,7 +133,7 @@ test('a late media update cannot undo a chapter jump during an immediate version
     const url=new URL(route.request().url())
     const audience=url.searchParams.get('audience')
     if(url.searchParams.get('view')==='panel_video')return previewVideo(route)
-    return route.fulfill({json:audience?{task:{...base,taskId:audience,stage:'self_check',blueprintConfirmed:true,
+    return route.fulfill({json:audience?{task:{...base,taskId:audience,sourceTaskId:'parent',audience,stage:'self_check',blueprintConfirmed:true,
       status:audience==='existing_partner'?'awaiting_review':'blocked',renderId:audience==='existing_partner'?'preview-cut':undefined,
       previewChapters:[{id:'two',label:'第 2 组',seconds:.12}]}}
       :{task:null,outputOwner:{taskId:'parent',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})

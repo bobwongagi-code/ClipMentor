@@ -22,7 +22,7 @@ export type Task = {
   reviewGroups?:Array<{id:string;label:string}>
   previewChapters?:Array<{id:string;label:string;seconds:number}>
   previewDuration?:number; previewReviewed?:boolean
-  canAcceptPreview?:boolean; previewPending?:boolean; previewNeedsChanges?:boolean; deliveryHeld?:boolean; reviewIssue?:ReviewIssue
+  canAcceptPreview?:boolean; previewPending?:boolean; previewNeedsChanges?:boolean; previewFeedbackUnavailable?:boolean; deliveryHeld?:boolean; reviewIssue?:ReviewIssue
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
   confirmedAt?: number; materialAttachment?: {assetId:string;label:string}; materialAttachmentUnavailable?:boolean
   canContinueAnalysis?: boolean
@@ -31,6 +31,11 @@ export type Audience = 'new_contact' | 'existing_partner'
 export const audienceTitleFor=(audience:Audience)=>audience==='new_contact'?'新建联达人版':'已合作达人版'
 const playbackTime=(seconds:number)=>`${Math.floor(seconds/60)}:${String(Math.floor(seconds%60)).padStart(2,'0')}`
 type State = { task: Task | null; unavailable?: string; outputs?: {audience:Audience}[]; outputOwner?:{taskId:string;sequence:number} }
+
+export function matchesPanelOutput(task: Task | null | undefined, audience: Audience, sourceTaskId?: string): task is Task {
+  return !!task && (sourceTaskId ? task.sourceTaskId === sourceTaskId && task.audience === audience && !!task.taskId
+    : !task.audience || task.audience === audience)
+}
 type ActionReceipt = { accepted?: boolean; reason?: string; issue?:unknown; notesSaved?:boolean; dispatched?:boolean;
   opinionConfirmation?:BlueprintOpinionConfirmation;opinionPlacements?:BlueprintOpinionPlacement[] }
 type FeedbackDraft = {key:string;text:string;target?:string;confirmed?:boolean;start?:string;end?:string;kind?:'content'|'execution'}
@@ -91,8 +96,11 @@ export async function readPanelState(response: Response): Promise<State | undefi
   const data = await readApiJson<State>(response)
   if (!data || typeof data !== 'object' || !('task' in data)) return
   if (data.task !== null && (typeof data.task?.status !== 'string' || !Number.isSafeInteger(data.task.sequence))) return
-  if (data.outputs !== undefined && (!Array.isArray(data.outputs) ||
-    data.outputs.some(output => output?.audience !== 'new_contact' && output?.audience !== 'existing_partner'))) return
+  if (data.outputs !== undefined && (!data.outputOwner || data.task !== null || !Array.isArray(data.outputs) ||
+    data.outputs.length === 0 || data.outputs.some(output => output?.audience !== 'new_contact' && output?.audience !== 'existing_partner') ||
+    new Set(data.outputs.map(output => output.audience)).size !== data.outputs.length)) return
+  if (data.outputOwner !== undefined && (!data.outputOwner || typeof data.outputOwner.taskId !== 'string' || !data.outputOwner.taskId
+    || !Number.isSafeInteger(data.outputOwner.sequence))) return
   if(data.task){
     const length=data.task.previewDuration
     const duration=typeof length==='number'&&Number.isFinite(length)&&length>0?length:undefined
@@ -110,9 +118,9 @@ export async function readPanelState(response: Response): Promise<State | undefi
   return data
 }
 
-export default function ProductionPanel({ assets, intakeReady, requestApi, outputAudience, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh, showPreview = true, projectId, reviewProjectId, slotsFull = false, requestedAudience, onAudienceChange, onPreviewTask }: {
+export default function ProductionPanel({ assets, intakeReady, requestApi, outputAudience, sourceTaskId, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh, showPreview = true, projectId, reviewProjectId, slotsFull = false, requestedAudience, onAudienceChange, onPreviewTask }: {
   assets:{id:string;title:string;name:string}[]; intakeReady:boolean; requestApi:(url:string, init?:RequestInit)=>Promise<Response>
-  outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task|undefined, failed:boolean)=>void; unifiedBlueprint?:boolean
+  outputAudience?:Audience; sourceTaskId?:string; sharedTask?:Task; onTask?:(task:Task|undefined, failed:boolean)=>void; unifiedBlueprint?:boolean
   mediaRefresh?:number; showPreview?:boolean; projectId?:string; reviewProjectId?:string; slotsFull?:boolean
   requestedAudience?:Audience; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
 }) {
@@ -156,10 +164,9 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       if(previousOwner?.taskId&&previousOwner.taskId===nextOwner?.taskId
         &&previousOwner.sequence>nextOwner.sequence)return current
       if(next.outputs)return next
-      if(current?.outputs&&!next.task)return current
-      if(current?.outputs&&current.outputOwner?.taskId===next.task?.taskId)return current
+      if(current?.outputs&&current.outputOwner&&current.outputOwner.taskId===next.task?.taskId)return current
       if(!current?.task)return next
-      if(!next.task)return current
+      if(!next.task)return next
       if(current.task.taskId&&next.task.taskId&&current.task.taskId!==next.task.taskId){
         if(current.task.sourceTaskId===next.task.taskId)return current
         return next
@@ -329,24 +336,31 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       const readId=++nextRead.current
       try {
         const response = await requestApi(endpoint, { signal: AbortSignal.any([controller.signal,AbortSignal.timeout(15_000)]) })
-        const data = await readPanelState(response)
-        if (!data || outputAudience&&data.task?.audience&&data.task.audience!==outputAudience) throw new Error('暂时无法读取制作状态')
+        const outputUnavailable=outputAudience&&response.status===409
+          &&(await readApiJson<{reason?:string}>(response))?.reason==='output_unavailable'
+        const data = outputUnavailable?{task:null}:await readPanelState(response)
+        if (!data) throw new Error('暂时无法读取制作状态')
         if (!controller.signal.aborted) {
-          remember(data,readId)
-          failures = 0
-          setReadError('')
-          if(!data.outputs)timer = setTimeout(read, data.task?.active ? 2000 : 8000)
+          if(readId>=latestRead.current){
+            // The parent and its outputs are polled independently. A sibling
+            // response belongs here only while its source task still matches.
+            const mismatched=outputAudience&&!matchesPanelOutput(data.task,outputAudience,sourceTaskId)
+            remember(mismatched?{task:null}:data,readId)
+            failures=0
+            setReadError(mismatched?'制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。':'')
+          }
+          timer = setTimeout(read, data.task?.active ? 2000 : 8000)
         }
       } catch {
         if (!controller.signal.aborted) {
-          if (++failures === 3 || latestRead.current===0) setReadError('制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。')
+          if (readId>=latestRead.current&&(++failures === 3 || latestRead.current===0)) setReadError('制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。')
           timer = setTimeout(read, 8000)
         }
       }
     }
     void read()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [pollingActive, endpoint, requestApi, outputAudience])
+  }, [pollingActive, endpoint, requestApi, outputAudience, sourceTaskId])
 
   useEffect(() => {
     setBoard(undefined)
@@ -501,9 +515,9 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         setConfirmation(current => current?.key === visualKey ? { ...current, acknowledged: true } : current)
       }
       const readId=++nextRead.current
-      const next = await requestApi(endpoint,{signal}).catch(() => undefined)
+      const next = await requestApi(endpoint,{signal:AbortSignal.any([signal,AbortSignal.timeout(15_000)])}).catch(() => undefined)
       const readback=next?await readPanelState(next):undefined
-      const latest=outputAudience&&readback?.task?.audience&&readback.task.audience!==outputAudience?undefined:readback
+      const latest=outputAudience&&readback&&!matchesPanelOutput(readback.task,outputAudience,sourceTaskId)?{task:null}:readback
       if(!stillCurrent()||readId<latestRead.current)return
       const confirmed = latest?.task?.status === 'completed' && !latest.task.deliveryUnavailable && !latest.task.deliveryHeld
         && !!task?.taskId && latest.task.taskId === task.taskId && latest.task.renderId === task.renderId
@@ -533,7 +547,8 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
 
   function revise(event: FormEvent) {
     event.preventDefault()
-    if (task?.status==='awaiting_review'&&!task.deliveryHeld&&!task.feedbackUsed&&task.renderId&&feedback.trim()&&feedbackTarget) void action('revise_preview')
+    if (task?.status==='awaiting_review'&&!task.previewFeedbackUnavailable&&!task.previewNeedsChanges&&!task.deliveryHeld
+      &&!task.feedbackUsed&&task.renderId&&feedback.trim()&&feedbackTarget) void action('revise_preview')
   }
 
   function seek(seconds:number){
@@ -618,14 +633,14 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         return <section key={`${owner}:${audience}`} id={`${tabsId}-panel-${audience}`} hidden={!visible}
         role={tabbed?'tabpanel':undefined} aria-label={sharedBlueprint?'共用蓝图':audienceTitleFor(audience)}>
         <ProductionPanel assets={assets} intakeReady={intakeReady} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint}
-          projectId={projectId} reviewProjectId={reviewProjectId} slotsFull={slotsFull} outputAudience={audience} sharedTask={sharedProgress} showPreview={visible}
+          projectId={projectId} reviewProjectId={reviewProjectId} slotsFull={slotsFull} outputAudience={audience} sourceTaskId={state.outputOwner?.taskId} sharedTask={sharedProgress} showPreview={visible}
           onTask={audience==='existing_partner'?reportPartner:reportContact} />
       </section>})}
       </div>
     </div>
   }
   return <>
-    {!task ? intakeReady&&<>
+    {!task ? !outputAudience&&intakeReady&&<>
       <div className="cm-heading"><Title>素材已上传</Title><p>四份素材均已保存到当前工程。</p></div>
       <section className="cm-panel">
         <ul className="cm-saved-assets">{assets.map(asset => <li key={asset.id}>
@@ -760,8 +775,8 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
                 maxLength={8000} placeholder="写下哪里要改、希望看到什么" />
               <div className="cm-preview-actions">
                 {feedbackInMemory&&hasPreviewDraft&&<p role="status">本机未能保存草稿，刷新前请提交或复制。</p>}
-                {pendingPreview&&<p>复核完成后可提交。</p>}
-                <button className="cm-button secondary" disabled={pending||!awaitingPreview||!feedbackTarget||!feedback.trim()}><Send size={16} /> 提交修改</button>
+                {task.previewFeedbackUnavailable?<p>意见可先保存为草稿。</p>:pendingPreview&&<p>复核完成后可提交。</p>}
+                <button className="cm-button secondary" disabled={pending||!awaitingPreview||task.previewFeedbackUnavailable||!feedbackTarget||!feedback.trim()}><Send size={16} /> 提交修改</button>
               </div>
             </form>}
           {(task.feedbackUsed||task.productionDifferences)&&<section className="cm-preview-card" aria-label="修改记录">
@@ -801,7 +816,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
               {capabilities.canDownloadDraft&&task.renderId&&<a className="cm-button secondary" href={assetUrl('panel_draft_download','renderId',task.renderId)} download><Download size={17} /> 下载未复核版本</a>}
               {capabilities.canDownload&&task.renderId&&<a className="cm-button" href={projectId?taskPage(projectId,'downloads',outputAudience??task.audience):assetUrl('panel_download','renderId',task.renderId)} download={projectId?undefined:task.downloadName}><Download size={17} /> {projectId?'打开下载页':'下载成片'}</a>}
             </div>
-            {task.deliveryUnavailable&&<p role="alert">随片资料暂时无法下载。</p>}
+            {task.deliveryUnavailable&&reviewIssue?.message!==reviewMessages.deliveryCheckUnavailable&&<p role="alert">随片资料暂时无法下载。</p>}
           </section>
         </div>
       </div>}

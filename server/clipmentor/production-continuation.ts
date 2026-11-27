@@ -185,11 +185,16 @@ export async function readProductionOutputs(parent:ProductionTask):Promise<Produ
  }
  const entry=parent.productionChild;
  if(!entry)return [];
+ return [await readProductionOutput(parent,entry)];
+}
+
+/** A status or media read for one version must not depend on its sibling's checkpoint. */
+export async function readProductionOutput(parent:ProductionTask,entry:NonNullable<ProductionTask['productionChild']>){
  const child=await productionTaskStore.load(entry.projectId,entry.taskId);
  if(child.projectId===parent.projectId||child.input.panelDelivery?.audience!==entry.audience
   ||child.blueprintApproval?.sourceProjectId!==parent.projectId||child.blueprintApproval.sourceTaskId!==parent.taskId
   ||child.input.sourceAssetId!==parent.input.sourceAssetId)throw Error('production_outputs_binding_invalid');
- return [child];
+ return child;
 }
 
 /** The durable manifest still identifies both outputs after a follower is
@@ -205,14 +210,21 @@ function retainedProducerMatches(parent:ProductionTask,producer:ProductionTask,d
   &&(!shared||shared.prepared===true&&shared.projectId===deleted.projectId&&shared.taskId===deleted.taskId);
 }
 
-export async function publishedProductionParent(task:ProductionTask){
+export async function publishedProductionParent(task:ProductionTask,options?:{playbackOnly:true}){
  const approval=task.blueprintApproval;
  if(!approval)return;
  const index=(await getStoredEntry('projects')).value;
  if(Array.isArray(index)&&index.some(row=>row?.deletedAt&&(row.id===task.projectId||row.id===approval.sourceProjectId)))
   throw Error('production_output_project_deleted');
  const parent=await latestPanelProductionTask(approval.sourceProjectId);
- if(parent?.taskId!==approval.sourceTaskId||!(await readProductionOutputs(parent)).some(child=>child.taskId===task.taskId&&child.projectId===task.projectId))
+ if(parent?.taskId!==approval.sourceTaskId)throw Error('production_outputs_binding_invalid');
+ if(options?.playbackOnly){
+  const outputs=parent.productionChildren?.length?parent.productionChildren:parent.productionChild?[parent.productionChild]:[];
+  if(task.input.sourceAssetId!==parent.input.sourceAssetId||!outputs.some(output=>output.taskId===task.taskId
+   &&output.projectId===task.projectId&&output.audience===task.input.panelDelivery?.audience))throw Error('production_outputs_binding_invalid');
+  return parent;
+ }
+ if(!(await readProductionOutputs(parent)).some(child=>child.taskId===task.taskId&&child.projectId===task.projectId))
   throw Error('production_outputs_binding_invalid');
  return parent;
 }

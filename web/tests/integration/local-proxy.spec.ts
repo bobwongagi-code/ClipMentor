@@ -1,5 +1,5 @@
 import {approvedFixtureReview} from '../review-controls'
-import { createServer } from 'node:http'
+import { createServer, request } from 'node:http'
 import { expect, test } from '@playwright/test'
 import { createServer as createViteServer } from 'vite'
 
@@ -43,10 +43,24 @@ test('the local dev proxy preserves the board identity in both directions', asyn
 test('workspace dev proxy routes only the selected task to its saved inputs',async({page})=>{
   const id='workspace-project'
   const calls:string[]=[]
-  const upstream=createServer((req,res)=>{
+  const upstream=createServer(async(req,res)=>{
     const url=new URL(req.url!, 'http://localhost')
     calls.push(`${url.pathname}:${url.searchParams.get('projectId')??''}`)
     expect(req.headers['sec-fetch-site']).toBe('same-origin')
+    if(req.method==='POST'&&url.pathname.endsWith('/task-workspace')){
+      let body=''
+      for await (const chunk of req)body+=chunk
+      res.writeHead(201,{'Content-Type':'application/json'}).end(body)
+      return
+    }
+    if(url.searchParams.get('view')==='panel_video'){
+      expect(req.headers.range).toBe('bytes=2-4')
+      res.writeHead(206,{'Content-Type':'video/mp4','Content-Range':'bytes 2-4/9','Content-Length':'3','Accept-Ranges':'bytes'})
+      if(url.searchParams.get('renderId')==='truncated'){
+        res.write('2',()=>setTimeout(()=>res.destroy(),20))
+      }else res.end('234')
+      return
+    }
     const data=url.pathname.endsWith('/task-workspace')
       ?{running:0,limit:5,tasks:[{id,name:'示例任务',status:'materials',updatedAt:1,outputs:[]}]}
       :url.searchParams.get('projectId')!==id?null
@@ -74,6 +88,34 @@ test('workspace dev proxy routes only the selected task to its saved inputs',asy
     expect(calls).toContain('/api/clipmentor/material-intake:'+id)
     expect(calls).toContain('/api/clipmentor/production-task:'+id)
     expect(await page.evaluate(async()=>(await fetch('/api/clipmentor/intake')).status)).toBe(400)
+    expect(await page.evaluate(async()=>(await fetch('/api/clipmentor/unknown')).status)).toBe(404)
+
+    const body=JSON.stringify({id,name:'分块请求'})
+    const result=await new Promise<{status?:number;body:string}>((resolve,reject)=>{
+      const post=request(new URL('/api/clipmentor/tasks',origin),{method:'POST',headers:{
+        Origin:new URL(origin).origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json',
+      }},async response=>{
+        let received=''
+        try{
+          for await(const chunk of response)received+=chunk
+          resolve({status:response.statusCode,body:received})
+        }catch(error){reject(error)}
+      })
+      post.setTimeout(3000,()=>post.destroy(Error('local POST timed out'))).once('error',reject)
+      post.write(body.slice(0,9));post.end(body.slice(9))
+    })
+    expect(result).toEqual({status:201,body})
+
+    const readRange=async(renderId:string)=>{
+      const response=await fetch(new URL(`/api/clipmentor/production?view=panel_video&projectId=${id}&renderId=${renderId}`,origin),{
+        headers:{Range:'bytes=2-4','Sec-Fetch-Site':'same-origin'},signal:AbortSignal.timeout(3000),
+      })
+      expect(response.status).toBe(206)
+      expect(response.headers.get('Content-Range')).toBe('bytes 2-4/9')
+      return response.text()
+    }
+    expect(await readRange('valid')).toBe('234')
+    await expect(readRange('truncated')).rejects.toThrow('terminated')
   }finally{
     if(priorProject===undefined)delete process.env.CLIPMENTOR_PROJECT_ID
     else process.env.CLIPMENTOR_PROJECT_ID=priorProject

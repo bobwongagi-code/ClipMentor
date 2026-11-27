@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { request } from 'node:http'
+import { pipeline } from 'node:stream'
 import path from 'path'
 
 export default defineConfig(({ mode, command, isPreview }) => {
@@ -29,10 +30,13 @@ export default defineConfig(({ mode, command, isPreview }) => {
       name: 'local-clipmentor-intake',
       configureServer(server) {
         if (!localApiEnabled) return
-        server.middlewares.use('/api/clipmentor', (req, res, next) => {
+        server.middlewares.use('/api/clipmentor', (req, res) => {
           const url = new URL(req.url ?? '/', 'http://localhost')
           const workspace = url.pathname === '/tasks' && localWorkspace
-          if (!workspace && url.pathname !== '/intake' && url.pathname !== '/production') { next(); return }
+          if (!workspace && url.pathname !== '/intake' && url.pathname !== '/production') {
+            res.writeHead(404).end()
+            return
+          }
           const intake = url.pathname === '/intake'
           const view = url.searchParams.get('view') ?? 'panel'
           if (!intake && !workspace && !['panel', 'panel_board', 'panel_video', 'panel_poster', 'panel_download', 'panel_draft_download', 'panel_reference', 'panel_attachment', 'panel_material'].includes(view)) {
@@ -67,19 +71,19 @@ export default defineConfig(({ mode, command, isPreview }) => {
             headers: {
               origin: `http://127.0.0.1:${backendPort}`, 'sec-fetch-site': 'same-origin',
               'content-type': req.headers['content-type'] ?? '',
-              'content-length': req.headers['content-length'] ?? '0',
+              ...(req.headers['content-length'] !== undefined ? { 'content-length': req.headers['content-length'] } : {}),
               ...(req.headers.range ? { range: req.headers.range } : {}),
             },
           }, response => {
             const headers = Object.fromEntries(['content-type','content-length','content-disposition','content-security-policy','content-range','accept-ranges','x-clipmentor-board-identity']
               .flatMap(key => response.headers[key] ? [[key, response.headers[key]!]] : []))
             res.writeHead(response.statusCode ?? 502, { ...headers, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
-            response.pipe(res)
+            pipeline(response,res,()=>{})
           })
           upstream.setTimeout(120_000, () => upstream.destroy())
           upstream.on('error', () => {
             if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: '制作服务暂未连接，请刷新查看当前状态' }))
-            else res.end()
+            else res.destroy()
           })
           res.on('close', () => { if (!res.writableEnded) upstream.destroy() })
           req.pipe(upstream)

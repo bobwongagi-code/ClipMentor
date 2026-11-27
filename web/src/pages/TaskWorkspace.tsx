@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeft, ArrowRight, Download, Film, Plus } from 'lucide-react'
 import type { ClipMentorTaskStatus, ClipMentorTaskSummary, ClipMentorWorkspace } from '../../../shared/clipmentor-tasks'
 import ClipMentorPage from './ClipMentorPage'
-import { audienceTitleFor, productionEndpoint, readPanelState, resourceUrl, type Audience, type Task } from './ProductionPanel'
+import { audienceTitleFor, matchesPanelOutput, productionEndpoint, readPanelState, resourceUrl, type Audience, type Task } from './ProductionPanel'
 import { previewActions, previewStatus } from './productionPanelState'
 import { projectResource, taskPage, workspaceEndpoint } from './taskNavigation'
 
@@ -162,7 +162,7 @@ function TaskDownloads({ projectId,audience,onPreviewTask }: { projectId:string;
           let result:DownloadVersion={audience,unavailable:true}
           try {
             const state=await readPanelState(await readJson(`${endpoint}&audience=${audience}`,controller.signal))
-            if(state?.task&&(!state.task.audience||state.task.audience===audience))result={audience,task:{...state.task,audience}}
+            if(matchesPanelOutput(state?.task,audience,owner))result={audience,task:{...state.task,audience}}
           } catch { /* A sibling may still publish its own card. */ }
           if(!controller.signal.aborted)setData(current=>current?.map(item=>item.audience===audience?result:item))
         }))

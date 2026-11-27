@@ -2,7 +2,7 @@ import { CLIPMENTOR_TASK_LIMIT, type ClipMentorTaskStatus, type ClipMentorTaskSu
 import { emptyProject } from '../external-agent/projects';
 import { getStoredEntry, withSerializedProjectStore } from '../plugins/project-store';
 import { commitProjectEditRows } from '../plugins/project-store-edit-journal';
-import { readProductionOutputs } from './production-continuation';
+import { readProductionOutput } from './production-continuation';
 import { latestPanelProductionTask, type ProductionTask } from './production-task';
 import { pendingProductionPreview } from './production-playable-preview';
 import { CLIPMENTOR_OUTPUT_CANVAS } from './production-format';
@@ -64,12 +64,11 @@ function displayName(entry: Entry, task?: ProductionTask) {
 async function projectSummary(entry: Entry, active: IsActive, deferred: IsDeferred) {
   const task = await latestPanelProductionTask(entry.id);
   if (task?.blueprintApproval || (!task && !entry.clipMentorTask)) return;
-  const children = task && (task.productionChildren?.length || task.productionChild)
-    ? await readProductionOutputs(task).catch(()=>null) : [];
   const name = displayName(entry, task);
   const manifest=task?.productionChildren?.length?task.productionChildren:task?.productionChild?[task.productionChild]:[];
-  const outputs: ClipMentorTaskSummary['outputs'] = manifest.map(({audience})=>{
-    const child=children?.find(output=>output.input.panelDelivery?.audience===audience);
+  const children = task ? await Promise.all(manifest.map(output=>readProductionOutput(task,output).catch(()=>undefined))) : [];
+  const outputs: ClipMentorTaskSummary['outputs'] = manifest.map(({audience},index)=>{
+    const child=children[index];
     return child?{audience,status:displayStatus(child,active,deferred),stage:child.stage,
       ...(child.status==='awaiting_review'?{awaitingConfirmation:true}:{})}:{audience,status:'unavailable'};
   });
@@ -84,7 +83,7 @@ async function projectSummary(entry: Entry, active: IsActive, deferred: IsDeferr
     id: entry.id,
     name,
     status, stage: outputs.find(output=>output.status===status)?.stage??task?.stage,
-    updatedAt: Math.max(entry.updatedAt ?? 0, task?.updatedAt ?? 0, ...(children??[]).map(child => child.updatedAt)),
+    updatedAt: Math.max(entry.updatedAt ?? 0, task?.updatedAt ?? 0, ...children.map(child => child?.updatedAt ?? 0)),
     outputs,
   } satisfies ClipMentorTaskSummary;
 }

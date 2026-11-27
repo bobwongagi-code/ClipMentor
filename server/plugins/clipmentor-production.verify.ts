@@ -1010,10 +1010,13 @@ try{
  assert(bindBlueprintFeedbackSummary(panelTask,panelTask.blueprintFeedback,['片头与双结尾：核对现行安排。','人审板：精简内部技术信息。']));
  await productionTaskStore.save(panelTask);
  const concise=(await panelGet()).task;
- assert.deepEqual(concise.blueprintFeedbackSummary,['片头与双结尾：核对现行安排。','人审板：精简内部技术信息。']);
- assert.equal(concise.hasBlueprintFeedback,true);assert(!('blueprintFeedback' in concise));
- assert.deepEqual((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).attempts,beforeFeedback);
- assert.equal((await productionTaskStore.load(panelTask.projectId,panelTask.taskId)).blueprintFeedback,panelTask.blueprintFeedback);
+ assert.equal(concise.hasBlueprintFeedback,true);
+ assert(!('blueprintFeedback' in concise));
+ assert(!('blueprintFeedbackSummary' in concise),'the business panel keeps the author summary private');
+ const savedFeedback=await productionTaskStore.load(panelTask.projectId,panelTask.taskId);
+ assert.deepEqual(savedFeedback.blueprintFeedbackSummary?.points,['片头与双结尾：核对现行安排。','人审板：精简内部技术信息。']);
+ assert.deepEqual(savedFeedback.attempts,beforeFeedback);
+ assert.equal(savedFeedback.blueprintFeedback,panelTask.blueprintFeedback);
  delete panelTask.blueprintFeedback;delete panelTask.blueprintFeedbackSummary;await productionTaskStore.save(panelTask);
 
  assert.equal((await boardAction(currentDraft.revision)).status,409,'a visible current draft cannot reuse the old approval');

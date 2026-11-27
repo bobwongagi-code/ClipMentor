@@ -136,8 +136,11 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       const releasedResponse = page.waitForResponse(r => r.request().method() === 'POST' && r.request().postDataJSON()?.action === action && r.request().postDataJSON()?.renderId === old.renderId && r.url().includes('audience=existing_partner'), { timeout: 10_000 })
       gate.release()
       await releasedResponse
-      if (timing === 'request') await expect(partner(page).getByText('请刷新后查看当前版本。')).toBeVisible()
-      else await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)))
+      if (replacement === 'render' && timing === 'request') {
+        await expect(partner(page).getByText('请刷新后查看当前版本。')).toBeVisible()
+      } else {
+        await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)), { timeout: 18_000 })
+      }
       await expect.poll(async () => (await audit()).actions.filter((a: { action: string; renderId?: string }) => a.action === action && a.renderId === old.renderId).length).toBe(action === 'revise_preview' && replacement === 'render' ? 2 : 1)
       await expect.poll(async () => (await audit()).actions.at(-1)?.status).toBe(timing === 'request' ? 409 : 200)
       expect((await state()).task.renderId).toBe(fresh.renderId)

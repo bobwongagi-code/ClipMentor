@@ -15,6 +15,7 @@ export const reviewMessages={
   feedbackTarget:'请选择意见针对的片段、讲解组或整部成片。',
   endingMissing:'片尾素材暂时无法显示。',
   previewUnavailable:'当前预览或随片资料暂不可用。',
+  deliveryCheckUnavailable:'成片可以观看，暂时不能确认或下载。',
   commission:'请核对片尾的佣金等合作数字。',
   feedbackLength:'意见总字数太多，请缩短后再提交。',
   invalidGroup:'当前蓝图没有这个讲解组，请核对组号。',

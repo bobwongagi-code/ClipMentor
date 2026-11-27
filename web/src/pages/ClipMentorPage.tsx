@@ -152,7 +152,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
     void (async () => {
       try {
         try {
-          const response = await requestApi(projectResource(intakeEndpoint, projectId), { signal: controller.signal })
+          const response = await requestApi(projectResource(intakeEndpoint, projectId), { signal: AbortSignal.any([controller.signal,AbortSignal.timeout(15_000)]) })
           if (!response.ok) {
             if (!controller.signal.aborted) setUploadError('无法读取上传记录，请稍后刷新。')
             if (response.status === 404 || response.status === 401 || response.status === 403) return
@@ -171,7 +171,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
         }
         if (!controller.signal.aborted) {
           // A missing upload receipt cannot hide a previously saved task.
-          const response = await requestApi(projectResource(productionEndpoint, projectId), { signal: controller.signal })
+          const response = await requestApi(projectResource(productionEndpoint, projectId), { signal: AbortSignal.any([controller.signal,AbortSignal.timeout(15_000)]) })
           const saved = await readPanelState(response)
           if (!controller.signal.aborted && (saved?.task || saved?.outputs?.length)) setHasSavedProduction(true)
         }

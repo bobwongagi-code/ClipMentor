@@ -196,21 +196,44 @@ try{
   assert.equal((await panel()).status,200,'legacy bookmarks may omit the audience');
   assert.equal((await panel('existing_partner')).status,200);
   assert.equal((await panel('new_contact')).status,409,'an explicit different audience cannot use the legacy output');
-  await deleteStoredEntry('project:'+removedProject);
   task.productionChildren=[task.productionChild,{projectId:removedProject,taskId:randomUUID(),audience:'new_contact'}];
   await productionTaskStore.save(task);
-  const workspace=await (await request('task-workspace')).json();
-  const partial=workspace.tasks.find((entry:{id:string})=>entry.id===projectId);
-  assert.equal(partial.status,'paused','a missing output cannot report the whole project as confirmed');
-  assert.deepEqual(partial.outputs,[
+  const expectedOutputs=[
     {audience:'existing_partner',status:'completed',stage:'self_check'},
     {audience:'new_contact',status:'unavailable'},
-  ]);
+  ];
+  const readPartial=async()=>{
+    const workspace=await (await request('task-workspace')).json();
+    return workspace.tasks.find((entry:{id:string})=>entry.id===projectId);
+  };
+  const partial=await readPartial();
+  assert.equal(partial.status,'paused','a missing output cannot report the whole project as confirmed');
+  assert.deepEqual(partial.outputs,expectedOutputs,'a failed checkpoint read must leave the usable output in the task list');
   assert.equal((await panel('existing_partner')).status,200,'the remaining sibling can still be read');
-  assert.equal((await panel('new_contact')).status,409);
+  const missingOutput=await panel('new_contact');
+  assert.equal(missingOutput.status,409);
+  assert.equal((await missingOutput.json()).reason,'output_unavailable');
+  const partnerRevision=(await loadOfflineStoredProject(partnerProject))!.revision;
+  partner.status='blocked';
+  partner.projectRevision=partnerRevision;
+  partner.completed.export={...task.completed.export,artifact:{...task.completed.export.artifact,revision:partnerRevision,renderId:'partner-saved-render'}};
+  await productionTaskStore.save(partner);
+  const partnerMedia=(view:string)=>request('production-task?'+new URLSearchParams({
+    projectId,view,audience:'existing_partner',renderId:'partner-saved-render',
+  }));
+  const partnerState=await (await panel('existing_partner')).json();
+  assert.equal(partnerState.task.renderId,'partner-saved-render','unreadable sibling cannot hide the current playable export');
+  assert.equal(partnerState.task.deliveryUnavailable,true,'sibling still unreadable before shared editing is attached');
+  const playback=await partnerMedia('panel_video');
+  assert.equal(playback.status,200);
+  assert.deepEqual(Buffer.from(await playback.arrayBuffer()),videoBytes);
+  assert.equal((await partnerMedia('panel_draft_download')).status,409);
+  assert.equal((await partnerMedia('panel_download')).status,409);
+  await deleteStoredEntry('project:'+removedProject);
+  assert.equal((await panel('existing_partner')).status,200,'a deleted sibling also leaves the remaining output readable');
   console.log('workspace: retained sibling and legacy audience stay independently bound');
 }finally{
   for(const gate of gates.values())gate.resolve();
   await new Promise<void>(resolve=>server.close(()=>resolve()));
-  await rm(directory,{recursive:true,force:true});
+  await rm(directory,{recursive:true,force:true,maxRetries:3});
 }

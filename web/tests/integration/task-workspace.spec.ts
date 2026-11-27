@@ -100,7 +100,7 @@ test.beforeAll(async ()=>{
           if(!audience){send(200,{task:null,outputs,outputOwner:{taskId:id,sequence:1}});return}
           if(audience==='new_contact'&&clientFailed){send(503,{});return}
           if(audience==='existing_partner'&&partnerFailed){send(503,{});return}
-          send(200,{task:{...baseTask,taskId:`${id}-${audience}`,audience,stage:'self_check',blueprintConfirmed:true,previewDuration:28,
+          send(200,{task:{...baseTask,taskId:`${id}-${audience}`,sourceTaskId:id,audience,stage:'self_check',blueprintConfirmed:true,previewDuration:28,
             ...(audience==='new_contact'?{status:'blocked',previewPending:true,deliveryHeld:held,renderId:'draft-contact',
               materialAttachment:{assetId:'cta',label:'CTA 海报'}}:
               {status:'completed',previewReviewed:true,deliveryHeld:partnerHeld,renderId:'ready-partner',confirmedAt:1770000000000,downloadName:'saved.mp4',
@@ -228,7 +228,7 @@ for(const scenario of ['delayed-read','switched','delayed-ack'])test(`confirmati
       return
     }
     if(scenario!=='delayed-ack'&&accepted&&++readsAfterAccept===1){await route.fulfill({status:503,json:{}});return}
-    await route.fulfill({json:{task:{...baseTask,sequence:accepted?2:1,taskId:`${exportsId}-new_contact`,audience:'new_contact',stage:'self_check',
+    await route.fulfill({json:{task:{...baseTask,sequence:accepted?2:1,taskId:`${exportsId}-new_contact`,sourceTaskId:exportsId,audience:'new_contact',stage:'self_check',
       status:accepted?'completed':'awaiting_review',renderId:'draft-contact',blueprintConfirmed:true,previewReviewed:true,
       ...(accepted?{confirmedAt:1770000000000}:{canAcceptPreview:true,visualCriteria:{digest:'fixture'}})}}})
   })
@@ -290,6 +290,56 @@ test('an explicit mismatched response cannot offer another ending’s download',
   await expect(target.getByText('暂不可下载')).toBeVisible()
   await expect(target.getByRole('link',{name:/下载成片/})).toHaveCount(0)
   await expect(page.getByRole('link',{name:'下载成片 · 已合作达人版'})).toBeVisible()
+})
+
+test('a download response for the right audience but a different source task is discarded',async({page})=>{
+  await page.route(versionRead('new_contact'),route=>route.fulfill({json:{task:{...baseTask,
+    taskId:'other-contact',sourceTaskId:'other-source',audience:'new_contact',status:'completed',stage:'self_check',renderId:'other-export',
+  }}}))
+  await page.goto(`${origin}/?task=${exportsId}&view=downloads&audience=new_contact`)
+  const target=page.locator('article[data-current="true"]')
+  await expect(target.getByText('暂不可下载')).toBeVisible()
+  await expect(target.getByRole('link',{name:/下载成片/})).toHaveCount(0)
+  await expect(page.getByRole('link',{name:'下载成片 · 已合作达人版'})).toBeVisible()
+})
+
+test('an explicitly unavailable version loses stale actions without hiding the other preview',async({page})=>{
+  clientFailed=false
+  held=false
+  await page.clock.install()
+  await page.goto(`${origin}/?task=${exportsId}&audience=existing_partner`)
+  const partner=page.getByRole('tab',{name:/已合作达人版/})
+  const contact=page.getByRole('tab',{name:/新建联达人版/})
+  await expect(partner).toContainText('可下载')
+  await expect(contact).toContainText('复核已暂停')
+  await page.route(versionRead('existing_partner'),route=>route.fulfill({status:409,json:{reason:'output_unavailable'}}))
+  await page.clock.fastForward(9000)
+  await expect(partner).toContainText('读取状态失败')
+  await expect(page.getByRole('tabpanel',{name:'已合作达人版'}).locator('video')).toHaveCount(0)
+  await expect(page.getByRole('button',{name:'开始制作',exact:true})).toHaveCount(0)
+  await contact.click()
+  await expect(page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video')).toHaveCount(1)
+})
+
+test('a disabled revision can keep its draft and submit only after readback recovers',async({page})=>{
+  let unavailable=true
+  await page.route(versionRead('new_contact'),route=>route.fulfill({json:{task:{...baseTask,
+    taskId:`${exportsId}-new_contact`,sourceTaskId:exportsId,audience:'new_contact',status:'awaiting_review',stage:'self_check',
+    renderId:'draft-contact',previewFeedbackUnavailable:unavailable,deliveryUnavailable:unavailable,canAcceptPreview:!unavailable,
+  }}}))
+  await page.clock.install()
+  await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
+  const panel=page.getByRole('tabpanel',{name:'新建联达人版'})
+  const opinion=panel.getByRole('textbox',{name:'修改意见'})
+  await opinion.fill('缩短片尾留白')
+  await panel.getByLabel('反馈位置').selectOption('whole')
+  await panel.getByLabel('确认这条意见作用于整体').check()
+  const submit=panel.getByRole('button',{name:'提交修改'})
+  await expect(submit).toBeDisabled()
+  unavailable=false
+  await page.clock.fastForward(9000)
+  await expect(opinion).toHaveValue('缩短片尾留白')
+  await expect(submit).toBeEnabled()
 })
 
 test('a session rejection removes the previously authorized task workspace',async({page})=>{

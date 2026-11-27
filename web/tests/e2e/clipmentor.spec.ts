@@ -270,7 +270,7 @@ test('one confirmation starts both outputs without an audience choice',async({pa
     const audience=new URL(request.url()).searchParams.get('audience')
     await route.fulfill({json:submitted
       ?audience?{task:{taskId:audience,sourceTaskId:'original-task',status:audience==='new_contact'?'waiting':'running',stage:'copy_review',active:audience==='existing_partner',sequence:2,blueprintConfirmed:true,audience}}
-        :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}
+        :{task:null,outputOwner:{taskId:'original-task',sequence:213},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}
       :{task:{...approvedFixtureReview,savedReview:undefined,reviewEndings,taskId:'original-task',status:'blocked',stage:'copy_review',active:false,sequence:212,revision:'old-review',blueprintRevision:'current-draft',canApproveBlueprint:false,canConfirmBlueprint:true,dualBlueprint:true}}})
   })
   await page.goto('/')
@@ -306,8 +306,8 @@ test('both previews keep feedback, approval and downloads bound to their own end
     const productionDifferences=audience==='existing_partner'?{groups:[
       {label:'第 1 组',changes:[{before:'原句较长',after:'句子缩短，意思保留'}],kept:[]},
     ]}:undefined
-    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',canAcceptPreview:!accepted.has(audience),stage:'self_check',sequence:accepted.has(audience)?2:1,renderId:`render-${audience}`,active:false,feedbackUsed:false,productionDifferences}}
-      :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
+    await route.fulfill({json:audience?{task:{taskId:audience,sourceTaskId:'parent',audience,status:accepted.has(audience)?'completed':'awaiting_review',canAcceptPreview:!accepted.has(audience),stage:'self_check',sequence:accepted.has(audience)?2:1,renderId:`render-${audience}`,active:false,feedbackUsed:false,productionDifferences}}
+      :{task:null,outputOwner:{taskId:'parent',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
   const existing=page.getByRole('tabpanel',{name:'已合作达人版'}),fresh=page.getByRole('tabpanel',{name:'新建联达人版'})
@@ -563,7 +563,7 @@ test('an open two-output tab observes an externally persisted newer shared bluep
     // The real handler ignores audience when the current parent has no children.
     await route.fulfill({json:changed
       ?{task:{taskId:'new-shared',status:'awaiting_blueprint',stage:'copy_review',revision:'new-draft',sequence:1,active:false}}
-      :audience?{task:{taskId:audience,status:'awaiting_review', canAcceptPreview:true,stage:'self_check',renderId:`old-${audience}`,sequence:1,active:false}}
+      :audience?{task:{taskId:audience,sourceTaskId:'old-shared',audience,status:'awaiting_review', canAcceptPreview:true,stage:'self_check',renderId:`old-${audience}`,sequence:1,active:false}}
         :{task:null,outputOwner:{taskId:'old-shared',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
@@ -596,8 +596,8 @@ test('two tabs keep attachment and accepted download identities separate for bot
       accepted.add(audience!)
       await route.fulfill({json:{accepted:true}});return
     }
-    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',canAcceptPreview:!accepted.has(audience),stage:'self_check',renderId:`render-${audience}`,sequence:accepted.has(audience)?2:1,active:false,attachments:[{assetId:`storyboard-${audience}`,fileName:`${audience}.html`}]}}
-      :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
+    await route.fulfill({json:audience?{task:{taskId:audience,sourceTaskId:'parent',audience,status:accepted.has(audience)?'completed':'awaiting_review',canAcceptPreview:!accepted.has(audience),stage:'self_check',renderId:`render-${audience}`,sequence:accepted.has(audience)?2:1,active:false,attachments:[{assetId:`storyboard-${audience}`,fileName:`${audience}.html`}]}}
+      :{task:null,outputOwner:{taskId:'parent',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
   const other=await context.newPage()
@@ -886,9 +886,9 @@ test('pending preview keeps a timed opinion across variant and review changes wi
     }
     if(!audience){await route.fulfill({json:{task:null,outputOwner:{taskId:'parent',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}});return}
     if(audience==='new_contact'){
-      await route.fulfill({json:{task:{taskId:audience,sequence:1,status:'waiting',stage:'copy_review',active:false,blueprintConfirmed:true}}});return
+      await route.fulfill({json:{task:{taskId:audience,sourceTaskId:'parent',audience,sequence:1,status:'waiting',stage:'copy_review',active:false,blueprintConfirmed:true}}});return
     }
-    await route.fulfill({json:{task:{taskId:audience,sequence:reviewed?2:1,status:reviewed?'awaiting_review':'blocked',stage:'self_check',active:false,blueprintConfirmed:true,
+    await route.fulfill({json:{task:{taskId:audience,sourceTaskId:'parent',audience,sequence:reviewed?2:1,status:reviewed?'awaiting_review':'blocked',stage:'self_check',active:false,blueprintConfirmed:true,
       renderId:'existing-render',previewPending:!reviewed,previewReviewed:reviewed,canAcceptPreview:reviewed,previewDuration:.2,
       ...(reviewed?{visualCriteria:{digest:'reviewed-digest'}}:{}),
       previewChapters:[{id:'group',label:'第 1 组',seconds:.12}],reviewGroups:[{id:'group',label:'第 1 组'}]}}})

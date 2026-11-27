@@ -24,7 +24,7 @@ import {representativeTeachingExcerpt,renderTeachingExcerpt,verifyTeachingExcerp
 import { productionFeedbackAnchor,matchesExportedPreviewProject } from './production-feedback';
 import {blueprintNotices,opinionClarificationText,reviewMessages} from '../../shared/clipmentor-review-feedback';
 import { panelDeliveryIssues,panelDeliveryFindings,declaredPanelOpening,panelSalesEvidence,panelPartnerCardIssue,assertPanelDeliveryReady } from './production-panel-delivery';
-import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs } from './production-continuation';
+import { createBlueprintContinuations,publishedProductionParent,queueBlueprintContinuations,readProductionOutput,readProductionOutputs } from './production-continuation';
 import { assertVisualCriteriaPlan,boundVisualCriteria,visualCriteriaPlanApproved,visualReferenceFrames } from './visual-done-criteria';
 import {checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {handoffDigest,sourcePerformanceCriterion,type HandoffPolicy} from '../../shared/clipmentor-handoff';
@@ -232,6 +232,17 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
   const handler=async (projectId:string, origin:string, query:URLSearchParams, req:IncomingMessage, res:ServerResponse, readBody:()=>Promise<Record<string,unknown>>,manifestTask?:ProductionTask):Promise<void> => {
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(projectId)) throw new Error('制作工程无效');
     const task = manifestTask??await currentPanelTask(projectId);
+    const serveOutput=async(parent:ProductionTask,entry:NonNullable<ProductionTask['productionChild']>)=>{
+      let child:ProductionTask;
+      try{child=await readProductionOutput(parent,entry);}catch(error){
+        if(req.method!=='GET'||query.get('view')!=='panel')throw error;
+        console.error('ClipMentor selected output unavailable',error);
+        res.writeHead(409,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'})
+          .end(JSON.stringify({reason:'output_unavailable',error:reviewMessages.previewUnavailable}));
+        return;
+      }
+      await handler(child.projectId,origin,query,req,res,readBody,child);
+    };
     if(task?.productionChildren?.length){
       const audience=query.get('audience');
       if(!audience&&req.method==='GET'&&query.get('view')==='panel'){
@@ -258,20 +269,12 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       }
       const entry=task.productionChildren.find(child=>child.audience===audience);
       if(!entry)throw Error('制作输出不存在');
-      const child=await productionTaskStore.load(entry.projectId,entry.taskId);
-      if(child.projectId===projectId||child.input.panelDelivery?.audience!==entry.audience
-        ||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
-        throw Error('制作版本记录不匹配');
-      return handler(child.projectId,origin,query,req,res,readBody,child);
+      return serveOutput(task,entry);
     }
     if(task?.productionChild){
       const audience=query.get('audience');
       if(audience!==null&&audience!==task.productionChild.audience)throw Error('制作输出不存在');
-      const child=await productionTaskStore.load(task.productionChild.projectId,task.productionChild.taskId);
-      if(child.projectId===projectId||child.input.panelDelivery?.audience!==task.productionChild.audience
-        ||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
-        throw Error('制作版本记录不匹配');
-      return handler(child.projectId,origin,query,req,res,readBody,child);
+      return serveOutput(task,task.productionChild);
     }
     const snapshot = async () => {
       const saved = await loadOfflineStoredProject(projectId);
@@ -330,12 +333,12 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if(!task)throw Error('预览已变化，请刷新');
         return manifestTask?productionTaskStore.load(task.projectId,task.taskId):currentPanelTask(projectId);
       };
-      const assertCurrentPendingPreview=async()=>{
+      const assertCurrentPendingPreview=async(playbackOnly=true)=>{
         const current=await currentPreviewTask();
         const currentBinding=current&&pendingProductionPreview(current);
         if(!current||current.taskId!==task?.taskId||!currentBinding||!pendingPreview||digestValue(currentBinding)!==digestValue(pendingPreview))
           throw Error('预览已变化，请刷新');
-        if(current.blueprintApproval)await publishedProductionParent(current);
+        if(current.blueprintApproval)await publishedProductionParent(current,playbackOnly?{playbackOnly:true}:undefined);
         return current;
       };
       const verifyPreview=async()=>{
@@ -373,6 +376,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       if(view==='panel_attachment'){
         const output=(await deliveryOutputs()).find(o=>o.assetId===query.get('assetId'));
         if(!output)throw Error('随片资料不存在');
+        if(task?.blueprintApproval)await publishedProductionParent(task,{playbackOnly:true});
         res.setHeader('Content-Type','application/pdf');
         res.setHeader('Content-Disposition',attachmentDisposition(output.fileName));
         res.setHeader('X-Content-Type-Options','nosniff');
@@ -522,10 +526,10 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const {file,handle}=await openPendingProductionPreview(pendingPreview);
           try{
             await boundPreviewProject();
-            const current=await assertCurrentPendingPreview();
+            const current=await assertCurrentPendingPreview(view==='panel_video');
             if(view==='panel_draft_download'){
               if(previewHasBoundContentIssue(current)||await sharedPreviewDeliveryHeld(current))throw Error('当前预览暂不可下载');
-              const latest=await assertCurrentPendingPreview();
+              const latest=await assertCurrentPendingPreview(false);
               if(latest.sequence!==current.sequence||latest.updatedAt!==current.updatedAt)throw Error('预览已变化，请刷新');
               res.setHeader('Content-Disposition',attachmentDisposition('未复核_'+deliveryFileName(task.input.product.name,
                 task.input.panelDelivery?.audience,'video',task.completed.export!.at)));
@@ -549,6 +553,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
               ||!current.completed.export||!current.completed.self_check
               ||digestValue(current.completed.export)!==digestValue(task.completed.export)
               ||digestValue(current.completed.self_check)!==digestValue(task.completed.self_check))throw Error('预览已变化，请刷新');
+            if(current.blueprintApproval)await publishedProductionParent(current);
             if(await sharedPreviewDeliveryHeld(current))throw Error('preview_shared_body_requires_reconciliation');
             if(task.input.panelDelivery)await boundPreviewProject();
             res.setHeader('Content-Disposition',attachmentDisposition(deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at)));
@@ -642,7 +647,19 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }catch{deliveryUnavailable=true;}
       }
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
-      const sharedDeliveryHeld=(needPreview||!!pendingPreviewRenderId)&&!!task&&await sharedPreviewDeliveryHeld(task);
+      let sharedDeliveryHeld=false;
+      let previewFeedbackUnavailable=false;
+      if((pendingPreviewRenderId||needPreview&&playablePreview&&!outputUnavailable)&&task)try{
+        if(task.blueprintApproval)await publishedProductionParent(task);
+        sharedDeliveryHeld=await sharedPreviewDeliveryHeld(task);
+      }catch(error){
+        // The export is bound and playable. An unreadable sibling gives no
+        // assurance that the shared body is cleared for either download.
+        console.error('ClipMentor shared preview delivery status unavailable',error);
+        deliveryUnavailable=true;
+        previewFeedbackUnavailable=true;
+        reviewIssue={kind:'binding',message:reviewMessages.deliveryCheckUnavailable};
+      }
       if(sharedDeliveryHeld)reviewIssue=panelReviewIssue('preview_shared_body_requires_reconciliation');
       const canAcceptPreview=task?.status==='awaiting_review'&&!!playablePreview&&!deliveryUnavailable&&!sharedDeliveryHeld
         &&(!task.input.panelDelivery||!!task.completed.self_check?.artifact.receipt);
@@ -681,6 +698,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ...(task.input.panelDelivery?{dualBlueprint,
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),
         ...(reviewIssue?{reviewIssue}:{}),
+        ...(previewFeedbackUnavailable?{previewFeedbackUnavailable:true}:{}),
         ...(task.status==='awaiting_review'?{canAcceptPreview}:{}),
         ...(task.finalAcceptance&&task.status==='completed'?{confirmedAt:task.finalAcceptance.confirmedAt}:{}),
         ...(currentPreviewProject?{reviewGroups:blueprintReviewGroups(currentPreviewProject.doc),previewChapters,previewDuration,
