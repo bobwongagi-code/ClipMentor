@@ -1,6 +1,6 @@
 import {stageCueTopStripProps} from '../../src/clipmentor/blueprint-picture-notices';
 import {contiguousPlaybackRuns,nativeExecutionMapping} from '../../src/clipmentor/source-breakdown';
-import type {ProjectDoc,TimelineItem} from '../../src/editor/types';
+import {captionTrackEntries,type ProjectDoc,type TimelineItem} from '../../src/editor/types';
 
 type Row=Record<string,unknown>;
 type Window=[number,number];
@@ -17,6 +17,9 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
  const a=doc.clipMentorAnalysis;
  const timeline=doc.timelines.find(t=>t.id===doc.activeTimelineId);
  if(!a?.source_breakdown||!timeline)return {doc,units:[]};
+ const captions=captionTrackEntries(timeline);
+ const captionsOff=timeline.captionsHidden===true
+  ||(timeline.captionsHidden===undefined&&captions.length>0&&captions.every(entry=>!entry.captions?.enabled));
  const native=nativeExecutionMapping(doc);
  const allOriginals=[...Object.values(native.teachingPhases).flatMap(phases=>phases.original),
   ...a.source_breakdown.units.flatMap(unit=>unit.placement?.timeline_id===timeline.id?[unit.placement.original_frames]:[])];
@@ -48,13 +51,19 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
    if(previous&&!allOriginals.some(([a,b])=>previous[1]<b&&start>a))previous[1]=end;
    else explanationCueWindows.push([start,end]);
   }
-  const use=(t:typeof timeline.items[number])=>!timeline.tracks?.[t.track]?.hidden&&t.transform?.opacity!==0;
+  const use=(item:TimelineItem)=>!timeline.tracks?.[item.track]?.hidden&&item.transform?.opacity!==0;
   const audioByLine=new Map<string,{words:string[];span:Window}>();
   const labels=new Set<string>();
+  const plannedLabels:Array<{lineId:string;text:string}>=[];
   for(const line of entries(candidate.lines)){
    if(typeof line.narration_ms!=='string')continue;
-   if(Array.isArray(line.labels))for(const label of line.labels)labels.add(normalized(label));
-   const voices=timeline.items.filter(t=>t.kind==='audio'&&use(t)&&contains(explanation,t.startFrame,t.startFrame+t.durationInFrames)
+   if(Array.isArray(line.labels))for(const label of line.labels){
+    if(typeof label!=='string'||!normalized(label))continue;
+    labels.add(normalized(label));
+    plannedLabels.push({lineId:String(line.id),text:label});
+   }
+   const voices=timeline.items.filter(t=>t.kind==='audio'&&use(t)&&!timeline.tracks?.[t.track]?.muted&&(t.volume??1)>0
+    &&contains(explanation,t.startFrame,t.startFrame+t.durationInFrames)
     &&doc.assets.some(asset=>asset.id===t.sourceAssetId&&asset.src===t.src&&record(asset.props?.generation).text===line.narration_ms));
    if(voices.length!==1)continue;
    const voice=voices[0];
@@ -67,23 +76,30 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
   const referenceReads=entries(plan.timing_dispositions).filter(row=>row.action==='reference_reading')
    .map(row=>({lineId:row.line_id,information:row.reason}));
   const sourceStills=timeline.items.flatMap(item=>{
-   if(!referenceReads.length||item.kind!=='image'||!use(item)
+   if(item.kind!=='image'||!use(item)
     ||!contains(explanation,item.startFrame,item.startFrame+item.durationInFrames))return [];
    const asset=doc.assets.find(asset=>asset.id===item.sourceAssetId&&asset.src===item.src);
-   if(asset?.props?.sourceAssetId!==a.source.asset_id||typeof asset.props.sourceSeconds!=='number')return [];
+   if(asset?.props?.sourceAssetId!==a.source.asset_id||asset.props.sourceHash!==a.source.sourceContentHash
+    ||typeof asset.props.sourceSeconds!=='number'||!Number.isFinite(asset.props.sourceSeconds)||asset.props.sourceSeconds<0)return [];
    return [{sourceSeconds:asset.props.sourceSeconds,startsAt:item.startFrame/timeline.fps,seconds:item.durationInFrames/timeline.fps}];
   });
+  const labelWindows=new Map<string,Window[]>();
   for(const item of timeline.items){
    const words=normalized(item.props?.text);
    if(item.kind!=='text'||!words||!use(item))continue;
    const start=item.startFrame,end=start+item.durationInFrames;
    const phase=contains(original,start,end)?'original':contains(explanationCueWindows,start,end)?'explanation':undefined;
-   if(!phase)continue;
    const phaseLabel=phase==='original'?words===normalized(record(cues.original).text)
     :entries(cues.revisit).some(cue=>words===normalized(cue.text));
-   const caption=phase==='explanation'&&[...audioByLine.values()].some(({words:approved,span})=>
+   const caption=[...audioByLine.values()].some(({words:approved,span})=>
     start<span[1]&&end>span[0]&&approved.some(text=>text===words||words.includes(' ')&&` ${text} `.includes(` ${words} `)));
-   if(caption&&!labels.has(words))captionCount++;
+   if(!captionsOff&&labels.has(words)&&!phaseLabel&&!caption&&item.props?.placement!=='top_strip'){
+    const intersections:Window[]=explanation.flatMap(([a,b])=>Math.max(a,start)<Math.min(b,end)
+     ?[[Math.max(a,start),Math.min(b,end)] as Window]:[]);
+    if(intersections.length)labelWindows.set(words,[...labelWindows.get(words)??[],...intersections]);
+   }
+   if(!phase)continue;
+   if(phase==='explanation'&&!captionsOff&&caption&&!labels.has(words))captionCount++;
    if(!phaseLabel)continue;
    if(caption||labels.has(words)){
     ambiguousTitles.add(words);
@@ -95,6 +111,16 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
    const prior=updates.get(item.id);
    updates.set(item.id,prior!==undefined&&JSON.stringify(prior)!==JSON.stringify(style)?null:style);
   }
+  const seconds=([start,end]:Window):Window=>[start/timeline.fps,end/timeline.fps];
+  // A scheduled native text item is a locator for playback review. Text
+  // embedded in a picture, visual coverage and word timing need visual/audio review.
+  const labelReadback=plannedLabels.map(({lineId,text})=>{
+   const voice=audioByLine.get(lineId)?.span;
+   const shown=(labelWindows.get(normalized(text))??[]).toSorted(([a],[b])=>a-b);
+   return {lineId,text,voiceWindow:voice?seconds(voice):null,textWindows:shown.map(seconds),
+    timing:!voice?'voice_unbound':!shown.length?'native_text_unlocated'
+     :shown.some(([start,end])=>start<voice[1]&&end>voice[0])?'overlaps_voice':'elsewhere_in_explanation'};
+  });
   const originalText=record(cues.original).text;
   const revisitTexts=[...new Set(entries(cues.revisit).flatMap(cue=>typeof cue.text==='string'&&cue.text.trim()?[cue.text]:[]))];
   // If the editor omitted a whole phase label, recover the unambiguous saved
@@ -107,7 +133,7 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
    windows.forEach((span,index)=>missing.push({id:`clipmentor-stage-${unit.unit_id}-${phase}-${index}`,span,text:title,style}));
   }
   return [{unitId:unit.unit_id,originalSeconds:duration(original)/timeline.fps,explanationSeconds:duration(explanation)/timeline.fps,
-   stageLabels:stageCounts,matchedCaptionCards:captionCount,referenceReads,sourceStills}];
+   stageLabels:stageCounts,matchedCaptionCards:captionCount,referenceReads,sourceStills:sourceStills.sort((a,b)=>a.startsAt-b.startsAt),labelReadback}];
  });
  if(!options.apply||(!updates.size&&!missing.length))return {doc,units};
  const items=timeline.items.map(item=>{

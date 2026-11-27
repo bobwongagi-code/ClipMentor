@@ -3,7 +3,7 @@ import {nativeExecutionMapping,checkSourceBreakdown,registerGroupedPlayback} fro
 import {deliveryTimeline,deliverySectionsFromDoc} from '../../src/clipmentor/delivery-sections';
 import {productionPreviewFacts,productionPreviewReviewInput} from './production-preview-facts';
 import {productionTeachingPresentation} from './production-teaching-presentation';
-import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
+import {stageCuePalette,stageCueTopStripProps} from '../../src/clipmentor/blueprint-picture-notices';
 import {makeDraft} from '../../src/editor/store';
 import type {ProjectDoc} from '../../src/editor/types';
 import bookends from '../../src/agent/tools/fixtures/barely-there-bookend-replacement-20261029.json';
@@ -32,6 +32,37 @@ assert.deepEqual(good.issues,[]);assert.deepEqual(good.placements.U1,{timeline_i
 assert.deepEqual(good.placements.U2,{timeline_id:'tl',original_frames:[60,120],explanation_frames:[210,270]});
 assert.equal(good.bindings.length,5);assert.equal(JSON.stringify(project),before,'actual inspection cannot revise or restamp the blueprint');
 assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON.stringify(checkSourceBreakdown(project,true).issues));
+{
+ const scheduled=structuredClone(project);
+ const t=scheduled.timelines[0];
+ const analysis=scheduled.clipMentorAnalysis!;
+ const {copy}=analysis.blueprint[0].internal_review as any;
+ copy.lines[0].labels=['Contact position','Detail recap','Line 1','Hidden cue','Crossing cue'];
+ analysis.source_breakdown!.units[0].placement={timeline_id:'tl',original_frames:[0,60],explanation_frames:[120,240]};
+ t.tracks!.captions={kind:'caption',hidden:true};
+ t.captionsHidden=false;
+ const label=(id:string,text:string,startFrame:number,track='V2')=>({
+  id,kind:'text' as const,name:text,track,startFrame,durationInFrames:15,props:{text},
+ });
+ t.items.push(label('anchor','Contact position',125),label('recap','Detail recap',220),label('subtitle','Line 1',135),
+  label('hidden','Hidden cue',135,'captions'),label('crossing-scope','Crossing cue',115));
+ const first=productionTeachingPresentation(scheduled).units[0];
+ assert.deepEqual(first.labelReadback,[
+  {lineId:'L1',text:'Contact position',voiceWindow:[4,7],textWindows:[[125/30,140/30]],timing:'overlaps_voice'},
+  {lineId:'L1',text:'Detail recap',voiceWindow:[4,7],textWindows:[[220/30,235/30]],timing:'elsewhere_in_explanation'},
+  {lineId:'L1',text:'Line 1',voiceWindow:[4,7],textWindows:[],timing:'native_text_unlocated'},
+  {lineId:'L1',text:'Hidden cue',voiceWindow:[4,7],textWindows:[],timing:'native_text_unlocated'},
+  {lineId:'L1',text:'Crossing cue',voiceWindow:[4,7],textWindows:[[4,130/30]],timing:'overlaps_voice'},
+ ]);
+ assert.deepEqual(first.sourceStills,[{sourceSeconds:1,startsAt:6,seconds:1}],
+  'actual source holds stay inspectable even when the plan did not describe a hold');
+ t.captionsHidden=true;
+ assert.equal(productionTeachingPresentation(scheduled).units[0].labelReadback[0].timing,'native_text_unlocated',
+  'caption visibility also hides text on a video track in the actual renderer');
+ t.captionsHidden=false;
+ t.tracks!.A1.muted=true;
+ assert.equal(productionTeachingPresentation(scheduled).units[0].labelReadback[0].timing,'voice_unbound');
+}
 {
  const compact=structuredClone(project);
  const analysis=compact.clipMentorAnalysis!;
@@ -81,7 +112,10 @@ assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON
  const before=JSON.stringify(authored),style=productionTeachingPresentation(authored,{apply:true});
  const get=(id:string)=>style.doc.timelines[0].items.find(item=>item.id===id)!;
  assert.deepEqual(stageCuePalette(undefined,'original'),{backgroundColor:'#0D5EA6',color:'#FFFFFF'});
- assert.deepEqual(stageCuePalette({color:'invalid',text_color:'#222222'},'explanation'),{backgroundColor:'#FFD83D',color:'#222222'});
+ assert.deepEqual(stageCueTopStripProps({placement:'top_strip',height_fraction:.03},'explanation'),{
+  color:'#2F261A',backgroundColor:'#E6C46F',placement:'top_strip',backgroundOpacity:1,stripHeightFraction:.03,
+ });
+ assert.deepEqual(stageCuePalette({color:'invalid',text_color:'#222222'},'explanation'),{backgroundColor:'#E6C46F',color:'#222222'});
  assert.deepEqual(stageCuePalette({color:'#24212A'},'explanation'),{backgroundColor:'#24212A',color:'#FFFFFF'});
  assert.equal(get('original-cue').props?.backgroundColor,'#0D5EA6');
  assert.equal(get('original-cue').props?.placement,'top_strip');

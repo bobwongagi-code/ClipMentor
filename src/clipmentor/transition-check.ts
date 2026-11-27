@@ -35,7 +35,7 @@ export function validPictureLayers(value: unknown, start: number, end: number): 
     ids.add(l.item_id); return true;
   });
 }
-type Candidate = { code: 'composition_change' | 'pause_inserts_picture' | 'audio_gap_with_picture_change'; start_seconds: number; end_seconds: number; detail: string };
+type Candidate = { code: 'composition_change' | 'pause_inserts_picture' | 'audio_gap_with_picture_change' | 'still_hold_review'; start_seconds: number; end_seconds: number; detail: string };
 const row = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const frame = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0;
@@ -56,6 +56,15 @@ function samePicture(a: Scene, aEdge: 'start' | 'end', b: Scene, bEdge: 'start' 
   const left = boundaryPicture(a, aEdge, fps), right = boundaryPicture(b, bEdge, fps);
   // Compare at this manifest's output-frame resolution, not exact float equality or perceptual tolerance.
   return left.length === right.length && left.every((t, i) => Math.round(t * fps) === Math.round(right[i] * fps));
+}
+
+function plainStillKey(scene: Scene) {
+  if (scene.kind === 'still') return String(scene.content);
+  if (scene.kind !== 'composition' || scene.layers.some(layer =>
+    layer.origin !== 'source_frame' && layer.kind !== 'text' && layer.kind !== 'solid')) return undefined;
+  const sources = scene.layers.filter(layer => layer.origin === 'source_frame');
+  return sources.length ? JSON.stringify(sources.map(layer =>
+    [layer.asset_id, layer.source_hash, layer.source_start_seconds, layer.layout_digest, layer.render_digest])) : undefined;
 }
 
 interface AudioSpan { start: number; end: number; kind?: string; line_id?: string }
@@ -115,7 +124,21 @@ export function checkTransitionManifest(input: unknown) {
     return value as Scene;
   });
   if (previousEnd !== input.total_frames) throw new Error('Picture coverage does not reach total_frames');
+  const holdReviewSeconds = finite(input.still_hold_review_seconds) && input.still_hold_review_seconds > 0
+    ? input.still_hold_review_seconds : undefined;
   const candidates: Candidate[] = [];
+  if (holdReviewSeconds !== undefined) {
+    let held: { key: string; start: number; end: number } | undefined;
+    for (const scene of [...scenes, undefined]) {
+      const key = scene && plainStillKey(scene);
+      if (held && key !== held.key && (held.end - held.start) / fps > holdReviewSeconds) {
+        candidates.push({ code: 'still_hold_review', start_seconds: held.start / fps, end_seconds: held.end / fps,
+          detail: '静帧停留超过本次查看标准。请结合实际口播看画面如何引导读图，核对构图、短标或指向是否够用。' });
+      }
+      if (scene && key !== undefined) held = { key, start: held?.key === key ? held.start : scene.start_frame, end: scene.end_frame };
+      else held = undefined;
+    }
+  }
   for (let i = 0; i < scenes.length; i++) {
     const current = scenes[i], previous = scenes[i - 1], next = scenes[i + 1];
     // Inspect the pause itself: a silent interval need not introduce a third picture.

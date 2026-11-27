@@ -397,7 +397,7 @@ try{
   plan.phases[1].context_source_ranges=[{segment_id:'GM-S01',source_range_seconds:[0,1],purpose:'first object'},
    {segment_id:'GM-S01',source_range_seconds:[9,10.5],purpose:'second object'}];
   assert(representativeTeachingExcerpt(doc)?.state.items.every(i=>i.kind==='video'),'a source comparison does not impose stage strip styling');
-  plan.viewer_stage_cues.layout={placement:'top_strip',height_fraction:.03,revisit:{color:'#E6C46F',text_color:'#2F261A'}};
+  plan.viewer_stage_cues.layout={placement:'top_strip',height_fraction:.03};
   const before=JSON.stringify(doc);
   const selected=representativeTeachingExcerpt(doc);
   assert(selected);

@@ -218,9 +218,13 @@ Complete information does not require replaying every source second. Retain cohe
 
 需要在手机上辨认细节，就给足画面面积。逐处大图适合讲不同落点；多个对象需要直接比较时，同屏可能更快。总览可用在前面帮助定位，也可用在后面帮助回想。布局、部位数和顺序随证据及画面任务决定。
 
+逐处讲时，让同一位置在大图和总览上用同一个短标。口播明确点名时才跟着点出那个位置。口播讲共同拍法时，画面可分次给例，末尾留出的总览让人重新找到各处。先用实际声画确认该留哪张图、留多久。落点示范、肌肤上的效果和具体操作建议各自回到原片找依据。
+
 需要多看一眼时，可以暂停，让视线跟着实测口播去找编号、落点或差别。标注、放大和切换都可以帮观众定位，近景已经讲清时可以留干净。框线只指向可验证的对象，不暗示未经证实的归因。看不出停留增加了什么，就缩口播或重排有用的画面。重看动作时让观众分清回看与原片的实际速度、次数和顺序。当前自动制作使用能核对来源的原速片段和证据帧。蓝图写明各段读图任务与预计承载，具体切点和停留时长靠实测音频与代表段验证。
 
 用阶段提示交代正在看原片还是讲解。现有分组计划登记提示文字和进出位置，声音、配色和转场可以帮观众更快认出阶段。先保留本任务已确认的样式。看手机尺寸下能否迅速分辨阶段，字幕和短标是否可读、是否盖住脸、手势或编号。单帧能看布局，实际声画连播才能核切换时机。
+
+回看已保存的剪辑时，用制作记录的 `teachingPresentation` 定位实际原声、讲解、源片静帧与短标。按报告的时间抽帧，再连播核对声音。Native 短标没找到，先检查它是否嵌在画面里；短标与配音段重合，只说明它们同时安排在时间线上。
 
 Assess the source closing's purchase function, not just product recognition: grouped goods, any supported offer and the purchase cue may work together. An ordinary consumer CTA needs only a brief explanation; do not give it the core demonstrations' weight. Unconfirmed price or bundle details restrict specific claims, not the supported purchase invitation itself. If the task treats a weak clue as a factual record, describe what the original ending shows and keep it out of the review conditions. Keep this source consumer CTA distinct from our creator cooperation CTA.
 
@@ -235,6 +239,8 @@ Use existing native layers for original footage, audio, captions, titles and ann
 Give creators a clear transition between source audio and explanation. Keep actual voice endings and appropriate breath. Use the current task’s phase labels and visual treatment. Check source burned-in text as well as added captions. A misleading fragment may need another source frame or a suitable crop, but never remove necessary evidence to hide it. After crop/scale/layout changes, inspect annotation targets, entrance/exit and key-number visibility. Check an action's beginning, middle and end: a correct last-frame arrow cannot excuse earlier mistiming, duplicate backplates, translucent overlap or blank regions.
 
 Carry the current approved phase style in `viewer_stage_cues.layout`. For a full-width top band, choose `placement: "top_strip"`, the original/revisit colors, and optionally `height_fraction` relative to the canvas. For other layouts, the editor applies the approved palette and layout directly. Captions and callouts keep their own typography and placement. Compare the phase signal, audio switch and visual focus in the assembled representative clip before applying the style throughout.
+
+When the plan leaves phase colors open, use the shared preview/export palette as a starting point. Check a real frame where color could compete with product or skin and a contrasting background before proposing a change to the shared fallback. Keep short labels in the phase's color family, with a quieter fill when they compete with the title. For a two-object hold, time the emphasis to each actual spoken reference and point at what is visible. A readable close-up can carry the same task on its own. For an unusually long hold, choose a viewing threshold for that piece and use `still_hold_review_seconds` in the local transition manifest to find intervals to watch. Inspect the spoken phrase and the visible target together; the duration alone does not decide quality. Sample frames establish layout and contrast, while phone playback with the actual audio checks readability and timing.
 
 Reuse exact approved audio/configuration; a stored preference does not authorize switching providers or presets. Missing synthesis capability is reported, not silently substituted. Supplementary/generated material needs an authorized, explicit information contribution, narration match, entrance/exit and culturally appropriate presentation; never manufacture original footage, product results or news evidence. Keep the source consumer purchase CTA separate from our creator invitation. New contacts get the product, confirmed benefits/support and contact action; existing partners get confidence to film in their own style, without assuming receipt of the product. Preserve supplied imagery and metric scopes, end after the creator CTA, and do not append the full original. No extra Rootify video overlay; the source Storyboard carries its attribution and supplied official logo.
 

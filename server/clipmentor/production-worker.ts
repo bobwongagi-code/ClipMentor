@@ -5,6 +5,7 @@ import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from
 import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
 import {openingUnderlayShortfall,pictureRepairWriteError} from './production-capacity-repair';
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
+import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
 import {firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {productionTeachingPresentation} from './production-teaching-presentation';
@@ -1174,9 +1175,9 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
  const openingResults=productionOpeningComparison(task,policy,doc)?.results;
  return {evidenceInspection:productionEvidenceInspection(doc,task),task:task.input.brief,stage:task.stage,goal,feedback:task.stage==='blueprint'?task.blueprintFeedback??task.feedback??null:task.feedback??null,repairContext:task.repairContext?.repair?{repair:task.repairContext.repair,revision:task.repairContext.revision,final_feedback:task.repairContext.final_feedback??null}:task.repairContext??null,
   ...(task.input.panelDelivery&&(task.stage==='blueprint'||task.stage==='edit'&&!task.sharedProduction?.prepared
-   &&!task.repairContext?.final_feedback&&!isBoundCanvasReflow(task,doc))?{teachingPresentation:task.stage==='blueprint'
-   ?'证据窗保留为事实记录。需要压缩示范时用 original_playback:{mode:"selected_cuts",ranges,purpose} 登记实际原声选段，和 original 阶段保持一致。选能讲清关系的展示顺序和大小：若细节看不清，先放大；若比较依赖同屏，先保留共同参照。读图停留交代看哪里、读出什么，按需要选择近景、标注或压缩口播。用 viewer_stage_cues.layout 交接本片已认可的样式；选用贯通顶栏时填 placement:"top_strip"、两段配色和可选 height_fraction。'
-   :'按已审原声选段和回看顺序执行。用近景、按口播移动的提示或局部放大交代读图重点。位置已经清楚的脸部可以保持干净。阶段标题和字幕分别对齐实际段落及声音。仅当计划在 viewer_stage_cues.layout 选择 placement:"top_strip"，宿主才为阶段标题应用贯通顶栏；其他版式由剪辑直接落实已定配色和位置。字幕和指向短标按当前画面安排。用 view_timeline_frames 抽查原声切讲解、对照对象和关键局部，按手机尺寸检查是否遮挡。'}:{}),
+   &&!task.repairContext?.final_feedback&&!isBoundCanvasReflow(task,doc))?{teachingPhasePalette:{original:stageCuePalette(undefined,'original'),explanation:stageCuePalette(undefined,'explanation')},teachingPresentation:task.stage==='blueprint'
+   ?'证据窗保留为事实记录。需要压缩示范时用 original_playback:{mode:"selected_cuts",ranges,purpose} 登记实际原声选段，和 original 阶段保持一致。选能讲清关系的展示顺序和大小：若细节看不清，先放大；若比较依赖同屏，先保留共同参照。读图停留交代看哪里、读出什么，按需要选择近景、标注或压缩口播。用 viewer_stage_cues.layout 交接本片已认可的样式；选用贯通顶栏时填 placement:"top_strip"、可选 height_fraction。没指定颜色时用 teachingPhasePalette。'
+   :'按已审原声选段和回看顺序执行。用近景、随口播出现的提示或局部放大交代读图重点。若口播逐处点名，切到被点名的部位或突出对应的格；只总结共同拍法时，用清楚的各处画面和短标举例，给总览单独的读图任务。大图与总览复用同一短标，标题、字幕和提示留出位置，保证画面主体不被盖住。仅在 viewer_stage_cues.layout 选 top_strip 时宿主应用贴顶通栏；其他版式照本片的配色和位置。用 view_timeline_frames 抽查原声切讲解、一个关键局部及总览或对照的进出点，在手机大小看字幕、焦点和留白，随后连实际配音听一次，逐词对位和听感未验时标明。'}:{}),
   ...(task.stage==='blueprint'&&task.repairContext?.narration_repair_findings?{narrationRepair:{
    findings:task.repairContext.narration_repair_findings,
    instruction:'对照现行口播和独立审核，逐项修正列出的口播及其同文字幕，核对当句回看是否仍匹配。保留已核选题、未点名的教学组和片头片尾。版本号、标题和短标的改动不能代替口播修订。'} }:{}),

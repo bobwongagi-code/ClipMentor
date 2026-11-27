@@ -10,7 +10,7 @@ const window = (v: unknown): [number, number] | null => Array.isArray(v) && v.le
 type TeachingPhase = 'original' | 'explanation';
 const phasePalette = {
  original: {backgroundColor:'#0D5EA6',color:'#FFFFFF'},
- explanation: {backgroundColor:'#FFD83D',color:'#111111'},
+ explanation: {backgroundColor:'#E6C46F',color:'#2F261A'},
 } as const;
 
 /** Preview and production use the same phase palette and explicit overrides. */
