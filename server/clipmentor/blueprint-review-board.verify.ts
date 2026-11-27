@@ -396,6 +396,8 @@ try{
   const plan=first.internal_review[first.internal_review.current_picture_plan];
   plan.phases[1].context_source_ranges=[{segment_id:'GM-S01',source_range_seconds:[0,1],purpose:'first object'},
    {segment_id:'GM-S01',source_range_seconds:[9,10.5],purpose:'second object'}];
+  assert(representativeTeachingExcerpt(doc)?.state.items.every(i=>i.kind==='video'),'a source comparison does not impose stage strip styling');
+  plan.viewer_stage_cues.layout={placement:'top_strip',height_fraction:.03,revisit:{color:'#E6C46F',text_color:'#2F261A'}};
   const before=JSON.stringify(doc);
   const selected=representativeTeachingExcerpt(doc);
   assert(selected);
@@ -403,6 +405,9 @@ try{
   assert.deepEqual(selected.state.items.filter(i=>i.kind==='video').map(i=>[i.startFrame,i.srcInFrame,i.durationInFrames,i.volume]),
    [[0,270,45,1],[45,0,30,0],[75,270,45,0]],'preview does not play gaps or choose the arbitrary tail');
   assert.equal(selected.state.items.find(i=>i.id==='stage-0')?.props?.backgroundColor,'#0D5EA6');
+  const replay=selected.state.items.find(i=>i.id==='stage-1')?.props;
+  assert.equal(replay?.backgroundColor,'#E6C46F');
+  assert.equal(replay?.stripHeightFraction,.03,'sample and export resolve the same saved strip size');
   const mismatch=clone(doc);
   const mismatchReview=(mismatch.clipMentorAnalysis!.blueprint[0] as any).internal_review;
   mismatchReview[mismatchReview.current_picture_plan].phases[1].context_source_ranges[0].segment_id='GM-S00';

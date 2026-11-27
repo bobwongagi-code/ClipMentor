@@ -45,7 +45,7 @@ export function TextLayer({ item, canvasW, canvasH, fit }: {
 }) {
   const props = item.props ?? {};
   if(isNativeTextTopStrip(props)){
-    const h=nativeTextTopStripHeight(canvasH);
+    const h=nativeTextTopStripHeight(canvasH,props);
     const padding=Math.round(canvasW*.045);
     return <div style={{...nativeTextStyle(props),position:'absolute',top:0,left:0,right:0,height:h,padding:`0 ${padding}px`,
       boxSizing:'border-box',display:'flex',justifyContent:'center',alignItems:'center',fontSize:Math.round(h*.6),

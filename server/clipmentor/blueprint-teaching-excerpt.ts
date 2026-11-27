@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {ensureBrowser} from '@remotion/renderer';
 import {readBlueprint} from '../../src/clipmentor/blueprint-lint';
 import {copyLineSourceBinding} from '../../src/clipmentor/source-breakdown';
-import {currentPicturePhases,stageCueColors} from '../../src/clipmentor/blueprint-picture-notices';
+import {currentPicturePhases,stageCueTopStripProps} from '../../src/clipmentor/blueprint-picture-notices';
 import type {ProjectDoc,TimelineItem,TimelineState} from '../../src/editor/types';
 import {sha256File} from '../../shared/node-content-hash';
 import {isSafeUploadName,resolveUploadFile} from '../media-dir';
@@ -59,13 +59,11 @@ export function representativeTeachingExcerpt(doc:ProjectDoc,data=readBlueprint(
   const line=data.lines.find(l=>l.id===lineId);
   const unitBinding=breakdown.units.find(u=>u.unit_id===unitId);
   if(!originalLabel||!revisitLabel||!line||!unitBinding||!copyLineSourceBinding(breakdown,unitBinding,line.raw,operational))return [];
-  const layout=row(cues.layout);
-  const palette=[stageCueColors(layout.original,'original'),stageCueColors(layout.revisit,'explanation')];
   // Show the longest registered action before the planned replay. An arbitrary
   // original tail can contain the next action, even inside the saved group.
   const anchor=selected.reduce((a,b)=>b.end-b.first>a.end-a.first?b:a);
   const originalSample={first:anchor.first,end:Math.min(anchor.end,anchor.first+2*fps)};
-  return [{unitId,original:originalSample,originalLabel,selected,revisitLabel,palette}];
+  return [{unitId,original:originalSample,originalLabel,selected,revisitLabel,layout:cues.layout}];
  });
  // Prioritize the registered comparison with the most independently timed shots.
  const picked=candidates.sort((a,b)=>b.selected.length-a.selected.length)[0];
@@ -83,11 +81,12 @@ export function representativeTeachingExcerpt(doc:ProjectDoc,data=readBlueprint(
  }
  const originalFrames=picked.original.end-picked.original.first;
  for(const [index,label] of [picked.originalLabel,picked.revisitLabel].entries()){
+  const style=stageCueTopStripProps(picked.layout,index===0?'original':'explanation');
+  // Without an explicit strip this is a source/timing illustration, not a title mockup.
+  if(!style)continue;
   items.push({id:'stage-'+index,kind:'text',track:'track-v2',name:label,width,height,
    startFrame:index===0?0:originalFrames,durationInFrames:index===0?originalFrames:startFrame-originalFrames,
-   props:{text:label,placement:'top_strip',color:picked.palette[index][1],
-    backgroundColor:picked.palette[index][0],
-    backgroundOpacity:1,fontWeight:700,textShadow:'none'}});
+   props:{text:label,...style}});
  }
  const state:TimelineState={fps,width,height,fit:'contain',trackOrder:['track-v2','track-v1'],items,selectedId:null};
  return {unitId:picked.unitId,asset,state};

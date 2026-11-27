@@ -4,8 +4,11 @@ export const NATIVE_TEXT_PROPS=['text','fontSize','fontWeight','color','align','
 export function isNativeTextTopStrip(props?:Record<string,unknown>){
  return props?.placement==='top_strip';
 }
-export function nativeTextTopStripHeight(canvasHeight:number){
- return Math.max(1,Math.round(canvasHeight*.04));
+export function nativeTextTopStripHeightFraction(value:unknown){
+ return typeof value==='number'&&value>0&&value<1?value:undefined;
+}
+export function nativeTextTopStripHeight(canvasHeight:number,props?:Record<string,unknown>){
+ return Math.max(1,Math.round(canvasHeight*(nativeTextTopStripHeightFraction(props?.stripHeightFraction)??.04)));
 }
 export function nativeTextRendererVersion(props?:Record<string,unknown>){
  return isNativeTextTopStrip(props)?'native-text-top-strip-v1':NATIVE_TEXT_STYLE_VERSION;

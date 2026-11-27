@@ -152,6 +152,17 @@ const phaseRequest = () => buildCopyTeachingReviewRequest([{ case_id: 'group-pro
 const phaseProjection = phaseRequest().input.cases[0].packet.units[0].picture_plan!;
 assert.deepEqual(phaseProjection.execution_plan!.content, phaseUnit.picture_plan.execution_plan!.content);
 assert.deepEqual(phaseProjection.registered_revisits, phaseUnit.picture_plan.registered_revisits);
+const phaseCues=phaseUnit.picture_plan.execution_plan!.content.viewer_stage_cues as Record<string,unknown>;
+const projectedLayout=()=>(phaseRequest().input.cases[0].packet.units[0].picture_plan!.execution_plan!.content.viewer_stage_cues as Record<string,unknown>).layout;
+phaseCues.layout={safe_area:'Keep the action visible',original:{color:'#000000'}};
+assert.deepEqual(projectedLayout(),{safe_area:'Keep the action visible'},'keep the historical unstructured palette projection');
+phaseCues.layout={placement:'top_strip',height_fraction:.03,original:'#0D5EA6 #FFFFFF',
+  revisit:{color:'#E6C46F',text_color:'#2F261A',author_note:'Private',unused:['metadata']}};
+assert.deepEqual(projectedLayout(),{placement:'top_strip',height_fraction:.03,original:'#0D5EA6 #FFFFFF',
+  revisit:{color:'#E6C46F',text_color:'#2F261A'}},'the opted-in layout seen in review matches the saved renderer inputs');
+phaseCues.layout={placement:'top_strip',height_fraction:3};
+assert.deepEqual(projectedLayout(),{placement:'top_strip'},'invalid optional sizing falls back without blocking on visual preference');
+delete phaseCues.layout;
 phaseUnit.picture_plan.execution_plan!.content.composition={
  detail:'Fixture layout',
  caption_policy:'One semantic phrase per card',

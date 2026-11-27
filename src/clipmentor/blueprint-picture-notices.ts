@@ -1,4 +1,6 @@
-/** Shared advisory questions, not image understanding or executable parameters. */
+import {nativeTextTopStripHeightFraction} from '../../shared/native-text-style';
+
+/** Shared picture notes and optional stage presentation. */
 type Row = Record<string, unknown>;
 const obj = (v: unknown): Row => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Row : {};
 const arr = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
@@ -31,6 +33,14 @@ export function stageCuePalette(style:unknown,phase:TeachingPhase){
 export function stageCueColors(style:unknown,phase:TeachingPhase):string[]{
  const palette=stageCuePalette(style,phase);
  return [palette.backgroundColor,palette.color];
+}
+
+export function stageCueTopStripProps(layout:unknown,phase:TeachingPhase){
+ const saved=obj(layout);
+ if(saved.placement!=='top_strip')return undefined;
+ const height=nativeTextTopStripHeightFraction(saved.height_fraction);
+ return {...stageCuePalette(saved[phase==='original'?'original':'revisit'],phase),
+  placement:'top_strip' as const,backgroundOpacity:1,...(height===undefined?{}:{stripHeightFraction:height})};
 }
 
 export const picturePhaseIssueCode={

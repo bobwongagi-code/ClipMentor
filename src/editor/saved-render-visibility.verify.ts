@@ -45,7 +45,7 @@ try {
     {...structuredClone(text),id:'blue-strip',startFrame:150,transform:{x:10,y:20},props:{text:'Video asal',
       placement:'top_strip',color:'#FFFFFF',backgroundColor:'#0D5EA6'}},
     {...structuredClone(text),id:'yellow-strip',startFrame:180,props:{text:'Lihat semula',
-      placement:'top_strip',color:'#111111',backgroundColor:'#FFD83D'}},
+      placement:'top_strip',color:'#2F261A',backgroundColor:'#E6C46F',stripHeightFraction:.03}},
   );
   const meta = await createProject('isolated-render-visibility', fixture);
   // Drop every cache, then construct a NEW storage adapter. A live draft or
@@ -80,14 +80,15 @@ try {
   assert(measurements[0].height >= 18, JSON.stringify({ reason: 'saved portrait title was silently shrunk', measurements }));
   assert(measurements[1].height < 18 && measurements[1].pixels > 0, 'legacy landscape mismatch must be detected, not merely count any visible pixel');
   for (const result of measurements.slice(2,5)) assert.equal(result.pixels, 0, 'hidden, off-canvas and missing layers must not pass visible-content checks');
-  for(const [index,background] of [[5,[13,94,166]],[6,[255,216,61]]] as const){
+  for(const [index,background,lastStripRow,firstClearRow] of [[5,[13,94,166],21,30],[6,[230,196,111],16,22]] as const){
     const decoded=spawnSync(ffmpeg,['-loglevel','error','-i','pipe:0','-frames:v','1','-vf','scale=360:640',
       '-f','rawvideo','-pix_fmt','rgb24','pipe:1'],{input:Buffer.from(frames[index].base64,'base64'),maxBuffer:2_000_000});
     assert.equal(decoded.status,0,decoded.stderr.toString());
     const pixel=(x:number,y:number)=>[...decoded.stdout.subarray((y*360+x)*3,(y*360+x)*3+3)];
     const is=(rgb:number[],expected:readonly number[])=>rgb.every((v,i)=>Math.abs(v-expected[i])<24);
     assert(is(pixel(0,0),background)&&is(pixel(359,0),background),'strip begins at both edges of the first row');
-    assert(is(pixel(0,21),background)&&is(pixel(359,21),background),'strip spans the width throughout its narrow band');
+    assert(is(pixel(0,lastStripRow),background)&&is(pixel(359,lastStripRow),background),'strip spans the width at its chosen height');
+    assert(is(pixel(180,firstClearRow),[0,0,0]),'picture starts immediately below the configured band');
     assert(is(pixel(180,58),[0,0,0])&&is(pixel(180,320),[0,0,0]),'the strip must leave the rest of the picture clear');
   }
   // Small supported canvases must retain the previous default's physical

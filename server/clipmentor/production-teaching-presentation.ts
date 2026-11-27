@@ -1,4 +1,4 @@
-import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
+import {stageCueTopStripProps} from '../../src/clipmentor/blueprint-picture-notices';
 import {contiguousPlaybackRuns,nativeExecutionMapping} from '../../src/clipmentor/source-breakdown';
 import type {ProjectDoc,TimelineItem} from '../../src/editor/types';
 
@@ -11,9 +11,8 @@ const normalized=(value:unknown)=>typeof value==='string'
 const duration=(windows:Window[])=>windows.reduce((sum,[start,end])=>sum+end-start,0);
 const contains=(windows:Window[],start:number,end:number)=>windows.some(([a,b])=>start>=a&&end<=b);
 
-/** Apply the saved cues to the actual authored text layers. The edit still owns
- * what the viewer sees. Captions are identified from the approved words and
- * the measured voice instance, never by a free-text label or track name. */
+/** Apply the chosen top strip to stage titles. Caption and annotation styling
+ * remains with the edit, including when captions share the stage title's text. */
 export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:boolean}={}){
  const a=doc.clipMentorAnalysis;
  const timeline=doc.timelines.find(t=>t.id===doc.activeTimelineId);
@@ -21,12 +20,14 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
  const native=nativeExecutionMapping(doc);
  const allOriginals=[...Object.values(native.teachingPhases).flatMap(phases=>phases.original),
   ...a.source_breakdown.units.flatMap(unit=>unit.placement?.timeline_id===timeline.id?[unit.placement.original_frames]:[])];
- const updates=new Map<string,{cue:boolean;props:ReturnType<typeof stageCuePalette>}|null>();
- const missing:Array<{id:string;text:string;span:Window;style:ReturnType<typeof stageCuePalette>}>=[];
+ type StripStyle=NonNullable<ReturnType<typeof stageCueTopStripProps>>;
+ const updates=new Map<string,StripStyle|null>();
+ const missing:Array<{id:string;text:string;span:Window;style:StripStyle}>=[];
  const units=a.source_breakdown.units.flatMap(unit=>{
   const board=a.blueprint.find(b=>b.unit_id===unit.unit_id),internal=record(record(board).internal_review);
   const plan=record(internal[String(internal.current_picture_plan)]),candidate=record(internal[String(internal.current_script_candidate)]);
-  const cues=record(plan.viewer_stage_cues),layout=record(cues.layout);
+  const cues=record(plan.viewer_stage_cues);
+  const stripStyles={original:stageCueTopStripProps(cues.layout,'original'),explanation:stageCueTopStripProps(cues.layout,'explanation')};
   if(plan.script_candidate_id!==internal.current_script_candidate||!Array.isArray(plan.phases)||!normalized(record(cues.original).text))return [];
   // Exact historical compositions keep their own reviewed caption treatment.
   const detail=record(plan.composition).detail;
@@ -49,7 +50,7 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
   }
   const use=(t:typeof timeline.items[number])=>!timeline.tracks?.[t.track]?.hidden&&t.transform?.opacity!==0;
   const audioByLine=new Map<string,{words:string[];span:Window}>();
-  const labels=new Set(entries(cues.revisit).map(cue=>normalized(cue.text)).filter(Boolean));
+  const labels=new Set<string>();
   for(const line of entries(candidate.lines)){
    if(typeof line.narration_ms!=='string')continue;
    if(Array.isArray(line.labels))for(const label of line.labels)labels.add(normalized(label));
@@ -61,6 +62,7 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
     span:[voice.startFrame,voice.startFrame+voice.durationInFrames]});
   }
   const stageCounts={original:0,explanation:0};
+  const ambiguousTitles=new Set<string>();
   let captionCount=0;
   const referenceReads=entries(plan.timing_dispositions).filter(row=>row.action==='reference_reading')
    .map(row=>({lineId:row.line_id,information:row.reason}));
@@ -79,12 +81,17 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
    if(!phase)continue;
    const phaseLabel=phase==='original'?words===normalized(record(cues.original).text)
     :entries(cues.revisit).some(cue=>words===normalized(cue.text));
-   const caption=phase==='explanation'&&!labels.has(words)&&[...audioByLine.values()].some(({words:approved,span})=>
-    contains([span],start,end)&&approved.some(text=>text===words||words.includes(' ')&&` ${text} `.includes(` ${words} `)));
-   if(!phaseLabel&&!caption)continue;
-   if(phaseLabel)stageCounts[phase]++;
-   else captionCount++;
-   const style={cue:phaseLabel,props:stageCuePalette(phase==='original'?layout.original:layout.revisit,phase)};
+   const caption=phase==='explanation'&&[...audioByLine.values()].some(({words:approved,span})=>
+    start<span[1]&&end>span[0]&&approved.some(text=>text===words||words.includes(' ')&&` ${text} `.includes(` ${words} `)));
+   if(caption&&!labels.has(words))captionCount++;
+   if(!phaseLabel)continue;
+   if(caption||labels.has(words)){
+    ambiguousTitles.add(words);
+    if(item.props?.placement!=='top_strip')continue;
+   }
+   stageCounts[phase]++;
+   const style=stripStyles[phase];
+   if(!style)continue;
    const prior=updates.get(item.id);
    updates.set(item.id,prior!==undefined&&JSON.stringify(prior)!==JSON.stringify(style)?null:style);
   }
@@ -92,12 +99,12 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
   const revisitTexts=[...new Set(entries(cues.revisit).flatMap(cue=>typeof cue.text==='string'&&cue.text.trim()?[cue.text]:[]))];
   // If the editor omitted a whole phase label, recover the unambiguous saved
   // title. A plan with multiple revisit titles still owns their individual timing.
-  for(const [phase,windows,title,style] of [
-   ['original',original,originalText,layout.original],['explanation',explanationCueWindows,revisitTexts.length===1?revisitTexts[0]:undefined,layout.revisit],
+  for(const [phase,windows,title] of [
+   ['original',original,originalText],['explanation',explanationCueWindows,revisitTexts.length===1?revisitTexts[0]:undefined],
   ] as const){
-   if(stageCounts[phase]||typeof title!=='string'||!title.trim())continue;
-   windows.forEach((span,index)=>missing.push({id:`clipmentor-stage-${unit.unit_id}-${phase}-${index}`,span,text:title,
-    style:stageCuePalette(style,phase)}));
+   const style=stripStyles[phase];
+   if(!style||stageCounts[phase]||typeof title!=='string'||!title.trim()||ambiguousTitles.has(normalized(title)))continue;
+   windows.forEach((span,index)=>missing.push({id:`clipmentor-stage-${unit.unit_id}-${phase}-${index}`,span,text:title,style}));
   }
   return [{unitId:unit.unit_id,originalSeconds:duration(original)/timeline.fps,explanationSeconds:duration(explanation)/timeline.fps,
    stageLabels:stageCounts,matchedCaptionCards:captionCount,referenceReads,sourceStills}];
@@ -106,10 +113,8 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
  const items=timeline.items.map(item=>{
   const change=updates.get(item.id);
   if(!change)return item;
-  const props={...item.props,...change.props,backgroundOpacity:1};
-  if(!change.cue)return {...item,props};
   const {transform:_position,...rest}=item;
-  return {...rest,props:{...props,placement:'top_strip'}};
+  return {...rest,props:{...item.props,...change}};
  });
  const ids=new Set(items.map(item=>item.id));
  const recoverable=missing.filter(label=>!ids.has(label.id));
@@ -120,7 +125,7 @@ export function productionTeachingPresentation(doc:ProjectDoc,options:{apply?:bo
   return {doc:{...doc,timelines:doc.timelines.map(t=>t===timeline?{...timeline,items}:t)},units};
  const strips=recoverable.map(({id,text,span:[startFrame,end],style}):TimelineItem=>({
   id,name:text,kind:'text',track,startFrame,durationInFrames:end-startFrame,
-  width:timeline.width,height:timeline.height,props:{text,...style,placement:'top_strip',backgroundOpacity:1},
+  width:timeline.width,height:timeline.height,props:{text,...style},
  }));
  const active={...timeline,items:[...items,...strips],tracks:{...timeline.tracks,[track]:{kind:'video' as const,name:'Phase strips'}},
   trackOrder:[track,...(timeline.trackOrder??Object.keys(timeline.tracks??{})).filter(id=>id!==track)]};

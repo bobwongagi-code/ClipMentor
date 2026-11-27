@@ -66,8 +66,7 @@ assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON
 {
  const authored=structuredClone(project);
  const timeline=authored.timelines[0];
- const input=(authored.clipMentorAnalysis!.blueprint[1] as any).internal_review.plan;
- input.viewer_stage_cues.layout={revisit:{text_color:'#222222'}};
+ const [first,second]=authored.clipMentorAnalysis!.blueprint.map(unit=>(unit as any).internal_review.plan);
  const text=(id:string,text:string,startFrame:number,durationInFrames:number)=>({
   id,name:id,kind:'text' as const,track:'V2',startFrame,durationInFrames,props:{text,color:'#ffffff',backgroundColor:'#000000'},transform:{y:24},
  });
@@ -75,6 +74,10 @@ assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON
   text('second-cue','Lihat semula',210,60),text('caption','Line 1',121,89),
   text('other-caption','Line 1',211,59),text('ending-copy','Line 1',270,30),
   text('crossing','Lihat semula',200,40));
+ first.viewer_stage_cues.layout={original:'#2563A8 #FFFFFF'};
+ assert.equal(productionTeachingPresentation(authored,{apply:true}).doc,authored,'a valid alternative layout keeps every authored layer');
+ first.viewer_stage_cues.layout={placement:'top_strip',height_fraction:.03,revisit:{color:'#E6C46F',text_color:'#2F261A'}};
+ second.viewer_stage_cues.layout={placement:'top_strip',height_fraction:.03,revisit:{text_color:'#222222'}};
  const before=JSON.stringify(authored),style=productionTeachingPresentation(authored,{apply:true});
  const get=(id:string)=>style.doc.timelines[0].items.find(item=>item.id===id)!;
  assert.deepEqual(stageCuePalette(undefined,'original'),{backgroundColor:'#0D5EA6',color:'#FFFFFF'});
@@ -83,17 +86,19 @@ assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON
  assert.equal(get('original-cue').props?.backgroundColor,'#0D5EA6');
  assert.equal(get('original-cue').props?.placement,'top_strip');
  assert.equal(get('original-cue').transform,undefined);
- assert.equal(get('explanation-cue').props?.color,'#111111');
- assert.equal(get('caption').props?.backgroundColor,'#FFD83D');
- assert.equal(get('caption').transform?.y,24);
- assert.equal(get('caption').props?.placement,undefined,'subtitle copies stay independent of the stage strip');
+ assert.equal(get('explanation-cue').props?.color,'#2F261A');
+ assert.equal(get('explanation-cue').props?.stripHeightFraction,.03);
  assert.equal(get('second-cue').props?.color,'#222222');
  assert.equal(get('clipmentor-stage-U2-original-0').props?.placement,'top_strip','missing but approved phase cues are recovered');
- for(const id of ['other-caption','ending-copy','crossing'])assert.deepEqual(get(id),timeline.items.find(item=>item.id===id));
+ for(const id of ['caption','other-caption','ending-copy','crossing'])assert.deepEqual(get(id),timeline.items.find(item=>item.id===id));
  assert.equal(JSON.stringify(authored),before);
  assert.deepEqual(productionTeachingPresentation(style.doc,{apply:true}).doc,style.doc);
  assert.deepEqual(productionTeachingPresentation(authored).doc,authored);
  assert.deepEqual(style.units.map(unit=>[unit.originalSeconds,unit.explanationSeconds]),[[2,3],[2,2]]);
+ first.viewer_stage_cues.revisit[0].text='Line 1';
+ const ambiguous=productionTeachingPresentation(authored,{apply:true}).doc.timelines[0];
+ assert.deepEqual(ambiguous.items.find(item=>item.id==='caption'),timeline.items.find(item=>item.id==='caption'));
+ assert(!ambiguous.items.some(item=>item.id==='clipmentor-stage-U1-explanation-0'),'do not duplicate an ambiguous caption as a stage title');
 }
 const combined=structuredClone(project);
 const combinedAnalysis=combined.clipMentorAnalysis!;
@@ -132,6 +137,7 @@ for(const [index,id] of ['L3','L4','L5'].entries()){
 assert.deepEqual(nativeExecutionMapping(middleSwap).issues,[]);
 const silentBeat=structuredClone(middleSwap);
 const silentTimeline=silentBeat.timelines[0];
+ (silentBeat.clipMentorAnalysis!.blueprint[1] as any).internal_review.plan.viewer_stage_cues.layout={placement:'top_strip'};
 const secondLine= silentTimeline.items.find(item=>item.id==='line2')!;
 const sourceStart=secondLine.startFrame;
 for(const item of silentTimeline.items)if(item.startFrame>=270)item.startFrame+=10;
@@ -139,6 +145,15 @@ silentTimeline.items.push({id:'cue-over-silent-beat',name:'teaching cue',kind:'t
  durationInFrames:370-sourceStart,props:{text:'Lihat semula'}});
 const silentCue=productionTeachingPresentation(silentBeat,{apply:true}).doc.timelines[0].items.find(item=>item.id==='cue-over-silent-beat');
 assert.equal(silentCue?.props?.placement,'top_strip','a silent product-identification beat keeps the teaching-phase strip');
+const endOfSecondLine=sourceStart+secondLine.durationInFrames;
+const tailCaption={id:'caption-tail',name:'Caption',kind:'text' as const,track:'V2',startFrame:endOfSecondLine-6,
+ durationInFrames:11,props:{text:'Line 2',backgroundColor:'#191919'},transform:{y:24}};
+const silentPlan=(silentBeat.clipMentorAnalysis!.blueprint[1] as any).internal_review.plan;
+silentPlan.viewer_stage_cues.revisit[0].text='Line 2';
+silentTimeline.items.push(tailCaption);
+assert.deepEqual(nativeExecutionMapping(silentBeat).issues,[]);
+assert.deepEqual(productionTeachingPresentation(silentBeat,{apply:true}).doc.timelines[0].items.find(item=>item.id==='caption-tail'),
+ tailCaption,'a caption can end just after its measured voice without becoming a stage title');
 [middleReview.plan.phases[3],middleReview.plan.phases[4]]=[middleReview.plan.phases[4],middleReview.plan.phases[3]];
 assert(nativeExecutionMapping(middleSwap).issues.some(issue=>issue.id==='U2'&&issue.code==='unit_output_order_invalid'));
 // Editor defaults may persist an empty gap-cap map; only actual gap edits are nonlinear.
