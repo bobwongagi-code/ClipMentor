@@ -104,6 +104,30 @@ assert.equal(JSON.stringify(manifest), before, 'checking cannot mutate productio
 const hold = structuredClone(manifest);
 hold.scenes[0] = { ...hold.scenes[0], kind: 'still', content: 62.2 };
 assert.equal(checkTransitionManifest(hold).candidates.length, 0, 'a breath that retains its preceding picture is not an extra shot');
+const holdCandidate = checkTransitionManifest({ ...hold, still_hold_review_seconds: 2 });
+assert.deepEqual(holdCandidate.candidates.map(c => [c.code, c.start_seconds, c.end_seconds]),
+ [['still_hold_review', 0, 3.3]], 'a caption or breath cut does not reset the viewing timer for the same picture');
+assert.equal(holdCandidate.review_groups[0].next_action, 'agent_inspect');
+assert.equal(holdCandidate.review_groups[0].quality_status, 'unverified');
+assert.equal(checkTransitionManifest({ ...hold, still_hold_review_seconds: 4 }).candidates.length, 0);
+assert.equal(checkTransitionManifest({ ...hold, still_hold_review_seconds: -1 }).candidates.length, 0);
+{
+ const digest='a'.repeat(64),source={item_id:'preview-still',track:'V1',kind:'image',origin:'source_frame',
+  asset_id:'reference',source_hash:digest,source_start_seconds:2,item_start_frame:0,item_end_frame:100,
+  layout_digest:digest,render_digest:digest,render_state:{}};
+ const text={item_id:'focus',track:'V2',kind:'text',origin:'authored',item_start_frame:50,item_end_frame:100,
+  layout_digest:'b'.repeat(64),render_digest:digest,render_state:{text:'Tool position'}};
+ const native={fps:30,total_frames:100,scenes:[
+  {start_frame:0,end_frame:50,kind:'composition',layers:[source]},
+  {start_frame:50,end_frame:100,kind:'composition',layers:[source,text]},
+ ]};
+ assert(!checkTransitionManifest(native).candidates.some(c=>c.code==='still_hold_review'));
+ const finding=checkTransitionManifest({...native,still_hold_review_seconds:2}).candidates.find(c=>c.code==='still_hold_review');
+ assert.equal(finding?.end_seconds,100/30,'native callouts do not hide the underlying picture hold from review');
+ const changed=structuredClone(native);
+ changed.scenes[1].layers[0]={...source,source_start_seconds:3};
+ assert(!checkTransitionManifest({...changed,still_hold_review_seconds:2}).candidates.some(c=>c.code==='still_hold_review'));
+}
 const entry = structuredClone(manifest);
 entry.scenes[0] = { ...entry.scenes[0], kind: 'original', content: 43 };
 entry.scenes[2] = { ...entry.scenes[2], kind: 'video', content: 62.2 };

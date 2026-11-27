@@ -94,6 +94,23 @@ try{
  await editor.close();
  const restarted=await openHeadlessEditor({...opts,persistence:new FilePersistence(saved)});
  assert.equal(restarted.getDoc().timelines[0].items[0].props.text,'AFTER');await restarted.close();
+ const previewPersistence=new MemoryPersistence(saved);
+ const preview=await openHeadlessEditor({...opts,persistence:previewPersistence,projectForTimelinePreview:doc=>{
+  const copy=structuredClone(doc);
+  copy.timelines[0].items[0].props!.placement='top_strip';
+  return copy;
+ },fetch:async(url,init)=>{
+  assert.equal(new URL(String(url)).pathname,'/render-still');
+  const body=JSON.parse(String(init?.body));
+  assert.equal(body.state.items[0].props.placement,'top_strip');
+  assert.equal(body.project.timelines[0].items[0].props.placement,'top_strip');
+  return Response.json({frames:[]});
+ }});
+ try{
+  await preview.execute('view_timeline_frames',{frames:[5]},'staged-style-preview');
+  assert.equal(preview.getDoc().timelines[0].items[0].props?.placement,undefined);
+  assert.equal(previewPersistence.commitCount,0);
+ }finally{await preview.close();}
  // Existing ClipMentor gates are still checked before an unapproved edit.
  const guarded=projectDoc();guarded.clipMentorAnalysis={revision:1,source:{asset_id:'missing',sourceContentHash:''}} as never;
  const gp=new FilePersistence(guarded),ge=await openHeadlessEditor({...opts,persistence:gp});

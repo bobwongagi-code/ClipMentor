@@ -67,7 +67,8 @@ export function copyPreparationReady(doc: ProjectDoc): boolean {
     'copy_picture_outside_explanation', 'copy_point_not_registered', 'selected_point_missing_from_copy', 'picture_plan_copy_mismatch',
     'picture_plan_phase_mode_invalid', 'picture_plan_phase_range_invalid', 'picture_plan_phase_original_missing',
     'picture_plan_phase_line_invalid', 'picture_plan_group_explanation_missing',
-    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'picture_plan_replay_outside_evidence', 'delivery_sections_invalid',
+    'picture_plan_original_order_mismatch', 'picture_plan_revisits_mismatch', 'picture_plan_replay_outside_evidence',
+    'picture_plan_original_outside_evidence', 'picture_plan_original_selection_invalid', 'delivery_sections_invalid',
     'copy_candidate_pointer_invalid', 'picture_plan_pointer_invalid', 'picture_plan_candidate_mismatch', 'picture_plan_phase_invalid',
   ].includes(i.code));
 }
@@ -236,6 +237,11 @@ export function originalPlaybackRanges(b: SourceBreakdown, unit: SourceBreakdown
     const s = b.segments.find((segment) => segment.segment_id === id);
     return s ? [s.source_range_seconds] : [];
   });
+}
+
+function selectedOriginalReplay(plan:unknown){
+ const playback=row(plan)?plan.original_playback:undefined;
+ return row(playback)&&playback.mode==='selected_cuts'?playback:undefined;
 }
 
 export class PicturePlanIssue extends Error {
@@ -577,11 +583,13 @@ export function nativeExecutionMapping(doc:ProjectDoc){
   let offset=0;
   try{const opening=deliverySectionsFromDoc(doc).find(s=>s.kind==='performance_opening');if(opening)offset=deliveryAudio(doc,opening).frames;}catch{fail('native_mapping_delivery_audio_invalid','delivery');}
   const unitLines=new Map<string,Array<{id:string;text:string;item:typeof t.items[number]}>>();
+  const shortReplays=new Set<string>();
   for(const unit of a.blueprint){
     if(b.units.find(u=>u.unit_id===unit.unit_id)?.placement)continue;
     const ir=(unit as unknown as Row).internal_review;if(!row(ir))continue;
     const plan=ir[String(ir.current_picture_plan)],candidate=ir[String(ir.current_script_candidate)];
     if(executableRows(plan)!==undefined||!row(plan)||!Array.isArray(plan.phases)||!plan.phases.some(p=>row(p)&&p.mode==='explanation'))continue;
+    if(selectedOriginalReplay(plan))shortReplays.add(unit.unit_id);
     const selected:Array<{id:string;text:string;item:typeof t.items[number]}>=[];
     for(const line of row(candidate)&&Array.isArray(candidate.lines)?candidate.lines.filter(row):[]){
       const assets=doc.assets.filter(v=>v.kind==='audio'&&row(v.props?.generation)&&v.props.generation.text===line.narration_ms);
@@ -680,6 +688,36 @@ export function nativeExecutionMapping(doc:ProjectDoc){
         explanation:contiguousPlaybackRuns(lines.map(({item})=>[item.startFrame,item.startFrame+item.durationInFrames]),0)};
     }
   }
+  if(shortReplays.size){
+    const originalItems=new Map<string,Array<[number,number]>>();
+    const timelineItems=new Map(t.items.map(item=>[item.id,item]));
+    for(const binding of bindings){
+      if(binding.phase!=='original')continue;
+      const item=timelineItems.get(binding.item_id)!;
+      const base=item.startFrame-(item.srcInFrame??0);
+      const [from,to]=binding.source_range_seconds;
+      const assigned=originalItems.get(item.id)??[];
+      assigned.push([base+Math.round(from*t.fps),base+Math.round(to*t.fps)]);
+      originalItems.set(item.id,assigned);
+    }
+    const legacyWindows=b.units.flatMap(unit=>unit.placement?.timeline_id===t.id?[unit.placement.original_frames]:[]);
+    for(const [index,unit] of b.units.entries()){
+      const phases=teachingPhases[unit.unit_id];
+      if(!shortReplays.has(unit.unit_id)||!phases?.original.length||!phases.explanation.length)continue;
+      const prior=b.units[index-1];
+      const previous=prior&&(placements[prior.unit_id]??prior.placement);
+      if(prior&&(!previous||previous.timeline_id!==t.id))continue;
+      const start=Math.min(previous?.explanation_frames[1]??offset,phases.original[0][0]);
+      const end=phases.explanation.at(-1)![1];
+      for(const item of t.items){
+        if(item.kind!=='video'||item.src!==source?.src||!visible(item)
+          ||t.tracks?.[item.track]?.muted||(item.volume??1)<=0)continue;
+        const audible:[number,number]=[Math.max(start,item.startFrame),Math.min(end,item.startFrame+item.durationInFrames)];
+        if(audible[0]<audible[1]&&!rangesCover([...(originalItems.get(item.id)??[]),...legacyWindows],audible,0))
+          fail('native_mapping_original_outside_selected_replay',unit.unit_id);
+      }
+    }
+  }
   return {issues,bindings,placements,teachingPhases};
 }
 
@@ -751,10 +789,6 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
     for (const key of Object.keys(u)) if (!fields.has(key)) issue('unrecognized_unit_field', `${u.unit_id}:${key}`);
     const originalRanges = originalPlaybackRanges(b, u);
     if (originalRanges.some((r) => r[1] > a.source.duration_seconds)) issue('original_playback_out_of_bounds', u.unit_id);
-    for (const id of u.original_segment_ids) {
-      const r = segments.get(id)?.source_range_seconds;
-      if (r && !rangesCover(originalRanges, r, 1 / a.source.fps + 1e-6)) issue('original_segment_outside_playback', id);
-    }
     const blueprint = a.blueprint.find((v) => v.unit_id === u.unit_id);
     if (!blueprint) issue('breakdown_unit_missing', u.unit_id);
     for (const id of [...u.original_segment_ids, ...u.explanation_segment_ids]) if (!segments.has(id)) issue('unit_segment_missing', id);
@@ -775,6 +809,26 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
     const order = [...u.original_segment_ids, ...u.explanation_segment_ids].filter((id) => segments.has(id));
     const phases = row(boundPlan) ? boundPlan.phases : undefined;
     const groupedPlan = Array.isArray(phases) && phases.some(p => row(p) && (p.mode === 'original' || p.mode === 'explanation'));
+    const playback = groupedPlan ? selectedOriginalReplay(boundPlan) : undefined;
+    // A deliberate short replay can use a subset of the registered evidence.
+    // Its ranges still have to match the current grouped phases and the actual edit.
+    const originalSegments=u.original_segment_ids.flatMap(id=>{
+      const segment=segments.get(id);
+      return segment?[segment.source_range_seconds]:[];
+    });
+    if(playback){
+      if(!text(playback.purpose)||!Array.isArray(playback.ranges))
+        issue('picture_plan_original_selection_invalid',u.unit_id,['original_playback']);
+      else if(JSON.stringify(playback.ranges)!==JSON.stringify(originalRanges))
+        issue('picture_plan_original_order_mismatch',u.unit_id,['original_playback.ranges']);
+      for(const [index,r] of originalRanges.entries()){
+        if(!rangesCover(originalSegments,r,1 / a.source.fps + 1e-6))
+          issue('picture_plan_original_outside_evidence',u.unit_id,[`original[${index}]`]);
+      }
+    }else for(const id of u.original_segment_ids){
+      const r=segments.get(id)?.source_range_seconds;
+      if(r&&!rangesCover(originalRanges,r,1 / a.source.fps + 1e-6))issue('original_segment_outside_playback',id);
+    }
     let grouped: ReturnType<typeof groupedPlaybackRelations> = null;
     try {
       grouped = groupedPlaybackRelations(phases,

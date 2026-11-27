@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   assertExternalVideoUrlSize, buildPreviewReviewRequest, evaluatePreviewTeachingJudgment,
-  reviewClipMentorPreview, validatePreviewReviewInput, previewReceiptFailure, previewReviewRepairBlock,
+  reviewClipMentorPreview, validatePreviewReviewInput, previewReceiptFailure, previewReviewRepairBlock, previewReviewIdentity,
 } from './preview-review.ts';
 import type { PreviewReviewInput, PreviewTeachingJudgment, ReviewReceipt } from './preview-review.ts';
 
@@ -56,6 +56,13 @@ assert.notEqual(compactRequest.request_sha256,built.request_sha256);
 assert.equal(compactRequest.input_sha256,built.input_sha256);
 assert.doesNotMatch(JSON.parse(originalRequest.body).contents[0].parts[1].text,/先完成全部 coverage、continuity/);
 const request = JSON.parse(built.body);
+const priorRequest=buildPreviewReviewRequest(video,input,'decision-first');
+const priorPayload=JSON.parse(priorRequest.body);
+assert.deepEqual(request.contents,priorPayload.contents,'the original full video, 5 fps, references and review instructions stay identical');
+assert.deepEqual(request.generationConfig,{...priorPayload.generationConfig,thinkingConfig:{thinkingLevel:'LOW'}});
+assert.equal(built.input_sha256,priorRequest.input_sha256);
+assert.notEqual(previewReviewIdentity(built.video_sha256,video.length,input).logical_request_sha256,
+  previewReviewIdentity(built.video_sha256,video.length,input,'decision-first').logical_request_sha256);
 assert.deepEqual(Buffer.from(request.contents[0].parts[0].inlineData.data, 'base64'), Buffer.from(video));
 assert.equal(request.contents[0].parts[0].fileData, undefined);
 assert.equal(request.generationConfig.maxOutputTokens, 16_384);
@@ -143,6 +150,15 @@ assert.equal(fenced.status, 'pass', 'A complete JSON code fence is a transport w
 const partial = await reviewClipMentorPreview(video, input, { key: 'private-test-value', post: async () => ({ status: 200,
   body: { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: JSON.stringify(good()) }] } }] } }) });
 assert.equal(partial.status, 'review_required'); assert.ok(partial.issues.includes('incomplete_generation'));
+const withheld=good();withheld.coverage[0].teaching.status='not_supported';
+const splitCandidate=await reviewClipMentorPreview(video,input,{key:'private-test-value',post:async()=>({status:200,body:{candidates:[
+ {content:{parts:[{text:JSON.stringify(withheld)}]}},
+ {finishReason:'STOP',content:{parts:[{thought:true,text:'another candidate finished'}]}},
+]}})});
+assert.equal(splitCandidate.judgment,null,'another candidate cannot supply a finish marker for an incomplete verdict');
+assert.equal(previewReviewRepairBlock({result:splitCandidate,effective_review:{
+ manifest_binding:'frozen_at_request',blockers:['P1:not_supported','saved_review_not_passed'],
+}}),'preview_review_incomplete_generation');
 console.log('Preview review: input-size guards, exact inline bytes, independent receipts, teaching-vs-narrative gates, quoted-text checks, safe failures and no retries passed.');
 
 // Model observation times are display precision, never native edit boundaries.

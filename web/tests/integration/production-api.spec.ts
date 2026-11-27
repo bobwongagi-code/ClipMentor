@@ -13,7 +13,7 @@ const build = (outDir: string, apiPath: string) => execFileSync(process.execPath
   ['node_modules/vite/bin/vite.js', 'build', '--outDir', outDir, '--emptyOutDir'],
   {
     env: {
-      ...process.env, CLIPMENTOR_PUBLIC_API_BASE_PATH: apiPath,
+      ...process.env, NODE_ENV:'production', CLIPMENTOR_PUBLIC_API_BASE_PATH: apiPath,
       CLIPMENTOR_PROJECT_ID: 'dev-only-project', CLIPMENTOR_BACKEND_PORT: 'invalid-dev-only-port',
     },
     stdio: 'pipe',
@@ -195,7 +195,7 @@ test.describe('production gateway responses', () => {
       expect(redirectedRequests).toBe(redirectCount)
       await submit.click()
       await expect(feedback).toHaveValue('')
-      await expect(page.getByRole('region', { name: '上次修改要点' })).toBeVisible()
+      await expect(page.getByText('上次修改意见已保存。')).toBeVisible()
       expect(posts).toBe(2)
     })
   }
@@ -226,7 +226,7 @@ test.describe('production gateway responses', () => {
           } } })
         }
         return route.fulfill({ json: { task: {
-          taskId: 'delivery-task', stage: 'self_check', status: confirmedDelivery ? 'completed' : 'awaiting_review',
+          taskId: 'delivery-task', stage: 'self_check', status: confirmedDelivery ? 'completed' : 'awaiting_review',canAcceptPreview:!confirmedDelivery,
           sequence: confirmedDelivery ? 4 : 3, active: false, renderId: 'one-render', downloadName: 'confirmed.mp4',
         } } })
       })
@@ -269,7 +269,7 @@ test.describe('production gateway responses', () => {
       }
       return route.fulfill({ json: { task: {
         taskId: 'restoring-task', stage: 'self_check', active: false, sequence: 3,
-        ...(previewAvailable ? { status: 'awaiting_review', renderId: 'restoring-render' } : { status: 'blocked' }),
+        ...(previewAvailable ? { status: 'awaiting_review', canAcceptPreview:true, renderId: 'restoring-render' } : { status: 'blocked' }),
       } } })
     })
     try {

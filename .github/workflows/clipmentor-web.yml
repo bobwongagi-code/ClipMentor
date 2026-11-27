@@ -27,6 +27,7 @@ jobs:
           ONNXRUNTIME_NODE_INSTALL: 'skip'
       - run: npm ci --prefix web
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - run: npx tsx server/clipmentor/task-workspace.verify.ts
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: npm test

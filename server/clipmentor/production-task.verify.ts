@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import * as production from './production-task';
 import {bindBlueprintFeedbackSummary,blueprintFeedbackPoints,captureBlueprintFeedbackSummary} from './production-feedback';
 import {authorizePreviewRetry,previewRetryReadback,productionDeadline,unavailablePreviewReceiptReason} from './production-preview-retry';
+import {PREVIEW_REVIEW_PROCESS_TIMEOUT_MS} from './preview-review-deadline';
+import {canLaunchSharedFollower} from './production-shared-clock';
+import {matchingSharedPreviewProblem} from './production-shared-review';
 import {advanceProductionTask,productionFeedback,acceptProductionTask,PRODUCTION_STAGES,validateProductionInput,cancelActiveProductionTask,runProductionWithRecovery,type ProductionInput,type ProductionTask,type TaskStore} from './production-task';
 const input:ProductionInput={projectId:'test',sourceAssetId:'source',product:{name:'Fixture',category:'test'},brief:'Fixture production without a provider',
  voice:{provider:'minimax',voiceId:'fixture'},
@@ -13,6 +16,73 @@ let saved:ProductionTask;
 const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){return structuredClone(saved);}};
 const negativePreviewReceipt={result:{finish_reasons:['STOP'],issues:['group:teaching:not_supported']},
  effective_review:{manifest_binding:'frozen_at_request',blockers:['group:teaching:not_supported','saved_review_not_passed']}};
+for(const mode of ['new-export','saved-export','running-review'] as const){
+ const task=fresh();task.stage=mode==='running-review'?'self_check':'export';
+ if(mode!=='new-export')task.completed.export={at:1,artifact:{renderId:'saved-before-review'}};
+ if(mode==='running-review')task.status='running';
+ saved=structuredClone(task);
+ if(mode==='running-review'){
+  saved.input.author.origin='http://127.0.0.1:4999';saved.input.reviewer.origin='http://127.0.0.1:4999';
+ }
+ let prepared=false;
+ await runProductionWithRecovery(task,async current=>{
+  if(current.stage==='export')return {artifact:{renderId:'saved-before-review'}};
+  assert.equal(current.stage,'self_check');
+  assert.equal(current.input.author.origin,input.author.origin,'resume keeps the rebound local gateway');
+  assert(prepared&&current.sharedProduction?.prepared,'the prepared body binding must survive into the review checkpoint');
+  return {artifact:{},pause:'fixture_pending_review'};
+ },async()=>{},store,undefined,async()=>{
+  assert.equal(saved.completed.export?.artifact.renderId,'saved-before-review');
+  assert.equal(saved.completed.self_check,undefined);
+  saved.sequence++;saved.sharedProduction={projectId:'follower',taskId:'ending',prepared:true,endFrame:42,digest:'fixture'};
+  prepared=true;
+ });
+ assert.equal(task.status,'blocked');
+ assert.equal(task.completed.export?.artifact.renderId,'saved-before-review');
+ assert.equal(task.attempts.render,0);
+}
+for(const [issue,matchesPeer] of [['group:teaching:not_supported',true],['delivery/existing_partner:teaching:not_supported',false]] as const){
+ const task=fresh();task.stage='self_check';task.projectRevision='saved';
+ task.input.panelDelivery={audience:'existing_partner'} as ProductionInput['panelDelivery'];
+ task.sharedProduction={projectId:'follower',taskId:'ending',prepared:true,endFrame:42,digest:'d'.repeat(64)};
+ const videoSha256='a'.repeat(64);
+ task.completed.export={at:1,artifact:{renderId:'kept-render',revision:'saved',path:'/media/uploads/fixture.mp4',
+  facts_digest:'f'.repeat(64),sizeBytes:42,durationSeconds:3,videoSha256}};
+ const receipt={projectId:task.projectId,videoSha256,scope:'rendered_preview_continuous_review',full_film_accepted:false,
+  result:{finish_reasons:['STOP'],issues:[issue]},
+  effective_review:{manifest_binding:'frozen_at_request',blockers:[issue,'saved_review_not_passed']}};
+ const visited:string[]=[];
+ await advanceProductionTask(task,async current=>{
+  visited.push(current.stage);
+  return {artifact:{receipt},repair:'edit'};
+ },store);
+ assert.deepEqual(visited,['self_check']);
+ assert.equal(task.completed.export?.artifact.renderId,'kept-render');
+ assert.deepEqual(task.repairContext?.receipt,receipt);
+ assert.equal(task.repairs,0);
+ assert.equal(task.attempts.render,0);
+ assert.match(task.error??'',matchesPeer?/shared_body_requires_reconciliation/:/shared_ending_requires_local_repair/);
+ const sibling={...fresh(),projectId:'follower',taskId:'ending',
+  sharedProduction:{...task.sharedProduction,projectId:task.projectId,taskId:task.taskId}};
+ assert.equal(matchingSharedPreviewProblem(sibling,task),matchesPeer);
+ task.status='cancelled';delete task.error;
+ assert.equal(matchingSharedPreviewProblem(sibling,task),matchesPeer,'cancelling a variant does not resolve a documented body issue');
+ sibling.sharedProduction.digest='b'.repeat(64);
+ assert(!matchingSharedPreviewProblem(sibling,task),'a finding must bind the identical shared render');
+}
+{
+ const follower=fresh();
+ follower.input.panelDelivery={audience:'new_contact'} as ProductionInput['panelDelivery'];
+ follower.sharedProduction={projectId:'producer',taskId:'producer-task'};
+ follower.createdAt=1;follower.stage='copy_review';follower.status='blocked';follower.error='Error: Production deadline exceeded';
+ assert(canLaunchSharedFollower(follower));
+ assert(productionDeadline(follower)>Date.now());
+ follower.attempts.model=1;
+ assert(!canLaunchSharedFollower(follower));
+ assert.equal(productionDeadline(follower),1+follower.input.budget.maxElapsedMs);
+ follower.sharedProduction={...follower.sharedProduction,prepared:true,workStartedAt:2};
+ assert.equal(productionDeadline(follower),2+follower.input.budget.maxElapsedMs,'actual execution cannot renew the elapsed window');
+}
 {
  const task=fresh();task.stage='edit';task.input.budget.maxRepairs=3;
  let edits=0;
@@ -82,33 +152,60 @@ for(const mode of ['missing-evidence','same-finding','same-group-finding','inter
  const taskKey='self_check:initial:0:'+priorOperationId;
  task.effects[taskKey]={kind:'preview_review',operationId:priorOperationId,status:'completed',result:{body:{
   projectId:task.projectId,operationId:priorOperationId,videoSha256,receipt_persisted:true,status:'failed',requestsAttempted:1,
+  scope:'rendered_preview_continuous_review',full_film_accepted:false,
  }}};
  const request={renderId:'kept-render',sequence:task.sequence,videoSha256,priorOperationId,confirmed:true,reason:'One extra review for the saved video'};
  for(const patch of [{renderId:'other'},{videoSha256:'b'.repeat(64)},{sequence:18},{priorOperationId:'unknown'},{reason:'  '},{confirmed:false}])
   assert.throws(()=>authorizePreviewRetry(task,{...request,...patch},videoSha256),/preview_retry/);
- const uncertain=structuredClone(task);uncertain.effects[taskKey].status='reserved';
- assert.throws(()=>authorizePreviewRetry(uncertain,request,videoSha256),/not_reconciled/);
+ const uncertain=structuredClone(task);uncertain.effects[taskKey]={kind:'review',status:'reserved',operationId:priorOperationId};
+ assert.equal(authorizePreviewRetry(uncertain,request,videoSha256).previewReviewRetry?.readOnly,true);
+ uncertain.effects[taskKey].status='failed';
+ assert.equal(authorizePreviewRetry(uncertain,request,videoSha256).previewReviewRetry?.readOnly,true);
  const next=authorizePreviewRetry(task,request,videoSha256);
  assert.equal(task.status,'blocked');assert.deepEqual(next.input.budget,task.input.budget);
  assert.equal(next.previewReviewRetry?.reason,request.reason);
- assert(productionDeadline(next)>Date.now());
+ assert(productionDeadline(next)-next.previewReviewRetry!.authorizedAt>PREVIEW_REVIEW_PROCESS_TIMEOUT_MS);
+ assert.equal(productionDeadline({...next,stage:'edit'}),task.createdAt+task.input.budget.maxElapsedMs);
  const readback={projectId:task.projectId,operationId:priorOperationId,videoSha256,scope:'rendered_preview_continuous_review',full_film_accepted:false};
  assert.equal(previewRetryReadback(next,{...readback,status:'reserved'}),'stop');
  assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:false}),'stop');
- assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:true}),'request');
+ const localFailure={...readback,status:'failed',receipt_persisted:true,requestsAttempted:1,requestsSent:0,upstream_http_status:100,
+  model_retry_policy:'no_automatic_retry',transport_diagnostic:{operation_id:priorOperationId,error_kind:'curl_timeout',http_status:100,
+   curl_exit_code:28,request_bytes:1000,metrics:{size_upload:1000,size_download:0},request_ids:{},response_body:{bytes:0}}};
+ assert.equal(previewRetryReadback(next,localFailure),'stop','HTTP 100 and a completed upload are not a terminal response');
+ assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:true}),'stop');
+ const unsubmitted={...readback,status:'failed',receipt_persisted:true,requestsAttempted:0,requestsSent:0,model_retry_policy:'no_automatic_retry'};
+ assert.equal(previewRetryReadback(next,unsubmitted),'stop','a read-only lookup cannot become an authorization to submit');
+ const unsentTask=structuredClone(task);unsentTask.effects[taskKey].result={body:unsubmitted};
+ const replacement=authorizePreviewRetry(unsentTask,request,videoSha256);
+ assert.equal(previewRetryReadback(replacement,unsubmitted),'request');
+ assert.equal(previewRetryReadback(replacement,localFailure),'stop');
+ assert.equal(previewRetryReadback(next,{...readback,status:'completed',result:{finish_reasons:['MAX_TOKENS']},
+  effective_review:{can_use_as_pass:false}}),'stop');
  assert.equal(previewRetryReadback(next,{...readback,status:'completed',effective_review:{can_use_as_pass:true}}),'reuse');
  assert.equal(previewRetryReadback(next,{...readback,status:'completed',...negativePreviewReceipt}),'reuse');
  assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:true,videoSha256:'b'.repeat(64)}),'stop');
  assert.equal(unavailablePreviewReceiptReason({transport_diagnostic:{error_kind:'curl_timeout',response_boundary:'no_final_response_unattributed'}}),'preview_review_timeout_unconfirmed');
  assert.equal(unavailablePreviewReceiptReason({transport_diagnostic:{error_kind:'curl_timeout',response_boundary:'final_response'}}),'preview_review_receipt_unavailable');
  let calls=0;
+ await advanceProductionTask(next,async(t,ctx)=>{
+  assert.equal(previewRetryReadback(t,localFailure),'stop');
+  await assert.rejects(ctx.effect('preview_review',t.previewReviewRetry!.operationId,async()=>++calls),/budget exhausted/);
+  return {artifact:{receipt:localFailure},pause:'preview_retry_original_outcome_unavailable'};
+ },store);
+ assert.equal(saved.attempts.preview_review,1);
+ assert.equal(saved.attempts.render,0);
+ assert.equal(saved.completed.export?.artifact.renderId,'kept-render');
+ const renewed=authorizePreviewRetry(saved,{...request,sequence:saved.sequence},videoSha256);
+ assert.equal(renewed.previewReviewRetry?.operationId,next.previewReviewRetry?.operationId);
  const check=async (t:ProductionTask,ctx:Parameters<production.StageWorker>[1])=>{
   assert.equal(t.stage,'self_check');
+  assert.equal(previewRetryReadback(t,unsubmitted),'request');
   await assert.rejects(ctx.effect('preview_review','unrelated',async()=>++calls),/budget exhausted/);
   await ctx.effect('preview_review',t.previewReviewRetry!.operationId,async()=>++calls);
   return {artifact:{receipt:'test-timeout'},pause:'preview_review_receipt_unavailable'};
  };
- await advanceProductionTask(next,check,store);
+ await advanceProductionTask(replacement,check,store);
  await advanceProductionTask(saved,check,store);
  assert.equal(calls,1);assert.equal(saved.attempts.preview_review,2);assert.equal(saved.attempts.render,0);
  assert.equal(saved.completed.export?.artifact.renderId,'kept-render');
@@ -461,18 +558,44 @@ await resolveHumanBlueprint(gatewayTask,'gateway-fixture','gateway-fixture',unde
 await advanceProductionTask(gatewayTask,async(t,c)=>{
  if(t.stage==='self_check'){
   assert.equal(c.remaining!('review'),0);assert.equal(c.remaining!('preview_review'),3);
-  let calls=0;
+  let calls=0,reads=0;
+  const failed={operationId:originalOperation,projectId:t.projectId,videoSha256:'fixture',requestsAttempted:1,
+   receipt_persisted:true,status:'failed',scope:'rendered_preview_continuous_review',full_film_accepted:false,
+   transport_diagnostic:{operation_id:originalOperation,http_status:null,curl_exit_code:28,error_kind:'curl_timeout',
+    response_boundary:'no_final_response_unattributed',
+    request_bytes:58_618_849,metrics:{size_upload:58_618_849,size_download:0,time_pretransfer:.2,time_starttransfer:.3},
+    request_ids:{},response_body:{bytes:0}}};
   const result=await recoverProductionGateway('review_clipmentor_preview',{action:'request',operationId:originalOperation,videoSha256:'fixture'},t.projectId,
    ()=>c.remaining!('preview_review')>0,args=>c.effect('preview_review',String(args.operationId),async()=>{
-    calls++;return {operationId:args.operationId,projectId:t.projectId,videoSha256:'fixture',requestsAttempted:1,receipt_persisted:true,
-     status:calls===1?'failed':'completed',upstream_http_status:calls===1?503:undefined};
-   }),async()=>{}) as {status:string};
-  assert.equal(result.status,'completed');assert.equal(calls,2);
+    calls++;return {...failed,operationId:args.operationId};
+   }),async()=>{},2,{allowRetry:true,readOriginal:async operationId=>{reads++;assert.equal(operationId,originalOperation);return failed;}}) as {status:string};
+  assert.equal(result.status,'failed');
+  assert.equal(calls,1,'a legacy timeout receipt without a retry policy must not create a fresh preview operation');
+  assert.equal(reads,1);
+  return {artifact:{receipt:result},pause:unavailablePreviewReceiptReason(result)};
  }
  return {artifact:{revision:'gateway-fixture'}};
 },store);
-assert.equal(gatewayTask.attempts.preview_review,2);
+assert.equal(gatewayTask.attempts.preview_review,1);
 assert.equal(gatewayTask.attempts.review,1);
+assert.equal(gatewayTask.attempts.render,0);
+assert.equal(gatewayTask.status,'blocked');
+assert.equal(gatewayTask.stage,'self_check');
+assert.equal(gatewayTask.error,'Error: preview_review_timeout_unconfirmed');
+assert(gatewayTask.completed.export);
+for(const status of ['reserved','completed'] as const){
+ const sent={operationId:originalOperation,projectId:'test',videoSha256:'fixture',requestsAttempted:1,
+  receipt_persisted:true,status:'failed',upstream_http_status:504,
+  scope:'rendered_preview_continuous_review',full_film_accepted:false};
+ const late={...sent,status,...(status==='completed'?negativePreviewReceipt:{})};
+ let attempts=0,reads=0;
+ const recovered=await recoverProductionGateway('review_clipmentor_preview',{action:'request',operationId:originalOperation,videoSha256:'fixture'},
+  'test',()=>true,async()=>{attempts++;return sent;},async()=>assert.fail('readback must not retry'),2,
+  {allowRetry:true,readOriginal:async operationId=>{assert.equal(operationId,originalOperation);reads++;return late;}}) as Record<string,unknown>;
+ assert.equal(attempts,1);assert.equal(reads,1);
+ assert.equal(recovered.status,status==='completed'?'completed':'failed');
+ if(status==='completed')assert.deepEqual(recovered.result,negativePreviewReceipt.result,'a late valid verdict keeps its content decision');
+}
 
 for(const [status,allowBudget,patch] of [
  [null,true,{}], [401,true,{}], [422,true,{}], [504,false,{}], [504,true,{receipt_persisted:false}],

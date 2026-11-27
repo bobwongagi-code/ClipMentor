@@ -17,6 +17,61 @@ const input=(value:unknown,bindings?:ProjectDoc[]):BoardInput=>({value,sha256:ha
 try{
  const {loadReviewBoardInput,planReviewBoards,renderReviewBoards,REVIEW_BOARD_FRAME_LIMIT}=await import('./blueprint-review-board');
  assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,root,'all server imports must bind to temporary storage');
+ await test('Human replay gallery uses named source selections, preserves the draft and falls back on conflicts',async()=>{
+  const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
+  const {reviewReplayViews}=await import('./blueprint-review-board-human-context');
+  const {plans,data,lint}=planReviewBoards(input(clone(c.newBinding)));
+  const board=plans[0];
+  const unit=board.rows.find(row=>row.stage==='explanation')!;
+  const samples=[
+   {key:'context',frame:10,seconds:1,label:'source',jpeg:'eA==',selection:{segmentId:'context-segment',start:1}},
+   ...['一','二','三','四'].map((zh,index)=>({key:`step-${index}`,frame:20+index,seconds:2+index,label:'source',jpeg:'eA==',
+    selection:{segmentId:`segment-${index}`,start:2+index,shortLabel:{zh,ms:`step ${index}`}}})),
+  ];
+  const rows=[{...unit,frames:samples,replayFrames:samples}];
+  assert.deepEqual(reviewReplayViews(rows).map(({frame})=>frame.key),['context','step-0','step-1','step-2','step-3']);
+  assert.deepEqual(reviewReplayViews([{...rows[0],frames:samples.slice(0,3)}]),[],'limited frames cannot appear as a complete recap');
+  assert.deepEqual(reviewReplayViews([...rows,{...rows[0],stage_text:'another cue'}]),[],'never flatten two different stage cues');
+  const conflict={...samples[1],selection:{...samples[1].selection,shortLabel:{zh:'错位',ms:'wrong place'}}};
+  assert.deepEqual(reviewReplayViews([...rows,{...unit,frames:[conflict]}]),[],'same frame with conflicting labels cannot receive a guessed name');
+  assert.deepEqual(reviewReplayViews(rows.map(row=>({...row,frames:row.frames.map(frame=>({...frame,selection:{...frame.selection,shortLabel:undefined}}))}))),[],'registration order does not supply names');
+  board.rows=board.rows.map(row=>row===unit?rows[0]:row);
+  const before=JSON.stringify(board);
+  const html=humanReviewBoardPage(board,data,lint,[],[],true);
+  const gallery=html.match(/<div class="replay-gallery">.*?<\/div><\/div>/s)?.[0];
+  assert(gallery,'fixture must render the real human board gallery');
+  assert.equal((html.match(/ data-recap-frame/g)??[]).length,4);
+  assert.match(html,/data-replay-frame="0"><button/);
+  assert.match(html,/data-show="recap" aria-pressed="false">总览/);
+  const alternate={...samples[1],key:'step-0-alternate',frame:30,seconds:6,
+   selection:{...samples[1].selection,segmentId:'alternate-segment',start:6}};
+  const alternateBoard={...board,rows:board.rows.map(row=>row===rows[0]?{...row,frames:[...samples,alternate],replayFrames:[...samples,alternate]}:row)};
+  const alternateHtml=humanReviewBoardPage(alternateBoard,data,lint,[],[],true);
+  assert.equal((alternateHtml.match(/data-recap-frame="0"/g)??[]).length,2,'two views of the same area share a recap slot');
+  assert.match(alternateHtml,/一 · 原片 2 秒/);
+  assert.match(alternateHtml,/一 · 原片 6 秒/);
+  const views=[undefined,'0','1','2','3','0'].map((area,index)=>({
+   dataset:{replayFrame:String(index),recapFrame:area},hidden:index!==0,current:false,
+   toggleAttribute(name:string,enabled:boolean){assert.equal(name,'data-recap-current');this.current=enabled;},
+  }));
+  const actions=['recap','5'].map(show=>({dataset:{show},click:()=>{},
+   addEventListener(_:string,click:()=>void){this.click=click;},setAttribute(){},
+  }));
+  const replay=alternateHtml.match(/<script>(\{\s*for\(const gallery of document\.querySelectorAll\('\.replay-gallery'\)\).*?)<\/script>/s)?.[1];
+  assert(replay);
+  runInNewContext(replay,{document:{querySelectorAll:()=>[{
+   classList:{toggle(){}},querySelectorAll:(selector:string)=>selector==='[data-show]'?actions:views,
+  }]}});
+  actions[0].click();
+  assert.deepEqual(views.flatMap((view,index)=>view.hidden?[]:[index]),[1,2,3,4]);
+  actions[1].click();
+  assert.deepEqual(views.flatMap((view,index)=>view.hidden?[]:[index]),[5]);
+  actions[0].click();
+  assert.deepEqual(views.flatMap((view,index)=>view.hidden?[]:[index]),[2,3,4,5]);
+  assert.deepEqual(views.flatMap((view,index)=>view.current?[index]:[]),[5]);
+  assert.equal((html.match(/data-blueprint-opinion="/g)??[]).length,new Set(board.rows.filter(row=>row.stage==='explanation').map(row=>row.unit_id)).size);
+  assert.equal(JSON.stringify(board),before);
+ });
  const {deliveryPictureBindings,deliverySectionsFromDoc}=await import('../../src/clipmentor/delivery-sections');
  const {extractOneFrame}=await import('../plugins/extract-frames'),{ffmpegBin}=await import('../media-binaries');
  await test('Saved blueprint opinions preserve untouched scopes and name the exact confirmed sentence',async()=>{
@@ -181,6 +236,7 @@ try{
  });
  await test('Human board keeps capacity estimates and binding repairs out of business decisions',async()=>{
   const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
+  const {PanelReviewIssue,panelReviewIssue}=await import('./production-panel-review');
   const {plans,data,lint}=planReviewBoards(input(c.green,[c.newBinding,c.existingBinding] as unknown as ProjectDoc[]));
   const group=lint.groups.find(g=>g.line_ids.includes('GM-L02'))!;
   const report={...lint,groups:[{...group,complete:true,estimated_seconds:13.73,picture_seconds:2.9,empirical_lower_seconds:12.1}],
@@ -189,14 +245,31 @@ try{
   assert.doesNotMatch(html,/估算可能偏长|是否偏紧|缺独立 Storyboard PDF 交付绑定|画面说明相同，是否/);
   assert.match(html,/模型听写，未经人工听审/);
   const explanation=plans[0].rows.find(row=>row.stage==='explanation')!;
+  explanation.picture='PRIVATE_PICTURE_PLAN 复核回执没有绑定';
+  explanation.stage_text='未登记阶段标识';
   const answers=[{unit_id:explanation.unit_id,line_id:explanation.line_ids[0],status:'ok' as const,
    decision:'PRIVATE_REVIEW_DECISION',viewer_basis:'PRIVATE_REVIEW_REASON',quote:'PRIVATE_REVIEW_QUOTE'}];
   assert.match(humanReviewBoardPage(plans[0],data,report,[],[],false,undefined,answers),/PRIVATE_REVIEW_DECISION/);
-  const legacyData={...data,analysis:{...data.analysis,product:{name:'422f63f1-f6bb-4219-9714-61b11c2104ee'}}};
+  const legacyData=clone(data);
+  legacyData.analysis.product={name:'示例商品（内部名称待核）'};
+  const appendix=legacyData.analysis.evidence as Array<{kind:string;text:string;meaning_zh?:string}>;
+  const speech=appendix.find(item=>item.kind==='original_claim')!;
+  speech.text='PRIVATE_ASR_NOTE 原片识别模型的内部记录';
+  appendix.find(item=>item.kind==='original_claim'&&item.text.includes('Transferproof'))!.meaning_zh='PRIVATE_TRANSLATION 译文审核回执';
+  appendix.filter(item=>item.kind==='visible_action').forEach(item=>{item.text='PRIVATE_OBSERVATION 内部观察摘要';});
   const embedded=humanReviewBoardPage(plans[0],legacyData,report,[],[],true,undefined,answers);
   assert.match(embedded,/<h1>剪辑蓝图<\/h1>/);
-  assert.doesNotMatch(embedded,/422f63f1|PRIVATE_REVIEW_|existing_partner_pdf_binding|证据边界与未知/);
+  assert.doesNotMatch(embedded,/内部名称待核|PRIVATE_REVIEW_|PRIVATE_PICTURE_PLAN|PRIVATE_ASR_NOTE|PRIVATE_TRANSLATION|PRIVATE_OBSERVATION|existing_partner_pdf_binding|证据边界与未知|未登记阶段标识|审核依据|短标译文未登记|const identity=/);
+  assert.match(embedded,/Transferproof/);
+  assert(!embedded.includes(plans[0].candidate_sha256));
+  assert.match(embedded,/第 1 组意见/);
   assert.match(embedded,/<details class="source-speech"[^>]*><summary>附录 · 原片听写<\/summary>/);
+  assert.equal(panelReviewIssue('blueprint_opinion_scope_locked: 第 1 组第 2 句已确认保留。')?.message,'第 1 组第 2 句已确认保留。');
+  assert.equal(panelReviewIssue('blueprint_opinion_scope_locked: 内部回执 /本地/工程')?.message,'请刷新后查看当前版本。');
+  assert.equal(panelReviewIssue('provider error blueprint_opinion_scope_group: 第 2 组未收到修改意见。')?.message,'请刷新后查看当前版本。');
+  const clarification='第 2 组，请写清要改的是第几句。';
+  assert.equal(panelReviewIssue(new PanelReviewIssue('content',clarification))?.message,clarification);
+  assert.equal(panelReviewIssue(new PanelReviewIssue('content',clarification+' 内部记录 /本地/目录'))?.message,'请查看当前蓝图，按需提交修改意见。');
  });
  await test('A4 actual four-group middle and historical full v5 reuse retain separate source facts',async()=>{
   const four=planReviewBoards(input(c.barelyFour)).plans[0];assert.equal(four.rows.filter(r=>r.stage==='original').length,4);assert(four.reuse.some(r=>r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L04'))&&r.row_keys.some(k=>four.rows.find(v=>v.key===k)?.line_ids.includes('BT-L06'))));
@@ -396,6 +469,8 @@ try{
   const plan=first.internal_review[first.internal_review.current_picture_plan];
   plan.phases[1].context_source_ranges=[{segment_id:'GM-S01',source_range_seconds:[0,1],purpose:'first object'},
    {segment_id:'GM-S01',source_range_seconds:[9,10.5],purpose:'second object'}];
+  assert(representativeTeachingExcerpt(doc)?.state.items.every(i=>i.kind==='video'),'a source comparison does not impose stage strip styling');
+  plan.viewer_stage_cues.layout={placement:'top_strip',height_fraction:.03};
   const before=JSON.stringify(doc);
   const selected=representativeTeachingExcerpt(doc);
   assert(selected);
@@ -403,6 +478,9 @@ try{
   assert.deepEqual(selected.state.items.filter(i=>i.kind==='video').map(i=>[i.startFrame,i.srcInFrame,i.durationInFrames,i.volume]),
    [[0,270,45,1],[45,0,30,0],[75,270,45,0]],'preview does not play gaps or choose the arbitrary tail');
   assert.equal(selected.state.items.find(i=>i.id==='stage-0')?.props?.backgroundColor,'#0D5EA6');
+  const replay=selected.state.items.find(i=>i.id==='stage-1')?.props;
+  assert.equal(replay?.backgroundColor,'#E6C46F');
+  assert.equal(replay?.stripHeightFraction,.03,'sample and export resolve the same saved strip size');
   const mismatch=clone(doc);
   const mismatchReview=(mismatch.clipMentorAnalysis!.blueprint[0] as any).internal_review;
   mismatchReview[mismatchReview.current_picture_plan].phases[1].context_source_ranges[0].segment_id='GM-S00';
@@ -436,7 +514,7 @@ try{
    const checked=(await (await realFetch(base+'/?view=panel')).json()).task;
    const url=base+'/?'+new URLSearchParams({view:'panel_board',revision:saved.revision,boardIdentity:checked.boardIdentity});
    const html=await (await realFetch(url)).text();
-   assert.equal((html.match(/看回看示意/g)??[]).length,1);
+   assert.equal((html.match(/播放回看片段/g)??[]).length,1);
    const boundStrip=html.match(/class="thumb-strip explanation-strip">([\s\S]*?)<\/div>/u)?.[1];
    assert(boundStrip);
    assert.deepEqual([...boundStrip.matchAll(/<figcaption>原片 ([^<]+)<\/figcaption>/gu)].map(match=>match[1]),['0秒','9秒']);
@@ -570,7 +648,7 @@ try{
    assert.equal((await productionTaskStore.load(projectId,task.taskId)).productionChildren,undefined);
    task.createdAt=Date.now()-task.input.budget.maxElapsedMs-1;
    await productionTaskStore.save(task);
-   assert.match((await status()).blueprintMessage,/处理上限/,'the CTA prompt does not hide an expired task');
+   assert.match((await status()).blueprintMessage,/蓝图检查已暂停/,'the CTA prompt does not hide an expired task');
    task.createdAt=originalCreatedAt;
    assert.equal(task.completed.blueprint.artifact.authorSelfCheckNotice,'PRIVATE_S7_SENTINEL：片头成绩与字幕信息待核对');
    task.completed.blueprint.artifact=structuredClone(pass);
@@ -735,7 +813,7 @@ try{
    assert.deepEqual(await action.json(),{accepted:true,saved:true,dispatched:true});
    await entered.promise;
    const running=await productionTaskStore.load(projectId,task.taskId);
-   assert.match(proposal.opinionConfirmation.rows[0].label,/^第 2 组 · /u);
+   assert.equal(proposal.opinionConfirmation.rows[0].label,'第 2 组');
    assert.deepEqual(received,[{stage:'blueprint',feedback:`［第 2 组］${text}`,revision:snapshot.revision}]);
    assert.deepEqual(running.blueprintFeedbackUnitIds,[secondUnit.unit_id]);
    assert.equal(running.blueprintOpinions?.confirmed,true);

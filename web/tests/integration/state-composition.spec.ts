@@ -78,10 +78,10 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       const state = async () => (await fetch(origin + '/api/clipmentor/production?audience=existing_partner', { signal: AbortSignal.timeout(5000) })).json()
       const audit = async () => (await fetch(origin + '/audit', { signal: AbortSignal.timeout(5000) })).json()
       const checkpoint = async (stage: string) => writeFile(join(proof, 'stage-' + stage + '.json'), JSON.stringify({ state: await state(), audit: await audit(), posts, downloads }, null, 2))
-      const partner = (p: Page) => p.getByRole('region', { name: '已合作达人版', exact: true })
+      const partner = (p: Page) => p.getByRole('tabpanel', { name: '已合作达人版', exact: true })
       await page.goto(origin)
       const inputs = (await audit()).inputs
-      for (const [label, key] of [['爆款原片', 'source'], ['商品图', 'product'], ['销量截图', 'sales'], ['CTA 行动号召图', 'cta']]) await page.getByLabel(label, { exact: true }).setInputFiles(inputs[key])
+      for (const [label, key] of [['爆款原片', 'source'], ['商品图', 'product'], ['销量截图', 'sales'], ['合作海报', 'cta']]) await page.getByLabel(label, { exact: true }).setInputFiles(inputs[key])
       await page.getByRole('button', { name: '上传素材' }).click()
       await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
     await page.getByRole('button', { name: '确认蓝图，开始制作' }).click()
@@ -136,8 +136,11 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       const releasedResponse = page.waitForResponse(r => r.request().method() === 'POST' && r.request().postDataJSON()?.action === action && r.request().postDataJSON()?.renderId === old.renderId && r.url().includes('audience=existing_partner'), { timeout: 10_000 })
       gate.release()
       await releasedResponse
-      if (timing === 'request') await expect(partner(page).getByText(/当前版本不可用/)).toBeVisible()
-      else await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)))
+      if (replacement === 'render' && timing === 'request') {
+        await expect(partner(page).getByText('请刷新后查看当前版本。')).toBeVisible()
+      } else {
+        await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)), { timeout: 18_000 })
+      }
       await expect.poll(async () => (await audit()).actions.filter((a: { action: string; renderId?: string }) => a.action === action && a.renderId === old.renderId).length).toBe(action === 'revise_preview' && replacement === 'render' ? 2 : 1)
       await expect.poll(async () => (await audit()).actions.at(-1)?.status).toBe(timing === 'request' ? 409 : 200)
       expect((await state()).task.renderId).toBe(fresh.renderId)

@@ -1,5 +1,6 @@
 import {readSavedExternalResponse} from '../clipmentor/external-call';
 import { getKey } from '../keystore';
+import { PREVIEW_REVIEW_PROCESS_TIMEOUT_MS } from '../clipmentor/preview-review-deadline';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createHash } from 'node:crypto';
@@ -17,7 +18,7 @@ import { runtimeProfile, type RuntimeProfile } from '../runtime-profile';
 import { sha256File } from '../../shared/node-content-hash';
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { readJson } from '../agent-runs/request';
-import { PREVIEW_REVIEW_ENDPOINT, previewBoundaryRevalidation, interpretPreviewResponse, previewReviewFormats, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput, previewBlueprintAlignmentDigest } from '../clipmentor/preview-review';
+import { PREVIEW_REVIEW_ENDPOINT, previewBoundaryRevalidation, interpretPreviewResponse, previewReviewFormats, previewReviewIdentity, evaluatePreviewTeachingJudgment, parsePreviewTeachingJudgment, validatePreviewReviewInput, previewBlueprintAlignmentDigest, previewReceiptFailure } from '../clipmentor/preview-review';
 import { checkPreviewTimelineObservations, previewReviewWindows } from '../clipmentor/preview-timeline-check';
 import { boundVisualCriteria,visualReferenceFrames,type BoundVisualCriteria } from '../clipmentor/visual-done-criteria';
 import { productionReviewRequirements } from '../clipmentor/production-task';
@@ -54,7 +55,7 @@ function dependencies(): PreviewBridgeDependencies {
       return (await readFile(output)).toString('base64');
     }},
     run: async (args, signal) => { const frozen=environment();await execute(process.execPath, ['--import', loader, cli, ...args],
-      { signal, timeout: 660_000, maxBuffer: 64 * 1024, windowsHide: true,
+      { signal, timeout: PREVIEW_REVIEW_PROCESS_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true,
         env:{...process.env,...frozen} }); } };
 }
 
@@ -117,6 +118,8 @@ export async function previewBridge(body: Record<string, unknown>, deps: Preview
     let alignmentDigest:string|undefined;
     if (!result) blockers.push('review_not_completed');
     else {
+      const receiptFailure=previewReceiptFailure({result});
+      if(receiptFailure)blockers.push(receiptFailure);
       // A frozen locator lets current reads reject changed bytes without starting image work.
       // Legacy receipts without it remain readable under their original evidence contract.
       if(binding.src!==undefined){try{

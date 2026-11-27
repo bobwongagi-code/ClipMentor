@@ -3,7 +3,7 @@ import {timelineTrackIds,trackKind,isVisualItemKind} from '../../src/editor/time
 import {checkTransitionManifest,type Scene,type PictureLayer} from '../../src/clipmentor/transition-check';
 import type {ProjectDoc,TimelineState,TimelineItem} from '../../src/editor/types';
 import type {TeachingPacket} from '../../src/clipmentor/production-gate';
-import {NATIVE_TEXT_STYLE_VERSION} from '../../shared/native-text-style';
+import {nativeTextRendererVersion} from '../../shared/native-text-style';
 import {deliveryAudio} from '../../src/clipmentor/delivery-bindings';
 import {contiguousPlaybackRuns,nativeExecutionMapping} from '../../src/clipmentor/source-breakdown';
 import {validatePreviewReviewInput,type PreviewReviewInput} from './preview-review';
@@ -20,7 +20,7 @@ const nonblank=(v:unknown):v is string=>typeof v==='string'&&!!v.trim();
 const hashCode=(i:TimelineItem)=>i.code?previewFactsDigest(i.code):undefined;
 /** Snapshot actual native rendering inputs. Names, local paths and author evaluations are excluded. */
 function renderState(i:TimelineItem) {
- return {...(i.kind==='text'?{renderer:NATIVE_TEXT_STYLE_VERSION}:{}),code_sha256:hashCode(i),source_locator_sha256:i.src?previewFactsDigest(i.src):undefined,...Object.fromEntries(renderKeys.filter(k=>i[k]!==undefined).map(k=>[k,i[k]]))};
+ return {...(i.kind==='text'?{renderer:nativeTextRendererVersion(i.props)}:{}),code_sha256:hashCode(i),source_locator_sha256:i.src?previewFactsDigest(i.src):undefined,...Object.fromEntries(renderKeys.filter(k=>i[k]!==undefined).map(k=>[k,i[k]]))};
 }
 function assertLinear(i:TimelineItem) {
  if(i.deletedWordIdx?.length||i.transcriptPlayOrder?.length||i.silenceFrames!==undefined||i.cutPadFrames!==undefined||Object.keys(i.gapCapsMs??{}).length)
@@ -201,6 +201,7 @@ export function assertFinalPreviewEvidence(task:Pick<import('./production-task')
  if(!row(r))throw Error('final_output_evidence_missing_or_stale');
  const gate=row(r.effective_review)?r.effective_review:{},timeline=row(r.timeline_check)?r.timeline_check:{};
  if(!/^[a-f0-9]{64}$/.test(videoSha256)||revision!==task.projectRevision||exported?.revision!==revision||checked?.preview!==exported?.path
+  ||(exported?.videoSha256!==undefined&&exported.videoSha256!==videoSha256)
   ||r.projectId!==task.projectId||r.videoSha256!==videoSha256||r.status!=='completed'
   ||r.scope!=='rendered_preview_continuous_review'||r.full_film_accepted!==false
   ||gate.can_use_as_pass!==true||gate.status!=='pass'||!Array.isArray(gate.blockers)||gate.blockers.length!==0

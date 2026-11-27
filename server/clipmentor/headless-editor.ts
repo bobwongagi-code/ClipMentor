@@ -43,6 +43,7 @@ export interface HeadlessOptions {
  finalFeedback?:Record<string,unknown>;
  creatorStoryboardDraft?:boolean;
  stageEditWrites?:boolean;
+ projectForTimelinePreview?:(doc:ProjectDoc)=>ProjectDoc;
  assertCanvas?:(doc:ProjectDoc)=>void;
  assertCurrent?:()=>Promise<void>;
  effect<T>(kind:'review'|'observation'|'tts'|'render'|'preview_review',key:string,work:(operationId:string)=>Promise<T>,recover?:(operationId:string)=>Promise<T>):Promise<T>;
@@ -304,10 +305,13 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
     return {...data,__images:data.frames.map((f:{sourceTimeMs:number;base64:string})=>({frame:Math.round(f.sourceTimeMs*timeline.fps/1000),base64:f.base64}))};
    }
    if(name==='view_timeline_frames'){
-    const timeline=args.timelineId?before.timelines.find(t=>t.id===args.timelineId):ctx.getState();if(!timeline)throw new Error('Timeline not found');
+    const project=options.projectForTimelinePreview?.(before)??before;
+    const timelineId=args.timelineId??project.activeTimelineId;
+    const timeline=!args.timelineId&&project===before?ctx.getState():project.timelines.find(t=>t.id===timelineId);
+    if(!timeline)throw new Error('Timeline not found');
     const total=Math.max(1,...timeline.items.map(i=>i.startFrame+i.durationInFrames));
     const frames=pickFrames(args,total,timeline.fps,4);
-    const res=await local('/render-still',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:timeline,project:before,timelineId:args.timelineId??before.activeTimelineId,frames})});
+    const res=await local('/render-still',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:timeline,project,timelineId,frames})});
     if(!res.ok)throw new Error('Timeline frame render failed');const data=await res.json();return {...data,__images:data.frames};
    }
    let result:unknown;

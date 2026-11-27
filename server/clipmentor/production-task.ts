@@ -3,7 +3,7 @@ import {compactProductionTaskHistory,newestProductionCheckpoints,orderedProducti
 import {blueprintFindingKeys,blueprintFindings,pictureRepairCoverage,pictureRepairFindings,blueprintRepairStopped,repeatedPictureRepair,productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProjectStoreRequest} from '../../shared/project-store-transport';
-import {getStoredEntry} from '../plugins/project-store';
+import {getStoredEntry,isStoredProjectDeleted} from '../plugins/project-store';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {digestValue} from '../agent-runs/store-values';
@@ -21,6 +21,7 @@ import {frozenTeachingTopics} from './production-source-policy';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {previewAlignmentFindingKeys,previewAlignmentRepairPause,previewReviewRepairBlock} from './preview-review';
 import {productionDeadline} from './production-preview-retry';
+import {sharedPreviewReviewPause,matchingSharedPreviewProblem} from './production-shared-review';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest,matchesExportedPreviewProject} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
@@ -45,7 +46,7 @@ export function productionRepairContext(previous:Record<string,unknown>|undefine
    narration_repair_findings:artifact.narration_repair_findings??previous?.narration_repair_findings,
    narration_repair_scope:artifact.narration_repair_scope??previous?.narration_repair_scope,
   }:{}),
-  ...(previous?.final_feedback?{final_feedback:previous.final_feedback}:{})};
+  ...(artifact.final_feedback??previous?.final_feedback?{final_feedback:artifact.final_feedback??previous?.final_feedback}:{})};
 }
 
 function clearNarrationRepair(context:ProductionTask['repairContext']){
@@ -99,8 +100,8 @@ export interface ProductionInput {
 export interface ProductionTask {
  productionChild?:{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'};
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
- sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
- previewReviewRetry?:{operationId:string;priorOperationId:string;renderId:string;videoSha256:string;reason:string;authorizedAt:number};
+ sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string;workStartedAt?:number};
+ previewReviewRetry?:{operationId:string;priorOperationId:string;renderId:string;videoSha256:string;reason:string;authorizedAt:number;readOnly?:true};
  blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;openingPictureAdjustment?:{before:string;after:string};confirmedAt:number};
  blueprintReview?:BlueprintReviewRecord;
  finalAcceptance?:{renderId:string;watched:true;malayReviewed:true;confirmedAt:number};
@@ -595,7 +596,8 @@ async function withProductionExecution(task:ProductionTask,work:(controller:Abor
 export async function advanceProductionTask(task:ProductionTask,worker:StageWorker,store=productionTaskStore,now=()=>Date.now()):Promise<ProductionTask>{
  return withProductionExecution(task,controller=>advanceWithinExecution(task,worker,store,now,controller));
 }
-async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,store:TaskStore,now:()=>number,abort:AbortController){
+type OnExportPublished=(task:ProductionTask,signal:AbortSignal)=>Promise<void>;
+async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,store:TaskStore,now:()=>number,abort:AbortController,onExport?:OnExportPublished){
  if(blueprintRepairStopped(task)||['completed','cancelled'].includes(task.status)
   ||['awaiting_blueprint','awaiting_review'].includes(task.status)&&!abort.signal.aborted)return task;
  const published=async()=>{
@@ -661,7 +663,8 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   try{
   const authorized=kind==='preview_review'&&task.stage==='self_check'&&name===task.previewReviewRetry?.operationId
    &&task.completed.export?.artifact.renderId===task.previewReviewRetry.renderId;
-  const decision=productionEffectDecision(old,!!recover,authorized?1:remaining(kind));
+  const allowance=authorized?(task.previewReviewRetry?.readOnly?0:1):remaining(kind);
+  const decision=productionEffectDecision(old,!!recover,allowance);
   if(decision.action!=='submit'){
    await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
    check();
@@ -690,7 +693,25 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   return await settle(effect,result);
   }finally{activeEffects.delete(id);}
  }};
+ let exportNotified=false;
+ const notifySavedExport=async()=>{
+  if(!onExport||exportNotified||!task.completed.export)return;
+  exportNotified=true;
+  await onExport(task,abort.signal);
+  const current=await store.load(task.projectId,task.taskId);
+  const content=(v:ProductionTask)=>{
+   const {sequence:_,updatedAt:__,sharedProduction:___,input,...rest}=v;
+   return digestValue({...rest,input:{...input,author:{...input.author,origin:''},reviewer:{...input.reviewer,origin:''}}});
+  };
+  if(content(current)!==content(safeCheckpoint))throw new ProductionCheckpointSuperseded('production_checkpoint_superseded');
+  // Keep local origin rebinding and pending in-memory counter migrations.
+  task.sequence=current.sequence;task.updatedAt=current.updatedAt;
+  if(current.sharedProduction)task.sharedProduction=structuredClone(current.sharedProduction);
+  else delete task.sharedProduction;
+  safeCheckpoint=structuredClone(current);
+ };
  try{
+  if(task.stage==='export'||task.stage==='self_check'){check();await notifySavedExport();}
   check();task.status='running';delete task.error;await save();
   for(let index=PRODUCTION_STAGES.indexOf(task.stage);index<PRODUCTION_STAGES.length;){
    check();await published();check();task.stage=PRODUCTION_STAGES[index]!;
@@ -707,8 +728,13 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      pause=await structuralRepairPause(task,issue,source?.asset_id===task.input.sourceAssetId&&saved?.revision===task.projectRevision
       ?source.sourceContentHash:undefined);
     }
-    if(task.stage==='self_check')pause=previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt)
-     ??previewReviewRepairBlock(result.artifact.receipt);
+    if(task.stage==='self_check'){
+     const sharedPause=sharedPreviewReviewPause(task,result.artifact.receipt);
+     const scope=result.artifact.final_feedback as {authority?:string}|undefined;
+     const targetedEnding=sharedPause==='preview_shared_ending_requires_local_repair'&&scope?.authority==='bound_preview_ending_review';
+     pause=(targetedEnding?undefined:sharedPause)??previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt)
+      ??previewReviewRepairBlock(result.artifact.receipt);
+    }
     const executionError=result.artifact.execution_validation_error;
     if(task.stage==='edit'&&typeof executionError==='string'&&executionError===task.repairContext?.execution_validation_error)
      pause='execution_mapping_repair_no_progress 待维护侧核对 '+executionError;
@@ -807,7 +833,9 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    if(humanApprovalRequired){
     task.status='awaiting_blueprint';await publishStage(reviewGuards);break;
    }
-   await publishStage(reviewGuards);index++;
+   await publishStage(reviewGuards);
+   if(task.stage==='export')await notifySavedExport();
+   index++;
   }
   if(task.status==='running'){task.status='awaiting_review';await publishStage();}
   if(abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user'))abort.signal.throwIfAborted();
@@ -825,11 +853,12 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
 }
 /** Keep recoverable checkpoints within the same server job and ownership window. */
 export async function runProductionWithRecovery(task:ProductionTask,worker:StageWorker,
- reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore,prepare?:(signal:AbortSignal)=>Promise<boolean>){
+ reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore,prepare?:(signal:AbortSignal)=>Promise<boolean>,onExport?:OnExportPublished){
  return withProductionExecution(task,async controller=>{
-  const advance=()=>advanceWithinExecution(task,worker,store,Date.now,controller);
-  const deadline=productionDeadline(task);
-  const timer=setTimeout(()=>controller.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-Date.now()));
+  const advance=()=>advanceWithinExecution(task,worker,store,Date.now,controller,onExport);
+  let deadline=productionDeadline(task);
+  const armDeadline=()=>setTimeout(()=>controller.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-Date.now()));
+  let timer=armDeadline();
   try{
   if(blueprintRepairStopped(task)||['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
   if(prepare){
@@ -839,6 +868,9 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
     const ready=await prepare(controller.signal);
     checkPreparation();
     if(!ready)return task;
+    if(task.sharedProduction?.workStartedAt!==undefined&&productionDeadline(task)!==deadline){
+     clearTimeout(timer);deadline=productionDeadline(task);timer=armDeadline();
+    }
    }catch(error){
     if(!controller.signal.aborted)throw error;
     // Preparation may have failed before it replaced the dispatch snapshot.
@@ -995,6 +1027,8 @@ export async function saveProductionControl(base:ProductionTask,next:ProductionT
   if(a&&b&&(a.projectId!==b.projectId||a.taskId!==b.taskId||a.prepared&&b.prepared&&(a.endFrame!==b.endFrame||a.digest!==b.digest)))throw Error('shared_producer_binding_changed');
   const marker=b?.prepared?b:a?.prepared?a:b??a;
   if(marker)next.sharedProduction=structuredClone(marker);
+  if(base.status==='awaiting_review'&&next.status==='completed'&&await sharedPreviewDeliveryHeld(current))
+   throw Error('preview_shared_body_requires_reconciliation');
   const conditions=[...(guards??[]),...parentGuards,{key,digest:digestValue(entry.value)}];
   if(expectedDoc){
    const project=await getStoredEntry('project:'+base.projectId),doc=project.found?runProjectMigrations(project.value)?.doc:null;
@@ -1022,6 +1056,16 @@ export async function saveProductionControl(base:ProductionTask,next:ProductionT
   }
  }
  throw contention;
+}
+
+export async function sharedPreviewDeliveryHeld(task:ProductionTask){
+ const sibling=task.sharedProduction;
+ if(!task.blueprintApproval||!sibling?.prepared)return false;
+ try{return matchingSharedPreviewProblem(task,await productionTaskStore.load(sibling.projectId,sibling.taskId));}
+ catch(error){
+  if(await isStoredProjectDeleted(sibling.projectId))return false;
+  throw error;
+ }
 }
 
 export async function productionFeedback(task:ProductionTask,feedback:unknown,store=productionTaskStore,doc?:ProjectDoc){

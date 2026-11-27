@@ -17,6 +17,7 @@ import {reusableVoiceForRequest} from './audio-reuse';
 import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest,checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {executeCoreEditItem} from './headless-edit-item';
 import {makeDraft} from '../../src/editor/store';
+import {reviewMessages} from '../../shared/clipmentor-review-feedback';
 const project=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
 const before=JSON.stringify(project);
 let networkCalls=0;const priorFetch=globalThis.fetch;globalThis.fetch=async()=>{networkCalls++;throw Error('Network forbidden');};
@@ -185,11 +186,11 @@ assert.deepEqual(bindBlueprintReview({scope:'whole_blueprint'},reviewScope),{
  revision:'fixture',boardIdentity:'fixture-board',scope:'whole_blueprint',groups:[],endings:[],
 });
 for(const input of [undefined,{scope:'whole_blueprint',groups:[]},{scope:'whole_blueprint',endingIds:['new_contact']}])
- assert.throws(()=>bindBlueprintReview(input,reviewScope),/刷新蓝图/);
-assert.throws(()=>bindBlueprintReview({scope:'whole_blueprint'},{...reviewScope,groups:[]}),/没有可审核的讲解/);
+ assert.throws(()=>bindBlueprintReview(input,reviewScope),{kind:'binding',message:reviewMessages.refreshBoard});
+assert.throws(()=>bindBlueprintReview({scope:'whole_blueprint'},{...reviewScope,groups:[]}),{kind:'binding',message:reviewMessages.emptyBoard});
 assert.deepEqual(panelFeedbackTarget({scope:'group',unitId:fixtureGroup.id},[fixtureGroup],false).unitIds,[fixtureGroup.id]);
-assert.throws(()=>panelFeedbackTarget({scope:'group',unitId:'wrong-group'},[fixtureGroup],true),/反馈位置/);
-assert.throws(()=>panelFeedbackTarget({scope:'whole'},[fixtureGroup],true),/确认/);
+for(const invalidTarget of [{scope:'group',unitId:'wrong-group'},{scope:'whole'}])
+ assert.throws(()=>panelFeedbackTarget(invalidTarget,[fixtureGroup],true),{kind:'binding',message:reviewMessages.feedbackTarget});
 const unchanged=structuredClone(finished);unchanged.status='awaiting_review';unchanged.feedbackUsed=false;const snapshot=JSON.stringify(unchanged);
 await assert.rejects(productionFeedback(unchanged,feedback,{save:async()=>{throw Error('write failed');},load:async()=>unchanged},project));
 assert.equal(JSON.stringify(unchanged),snapshot,'failed feedback persistence cannot mutate the task');

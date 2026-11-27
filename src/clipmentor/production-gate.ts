@@ -7,6 +7,7 @@ import { clipMentorHandoffBlock } from './handoff-guard';
 /** Copy/plan release gate. It does not certify audio, rendered video or efficacy. */
 import { previewEditGate } from './preview-edit';
 import { COPY_REVIEW_INPUT_POLICY } from '../../shared/clipmentor-copy-review';
+import { nativeTextTopStripHeightFraction } from '../../shared/native-text-style';
 import { isManifestSelfCheckCall } from './transition-check';
 import type { AgentContext } from '../agent/context';
 import type { ProjectDoc } from '../editor/types';
@@ -569,11 +570,11 @@ const PLAN_FIELDS = {
     'audio_seconds', 'duration_seconds', 'duration_frames', 'capacity', 'constraints', 'context_source_ranges'],
   context_source_ranges: ['segment_id', 'source_range_seconds', 'purpose'],
   viewer_stage_cues: ['scope', 'layout', 'original', 'revisit', 'handoff'],
-  layout: ['original', 'revisit', 'safe_area'],
+  layout: ['original', 'revisit', 'safe_area', 'placement', 'height_fraction'],
   original: ['text', 'zh', 'enter', 'exit'],
   revisit: ['line_ids', 'text', 'zh', 'enter', 'exit', 'meaning'],
   experience_group: ['line_ids', 'source_seconds', 'duration_frames', 'caption_frames', 'tail_without_caption_frames', 'audio_seconds'],
-  original_playback: ['ranges', 'purpose', 'person_visual_only'],
+  original_playback: ['ranges', 'purpose', 'person_visual_only', 'mode'],
   person_visual_only: ['point_id', 'segment_id', 'source_range_seconds'],
   visual_only_points: ['point_id', 'segment_id', 'source_range_seconds', 'treatment'],
 } as const;
@@ -591,6 +592,15 @@ function reviewablePlan(value: unknown, container: PlanContainer = 'root', curre
   const allowed: readonly string[] = PLAN_FIELDS[container];
   const projected = Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
     if (!allowed.includes(key)) return [];
+    if(container==='layout'){
+      if(key==='placement')return entry==='top_strip'?[[key,entry]]:[];
+      if(key==='height_fraction')return value.placement==='top_strip'&&nativeTextTopStripHeightFraction(entry)!==undefined?[[key,entry]]:[];
+      if((key==='original'||key==='revisit')&&value.placement==='top_strip'&&row(entry)){
+        const colors=Object.fromEntries(Object.entries(entry).filter(([name,color])=>
+          (name==='color'||name==='text_color')&&typeof color==='string'&&/^#[a-fA-F0-9]{6}$/.test(color)));
+        return Object.keys(colors).length?[[key,colors]]:[];
+      }
+    }
     // Existing compositions may be plain text or the declared canvas/detail object.
     if (container === 'root' && key === 'composition') {
       if (typeof entry === 'string') return [[key, entry]];

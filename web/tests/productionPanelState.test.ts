@@ -42,6 +42,7 @@ test('page phase follows human approval, not internal repair stage',()=>{
  assert.equal(productionPageTitle(initial),'准备蓝图')
  assert.deepEqual(productionProgress(initial).map(p=>p.label),['分析原片','整理蓝图','检查蓝图'])
  assert.equal(productionPageTitle({stage:'self_check',status:'awaiting_review',blueprintConfirmed:true}),'预览与下载')
+ assert.equal(productionPageTitle({stage:'self_check',status:'blocked',blueprintConfirmed:true,previewPending:true}),'视频预览')
 })
 
 import {productionActivity} from '../src/pages/productionPanelState.js'
@@ -49,4 +50,22 @@ test('shared waiting text uses the same approved production activity',()=>{
  assert.equal(productionActivity({stage:'blueprint',status:'running',active:true,blueprintConfirmed:true}),'调整画面安排')
  assert.equal(productionActivity({stage:'blueprint',status:'blocked',active:false,blueprintConfirmed:true}),'等待继续')
  assert.equal(productionActivity({stage:'blueprint',status:'running',active:true}),'生成剪辑蓝图')
+})
+
+import {hasPlayablePreview,previewProgress,previewStatus} from '../src/pages/productionPanelState.js'
+test('playable, reviewed and downloadable are separate preview states',()=>{
+ const paused={status:'blocked',stage:'self_check',active:false,renderId:'the-movie',previewPending:true}
+ assert.equal(hasPlayablePreview(paused),true)
+ assert.equal(previewStatus(paused),'复核已暂停')
+ assert.equal(previewProgress(paused).filter(step=>step.current)[0].label,'复核')
+ assert.equal(previewProgress(paused)[2].done,false)
+ const held={...paused,status:'completed',previewPending:false,previewReviewed:true,deliveryHeld:true}
+ assert.equal(previewStatus(held),'需修改')
+ assert.equal(previewProgress(held)[4].current,false)
+ assert.equal(previewStatus({...held,deliveryHeld:false}),'可下载')
+ assert.equal(previewStatus({...held,deliveryHeld:false,renderId:undefined}),'预览暂不可用')
+ const awaiting={...paused,status:'awaiting_review',previewPending:false}
+ assert.equal(previewStatus(awaiting),'暂不能确认')
+ assert.equal(previewStatus({...awaiting,canAcceptPreview:false}),'暂不能确认')
+ assert.equal(previewStatus({...awaiting,canAcceptPreview:true}),'待确认')
 })

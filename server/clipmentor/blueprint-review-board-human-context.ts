@@ -26,6 +26,31 @@ export function translatedLabels(data:Data,lineId:string){
  const invalid=(raw.labels!==undefined&&!Array.isArray(raw.labels))||labels.some(v=>!v.trim())||!labelTranslationsShape(given,labels);
  return{invalid,pairs:labels.map((ms,i)=>({ms,zh:invalid?'':string(Array.isArray(given)?given[i]:undefined).trim()})).filter(p=>p.ms.trim())};
 }
+export function reviewReplayViews(rows:readonly ReviewBoardRow[]){
+ const first=rows[0];
+ if(!first||!rows.every(row=>row.stage_text===first.stage_text&&row.colors.join()===first.colors.join()
+  &&(!row.replayFrames||row.frames.length===row.replayFrames.length)))return [];
+ type View={row:ReviewBoardRow;index:number;frame:ReviewBoardRow['frames'][number]};
+ const views=new Map<string,View>(),conflicts=new Set<string>();
+ for(const row of rows)for(const [index,frame] of row.frames.entries()){
+  const selection=frame.selection;
+  if(!selection||!frame.jpeg)continue;
+  const key=JSON.stringify([selection.segmentId,selection.start]);
+  const prior=views.get(key),before=prior?.frame.selection?.shortLabel,after=selection.shortLabel;
+  if(before&&after&&(before.ms!==after.ms||before.zh!==after.zh))conflicts.add(key);
+  if(!prior||!before&&after)views.set(key,{row,index,frame});
+ }
+ const distinct=new Map<string,View>();
+ for(const [selection,view] of views){
+  const prior=distinct.get(view.frame.key);
+  const a=prior?.frame.selection?.shortLabel,b=view.frame.selection?.shortLabel;
+  if(conflicts.has(selection)||a&&b&&(a.ms!==b.ms||a.zh!==b.zh))return [];
+  if(!prior||!a&&b)distinct.set(view.frame.key,view);
+ }
+ const result=[...distinct.values()];
+ const labels=result.flatMap(({frame})=>frame.selection?.shortLabel?[frame.selection.shortLabel.ms]:[]);
+ return new Set(labels).size>=2&&result.length<=8?result:[];
+}
 export function stageTranslations(data:Data,row:ReviewBoardRow){
  const selected=data.selectedPlans.find(p=>p.unit.unit_id===row.unit_id),plan=object(selected?.resolved?.operational??selected?.plan);
  const cues=object(plan.viewer_stage_cues??object(plan.execution_plan).viewer_stage_cues);

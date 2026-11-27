@@ -32,7 +32,7 @@ try {
   configureSharedKvBackend(backend());
   const draft = makeDraft(docFromTimeline({ fps: 30, width: 1080, height: 1920, selectedId: null,
     trackOrder: ['V3', 'V2', 'V1'], tracks: { V1: { kind: 'video' }, V2: { kind: 'video' }, V3: { kind: 'video', hidden: true } },
-    items: [{ id: 'background', name: 'black', kind: 'solid', track: 'V1', startFrame: 0, durationInFrames: 150, props: { color: '#000000' } }],
+    items: [{ id: 'background', name: 'black', kind: 'solid', track: 'V1', startFrame: 0, durationInFrames: 210, props: { color: '#000000' } }],
   }));
   const id = draft.commands.addTextClip({ text: 'VISIBLE', color: '#ff00ff', fontSize: 48, startFrame: 0, durationInFrames: 30, track: 'V2' });
   const fixture = structuredClone(draft.getDoc()), timeline = fixture.timelines[0];
@@ -42,6 +42,10 @@ try {
     { ...structuredClone(text), id: 'hidden', startFrame: 60, track: 'V3' },
     { ...structuredClone(text), id: 'off-canvas', startFrame: 90, transform: { x: 300, y: 300 } },
     // 120..150 intentionally contains no text layer.
+    {...structuredClone(text),id:'blue-strip',startFrame:150,transform:{x:10,y:20},props:{text:'Video asal',
+      placement:'top_strip',color:'#FFFFFF',backgroundColor:'#0D5EA6'}},
+    {...structuredClone(text),id:'yellow-strip',startFrame:180,props:{text:'Lihat semula',
+      placement:'top_strip',color:'#2F261A',backgroundColor:'#E6C46F',stripHeightFraction:.03}},
   );
   const meta = await createProject('isolated-render-visibility', fixture);
   // Drop every cache, then construct a NEW storage adapter. A live draft or
@@ -52,8 +56,8 @@ try {
   assert.deepEqual(reloaded.timelines[0].items.map(item => item.id), timeline.items.map(item => item.id));
   setUploadsDirProvider(() => root);
   const frames = await renderTimelineStills({ state: reloaded.timelines[0], project: reloaded,
-    timelineId: reloaded.activeTimelineId, frames: [10, 40, 70, 100, 130] }) as Array<{ frame: number; base64: string }>;
-  assert.equal(frames.length, 5);
+    timelineId: reloaded.activeTimelineId, frames: [10, 40, 70, 100, 130, 160, 190] }) as Array<{ frame: number; base64: string }>;
+  assert.equal(frames.length, 7);
   if (process.env.CC_VERIFY_OUTPUT_DIR) {
     await mkdir(process.env.CC_VERIFY_OUTPUT_DIR, { recursive: true });
     for (const frame of frames) await writeFile(join(process.env.CC_VERIFY_OUTPUT_DIR, `frame-${frame.frame}.jpg`), Buffer.from(frame.base64, 'base64'));
@@ -75,7 +79,18 @@ try {
   // not a universal claim about readable typography.
   assert(measurements[0].height >= 18, JSON.stringify({ reason: 'saved portrait title was silently shrunk', measurements }));
   assert(measurements[1].height < 18 && measurements[1].pixels > 0, 'legacy landscape mismatch must be detected, not merely count any visible pixel');
-  for (const result of measurements.slice(2)) assert.equal(result.pixels, 0, 'hidden, off-canvas and missing layers must not pass visible-content checks');
+  for (const result of measurements.slice(2,5)) assert.equal(result.pixels, 0, 'hidden, off-canvas and missing layers must not pass visible-content checks');
+  for(const [index,background,lastStripRow,firstClearRow] of [[5,[13,94,166],21,30],[6,[230,196,111],16,22]] as const){
+    const decoded=spawnSync(ffmpeg,['-loglevel','error','-i','pipe:0','-frames:v','1','-vf','scale=360:640',
+      '-f','rawvideo','-pix_fmt','rgb24','pipe:1'],{input:Buffer.from(frames[index].base64,'base64'),maxBuffer:2_000_000});
+    assert.equal(decoded.status,0,decoded.stderr.toString());
+    const pixel=(x:number,y:number)=>[...decoded.stdout.subarray((y*360+x)*3,(y*360+x)*3+3)];
+    const is=(rgb:number[],expected:readonly number[])=>rgb.every((v,i)=>Math.abs(v-expected[i])<24);
+    assert(is(pixel(0,0),background)&&is(pixel(359,0),background),'strip begins at both edges of the first row');
+    assert(is(pixel(0,lastStripRow),background)&&is(pixel(359,lastStripRow),background),'strip spans the width at its chosen height');
+    assert(is(pixel(180,firstClearRow),[0,0,0]),'picture starts immediately below the configured band');
+    assert(is(pixel(180,58),[0,0,0])&&is(pixel(180,320),[0,0,0]),'the strip must leave the rest of the picture clear');
+  }
   // Small supported canvases must retain the previous default's physical
   // text size. Explicit typography must also fit without fixed 96px padding.
   const tiny = makeDraft(docFromTimeline({ fps: 30, width: 320, height: 180, selectedId: null,
@@ -100,7 +115,7 @@ try {
     JSON.stringify({ reason: 'small canvas default title must retain legacy physical size', small }));
   assert(small[1].pixels > 0 && small[1].height < 70,
     JSON.stringify({ reason: 'explicit small canvas title must not wrap due to landscape padding', small }));
-  console.log(JSON.stringify({ status: 'passed', frames: 8, modelCalls: 0, milliseconds: Math.round(performance.now() - began), measurements, small }));
+  console.log(JSON.stringify({ status: 'passed', frames: 10, modelCalls: 0, milliseconds: Math.round(performance.now() - began), measurements, small }));
 } finally {
   configureSharedKvBackend(undefined); globalThis.fetch = originalFetch;
   await rm(root, { recursive: true, force: true });

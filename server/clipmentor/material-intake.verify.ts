@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = await mkdtemp(join(tmpdir(), 'clipmentor-intake-'));
+const root = await mkdtemp(join(tmpdir(), 'clipmentor-素材检查-'));
 process.env.OPENCHATCUT_DATA_DIR = root;
 process.env.OPENCHATCUT_DEV_PROFILE_ID = '11111111-1111-4111-8111-111111111111';
 const { createMaterialIntakeHandler } = await import('./material-intake');
@@ -68,7 +68,9 @@ try {
   assert.deepEqual(await (await read()).json(), { receipt: null });
   assert.equal((await fetch(endpoint, { method: 'POST', body: body() })).status, 403);
   assert.equal((await submit(new FormData())).status, 409);
-  assert.equal((await submit(body(new Blob(['corrupt'])))).status, 409);
+  const corrupt=await submit(body(new Blob(['corrupt'])));
+  assert.equal(corrupt.status,409);
+  assert.deepEqual(await corrupt.json(),{reason:'source',error:'原片无法播放或没有声音，请检查后再上传。'});
   const missingCta = body();
   missingCta.delete('cta');
   assert.equal((await submit(missingCta)).status, 409);
@@ -77,6 +79,15 @@ try {
   assert.equal((await loadOfflineStoredProject(id))?.doc.assets.length, 0);
   assert.deepEqual((await loadOfflineStoredProject(id))?.doc.timelines.map(t=>[t.width,t.height]),[[1920,1080],[1920,1080]],
     'failed uploads leave both media and canvas unchanged');
+  const directory=uploadDir();
+  await mkdir(directory,{recursive:true});
+  await rmdir(directory);
+  await writeFile(directory,'prevent mkdir');
+  try{
+    const unexpected=await submit(body());
+    assert.equal(unexpected.status,409);
+    assert.deepEqual(await unexpected.json(),{reason:'unavailable',error:'暂时无法保存素材，请稍后再试。'});
+  }finally{await rm(directory);}
   const good = await submit(body());
   const receipt = await good.json();
   assert.equal(good.status, 200, JSON.stringify(receipt));
@@ -342,8 +353,9 @@ try {
   legacy.stage='self_check';legacy.status='awaiting_review';legacy.completed.export={at:1,artifact:{renderId:'legacy-render'}};
   legacy.completed.self_check={at:1,artifact:{preview:'/media/uploads/legacy-wrong.mp4'}};
   const panel=createProductionPanel(()=>{throw Error('Must not launch');},()=>false);
+  let manifestPreview:import('./production-task').ProductionTask|undefined;
   const panelServer=createServer((req,res)=>{const q=new URL(req.url!,'http://localhost').searchParams;
-    void panel(id,origin,q,req,res,async()=>({})).catch(error=>{res.statusCode=409;res.end(JSON.stringify({error:String(error)}));});});
+    void panel(id,origin,q,req,res,async()=>({}),manifestPreview).catch(error=>{res.statusCode=409;res.end(JSON.stringify({error:String(error)}));});});
   panelServer.listen(0,'127.0.0.1');await once(panelServer,'listening');
   const pa=panelServer.address();assert(pa&&typeof pa!=='string');const panelOrigin=`http://127.0.0.1:${pa.port}`;
   try{
@@ -393,6 +405,45 @@ try {
     assert.equal(legacy.status,'completed');assert.equal(acceptedWrites,1);await productionTaskStore.save(legacy);
     const downloadable=await fetch(`${panelOrigin}/?view=panel_download&renderId=legacy-render`);
     assert.equal(downloadable.status,200);assert((await downloadable.arrayBuffer()).byteLength>0);
+    const soundFile=join(uploadDir(),'pending-portrait.mp4');
+    execFileSync(ffmpegBin(),['-hide_banner','-loglevel','error','-f','lavfi','-i','color=s=18x32:d=0.32',
+      '-f','lavfi','-i','sine=duration=0.32','-pix_fmt','yuv420p','-c:v','libx264','-c:a','aac','-shortest',soundFile]);
+    const proof=structuredClone(legacy);
+    proof.status='blocked';delete proof.completed.self_check;delete proof.finalAcceptance;
+    proof.completed.export={at:1,artifact:{renderId:'pending-render',revision:wrongSaved.revision,path:'/media/uploads/pending-portrait.mp4',
+      facts_digest:'c'.repeat(64),sizeBytes:(await stat(soundFile)).size,durationSeconds:.32,width:18,height:32,fps:25,
+      videoSha256:await sha256File(soundFile)}};
+    await productionTaskStore.save(proof);
+    const pendingPanel=await fetch(`${panelOrigin}/?view=panel`);
+    assert.equal((await pendingPanel.json()).task.previewPending,true);
+    const watching=await fetch(`${panelOrigin}/?view=panel_video&renderId=pending-render`,{headers:{Range:'bytes=0-31'}});
+    assert.equal(watching.status,206);assert.equal((await watching.arrayBuffer()).byteLength,32);
+    assert.equal((await fetch(`${panelOrigin}/?view=panel_download&renderId=pending-render`)).status,409);
+    await assert.rejects(acceptProductionTask(proof,true,{save:async()=>{acceptedWrites++;}} as never,{watched:true,renderId:'pending-render'}));
+    assert.equal(acceptedWrites,1);
+    proof.completed.export.artifact.fps=30;await productionTaskStore.save(proof);
+    assert.equal((await fetch(`${panelOrigin}/?view=panel_video&renderId=pending-render`)).status,409,
+      'a valid file with a different frame rate does not match the export record');
+    proof.completed.export.artifact.fps=25;
+    const originalLoad=productionTaskStore.load.bind(productionTaskStore);
+    let reads=0;
+    try{
+      // The route loaded the playback record before decoding. Re-read must
+      // reject a control change even if the project timeline is unmodified.
+      productionTaskStore.load=async(projectId,taskId)=>{
+        const current=await originalLoad(projectId,taskId);
+        if(projectId===id&&taskId===proof.taskId){reads++;return {...current,status:'cancelled'};}
+        return current;
+      };
+      await productionTaskStore.save(proof);
+      manifestPreview=structuredClone(proof);
+      assert.equal((await fetch(`${panelOrigin}/?view=panel_video&renderId=pending-render`)).status,409);
+      assert(reads>0,'re-reading the manifest task invalidates the still-intact file');
+    }finally{productionTaskStore.load=originalLoad;manifestPreview=undefined;}
+    proof.completed.export.artifact.videoSha256='a'.repeat(64);
+    await productionTaskStore.save(proof);
+    assert.equal((await (await fetch(`${panelOrigin}/?view=panel`)).json()).task.renderId,undefined);
+    assert.equal((await fetch(`${panelOrigin}/?view=panel_video&renderId=pending-render`)).status,409);
   }finally{await new Promise<void>(resolve=>panelServer.close(()=>resolve()));}
   // Failed post-commit verification must preserve all newly referenced files.
   const uncertainId = 'intake-post-commit-readback';
@@ -428,5 +479,5 @@ try {
   console.log('material intake verified: real-byte receipts, exact-content missing/corrupt repair, stale-read refusal, post-commit preservation, origin, idempotence and cleanup');
 } finally {
   if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries:3 });
 }

@@ -2,7 +2,7 @@ import { AbsoluteFill } from 'remotion';
 import { getCompiledTemplate } from '../template-host';
 import type { AspectFit, TimelineItem, Watermark } from './types';
 import { VisualClipSurface } from './TimelineMediaLayer';
-import {nativeTextStyle} from '../../shared/native-text-style';
+import {isNativeTextTopStrip,nativeTextStyle,nativeTextTopStripHeight} from '../../shared/native-text-style';
 
 export function SolidLayer({ item, canvasW, canvasH, borderRadius }: {
   item: TimelineItem;
@@ -43,10 +43,19 @@ export function TextLayer({ item, canvasW, canvasH, fit }: {
   canvasH: number;
   fit: AspectFit;
 }) {
+  const props = item.props ?? {};
+  if(isNativeTextTopStrip(props)){
+    const h=nativeTextTopStripHeight(canvasH,props);
+    const padding=Math.round(canvasW*.045);
+    return <div style={{...nativeTextStyle(props),position:'absolute',top:0,left:0,right:0,height:h,padding:`0 ${padding}px`,
+      boxSizing:'border-box',display:'flex',justifyContent:'center',alignItems:'center',fontSize:Math.round(h*.6),
+      fontFamily:'Geist, system-ui, sans-serif',textShadow:'none'}}>
+      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{String(props.text??'')}</span>
+    </div>;
+  }
   const dw = item.width ?? 1920;
   const dh = item.height ?? 1080;
   const scale = fit === 'cover' ? Math.max(canvasW / dw, canvasH / dh) : Math.min(canvasW / dw, canvasH / dh);
-  const props = item.props ?? {};
   // New native-canvas text records its inset; old saved titles retain 96px.
   const paddingX = typeof props.paddingX === 'number' && Number.isFinite(props.paddingX) ? Math.max(0, props.paddingX) : 96;
   const align = (props.align === 'left' || props.align === 'right' ? props.align : 'center') as 'left' | 'center' | 'right';

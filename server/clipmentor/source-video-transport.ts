@@ -6,6 +6,7 @@ import type { SourceVideoTransportDiagnostic as Diagnostic } from '../../shared/
 import { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 export { safeSourceTransportDiagnostic } from '../../shared/clipmentor-source-video';
 import { PREVIEW_REVIEW_ENDPOINT } from './preview-review';
+import { PREVIEW_REVIEW_TRANSPORT_SECONDS } from './preview-review-deadline';
 
 const METRICS = ['size_upload','size_download','time_namelookup','time_connect','time_appconnect','time_pretransfer','time_starttransfer','time_total'] as const;
 const IDS = ['x-oneapi-request-id','x-request-id','cf-ray'] as const;
@@ -44,9 +45,12 @@ function bodySummary(p: Awaited<ReturnType<typeof prefix>>, httpStatus:number|nu
 
 /** Same fixed endpoint, verified-media request, timeouts and zero retries. Injection is for offline process tests only. */
 export async function postSourceVideoTransport(body: string, key: string, signal: AbortSignal, operationId: string,
-  runtimeRoot: string, launch: typeof spawn = spawn, cleanup: typeof rm = rm): Promise<{status:number;body:unknown;diagnostic:Diagnostic}> {
+  runtimeRoot: string, launch: typeof spawn = spawn, cleanup: typeof rm = rm, scope: 'source'|'preview' = 'source'): Promise<{status:number;body:unknown;diagnostic:Diagnostic}> {
   signal.throwIfAborted();
-  // Let curl finish reporting transfer metrics before the outer 600s deadline.
+  // Let curl finish reporting transfer metrics before its caller's outer deadline.
+  const timeoutSeconds=scope==='preview'?PREVIEW_REVIEW_TRANSPORT_SECONDS:595;
+  // curl versions before 8.10 leave the optional field empty. Keep that valid JSON.
+  const metricsFormat=`{"http_code":%{http_code},${METRICS.map(k=>`"${k}":%{${k}}`).join(',')},"time_posttransfer":"%{time_posttransfer}"}`;
   const directory=await mkdtemp(join(runtimeRoot,'source-video-'));
   let capturedDiagnostic:Diagnostic|undefined;
   try {
@@ -55,9 +59,9 @@ export async function postSourceVideoTransport(body: string, key: string, signal
     const started=new Date().toISOString();let output='',spawnFailed=false;
     const result=await new Promise<{exit:number|null}>((resolve)=>{
       let child:ReturnType<typeof spawn>;
-      try {child=launch('curl',['--disable','-sS','--http1.1','--noproxy','*','--proto','=https','--max-redirs','0','--retry','0','--connect-timeout','30','--max-time','595','--max-filesize','1048576',
+      try {child=launch('curl',['--disable','-sS','--http1.1','--noproxy','*','--proto','=https','--max-redirs','0','--retry','0','--connect-timeout','30','--max-time',String(timeoutSeconds),'--max-filesize','1048576',
         '-H','@-','-H','Content-Type: application/json','-H',`Idempotency-Key: ${operationId}`,'--data-binary',`@${request}`,
-        '--dump-header',headers,'--output',response,'--write-out',`{"http_code":%{http_code},${METRICS.map(k=>`"${k}":%{${k}}`).join(',')}}`,PREVIEW_REVIEW_ENDPOINT],
+        '--dump-header',headers,'--output',response,'--write-out',metricsFormat,PREVIEW_REVIEW_ENDPOINT],
         {stdio:['pipe','pipe','ignore'],signal});}
       catch {spawnFailed=true;resolve({exit:null});return;}
       child.stdout?.on('data',chunk=>{if(output.length<4096) output+=String(chunk).slice(0,4096-output.length);});
@@ -69,6 +73,8 @@ export async function postSourceVideoTransport(body: string, key: string, signal
     let parsed:any;try {parsed=JSON.parse(output.replace(/"http_code":000/, '"http_code":0'));}catch { /* Missing metrics are explicit. */ }
     const code=obj(parsed)&&status(parsed.http_code)?parsed.http_code:null;
     const metrics:Diagnostic['metrics']={};for(const name of METRICS)if(obj(parsed)&&number(parsed[name]))metrics[name]=parsed[name];
+    const postTransfer=obj(parsed)?parsed.time_posttransfer:undefined;
+    if(typeof postTransfer==='string'&&/^\d+(?:\.\d+)?$/.test(postTransfer)&&number(Number(postTransfer)))metrics.time_posttransfer=Number(postTransfer);
     const h=await prefix(headers,65536),r=await prefix(response,16384),ids:Diagnostic['request_ids']={};
     let finalHeaderBlock=false;
     for(const line of h.data.toString('utf8').split(/\r?\n/)) {
@@ -80,7 +86,7 @@ export async function postSourceVideoTransport(body: string, key: string, signal
       if(IDS.includes(name as typeof IDS[number])) ids[name as typeof IDS[number]]=line.slice(at+1).trim();
     }
     const diagnostic=safeSourceTransportDiagnostic({version:'source-transport-v1',operation_id:operationId,started_at:started,ended_at:new Date().toISOString(),
-      request_bytes:Buffer.byteLength(body),curl_exit_code:result.exit,error_kind:signal.aborted?'aborted':spawnFailed?'spawn_failed':
+      request_bytes:Buffer.byteLength(body),timeout_seconds:timeoutSeconds,curl_exit_code:result.exit,error_kind:signal.aborted?'aborted':spawnFailed?'spawn_failed':
         result.exit===28?'curl_timeout':result.exit!==0?'curl_failed':!code?'invalid_metrics':'none',http_status:code,metrics,request_ids:ids,response_body:bodySummary(r,code)},key,operationId)!;
     capturedDiagnostic=diagnostic;
     if(result.exit!==0 || !code || signal.aborted || spawnFailed)throw new SourceVideoTransportError(diagnostic);

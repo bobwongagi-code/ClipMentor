@@ -20,6 +20,13 @@ import { withSerializedProjectStore } from '../plugins/project-store';
 import { sha256File } from '../../shared/node-content-hash';
 import { CLIPMENTOR_OUTPUT_CANVAS } from './production-format';
 import { hasWebmDocType } from './video-input';
+import { CLIPMENTOR_TASK_LIMIT } from '../../shared/clipmentor-tasks';
+import { uploadFeedback, type UploadFeedbackCode } from '../../shared/clipmentor-upload-feedback';
+
+class UploadFeedback extends Error {
+  readonly reason:UploadFeedbackCode;
+  constructor(reason:UploadFeedbackCode){super(uploadFeedback[reason]);this.reason=reason;}
+}
 
 const maxRequestBytes = 64 * 1024 * 1024;
 const slots = ['source', 'product', 'sales', 'cta'] as const;
@@ -81,32 +88,32 @@ async function restoreRegisteredFiles(projectId: string, revision: string, asset
   written: string[], hashFile: typeof sha256File) {
   const fields = [...form.keys()];
   if (!fields.length || new Set(fields).size !== fields.length || fields.some(field => !slots.includes(field as Slot)))
-    throw new Error('请提交工程登记的缺失素材');
+    throw new UploadFeedback('missing');
   const directory = uploadDir();
   await mkdir(directory, { recursive: true });
   const staged: { asset: MediaAsset; temporary: string }[] = [];
   for (const field of fields) {
     const asset = assets[slots.indexOf(field as Slot)];
     const file = form.get(field);
-    if (!file || typeof file === 'string' || !file.size) throw new Error('缺少素材');
+    if (!file || typeof file === 'string' || !file.size) throw new UploadFeedback('missing');
     const temporary = join(directory, `.clipmentor-restore-${randomUUID()}`);
     written.push(temporary);
     const { contentHash } = await streamUploadToFile(
       Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]), temporary, maxRequestBytes,
     );
-    if (contentHash !== asset.sourceContentHash) throw new Error('补传文件与工程登记的原文件不一致');
+    if (contentHash !== asset.sourceContentHash) throw new UploadFeedback('original');
     staged.push({ asset, temporary });
   }
   await withSerializedProjectStore(async store => {
     const stored = await store.readEntry(`project:${projectId}`);
     const doc = stored.found ? runProjectMigrations(stored.value)?.doc : null;
-    if (!doc || revisionOf(doc) !== revision || uploadDir() !== directory) throw new Error('工程或素材目录已变化，请重新核对');
+    if (!doc || revisionOf(doc) !== revision || uploadDir() !== directory) throw new UploadFeedback('changed');
     const stagedPositions = new Set(staged.map(entry => entry.asset));
     for (const asset of assets) {
       const name = localName(asset)!;
       if (resolveUploadFile(name)) {
-        if (!await intactAsset(asset, hashFile)) throw new Error('现有素材内容已变化，需要维护核对');
-      } else if (!stagedPositions.has(asset)) throw new Error('还缺少工程登记的素材');
+        if (!await intactAsset(asset, hashFile)) throw new UploadFeedback('unavailable');
+      } else if (!stagedPositions.has(asset)) throw new UploadFeedback('missing');
     }
     for (const { asset, temporary } of staged) {
       const name = localName(asset)!;
@@ -117,13 +124,13 @@ async function restoreRegisteredFiles(projectId: string, revision: string, asset
       }
     }
     if (!(await Promise.all(assets.map(asset => intactAsset(asset, hashFile)))).every(Boolean))
-      throw new Error('已补传，仍有素材无法核实，请刷新查看');
+      throw new UploadFeedback('changed');
   });
   return { projectId, revision, assets: receiptAssets(assets) };
 }
 
 export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFile?: typeof sha256File } = {}) {
-  let uploading = false;
+  const uploading = new Set<string>();
   return async (req: IncomingMessage, res: ServerResponse) => {
     const send = (status: number, value: unknown) => {
       res.statusCode = status;
@@ -168,14 +175,15 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
     const length = Number(req.headers['content-length']);
     const contentType = req.headers['content-type'];
     if (!Number.isSafeInteger(length) || length <= 0 || length > maxRequestBytes || !contentType?.startsWith('multipart/form-data;')) {
-      send(413, { error: '请提交四份素材，合计不得超过 64 MiB' });
+      send(413, { error:uploadFeedback.size,reason:'size' });
       return;
     }
-    if (uploading) {
-      send(409, { error: '已有上传正在保存' });
+    if (uploading.has(projectId) || uploading.size >= CLIPMENTOR_TASK_LIMIT) {
+      const reason=uploading.has(projectId)?'saving':'busy';
+      send(409, { error:uploadFeedback[reason],reason });
       return;
     }
-    uploading = true;
+    uploading.add(projectId);
     const written: string[] = [];
     let commitUncertain = false;
     let retained: string[] = [];
@@ -196,8 +204,8 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
         send(200, await restoreRegisteredFiles(projectId, initial.revision, registered, form, written, hashFile));
         return;
       }
-      if (started) throw new Error('上传目标必须是尚未制作的工程');
-      if ([...form.keys()].length !== slots.length) throw new Error('需要原片、商品图、销量截图和 CTA 行动号召图各一份');
+      if (started) throw new UploadFeedback('alreadySaved');
+      if ([...form.keys()].length !== slots.length) throw new UploadFeedback('missing');
       const timeline = initial.doc.timelines.find(t => t.id === initial.doc.activeTimelineId);
       if (!timeline) throw new Error('工程缺少活动时间线');
       const directory = uploadDir();
@@ -206,12 +214,11 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
       const staged = new Map<string, string>();
       for (const slot of slots) {
         const file = form.get(slot);
-        if (!file || typeof file === 'string' || !file.size || !isSafeUploadName(file.name) || file.name.length > 180) {
-          throw new Error('缺少素材或文件名无效');
-        }
+        if (!file || typeof file === 'string' || !file.size) throw new UploadFeedback('missing');
+        if (!isSafeUploadName(file.name) || file.name.length > 180) throw new UploadFeedback('name');
         const kind = slot === 'source' ? 'video' : 'image';
         const extension = extname(file.name).toLowerCase();
-        if (!allowed[kind].includes(extension)) throw new Error('素材格式与上传位置不符');
+        if (!allowed[kind].includes(extension)) throw new UploadFeedback('format');
         const id = randomUUID();
         const filename = `clipmentor-intake-${id}${extension}`;
         const local = join(directory, `.staged-${filename}`);
@@ -220,7 +227,7 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
           Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]), local, maxRequestBytes,
         );
         const metadata = await inspect(local, slot, timeline.fps).catch(() => {
-          throw new Error(slot === 'source' ? '原片无法读取、格式不符或缺少音轨' : `${file.name} 无法读取或实际图片格式与扩展名不符`);
+          throw new UploadFeedback(slot==='source'?'source':'image');
         });
         const src = mediaPrefix + filename;
         staged.set(src, local);
@@ -230,7 +237,7 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
         });
       }
       if (assets[1]?.sourceContentHash === assets[3]?.sourceContentHash) {
-        throw new Error('商品图和 CTA 行动号召图不能使用同一文件');
+        throw new UploadFeedback('sameImage');
       }
       const current = initial.doc.assets;
       let next = assets;
@@ -239,11 +246,11 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
         const same = (current.length === slots.length - 1 || current.length === slots.length) && current.every((asset, index) =>
           asset.name === assets[index]?.name && asset.kind === assets[index]?.kind
             && /^[a-f0-9]{64}$/.test(asset.sourceContentHash ?? '') && asset.sourceContentHash === assets[index]?.sourceContentHash);
-        if (!same) throw new Error('工程已有不同素材，请核对工程，现有素材未覆盖');
+        if (!same) throw new UploadFeedback('alreadySaved');
         const intact = await Promise.all(current.map(asset => intactAsset(asset, hashFile)));
         if (current.length === slots.length && intact.every(Boolean)) {
           // A byte-identical resubmission reads the saved receipt without editing.
-          if ((await loadOfflineStoredProject(projectId))?.revision !== initial.revision) throw new Error('工程已变化，请重新核对');
+          if ((await loadOfflineStoredProject(projectId))?.revision !== initial.revision) throw new UploadFeedback('changed');
           send(200, { projectId, revision: initial.revision, assets: receiptAssets(current) });
           return;
         }
@@ -251,9 +258,9 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
         next = assets.map((asset, index) => index >= current.length ? asset
           : intact[index] ? current[index] : { ...asset, id: current[index].id });
       }
-      if (isProjectConnected(projectId)) throw new Error('请先关闭该工程的编辑器再上传');
+      if (isProjectConnected(projectId)) throw new UploadFeedback('openEditor');
       ownership = await claimOfflineProjectOwnership(projectId, randomUUID());
-      if (ownership.status !== 'claimed' || ownership.revision !== initial.revision) throw new Error('工程正在使用或已变化，请重新核对');
+      if (ownership.status !== 'claimed' || ownership.revision !== initial.revision) throw new UploadFeedback('changed');
       // Keep only files referenced by the commit. Retry/backfill staging copies
       // of already-saved assets stay eligible for cleanup.
       retained = added.map(asset => join(directory, asset.src.split('/').at(-1)!));
@@ -278,7 +285,7 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
       });
       if (result.status !== 'applied') {
         commitUncertain = false;
-        throw new Error('素材未登记，工程可能刚被打开');
+        throw new UploadFeedback('changed');
       }
       const saved = await loadOfflineStoredProject(projectId);
       if (saved?.revision !== result.revision || saved?.doc.assets.length !== next.length
@@ -289,13 +296,13 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
       }
       send(200, { projectId, revision: saved.revision, assets: receiptAssets(next) });
     } catch (error) {
-      const message = error instanceof Error && /[\u3400-\u9fff]/u.test(error.message)
-        ? error.message : '上传或媒体检查失败，请检查文件是否完整';
-      send(409, { error: message, ...(commitUncertain ? { commitUncertain: true } : {}) });
+      if(!(error instanceof UploadFeedback))console.error('ClipMentor material intake failed',projectId,error);
+      const reason=error instanceof UploadFeedback?error.reason:'unavailable';
+      send(409, { error:uploadFeedback[reason],reason,...(commitUncertain ? { commitUncertain: true } : {}) });
     } finally {
       await Promise.allSettled(written.filter(file => !commitUncertain || !retained.includes(file)).map(file => unlink(file)));
       if (ownership?.status === 'claimed') await releaseProjectEditOwnership(ownership.claim).catch(() => undefined);
-      uploading = false;
+      uploading.delete(projectId);
     }
   };
 }

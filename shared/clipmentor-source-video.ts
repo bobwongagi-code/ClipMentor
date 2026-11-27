@@ -110,15 +110,17 @@ export interface SourceVideoValidation {
 export interface SourceVideoTransportDiagnostic {
   version: 'source-transport-v1'; operation_id: string;
   started_at: string; ended_at: string; request_bytes: number;
+  timeout_seconds?: number;
   curl_exit_code: number | null;
   error_kind: 'none' | 'curl_timeout' | 'aborted' | 'spawn_failed' | 'curl_failed' | 'invalid_metrics';
   http_status: number | null;
   /** Observed transport boundary, not an inferred gateway/upstream root cause. Recomputed on read. */
   response_boundary?: 'response_received' | 'gateway_or_upstream_error_unattributed' | 'body_not_fully_sent' | 'no_final_response_unattributed' | 'local_process_failure';
   cleanup_status?: 'completed' | 'failed';
-  metrics: Partial<Record<'size_upload' | 'size_download' | 'time_namelookup' | 'time_connect' | 'time_appconnect' | 'time_pretransfer' | 'time_starttransfer' | 'time_total', number>>;
+  metrics: Partial<Record<'size_upload' | 'size_download' | 'time_namelookup' | 'time_connect' | 'time_appconnect' | 'time_pretransfer' | 'time_starttransfer' | 'time_posttransfer' | 'time_total', number>>;
   /** Sent bytes do not prove the gateway received the entire body. First byte may be HTTP 100. */
   upload_matches_request_bytes?: boolean;
+  wait_after_upload_seconds?: number;
   first_byte_may_be_interim: true;
   request_ids: Partial<Record<'x-oneapi-request-id' | 'x-request-id' | 'cf-ray', string>>;
   response_body: {
@@ -160,7 +162,7 @@ export interface SourceVideoResult {
 
 // Shared closed projection also protects Agent failure settlement.
 type Diagnostic = SourceVideoTransportDiagnostic;
-const METRICS = ['size_upload','size_download','time_namelookup','time_connect','time_appconnect','time_pretransfer','time_starttransfer','time_total'] as const;
+const METRICS = ['size_upload','size_download','time_namelookup','time_connect','time_appconnect','time_pretransfer','time_starttransfer','time_posttransfer','time_total'] as const;
 const IDS = ['x-oneapi-request-id','x-request-id','cf-ray'] as const;
 const ERRORS = ['none','curl_timeout','aborted','spawn_failed','curl_failed','invalid_metrics'] as const;
 const FORMATS = ['json','html','text','missing','unreadable'] as const;
@@ -193,10 +195,16 @@ export function safeSourceTransportDiagnostic(v: unknown, key: string, operation
   const boundary:Diagnostic['response_boundary']=httpStatus!==null&&httpStatus>=400?'gateway_or_upstream_error_unattributed':
     httpStatus!==null&&httpStatus>=200?'response_received':v.error_kind==='spawn_failed'?'local_process_failure':
     number(metrics.size_upload)&&metrics.size_upload<v.request_bytes?'body_not_fully_sent':'no_final_response_unattributed';
+  const sent=metrics.size_upload===v.request_bytes;
+  const uploadEnded=metrics.time_posttransfer,total=metrics.time_total;
+  const wait=boundary==='no_final_response_unattributed'&&metrics.size_download===0&&sent&&v.request_bytes>0
+    &&typeof uploadEnded==='number'&&uploadEnded>0&&uploadEnded>=(metrics.time_pretransfer??0)
+    &&typeof total==='number'&&total>=uploadEnded?total-uploadEnded:undefined;
   return {version:'source-transport-v1',operation_id:operationId,started_at:v.started_at,ended_at:v.ended_at,request_bytes:v.request_bytes,
+    ...(Number.isSafeInteger(v.timeout_seconds)&&v.timeout_seconds>0?{timeout_seconds:v.timeout_seconds}:{}),
     curl_exit_code:Number.isInteger(v.curl_exit_code) && v.curl_exit_code >= 0 && v.curl_exit_code <= 255 ? v.curl_exit_code : null,
     error_kind:v.error_kind,http_status:httpStatus,response_boundary:boundary,metrics,request_ids:ids,
     ...(['completed','failed'].includes(v.cleanup_status)?{cleanup_status:v.cleanup_status}:{}),
-    ...(number(metrics.size_upload)?{upload_matches_request_bytes:metrics.size_upload===v.request_bytes}:{}),
+    ...(number(metrics.size_upload)?{upload_matches_request_bytes:sent}:{}),...(wait===undefined?{}:{wait_after_upload_seconds:wait}),
     first_byte_may_be_interim:true,response_body:response};
 }

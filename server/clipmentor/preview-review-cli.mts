@@ -13,6 +13,7 @@ import {
   PREVIEW_REVIEW_ENDPOINT, previewReviewFormats, type PreviewReviewFormat,
 } from './preview-review.ts';
 import { postSourceVideoTransport, SourceVideoTransportError } from './source-video-transport.ts';
+import { PREVIEW_REVIEW_PREPARATION_MS, PREVIEW_REVIEW_PURPOSE } from './preview-review-deadline.ts';
 import {atomicWriteFile} from '../plugins/project-store-durable.ts';
 import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from './local-operation-lock.ts';
 import type { SourceVideoTransportDiagnostic } from '../../shared/clipmentor-source-video.ts';
@@ -80,19 +81,17 @@ let diagnostic: SourceVideoTransportDiagnostic | undefined;
 let attempts = 0;
 let mediaTransfer: Awaited<ReturnType<typeof prepareVideoMedia>>['receipt'] | undefined;
 try {
-  const signal=AbortSignal.timeout(600_000);
   if(!sourceBindingMatches)throw new VideoMediaError('local_read','host_source_hash_mismatch');
-  const media = await prepareVideoMedia(resolve(options['--video']), prepared.video_sha256, signal);
+  const media = await prepareVideoMedia(file, prepared.video_sha256, AbortSignal.timeout(PREVIEW_REVIEW_PREPARATION_MS));
   mediaTransfer=media.receipt;
-  const result = await reviewClipMentorPreview(media, input, { key, signal, format, post: async (body, credential, signal) => {
+  const result = await reviewClipMentorPreview(media, input, { key, format, post: async (body, credential, signal, requestInfo) => {
     signal.throwIfAborted();
     attempts=1;
     await atomicWriteFile(ledger, JSON.stringify({ status:'reserved',identity_version:'video-logical-v1',fingerprint,requests_attempted:attempts,model_retry_policy:'no_automatic_retry',media_transfer:mediaTransfer }));
     try {
-      const {body:_wire,input:_frozenInput,...requestInfo}=buildPreviewReviewRequest(media,input,format);
-      const archived=await externalCall({directory:dirname(output),kind:'video',purpose:'preview-continuous-review-v1',requestId:options['--operation'],
+      const archived=await externalCall({directory:dirname(output),kind:'video',purpose:PREVIEW_REVIEW_PURPOSE,requestId:options['--operation'],
         identity:{operation:options['--operation'],fingerprint},signal,preserveErrors:true,
-        execute:async childSignal=>{const r=await postSourceVideoTransport(body,credential,childSignal,options['--operation'],tmpdir());
+        execute:async childSignal=>{const r=await postSourceVideoTransport(body,credential,childSignal,options['--operation'],tmpdir(),undefined,undefined,'preview');
           diagnostic=r.diagnostic;if(JSON.stringify(r.body)?.includes(credential)||echoesMediaSecret(r.body,media))throw Error('Preview review response rejected for credential echo');return {response:r,requestInfo,fingerprint};}});
       // Authoritative envelope includes both response and frozen request metadata.
       return archived.response;

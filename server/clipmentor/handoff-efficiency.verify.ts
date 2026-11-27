@@ -49,10 +49,11 @@ if(!scope.handoffEfficiencyTest){
   const {productionAuthorTaskData}=await import('./production-worker');
   const assertTaskUnchanged=(actual:any,previous:any)=>{
    if(actual.stage==='edit'){
-    // Native instance assembly supersedes the old generic still-frame sentence;
-    // compare preserved protections independently of that intentional clarification.
+    // Preserve the original protections while allowing the current task to
+    // choose how captions remain readable and how evidence is displayed.
     for(const protection of previous.goal.slice(previous.goal.indexOf('，')+1).split('。').filter(Boolean)){
      if(protection.startsWith('需要定格时'))assert(actual.goal.includes('save_clipmentor_source_frame保留来源，不用无关素材'));
+     else if(protection.includes('字幕实底'))assert(actual.goal.includes('让原片和讲解一眼可分，字幕清楚且不盖住正在讲的画面'));
      else assert(actual.goal.includes(protection),'existing editing protection lost: '+protection);
     }
     for(const term of ['edit_item 的 adds','空数组不代表禁止创建','不得把估算当实测','必须带实际 unitId'])assert(actual.goal.includes(term));

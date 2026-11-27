@@ -414,7 +414,15 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         const copyError = picturePlanCopyError(plan, candidate);
         if (copyError) return { error: copyError };
         const registered = a.source_breakdown?.units.find(entry => entry.unit_id === unit.unit_id);
-        if (registered && object(plan) && object(candidate)) registerGroupedPlayback(registered, plan, candidate);
+        if (registered && object(plan) && object(candidate)) {
+          registerGroupedPlayback(registered, plan, candidate);
+          if(object(plan.original_playback)&&plan.original_playback.mode==='selected_cuts'){
+            const findings=checkSourceBreakdown({...doc,clipMentorAnalysis:a}).issues.filter(issue=>issue.id===unit.unit_id
+              &&['picture_plan_original_selection_invalid','picture_plan_original_outside_evidence',
+                'picture_plan_original_order_mismatch'].includes(issue.code));
+            if(findings.length)return {error:'Original playback must match the selected phases and stay within the registered source evidence',issues:findings};
+          }
+        }
         await invalidateChangedReviews(a);
       }
       a.revision += 1;

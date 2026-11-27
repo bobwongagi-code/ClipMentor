@@ -1,0 +1,8 @@
+export const PREVIEW_REVIEW_PURPOSE = 'preview-continuous-review-v1';
+export const PREVIEW_REVIEW_PREPARATION_MS = 90_000;
+export const PREVIEW_REVIEW_TRANSPORT_SECONDS = 900;
+
+// Each outer boundary leaves time to settle and save the receipt from the inner one.
+export const PREVIEW_REVIEW_PROVIDER_MS = PREVIEW_REVIEW_TRANSPORT_SECONDS * 1000 + 10_000;
+export const PREVIEW_REVIEW_TIMEOUT_MS = PREVIEW_REVIEW_PROVIDER_MS + 10_000;
+export const PREVIEW_REVIEW_PROCESS_TIMEOUT_MS = PREVIEW_REVIEW_PREPARATION_MS + PREVIEW_REVIEW_TIMEOUT_MS + 10_000;

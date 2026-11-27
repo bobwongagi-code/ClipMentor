@@ -1,6 +1,18 @@
 /** One renderer contract, shared with the executor; not a product-specific visual preset. */
 export const NATIVE_TEXT_STYLE_VERSION='native-text-style-v2';
 export const NATIVE_TEXT_PROPS=['text','fontSize','fontWeight','color','align','paddingX','backgroundColor','backgroundOpacity','textShadow','shadow'] as const;
+export function isNativeTextTopStrip(props?:Record<string,unknown>){
+ return props?.placement==='top_strip';
+}
+export function nativeTextTopStripHeightFraction(value:unknown){
+ return typeof value==='number'&&value>0&&value<1?value:undefined;
+}
+export function nativeTextTopStripHeight(canvasHeight:number,props?:Record<string,unknown>){
+ return Math.max(1,Math.round(canvasHeight*(nativeTextTopStripHeightFraction(props?.stripHeightFraction)??.04)));
+}
+export function nativeTextRendererVersion(props?:Record<string,unknown>){
+ return isNativeTextTopStrip(props)?'native-text-top-strip-v1':NATIVE_TEXT_STYLE_VERSION;
+}
 export function nativeTextStyle(props:Record<string,unknown>){
  const color=typeof props.backgroundColor==='string'?props.backgroundColor:undefined;
  const alpha=typeof props.backgroundOpacity==='number'&&Number.isFinite(props.backgroundOpacity)?Math.max(0,Math.min(1,props.backgroundOpacity)):1;
