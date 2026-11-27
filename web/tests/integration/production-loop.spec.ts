@@ -62,7 +62,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await page.setViewportSize({ width: 1200, height: 900 })
     await page.goto(origin)
     const inputs=(await audit()).inputs
-    for(const [label,key] of [['爆款原片','source'],['商品图','product'],['销量截图','sales'],['CTA 行动号召图','cta']]){
+    for(const [label,key] of [['爆款原片','source'],['商品图','product'],['销量截图','sales'],['合作海报','cta']]){
       await page.getByLabel(label,{exact:true}).setInputFiles(inputs[key])
     }
     await page.getByRole('button',{name:'上传素材'}).click()
@@ -90,7 +90,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await page.reload()
     await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
     await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
-    await page.getByLabel('CTA 行动号召图', { exact: true }).setInputFiles(inputs.cta)
+    await page.getByLabel('合作海报', { exact: true }).setInputFiles(inputs.cta)
     await page.getByRole('button', { name: '补传素材' }).click()
     await expect(page.getByRole('heading', { name: '补传缺失素材' })).toHaveCount(0)
     await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
@@ -183,7 +183,9 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await page.getByRole('button', { name: '提交意见' }).click()
     await expect.poll(async () => { const task=(await state()).task; return task?.status==='awaiting_blueprint'&&typeof task.blueprintRevision==='string'&&task.blueprintRevision!==firstRevision }, { timeout:30000 }).toBe(true)
     await page.reload()
-    await expect(page.frameLocator('iframe').locator('body')).toContainText('修订后测试', { timeout: 30_000 })
+    await expect(page.frameLocator('iframe').getByRole('heading',{name:'剪辑蓝图',exact:true})).toBeVisible({timeout:30_000})
+    await page.getByText('整体意见 · 修改对照',{exact:true}).click()
+    await expect(page.getByText('修订后测试',{exact:true})).toBeVisible()
     const revised = (await state()).task
     expect(revised.blueprintRevision).not.toBe(firstRevision)
     expect(revised.blueprintOpinionDifferences).toMatchObject({overall:{label:'整体意见',changes:[{after:'修订后测试'}]},groups:[]})

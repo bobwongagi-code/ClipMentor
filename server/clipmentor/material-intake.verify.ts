@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = await mkdtemp(join(tmpdir(), 'clipmentor-intake-'));
+const root = await mkdtemp(join(tmpdir(), 'clipmentor-素材检查-'));
 process.env.OPENCHATCUT_DATA_DIR = root;
 process.env.OPENCHATCUT_DEV_PROFILE_ID = '11111111-1111-4111-8111-111111111111';
 const { createMaterialIntakeHandler } = await import('./material-intake');
@@ -68,7 +68,9 @@ try {
   assert.deepEqual(await (await read()).json(), { receipt: null });
   assert.equal((await fetch(endpoint, { method: 'POST', body: body() })).status, 403);
   assert.equal((await submit(new FormData())).status, 409);
-  assert.equal((await submit(body(new Blob(['corrupt'])))).status, 409);
+  const corrupt=await submit(body(new Blob(['corrupt'])));
+  assert.equal(corrupt.status,409);
+  assert.deepEqual(await corrupt.json(),{reason:'source',error:'原片无法播放或没有声音，请检查后再上传。'});
   const missingCta = body();
   missingCta.delete('cta');
   assert.equal((await submit(missingCta)).status, 409);
@@ -77,6 +79,15 @@ try {
   assert.equal((await loadOfflineStoredProject(id))?.doc.assets.length, 0);
   assert.deepEqual((await loadOfflineStoredProject(id))?.doc.timelines.map(t=>[t.width,t.height]),[[1920,1080],[1920,1080]],
     'failed uploads leave both media and canvas unchanged');
+  const directory=uploadDir();
+  await mkdir(directory,{recursive:true});
+  await rmdir(directory);
+  await writeFile(directory,'prevent mkdir');
+  try{
+    const unexpected=await submit(body());
+    assert.equal(unexpected.status,409);
+    assert.deepEqual(await unexpected.json(),{reason:'unavailable',error:'暂时无法保存素材，请稍后再试。'});
+  }finally{await rm(directory);}
   const good = await submit(body());
   const receipt = await good.json();
   assert.equal(good.status, 200, JSON.stringify(receipt));
@@ -468,5 +479,5 @@ try {
   console.log('material intake verified: real-byte receipts, exact-content missing/corrupt repair, stale-read refusal, post-commit preservation, origin, idempotence and cleanup');
 } finally {
   if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries:3 });
 }

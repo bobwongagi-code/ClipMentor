@@ -1,5 +1,6 @@
 import type {ProjectDoc} from '../../src/editor/types';
 import {deliverySectionsFromDoc,endingCardLayout,endingCardSources} from '../../src/clipmentor/delivery-bindings';
+import {opinionScopeText,readReviewIssue,reviewMessages as copy} from '../../shared/clipmentor-review-feedback';
 
 export type BlueprintReviewGroup = {id:string;label:string};
 type GroupReview = {id:string;decision:string;stance:'accepted'|'changes'|'pending'};
@@ -15,31 +16,31 @@ export class PanelReviewIssue extends Error {
 const row=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 
 export function panelReviewIssue(error:unknown){
- if(error instanceof PanelReviewIssue)return {kind:error.kind,message:error.message};
+ if(error instanceof PanelReviewIssue)return readReviewIssue(error);
  if(typeof error!=='string'&&!(error instanceof Error))return;
  const message=typeof error==='string'?error:error.message;
  if(/^(?:Error: )?production_source_breakdown_no_progress$/.test(message))
-  return {kind:'binding',message:'原片分析已暂停，已上传素材仍在。'} as const;
- const opinionIssue=message.match(/blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\n]+)$/u);
- if(opinionIssue)return {kind:'content',message:opinionIssue[1]+(message.includes('blueprint_repair_no_progress')?' 同一问题再次出现，修改已暂停。':'')} as const;
+  return {kind:'binding',message:copy.analysisPaused} as const;
+ const opinionIssue=message.match(/^(?:Error: )?(blueprint_repair_no_progress )?blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\r\n]+)$/u);
+ if(opinionIssue&&opinionScopeText.test(opinionIssue[2]))return {kind:'content',message:opinionIssue[2]+(opinionIssue[1]?' 同一问题再次出现，修改已暂停。':'')} as const;
  if(/suspected_gate_defect|门禁问题|teaching_confirmed_scope_requires_maintenance|teaching_whole_film_confirmed_criterion_invalid|production_confirmed_groups_(missing|changed)|confirmed_copy_review_reference_binding_invalid/.test(message))
-  return {kind:'gate',message:'制作已暂停，当前进度已保存。'} as const;
+  return {kind:'gate',message:copy.paused} as const;
  if(/^(?:Error: )?copy_review_confirmed_selection_conflict$/.test(message))
-  return {kind:'gate',message:'审核提出了已确认范围外的内容，现有讲解已保留。'} as const;
+  return {kind:'gate',message:copy.choicesRetained} as const;
  if(/production_opening_underlay_shortfall/.test(message))
-  return {kind:'binding',message:'片头配音长于现有画面安排，已暂停制作。'} as const;
+  return {kind:'binding',message:copy.openingPaused} as const;
  if(message.includes('preview_shared_body_requires_reconciliation'))
-  return {kind:'content',message:'两个版本的共用片段需要一起核对。'} as const;
+  return {kind:'content',message:copy.bothPreviews} as const;
  if(/preview_review_(?:receipt_unavailable|timeout_unconfirmed|incomplete_generation|invalid_judgment_schema|evidence_unverified)|preview_retry_original_outcome_unavailable/.test(message))
-  return {kind:'binding',message:'成片已保存，复核暂未完成。'} as const;
+  return {kind:'binding',message:copy.reviewPaused} as const;
  if(/production_confirmed_teaching_baseline_changed/.test(message))
-  return {kind:'gate',message:'现有讲解已保留。选题变更需由你决定。'} as const;
+  return {kind:'gate',message:copy.choicesRetained} as const;
  if(/binding|_scope_|_stale|_schema_|_format|review_reference_invalid|author_self_check_invalid|execution_mapping_repair_no_progress|feedback_(target_missing|unit_placement_missing|execution_targets_required|changed_)|绑定错|版本.*变化|预览.*变化|版本记录不匹配|片尾.*齐备|片尾.*变化|证据.*缺失/i.test(message))
-  return {kind:'binding',message:'请刷新后查看当前版本。'} as const;
+  return {kind:'binding',message:copy.updated} as const;
  if(/(?:teaching_baseline_repair|teaching_final_narration_repair|preview_blueprint_alignment|blueprint_repair)_no_progress/.test(message))
-  return {kind:'content',message:'同一问题再次出现，修改已暂停。'} as const;
+  return {kind:'content',message:copy.sameIssue} as const;
  if(/需补充事实|当前蓝图待独立审核|尚未完成教学自检|needs_revision/.test(message))
-  return {kind:'content',message:'请查看当前蓝图，按需提交修改意见。'} as const;
+  return {kind:'content',message:copy.checkBoard} as const;
 }
 
 export function blueprintReviewGroups(doc:ProjectDoc):BlueprintReviewGroup[]{
@@ -55,21 +56,21 @@ export function blueprintReviewEndings(doc:ProjectDoc):ReviewEnding[]{
   const assets=layout?endingCardSources(layout):[section.picture];
   return [{id,label:id==='existing_partner'?'已合作达人版':'新建联达人版',materials:assets.map(({asset_id})=>{
    const asset=doc.assets.find(a=>a.id===asset_id);
-   return {id:asset_id,name:asset?.name||'已绑定素材'};
+   return {id:asset_id,name:asset?.name||'片尾素材'};
   })}];
  });
 }
 
 export function assertWholeBlueprintConfirmation(input:unknown){
  if(!row(input)||input.scope!=='whole_blueprint'||Object.keys(input).length!==1)
-  throw new PanelReviewIssue('binding','请刷新蓝图后重新确认。');
+  throw new PanelReviewIssue('binding',copy.refreshBoard);
 }
 
 export function bindBlueprintReview(input:unknown,scope:{
  revision:string;boardIdentity:string;groups:BlueprintReviewGroup[];endings:ReviewEnding[];
 }):BlueprintReviewRecord{
  assertWholeBlueprintConfirmation(input);
- if(!scope.groups.length)throw new PanelReviewIssue('binding','当前蓝图没有可审核的讲解。');
+ if(!scope.groups.length)throw new PanelReviewIssue('binding',copy.emptyBoard);
  return {revision:scope.revision,boardIdentity:scope.boardIdentity,scope:'whole_blueprint',
   groups:[],endings:scope.endings};
 }
@@ -82,5 +83,5 @@ export function panelFeedbackTarget(value:unknown,groups:BlueprintReviewGroup[],
  if(preview&&row(value)&&value.scope==='range'&&typeof value.start==='number'&&typeof value.end==='number'
    &&Number.isFinite(value.start)&&Number.isFinite(value.end)&&value.start>=0&&value.end>value.start)
   return {unitIds:undefined,range:[value.start,value.end] as [number,number],kind:'execution' as const};
- throw new PanelReviewIssue('binding','请选择当前版本中的反馈位置，或明确确认这条意见作用于整体。');
+ throw new PanelReviewIssue('binding',copy.feedbackTarget);
 }

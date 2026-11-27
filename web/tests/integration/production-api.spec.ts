@@ -195,7 +195,7 @@ test.describe('production gateway responses', () => {
       expect(redirectedRequests).toBe(redirectCount)
       await submit.click()
       await expect(feedback).toHaveValue('')
-      await expect(page.getByRole('region', { name: '上次修改要点' })).toBeVisible()
+      await expect(page.getByText('上次修改意见已保存。')).toBeVisible()
       expect(posts).toBe(2)
     })
   }

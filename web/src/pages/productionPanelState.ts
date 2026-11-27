@@ -9,7 +9,7 @@ type ProgressTask={stage:string;status:string;active:boolean;stopReason?:string;
 export function productionProgress(task:ProgressTask,sharedTask?:ProgressTask){
  const source=task.status==='waiting'&&sharedTask?sharedTask:task
  const preparing=!source.blueprintConfirmed&&['analysis','blueprint','copy_review'].includes(source.stage)
- const labels=preparing?['分析原片','整理蓝图','检查蓝图']:['准备制作','配音','主体剪辑','片尾与预览']
+ const labels=preparing?['分析原片','整理蓝图','检查蓝图']:['准备制作','配音','剪辑','片尾与预览']
  const current=preparing?['analysis','blueprint','copy_review'].indexOf(source.stage):source.stage==='audio'?1:source.stage==='edit'?2:['export','self_check'].includes(source.stage)?3:0
  const waiting=task.status==='cancelled'||task.status==='waiting'&&(!sharedTask?.active||current===3)
  return labels.map((label,index)=>({label,
@@ -61,7 +61,7 @@ export function previewStatus(task?:PreviewTask,readFailed=false){
  if(task?.status==='cancelled')return '已取消'
  if(task?.status==='blocked')return '制作已暂停'
  if(task?.status==='queued')return '等待运行名额'
- if(task?.status==='waiting')return '等待共用主体'
+ if(task?.status==='waiting')return '等待另一版剪辑'
  return '制作中'
 }
 

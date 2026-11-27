@@ -8,7 +8,7 @@ import { projectResource, taskPage, workspaceEndpoint } from './taskNavigation'
 
 type WorkspaceStatus=ClipMentorTaskStatus|'unavailable'
 const statusLabels: Record<WorkspaceStatus, string> = {
-  materials:'待开始', running:'运行中', queued:'等待运行名额', waiting:'等待共用主体', blueprint:'待审蓝图',
+  materials:'待开始', running:'运行中', queued:'等待运行名额', waiting:'等待另一版剪辑', blueprint:'待审蓝图',
   preview:'预览阶段', paused:'已暂停', completed:'已确认', cancelled:'已取消', unavailable:'暂不可用',
 }
 const stages: Record<string,string> = {
@@ -41,7 +41,7 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
   const needsReview = tasks.filter(task => task.status === 'blueprint' || task.status === 'preview')
   return <main className="cm-task-main">
     <div className="cm-task-title">
-      <div><h1>任务</h1><p>只有运行中的任务占名额。</p></div>
+      <h1>任务</h1>
       <div className="cm-task-actions"><Slots workspace={workspace}/><a className="cm-button" href={taskPage(undefined,'new')}><Plus size={17}/> 新建任务</a></div>
     </div>
     {needsReview.length>0&&<section className="cm-task-attention" aria-labelledby="cm-needs-you">
@@ -91,6 +91,7 @@ type DownloadVersion={audience?:Audience;task?:Task;unavailable?:boolean;loading
 function DownloadCard({ projectId, task, audience, unavailable, loading, current }: DownloadVersion & { projectId:string;current?:boolean }) {
   const render = task?.renderId
   const {canDownload:delivered,canDownloadDraft:draft,canConfirm:ready,watchable}=previewActions(task)
+  const imageLabel=audience==='new_contact'?'合作海报':audience==='existing_partner'?'商品图':'随片图片'
   const url = (view:string) => projectResource(resourceUrl(view,'renderId',render!,audience),projectId)
   const when = task?.confirmedAt ? taskTime.format(task.confirmedAt) : undefined
   const version=audience?audienceTitleFor(audience):'成片'
@@ -122,10 +123,10 @@ function DownloadCard({ projectId, task, audience, unavailable, loading, current
       <a href={url('panel_draft_download')} download aria-label={`下载未复核版本 · ${version}`}>下载未复核版本</a>
     </details>}
     {render&&((task?.attachments?.length??0)>0||task?.materialAttachment)&&<ul className="cm-download-attachments">
-      {task?.attachments?.map(file=><li key={file.assetId}><span>原片 Storyboard（PDF）</span><a
-        href={`${url('panel_attachment')}&${new URLSearchParams({assetId:file.assetId})}`} aria-label="下载原片 Storyboard" download={file.fileName}>下载</a></li>)}
-      {task?.materialAttachment&&<li><span>{task.materialAttachment.label}</span><a
-        href={`${url('panel_material')}&${new URLSearchParams({assetId:task.materialAttachment.assetId})}`} aria-label={`下载${task.materialAttachment.label}`} download>下载</a></li>}
+      {task?.attachments?.map(file=><li key={file.assetId}><span>原片分镜（PDF）</span><a
+        href={`${url('panel_attachment')}&${new URLSearchParams({assetId:file.assetId})}`} aria-label="下载原片分镜（PDF）" download={file.fileName}>下载</a></li>)}
+      {task?.materialAttachment&&<li><span>{imageLabel}</span><a
+        href={`${url('panel_material')}&${new URLSearchParams({assetId:task.materialAttachment.assetId})}`} aria-label={`下载${imageLabel}`} download>下载</a></li>}
     </ul>}
     {task?.materialAttachmentUnavailable&&<p>随片图片暂不可下载。</p>}
     {audience==='new_contact'&&(draft||ready||delivered)&&<p className="cm-download-note">对外发送前，核对片尾里的佣金等合作数字。</p>}
@@ -239,7 +240,7 @@ function TaskDetails({ workspace, task, downloads }: { workspace:ClipMentorWorks
     </aside>
     <main className="cm-task-detail">
       <div className="cm-task-title">
-        <div><h1>{task.name}</h1><Status status={currentOutput?.status??task.status} label={currentPreview?previewStatus(currentPreview):undefined}/></div>
+        <div><h1>{task.name}</h1>{(downloads||!currentPreview||!currentOutput)&&<Status status={currentOutput?.status??task.status} label={currentPreview?previewStatus(currentPreview):undefined}/>}</div>
         <Slots workspace={workspace}/>
       </div>
       <TaskSteps task={currentOutput??task} preview={currentPreview}/>

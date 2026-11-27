@@ -56,8 +56,9 @@ function displayStatus(task: ProductionTask, active: IsActive, deferred: IsDefer
 }
 
 function displayName(entry: Entry, task?: ProductionTask) {
-  const savedName = entry.taskName || (!entry.clipMentorTask ? entry.name : undefined);
-  return [savedName, task?.input.product.name].find(value => value?.trim() && ![entry.id,'当前商品','未命名任务'].includes(value)) ?? '未命名任务';
+  if(entry.taskName?.trim())return entry.taskName;
+  return [!entry.clipMentorTask?entry.name:undefined,task?.input.product.name].map(name=>name?.trim()).find(value=>value
+    &&![entry.id,'当前商品','未命名任务'].includes(value)&&!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value))??'未命名任务';
 }
 
 async function projectSummary(entry: Entry, active: IsActive, deferred: IsDeferred) {

@@ -34,19 +34,37 @@ for (const matching of [true, false]) {
     })
     await page.route('**/api/clipmentor/production', route => route.fulfill({json:{task:null}}))
     await page.goto('/')
-    for(const [index,label] of ['爆款原片','商品图','销量截图','CTA 行动号召图'].entries()){
+    for(const [index,label] of ['爆款原片','商品图','销量截图','合作海报'].entries()){
       await page.getByLabel(label,{exact:true}).setInputFiles(files[index])
     }
     await page.getByRole('button',{name:'上传素材'}).click()
     if (matching) {
       await expect(page.getByRole('heading',{name:'素材已上传'})).toBeVisible()
     } else {
-      await expect(page.getByText('工程内保存的素材与本次上传不一致。')).toBeVisible()
+      await expect(page.getByText('已保存的素材与本次上传不一致，请刷新查看。')).toBeVisible()
       await expect(page.getByRole('heading',{name:'素材已上传'})).toHaveCount(0)
     }
     expect(submissions).toBe(1)
   })
 }
+
+test('upload errors use business copy for known reasons and hide raw diagnostics',async({page})=>{
+  const raw='内部夹具回执 /用户/本地目录 ENOENT'
+  let replies=0
+  await page.route('**/api/clipmentor/intake',route=>route.request().method()==='GET'
+    ?route.fulfill({json:{receipt:null}})
+    :route.fulfill({status:409,json:{reason:++replies===1?'source':'unknown',error:raw}}))
+  await page.route('**/api/clipmentor/production',route=>route.fulfill({json:{task:null}}))
+  await page.goto('/')
+  await page.getByLabel('爆款原片').setInputFiles(source)
+  for(const name of ['商品图','销量截图','合作海报'])await page.getByLabel(name).setInputFiles(image)
+  const upload=page.getByRole('button',{name:'上传素材'})
+  await upload.click()
+  await expect(page.getByRole('alert')).toHaveText('原片无法播放或没有声音，请检查后再上传。')
+  await upload.click()
+  await expect(page.getByRole('alert')).toHaveText('暂时无法保存素材，请稍后再试。')
+  await expect(page.getByText(raw)).toHaveCount(0)
+})
 
 test('unreadable and missing files block the start', async ({ page }) => {
   await page.goto('/?demo=1')
@@ -66,9 +84,9 @@ test('materials lead to blueprint confirmation, preview feedback, then demo down
   await page.getByLabel('商品图').setInputFiles(image)
   await page.getByLabel('销量截图').setInputFiles({ ...image, name: 'sales.png' })
   await expect(page.getByRole('button', { name: '开始制作' })).toBeDisabled()
-  await page.getByLabel('CTA 行动号召图').setInputFiles({ ...image, name: 'cta.gif' })
+  await page.getByLabel('合作海报').setInputFiles({ ...image, name: 'cta.gif' })
   await expect(page.getByText('支持 PNG、JPG、WebP')).toBeVisible()
-  await page.getByLabel('CTA 行动号召图').setInputFiles({ ...image, name: 'cta.png' })
+  await page.getByLabel('合作海报').setInputFiles({ ...image, name: 'cta.png' })
   await expect(page.getByRole('combobox')).toHaveCount(0)
   await page.getByRole('button', { name: '开始制作' }).click()
   await expect(page.getByRole('heading', { name: '审核蓝图' })).toBeVisible()
@@ -125,7 +143,7 @@ for (const status of ['blocked', 'awaiting_blueprint']) test(`current saved draf
   await expect(page.getByText('INTERNAL_STALE_REVIEW_SENTINEL')).toHaveCount(0)
   await page.getByRole('textbox', { name: '整体意见' }).fill('保留成绩钩子')
   await page.getByRole('button', {name:'提交意见'}).click()
-  await expect(page.getByRole('region',{name:'上次修改要点'}).getByRole('listitem')).toHaveText(['保留成绩钩子'])
+  await expect(page.getByText('保留成绩钩子')).toHaveCount(0)
   expect(posts).toBe(1)
 })
 
@@ -265,7 +283,7 @@ test('one confirmation starts both outputs without an audience choice',async({pa
   await confirm.click()
   await expect(page.getByRole('heading',{name:'新建联达人版'})).toBeVisible()
   await expect(page.getByRole('heading',{name:'已合作达人版'})).toBeVisible()
-  await expect(page.getByRole('region',{name:'新建联达人版',exact:true}).getByRole('status')).toContainText('共用主体')
+  await expect(page.getByRole('region',{name:'新建联达人版',exact:true}).getByRole('status')).toContainText('等待另一版剪辑')
   expect(submitted).toBe(true)
 })
 
@@ -356,16 +374,17 @@ test('blueprint approval has optional opinions even when the server returns lega
   }])
 })
 
-test('long spoken feedback is presented as concise points without exposing the raw monologue',async({page})=>{
-  const points=['片头：展示成绩，用同款成绩提问引入拆解。','双结尾：新建联用本品CTA，已合作用本品Storyboard。','人审板：精简技术信息，补齐原片口播中文。']
+test('the business board confirms saved feedback without printing an author summary or diagnostic',async({page})=>{
+  const points=['INTERNAL_SUMMARY_SENTINEL 审核回执未绑定。']
   await page.route('**/api/clipmentor/intake',route=>route.fulfill({json:{receipt:{projectId:'fixture',assets:['source','product','sales','cta'].map(id=>({id,name:id}))}}}))
   await page.route('**/api/clipmentor/production*',route=>new URL(route.request().url()).searchParams.get('view')==='panel_board'
     ?route.fulfill({contentType:'text/html',body:'<h2>审核蓝图</h2>'})
-    :route.fulfill({json:{task:{...approvedFixtureReview,status:'blocked',stage:'copy_review',active:false,sequence:1,blueprintRevision:'r1',hasBlueprintFeedback:true,blueprintFeedbackSummary:points,canConfirmBlueprint:true}}}))
+    :route.fulfill({json:{task:{...approvedFixtureReview,status:'blocked',stage:'copy_review',active:false,sequence:1,blueprintRevision:'r1',hasBlueprintFeedback:true,blueprintFeedbackSummary:points,canConfirmBlueprint:true,
+      reviewIssue:{kind:'binding',message:'INTERNAL_REVIEW_SENTINEL 维护回执 v3'}}}}))
   await page.goto('/')
-  const summary=page.getByRole('region',{name:'上次修改要点'})
-  await expect(summary.getByRole('listitem')).toHaveText(points)
-  await expect(page.getByText(/上次意见：|第一个呢|性格这么/)).toHaveCount(0)
+  await expect(page.getByText('上次修改意见已保存。')).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveText('请刷新后查看当前版本。')
+  await expect(page.getByText(/INTERNAL_SUMMARY_SENTINEL|INTERNAL_REVIEW_SENTINEL|审核回执|上次意见：/)).toHaveCount(0)
   await page.setViewportSize({width:375,height:812})
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
   await expect(page.getByRole('button',{name:'确认蓝图，开始制作'})).toBeEnabled()
@@ -587,7 +606,7 @@ test('two tabs keep attachment and accepted download identities separate for bot
     for(const [audience,title] of [['existing_partner','已合作达人版'],['new_contact','新建联达人版']] as const){
       const first=page.getByRole('tabpanel',{name:title,exact:true}),second=other.getByRole('tabpanel',{name:title,exact:true})
       for(const window of [page,other])await window.getByRole('tab',{name:new RegExp(title)}).click()
-      const attachment=first.getByRole('link',{name:'下载 Storyboard'})
+      const attachment=first.getByRole('link',{name:'下载原片分镜（PDF）'})
       const url=new URL((await attachment.getAttribute('href'))!,'http://fixture')
       expect(Object.fromEntries(url.searchParams)).toEqual({view:'panel_attachment',renderId:`render-${audience}`,audience,assetId:`storyboard-${audience}`})
       await checkFinalReview(second)
@@ -710,7 +729,7 @@ test('intake for another project uses the same neutral upload instructions', asy
   await page.route('**/api/clipmentor/intake',route=>route.fulfill({json:{receipt:null}}))
   await page.goto('/')
   await expect(page.getByRole('heading',{name:'上传制作素材'})).toBeVisible()
-  await expect(page.getByText('选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。')).toBeVisible()
+  await expect(page.getByText('上传原片、商品图、销量截图和合作海报。')).toBeVisible()
   await expect(page.getByText(/JUDYDOLL/)).toHaveCount(0)
 })
 
@@ -747,7 +766,7 @@ test('a saved blueprint opens with a missing upload and restores only its regist
   await expect(page.frameLocator('iframe').getByText('同一个双结尾蓝图')).toBeVisible()
   await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
   await expect(page.locator('input[type=file]')).toHaveCount(1)
-  await page.getByLabel('CTA 行动号召图', { exact: true }).setInputFiles({ ...image, name: 'local.png' })
+  await page.getByLabel('合作海报', { exact: true }).setInputFiles({ ...image, name: 'local.png' })
   await page.getByRole('button', { name: '补传素材' }).click()
   await expect(page.getByRole('heading', { name: '补传缺失素材' })).toHaveCount(0)
   await expect(page.frameLocator('iframe').getByText('同一个双结尾蓝图')).toBeVisible()
@@ -775,7 +794,7 @@ test('a recovered board can be opened in place after the read retries stop', asy
   await page.clock.fastForward(2000)
   await expect.poll(() => boardReads).toBe(2)
   await page.clock.fastForward(2000)
-  const reload = page.getByRole('button', { name: '重新加载审核板' })
+  const reload = page.getByRole('button', { name: '重新打开蓝图' })
   await expect(reload).toBeVisible()
   expect(boardReads).toBe(3)
   const text = page.getByRole('textbox', { name: '整体意见' })
@@ -809,7 +828,7 @@ test('restore a registered source by its bytes when the browser cannot decode it
   const file = page.getByLabel('爆款原片', { exact: true })
   const submit = page.getByRole('button', { name: '补传素材' })
   await file.setInputFiles({ name: 'wrong.mov', mimeType: 'video/quicktime', buffer: Buffer.from('other bytes') })
-  await expect(page.getByText('文件与工程登记的原文件不一致')).toBeVisible()
+  await expect(page.getByText('这份文件与原来上传的不一致，请选原文件。')).toBeVisible()
   await expect(submit).toBeDisabled()
   await file.setInputFiles({ name: 'renamed.mov', mimeType: 'video/quicktime', buffer: original })
   await expect(submit).toBeEnabled()
@@ -835,9 +854,9 @@ test('a repair cannot adopt a different asset manifest from the same project', a
   })
   await page.route('**/api/clipmentor/production', route => route.fulfill({ json: { task: null } }))
   await page.goto('/')
-  await page.getByLabel('CTA 行动号召图', { exact: true }).setInputFiles(image)
+  await page.getByLabel('合作海报', { exact: true }).setInputFiles(image)
   await page.getByRole('button', { name: '补传素材' }).click()
-  await expect(page.getByRole('alert')).toContainText('工程')
+  await expect(page.getByRole('alert')).toHaveText('任务已更新，请刷新后再查看素材。')
   await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '素材已上传' })).toHaveCount(0)
   expect(posts).toBe(1)

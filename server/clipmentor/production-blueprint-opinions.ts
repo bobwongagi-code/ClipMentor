@@ -90,7 +90,7 @@ export type BlueprintOpinionRecord={
 export function prepareBlueprintOpinions(doc:ProjectDoc,input:unknown,revision:string,boardIdentity:string){
  const before=captureBlueprintOpinions(doc,true);
  if(!Array.isArray(input)||!input.length||input.length>before.units.length+1)throw Error('blueprint_opinion_binding_invalid');
- const labels=before.units.map(({id,topic},index)=>({id,label:`第 ${index+1} 组${topic?' · '+topic:''}`}));
+ const labels=before.units.map(({id},index)=>({id,label:`第 ${index+1} 组`}));
  const seen=new Set<string|null>();
  let total=0;
  for(const entry of input){
@@ -172,8 +172,9 @@ export function assertBlueprintOpinionScope(record:BlueprintOpinionRecord,doc:Pr
    return line?.text!==sentence.text||sentence.meaning!==undefined&&line.meaning!==sentence.meaning
     ||sentence.blockMeaning!==undefined&&line.blockMeaning!==sentence.blockMeaning;
   });
-  if(changed)throw Error(`blueprint_opinion_scope_locked: ${entry.label}第 ${changed.number} 句已确认保留。`);
-  if(actual.length!==before.length-remove.length)throw Error(`blueprint_opinion_scope_locked: ${entry.label}只可修改已确认的句子。`);
+  const label=entry.unitId===null?'整体意见':`第 ${record.before.units.findIndex(unit=>unit.id===entry.unitId)+1} 组`;
+  if(changed)throw Error(`blueprint_opinion_scope_locked: ${label}第 ${changed.number} 句已确认保留。`);
+  if(actual.length!==before.length-remove.length)throw Error(`blueprint_opinion_scope_locked: ${label}只可修改已确认的句子。`);
  }
  if(digestValue(after.units.map(unit=>unit.id))!==digestValue(record.before.units.map(unit=>unit.id)))
   throw Error('blueprint_opinion_scope_groups: 本次意见的讲解组顺序或数量被改动。');
@@ -208,7 +209,9 @@ export function confirmedOutputCopyLocks(record:BlueprintOpinionRecord|undefined
  return (doc:ProjectDoc)=>{
   const actual=captureBlueprintOpinions(doc,true);
   for(const entry of entries){
-   const baseline=entry.unitId===null?frozen.overall.lines:frozen.units.find(unit=>unit.id===entry.unitId)?.lines??[];
+   const unitIndex=frozen.units.findIndex(unit=>unit.id===entry.unitId);
+   const label=entry.unitId===null?'整体意见':`第 ${unitIndex+1} 组`;
+   const baseline=entry.unitId===null?frozen.overall.lines:frozen.units[unitIndex]?.lines??[];
    const remove=entry.remove??[];
    const offset=(number:number)=>number-1-remove.filter(removed=>removed<number).length;
    for(const sentence of entry.keep){
@@ -223,7 +226,7 @@ export function confirmedOutputCopyLocks(record:BlueprintOpinionRecord|undefined
     const amount=entry.keep.filter(other=>other.text===sentence.text&&other.meaning===sentence.meaning
      &&other.blockMeaning===sentence.blockMeaning&&(!section||sectionOfSentence[offset(other.number)]===section)).length;
     if(!baseline[index]||!same(baseline[index])||lines.filter(same).length<amount)
-     throw Error(`blueprint_opinion_scope_locked: ${entry.label}第 ${sentence.number} 句已确认保留。`);
+     throw Error(`blueprint_opinion_scope_locked: ${label}第 ${sentence.number} 句已确认保留。`);
    }
   }
  };
@@ -266,7 +269,7 @@ export function blueprintOpinionDifferences(record:BlueprintOpinionRecord,doc:Pr
  const groups=record.before.units.flatMap((unit,index)=>{
   const next=after.units[index];
   const entry=record.opinions.find(opinion=>opinion.unitId===unit.id&&opinion.edits);
-  return entry?[difference(entry.label,unit.lines,next.lines,unit.digest!==next.digest,entry.remove)]:[];
+  return entry?[difference(`第 ${index+1} 组`,unit.lines,next.lines,unit.digest!==next.digest,entry.remove)]:[];
  });
  if(!record.opinions.some(entry=>entry.unitId===null&&entry.edits))return {groups};
  const titleChanged=record.before.overall.title!==after.overall.title;

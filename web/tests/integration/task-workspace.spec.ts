@@ -12,7 +12,7 @@ const outputs=[{audience:'existing_partner'},{audience:'new_contact'}]
 const boardTasks=[
   {id:a,name:'短片甲',status:'blueprint',updatedAt:4,stage:'copy_review',outputs:[]},
   {id:b,name:'短片乙',status:'blueprint',updatedAt:3,stage:'copy_review',outputs:[]},
-  {id:exportsId,name:'交付夹具',status:'preview',updatedAt:2,stage:'self_check',outputs:[
+  {id:exportsId,name:'成片示例',status:'preview',updatedAt:2,stage:'self_check',outputs:[
     {audience:'existing_partner',status:'completed',stage:'self_check'},
     {audience:'new_contact',status:'preview',stage:'self_check',awaitingConfirmation:true},
   ]},
@@ -71,7 +71,7 @@ test.beforeAll(async ()=>{
         if(view==='panel_board'){
           const identity=staleBoard&&id===a?'changed-a':id
           res.writeHead(200,{'Content-Type':'text/html','X-ClipMentor-Board-Identity':identity}).end(
-            `<h2>蓝图夹具</h2><details><summary>第 1 组意见</summary><textarea aria-label="第 1 组意见" data-blueprint-opinion="group-1"></textarea></details>
+            `<h2>蓝图示例</h2><details><summary>第 1 组意见</summary><textarea aria-label="第 1 组意见" data-blueprint-opinion="group-1"></textarea></details>
             <script>
               const field=document.querySelector('textarea');
               field.addEventListener('input',()=>parent.postMessage({type:'clipmentor:blueprint-opinion',unitId:'group-1',text:field.value},'*'));
@@ -126,7 +126,7 @@ test('homepage and upload disclose a lost slot and retain the four saved assets'
   await expect(page.getByText('名额已满，可以先选好素材。')).toBeVisible()
   await page.getByLabel('任务名称（选填）').fill('上传竞争')
   await page.getByLabel('爆款原片',{exact:true}).setInputFiles(source)
-  for(const label of ['商品图','销量截图','CTA 行动号召图']){
+  for(const label of ['商品图','销量截图','合作海报']){
     await page.getByLabel(label,{exact:true}).setInputFiles({...image,name:`${label}.png`})
   }
   await expect(page.getByText(/四份素材已就绪/)).toBeVisible()
@@ -202,7 +202,7 @@ test('home opens the outstanding version and the two page links retain an explic
   clientFailed=false
   held=false
   await page.goto(origin)
-  await page.getByRole('link',{name:'查看预览 · 交付夹具 · 新建联达人版'}).click()
+  await page.getByRole('link',{name:'查看预览 · 成片示例 · 新建联达人版'}).click()
   await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
   await expect(page.getByRole('heading',{level:1})).toHaveCount(1)
   await page.getByRole('tab',{name:/已合作达人版/}).click()

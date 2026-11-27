@@ -48,7 +48,7 @@ test('workspace dev proxy routes only the selected task to its saved inputs',asy
     calls.push(`${url.pathname}:${url.searchParams.get('projectId')??''}`)
     expect(req.headers['sec-fetch-site']).toBe('same-origin')
     const data=url.pathname.endsWith('/task-workspace')
-      ?{running:0,limit:5,tasks:[{id,name:'工作台接入夹具',status:'materials',updatedAt:1,outputs:[]}]}
+      ?{running:0,limit:5,tasks:[{id,name:'示例任务',status:'materials',updatedAt:1,outputs:[]}]}
       :url.searchParams.get('projectId')!==id?null
         :url.pathname.endsWith('/material-intake')?{receipt:{projectId:id,assets:['source.mp4','product.png','sales.png','cta.png'].map((name,id)=>({name,id:String(id)}))}}
         :{task:null}
@@ -68,7 +68,7 @@ test('workspace dev proxy routes only the selected task to its saved inputs',asy
     const origin=vite.resolvedUrls?.local[0]
     if(!origin)throw Error('Workspace development server unavailable')
     await page.goto(origin)
-    await page.getByRole('link',{name:'打开 工作台接入夹具'}).click()
+    await page.getByRole('link',{name:'打开 示例任务'}).click()
     await expect(page.getByText('四份素材均已保存到当前工程。')).toBeVisible()
     expect(calls).toContain('/api/clipmentor/task-workspace:')
     expect(calls).toContain('/api/clipmentor/material-intake:'+id)

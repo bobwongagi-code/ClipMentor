@@ -82,10 +82,6 @@
 .cm-draft-options > button { justify-self: start; }
 .cm-preview-status { padding: 3px 10px; border-radius: 100px; justify-self: start; background: #f7ecd0; color: #63490c; font-size: 13px; }
 .cm-preview-status[data-state=attention] { color: #872f20; background: #fff0e7; }
-.cm-preview-checks { display: grid; gap: 6px; padding-top: 2px; font-size: 14px; }
-.cm-preview-checks div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
-.cm-preview-checks dt { color: #625a51; }
-.cm-preview-checks dd { margin: 0; font-weight: 600; }
 .cm-preview-chapters { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .cm-preview-chapters button { border-radius: 8px; border: 1px solid #e8e2d6; padding: 6px 9px; color: #2f261a; background: #fff; }
 .cm-preview-chapters button:hover:not(:disabled) { background: #f7ecd0; }
