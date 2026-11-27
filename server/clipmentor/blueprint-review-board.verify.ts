@@ -17,6 +17,35 @@ const input=(value:unknown,bindings?:ProjectDoc[]):BoardInput=>({value,sha256:ha
 try{
  const {loadReviewBoardInput,planReviewBoards,renderReviewBoards,REVIEW_BOARD_FRAME_LIMIT}=await import('./blueprint-review-board');
  assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,root,'all server imports must bind to temporary storage');
+ await test('Human replay gallery uses named source selections, preserves the draft and falls back on conflicts',async()=>{
+  const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
+  const {reviewReplayViews}=await import('./blueprint-review-board-human-context');
+  const {plans,data,lint}=planReviewBoards(input(clone(c.newBinding)));
+  const board=plans[0];
+  const unit=board.rows.find(row=>row.stage==='explanation')!;
+  const samples=[
+   {key:'context',frame:10,seconds:1,label:'source',jpeg:'eA==',selection:{segmentId:'context-segment',start:1}},
+   ...['一','二','三','四'].map((zh,index)=>({key:`step-${index}`,frame:20+index,seconds:2+index,label:'source',jpeg:'eA==',
+    selection:{segmentId:`segment-${index}`,start:2+index,shortLabel:{zh,ms:`step ${index}`}}})),
+  ];
+  const rows=[{...unit,frames:samples,replayFrames:samples}];
+  assert.deepEqual(reviewReplayViews(rows).map(({frame})=>frame.key),['context','step-0','step-1','step-2','step-3']);
+  assert.deepEqual(reviewReplayViews([{...rows[0],frames:samples.slice(0,3)}]),[],'limited frames cannot appear as a complete recap');
+  assert.deepEqual(reviewReplayViews([...rows,{...rows[0],stage_text:'another cue'}]),[],'never flatten two different stage cues');
+  const conflict={...samples[1],selection:{...samples[1].selection,shortLabel:{zh:'错位',ms:'wrong place'}}};
+  assert.deepEqual(reviewReplayViews([...rows,{...unit,frames:[conflict]}]),[],'same frame with conflicting labels cannot receive a guessed name');
+  assert.deepEqual(reviewReplayViews(rows.map(row=>({...row,frames:row.frames.map(frame=>({...frame,selection:{...frame.selection,shortLabel:undefined}}))}))),[],'registration order does not supply names');
+  board.rows=board.rows.map(row=>row===unit?rows[0]:row);
+  const before=JSON.stringify(board);
+  const html=humanReviewBoardPage(board,data,lint,[],[],true);
+  const gallery=html.match(/<div class="replay-gallery">.*?<\/div><\/div>/s)?.[0];
+  assert(gallery,'fixture must render the real human board gallery');
+  assert.equal((html.match(/ data-recap-frame/g)??[]).length,4);
+  assert.match(html,/data-replay-frame="0"><button/);
+  assert.match(html,/data-show="recap" aria-pressed="false">总览/);
+  assert.equal((html.match(/data-blueprint-opinion="/g)??[]).length,new Set(board.rows.filter(row=>row.stage==='explanation').map(row=>row.unit_id)).size);
+  assert.equal(JSON.stringify(board),before);
+ });
  const {deliveryPictureBindings,deliverySectionsFromDoc}=await import('../../src/clipmentor/delivery-sections');
  const {extractOneFrame}=await import('../plugins/extract-frames'),{ffmpegBin}=await import('../media-binaries');
  await test('Saved blueprint opinions preserve untouched scopes and name the exact confirmed sentence',async()=>{

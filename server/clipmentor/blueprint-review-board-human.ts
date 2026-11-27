@@ -2,7 +2,7 @@ import {BLUEPRINT_OPINION_MAX_LENGTH} from '../../shared/clipmentor-blueprint-op
 /** Human presentation of the same saved plan. No new source selection or judgment. */
 import type {ReviewBoardPlan,ReviewBoardRow} from './blueprint-review-board';
 import type {ProjectDoc} from '../../src/editor/types';
-import {sourceSpeech,unitUnknowns,translatedLabels,stageTranslations,overlaps} from './blueprint-review-board-human-context';
+import {sourceSpeech,unitUnknowns,translatedLabels,stageTranslations,overlaps,reviewReplayViews} from './blueprint-review-board-human-context';
 import type {readBlueprint,lintBlueprint} from '../../src/clipmentor/blueprint-lint';
 import {reviewBoardInteractions} from './blueprint-review-board-page';
 import type {VisualReferenceFrame} from './visual-done-criteria';
@@ -45,13 +45,27 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const teaching=(id:string)=>{const u=data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit;return text(u?.intent_zh)||arr(obj(data.analysis.source_breakdown).points).map(obj).filter(p=>arr(u?.point_ids).includes(p.point_id)).map(p=>text(p.teaching_question)).filter(Boolean).join('；')||'本组教学点尚未登记';};
  const originalDescription=(id:string)=>{const breakdown=obj(data.analysis.source_breakdown),unit=arr(breakdown.units).map(obj).find(u=>u.unit_id===id),segments=arr(breakdown.segments).map(obj).filter(s=>arr(unit?.original_segment_ids).includes(s.segment_id)),evidenceIds=segments.flatMap(s=>arr(s.visible_evidence_ids));const evidence=arr(data.analysis.evidence).map(obj).find(e=>evidenceIds.includes(e.evidence_id)&&e.kind==='visible_action'),range=evidence?.source_range_seconds;if(!text(evidence?.text)||!Array.isArray(range)||range.length!==2||!range.every(v=>typeof v==='number'&&Number.isFinite(v))||range[0]<0||range[1]<range[0])return null;return{text:text(evidence?.text),range:range as [number,number]};};
  const frameLabel=(r:ReviewBoardRow,i:number)=>`${r.stage==='original'?'原片':'讲解'}画面${i+1}`;
- const image=(r:ReviewBoardRow,i:number,cls='')=>{const f=r.frames[i];return `<button class="image-button ${cls}" data-zoom="${board.rows.indexOf(r)}" aria-label="放大${esc(frameLabel(r,i))}"><img src="data:image/jpeg;base64,${f.jpeg}" alt="${esc(frameLabel(r,i))}" decoding="async"></button>`;};
+ const image=(r:ReviewBoardRow,i:number,detail?:string)=>{const f=r.frames[i],label=detail??frameLabel(r,i);return `<button class="image-button" data-zoom="${board.rows.indexOf(r)}"${detail?` data-zoom-frame="${i}"`:''} aria-label="放大${esc(label)}"><img src="data:image/jpeg;base64,${f.jpeg}" alt="${esc(label)}" decoding="async"></button>`;};
  const strip=(r:ReviewBoardRow,kind:string)=>`<div class="thumb-strip ${kind}">${r.frames.map((f,i)=>(r.stage==='original'||r.replayFrames)?`<figure>${image(r,i)}<figcaption>原片 ${n(f.seconds)}秒</figcaption></figure>`:image(r,i)).join('')}</div>`;
  const labelList=(lineId:string)=>{const labels=translatedLabels(data,lineId);return `${labels.invalid&&!embedded?'<p class="input-notice" data-input-code="INPUT">输入提示：短标中文与原文数量或类型不一致，未猜测对应。</p>':''}${labels.pairs.length?`<div class="label-copy"><h4>短标对照</h4><ul>${labels.pairs.map(p=>`<li><span lang="ms">${esc(p.ms)}</span><span aria-hidden="true"> → </span><span>${esc(p.zh||'短标译文未登记')}</span></li>`).join('')}</ul></div>`:''}`;};
  const copy=(r:ReviewBoardRow,lines=r.lines)=>lines.map(l=>`<div class="line-copy" data-line-id="${esc(l.id)}"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p><div class="caption-cards">${l.cards.map((card,i)=>`<div class="caption-card"><span>字幕卡${i+1}</span>${card.map(s=>`<p lang="ms">${esc(s)}</p>`).join('')}</div>`).join('')}</div>${labelList(l.id)}</div>`).join('');
  const mock=(r:ReviewBoardRow,lines:ReviewBoardRow['lines'][number])=>{
   const colors=r.colors.filter(c=>/^#[\da-f]{6}$/iu.test(c)),mid=Math.floor(r.frames.length/2);
   return`<figure class="mock"><figcaption>${embedded?'版式示意':'版式示意，非渲染 <span>示意模板</span>'}</figcaption><div class="mock-screen"><div class="stage-cue" style="background:${colors[0]??'#e8e7e1'};color:${colors[1]??'#252a27'}">${esc(r.stage_text)}</div><div class="mock-visual">${image(r,mid)}${!r.replayFrames&&lines?.labels.length?`<div class="mock-labels" lang="ms">${lines.labels.map(v=>`<span style="background:${colors[0]??'#e8e7e1'};color:${colors[1]??'#252a27'}">${esc(v)}</span>`).join('')}</div>`:''}</div><div class="mock-caption" lang="ms">${lines?.cards[0]?.map(s=>`<p>${esc(s)}</p>`).join('')??''}</div></div>${strip(r,'explanation-strip')}</figure>`;
+ };
+ const stageStyle=(row:ReviewBoardRow)=>{
+  const [background,foreground]=row.colors;
+  const color=(value:string|undefined,fallback:string)=>value&&/^#[\da-f]{6}$/iu.test(value)?value:fallback;
+  return `background:${color(background,'#e8e7e1')};color:${color(foreground,'#252a27')}`;
+ };
+ const replayGallery=(views:ReturnType<typeof reviewReplayViews>)=>{
+  const stamp=(seconds:number)=>`原片 ${Number(seconds.toFixed(2))} 秒`;
+  const controls=views.map(({frame},i)=>`<button type="button" data-show="${i}" aria-pressed="${i===0}">${esc(frame.selection?.shortLabel?.zh??stamp(frame.seconds))}</button>`).join('');
+  const frames=views.map(({row,index,frame},i)=>{
+   const label=frame.selection?.shortLabel;
+   return `<figure data-replay-frame="${i}"${label?' data-recap-frame':''}${i===0?'':' hidden'}>${image(row,index,label?.zh??stamp(frame.seconds))}<figcaption>${label?`<strong>${esc(label.zh)}</strong> <span lang="ms">${esc(label.ms)}</span>`:''} <span class="replay-time">${stamp(frame.seconds)}</span></figcaption></figure>`;
+  }).join('');
+  return `<div class="replay-gallery"><div class="replay-navigation" role="group" aria-label="回看画面">${controls}<button type="button" data-show="recap" aria-pressed="false">总览</button></div><div class="stage-cue" style="${stageStyle(views[0].row)}">${esc(views[0].row.stage_text)}</div><div class="replay-frames">${frames}</div></div>`;
  };
  const questionHtml=(id:string)=>{const q=[...questions.get(id)??[]];return q.length?`<aside class="questions"><h3>需要你看一眼</h3>${q.map(v=>`<p>${esc(v)}</p>`).join('')}</aside>`:'';};
  const visualQuestions=(id:string)=>references.filter(({criterion})=>criterion.sectionId===id).map(({criterion,base64})=>
@@ -77,6 +91,18 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   target.scrollIntoView({block:'start'});
  });
  }</script>`;
+ const replayScript=`<script>{
+ for(const gallery of document.querySelectorAll('.replay-gallery')){
+  const buttons=[...gallery.querySelectorAll('[data-show]')];
+  const frames=[...gallery.querySelectorAll('[data-replay-frame]')];
+  for(const button of buttons)button.addEventListener('click',()=>{
+   const choice=button.dataset.show,recap=choice==='recap';
+   gallery.classList.toggle('is-recap',recap);
+   for(const item of buttons)item.setAttribute('aria-pressed',String(item===button));
+   for(const frame of frames)frame.hidden=recap?!frame.hasAttribute('data-recap-frame'):frame.dataset.replayFrame!==choice;
+  });
+ }
+ }</script>`;
  const opinionsScript=`<script>{
  const origin=new URL(document.baseURI).origin;
  const fields=[...document.querySelectorAll('[data-blueprint-opinion]')];
@@ -84,7 +110,13 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   parent.postMessage({type:'clipmentor:blueprint-opinion',unitId:field.dataset.blueprintOpinion,text:field.value},origin);
  });
  addEventListener('message',event=>{
-  if(event.source!==parent||event.origin!==origin||event.data?.type!=='clipmentor:blueprint-opinion-draft')return;
+  if(event.source!==parent||event.origin!==origin)return;
+  if(event.data?.type==='clipmentor:open-blueprint-opinion'){
+   const field=fields.find(field=>field.dataset.blueprintOpinion===event.data.unitId);
+   if(field){field.closest('details').open=true;field.focus();}
+   return;
+  }
+  if(event.data?.type!=='clipmentor:blueprint-opinion-draft')return;
   const drafts=Array.isArray(event.data.entries)?new Map(event.data.entries.map(entry=>[entry.unitId,entry.text])):null;
   for(const field of fields){
    if(drafts){
@@ -139,9 +171,19 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
    if(previous?.[0].stage===row.stage)previous.push(row);
    else runs.push([row]);
   }
-  const playback=runs.map((run,position)=>run[0].stage==='original'
-   ?`<div class="source-block"><h3>原片</h3>${run.map(r=>strip(r,'source-strip')).join('')}${position===0?excerpt:''}</div>${stageList(run)}`
-   :run.flatMap(r=>r.lines.map(l=>`<div class="explanation"><div>${mock(r,l)}</div><div class="explanation-copy"><h3>讲解</h3>${sourceLink(r,index,originals)}${stageList([r])}${copy(r,[l])}<details class="picture-note"><summary>审核依据</summary><p>${esc(r.picture)}</p></details></div></div>`)).join('')).join('');
+  const reviewedRuns=runs.map(run=>({run,views:run[0].stage==='explanation'?reviewReplayViews(run):[]}));
+  const focused=reviewedRuns.some(({views})=>views.length);
+  const pictureNotes=(run:ReviewBoardRow[])=>`<details class="picture-note"><summary>审核依据</summary>${run.map(r=>`<p>${esc(r.picture)}</p>`).join('')}</details>`;
+  const playback=reviewedRuns.map(({run,views},position)=>{
+   if(run[0].stage==='original')return focused
+    ?`<div class="focused-original"><h3>原片选帧</h3><div class="source-rail">${run.map(r=>`<div><div class="stage-cue" style="${stageStyle(r)}">${esc(r.stage_text)}</div>${strip(r,'source-strip')}</div>`).join('')}</div>${position===0&&excerpt?`<details class="picture-note"><summary>原片观察</summary>${excerpt}${stageList(run)}</details>`:''}</div>`
+    :`<div class="source-block"><h3>原片</h3>${run.map(r=>strip(r,'source-strip')).join('')}${position===0?excerpt:''}</div>${stageList(run)}`;
+   if(views.length){
+    const copyById=new Map(run.flatMap(r=>r.lines.map(l=>[l.id,{r,l}] as const)));
+    return `<div class="focused-explanation"><h3>讲解</h3>${replayGallery(views)}<div class="focused-copy">${[...copyById.values()].map(({l})=>`<div class="focused-line"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p></div>`).join('')}<details class="picture-note"><summary>字幕与来源</summary>${stageList(run)}${[...copyById.values()].map(({r,l})=>`${sourceLink(r,index,originals)}${copy(r,[l])}`).join('')}</details>${pictureNotes(run)}</div></div>`;
+   }
+   return run.flatMap(r=>r.lines.map(l=>`<div class="explanation"><div>${mock(r,l)}</div><div class="explanation-copy"><h3>讲解</h3>${sourceLink(r,index,originals)}${stageList([r])}${copy(r,[l])}${pictureNotes([r])}</div></div>`)).join('');
+  }).join('');
   const opinion=embedded?`<details class="group-opinion"><summary>第 ${index+1} 组意见</summary><textarea rows="3" maxlength="${BLUEPRINT_OPINION_MAX_LENGTH}" data-blueprint-opinion="${esc(id)}" aria-label="第 ${index+1} 组意见" placeholder="只针对本组"></textarea></details>`:'';
   return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组 · 教什么</span>${esc(teaching(id))}</h2>${id===excerptUnit?excerptHtml:''}${playback}${speechBlock(index,originals)}${embedded?'':check+unknownBlock(id)+questionHtml(id)}${opinion}</section>`;
  }).join('');
@@ -173,5 +215,22 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
 .layered-opening .delivery-body{grid-template-columns:1fr}.layered-opening .provided{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr));gap:12px}.layered-opening figure{margin:0;text-align:center}
 .teaching-excerpt{margin:0 0 22px}.teaching-excerpt button{font:inherit;color:inherit;background:#fff;border:1px solid #c9d2c4;padding:6px 12px;cursor:pointer}.teaching-excerpt [role=status]{margin-left:10px;font-size:13px}.teaching-excerpt video{display:block;max-width:min(100%,320px);max-height:65vh;background:#101310}.teaching-excerpt video[hidden]{display:none}
 .group-opinion{border-top:1px solid #d9ded4;padding-top:12px;margin-top:22px}.group-opinion textarea{box-sizing:border-box;width:100%;display:block;resize:vertical;margin-top:8px;padding:8px;border:1px solid #d2d8ce;border-radius:6px;font:inherit}
-</style></head><body><header><p class="kicker">剪辑蓝图 · 人审版</p><h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解${durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main>${embedded?'':'<footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer>'}<dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded)}${sourceLinksScript}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
+.focused-original{margin-bottom:24px}.focused-original .source-description{margin-top:10px}
+.source-rail{display:flex;gap:12px;overflow-x:auto;padding:3px 3px 10px}
+.source-rail>div{flex:0 0 min(82%,290px);min-width:0}
+.source-rail .source-strip{padding:5px;background:#f1f3ef}.source-rail .stage-cue{padding:4px 8px}
+.focused-explanation{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:12px 24px;margin-bottom:24px}
+.focused-explanation>h3{grid-column:1/-1;margin:0}.focused-copy{min-width:0}.focused-line+.focused-line{border-top:1px solid #e1e5da;padding-top:12px}
+.focused-copy .meaning{font-size:19px;margin-bottom:5px}.focused-copy .narration{margin-bottom:14px}
+.replay-gallery{min-width:0;border:1px solid #d9ded4;background:#faf8f1}
+.replay-frames figure{margin:0;min-width:0}.replay-frames figure[hidden]{display:none}
+.replay-frames .image-button img{aspect-ratio:9/16;object-fit:contain;background:#181c20}
+.replay-frames figcaption{padding:8px 10px;font-size:13px;overflow-wrap:anywhere}
+.replay-frames strong{display:block;font-size:15px;color:#302719}.replay-time{display:block;color:#5d645a;font-size:12px}
+.is-recap .replay-frames{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:5px}
+.replay-navigation{display:flex;flex-wrap:wrap;gap:6px;padding:10px}
+.replay-navigation button{border:1px solid #c8c1b4;background:white;color:#302719;border-radius:6px;padding:6px 9px;font:inherit;font-size:13px;cursor:pointer}
+.replay-navigation button[aria-pressed="true"]{background:#faefd0;border-color:#846a35;font-weight:650}
+@media(max-width:600px){.focused-explanation{grid-template-columns:minmax(0,1fr)}.focused-explanation>h3{grid-column:auto}}
+</style></head><body><header><p class="kicker">剪辑蓝图 · 人审版</p><h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解${durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main>${embedded?'':'<footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer>'}<dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded,true)}${sourceLinksScript}${replayScript}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
 }

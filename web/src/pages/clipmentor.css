@@ -53,6 +53,9 @@
 .cm-saved-assets svg { color: #1c7b74; }
 .cm-footer p { font-size: 14px; color: #5c5c5c; }
 .cm-review-board { width: 100%; height: 70vh; border: 1px solid #eae6e0; border-radius: 12px; }
+.cm-blueprint-opinion-nav { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:6px 12px; margin-bottom:8px; font-size:13px; }
+.cm-blueprint-opinion-nav a, .cm-blueprint-opinion-nav button { color:#584526; text-decoration:underline; text-underline-offset:3px; }
+.cm-blueprint-opinion-nav button { border:0; background:none; padding:4px 0; font:inherit; cursor:pointer; }
 .cm-final-video { display: block; width: 100%; aspect-ratio: 9 / 16; object-fit: contain; background: #17181b; border-radius: 14px; }
 .cm-feedback > textarea { display: block; margin: 8px 0; }
 .cm-preview-page { --preview-gold: #e6c46f; --preview-ink: #2f261a; --preview-border: #e8e2d6; }

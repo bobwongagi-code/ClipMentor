@@ -18,6 +18,7 @@ import {tileContactSheet,formatFrameLabel} from '../frame-grid';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {blueprintReviewBoardPage} from './blueprint-review-board-page';
 import {humanReviewBoardPage} from './blueprint-review-board-human';
+import {translatedLabels} from './blueprint-review-board-human-context';
 import {deliveryLayoutStages,renderDeliveryLayoutFrames} from './delivery-layout-frames';
 import type {VisualReferenceFrame} from './visual-done-criteria';
 import type {PublishedNarrationDecision} from './production-teaching-baseline';
@@ -38,7 +39,8 @@ export interface ReviewBoardRow {
  range:[number,number]|null;asset_id:string;asset_hash:string;picture:string;
  stage_text:string;colors:string[];notices:string[];lint:ReturnType<typeof lintBlueprint>['findings'];
  crop?:{left:number;top:number;right:number;bottom:number};tool_crop_px?:unknown;
- frames:Array<{key:string;frame:number;seconds:number;label:string;jpeg?:string}>;sheet?:string;reuse:string[];ending_variant?:string;
+ frames:Array<{key:string;frame:number;seconds:number;label:string;jpeg?:string;
+  selection?:{segmentId:string;start:number;shortLabel?:{zh:string;ms:string}}}>;sheet?:string;reuse:string[];ending_variant?:string;
  replayFrames?:ReviewBoardRow['frames'];
  full_picture?:{key:string;jpeg?:string};
  deliveryLayout?:DeliverySection['picture'];
@@ -160,15 +162,27 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
    const unit=input.embedded&&stage==='explanation'&&ids.length===1&&selectedRanges.length
     ?breakdown?.units.find(unit=>unit.unit_id===selected.unit.unit_id):undefined;
    const binding=unit&&breakdown&&copyLineSourceBinding(breakdown,unit,lineById.get(ids[0])!.raw,operational);
+   const labels=binding?translatedLabels(data,ids[0]).pairs:[];
    const picks=binding?selectedRanges.flatMap(value=>{
-    const slice=window(obj(value).source_range_seconds);
+    const entry=obj(value),slice=window(entry.source_range_seconds);
     if(!slice||slice[1]>duration)return [];
-    const frame=Math.min(last,Math.ceil(slice[0]*fps-1e-8));
-    return slice[0]===slice[1]?[frameFloor(slice[0]*fps)]:frame/fps>=slice[0]-1e-8&&frame/fps<slice[1]?[frame]:[];
+    // A short label is only a locator when the saved selection names it.
+    // Order or equal counts cannot bind a label to a different shot.
+    const purpose=txt(entry.purpose);
+    const matches=labels.filter(({zh,ms})=>(zh&&purpose.includes(zh))||purpose.includes(ms));
+    const shortLabel=matches.length===1?matches[0]:undefined;
+    const first=Math.ceil(slice[0]*fps-1e-8);
+    const middle=frameFloor((slice[0]+slice[1])*fps/2);
+    const frame=slice[0]===slice[1]?frameFloor(slice[0]*fps):Math.min(last,shortLabel?Math.max(first,middle):first);
+    if(slice[0]!==slice[1]&&(frame/fps<slice[0]-1e-8||frame/fps>=slice[1]))return [];
+    return [{...samples([frame])[0],selection:{segmentId:txt(entry.segment_id),start:slice[0],shortLabel}}];
    }):[];
-   const replay=[...new Set(picks)];
+   const replay=picks.filter((sample,index)=>picks.findIndex(pick=>pick.frame===sample.frame)===index);
+   for(const sample of replay){
+    if(picks.some(pick=>pick!==sample&&pick.frame===sample.frame))delete sample.selection.shortLabel;
+   }
    // Read separately registered excerpts from their own frames, never from the gap in the phase envelope.
-   body.push({key:`${txt(selected.unit.unit_id)}/${index}`,unit_id:txt(selected.unit.unit_id),stage,line_ids:ids,lines,range,asset_id:txt(source.asset_id),asset_hash:sourceHash,picture,stage_text:cueRows.map(r=>txt(r.text)).filter(Boolean).join(' / ')||'未登记阶段标识',colors,notices,lint:lint.findings.filter(f=>['B04','B05','B07'].includes(f.rule_id)&&(ids.some(id=>f.location.includes(id))||f.location.includes(selected.path)||f.location.includes(txt(selected.unit.unit_id)))),frames:samples(frames),...(replay.length>1?{replayFrames:samples(replay)}:{}),reuse:[]});
+   body.push({key:`${txt(selected.unit.unit_id)}/${index}`,unit_id:txt(selected.unit.unit_id),stage,line_ids:ids,lines,range,asset_id:txt(source.asset_id),asset_hash:sourceHash,picture,stage_text:cueRows.map(r=>txt(r.text)).filter(Boolean).join(' / ')||'未登记阶段标识',colors,notices,lint:lint.findings.filter(f=>['B04','B05','B07'].includes(f.rule_id)&&(ids.some(id=>f.location.includes(id))||f.location.includes(selected.path)||f.location.includes(txt(selected.unit.unit_id)))),frames:samples(frames),...(replay.length>1?{replayFrames:replay}:{}),reuse:[]});
   }
  }
  if(!body.length)fail('没有可读的阶段');

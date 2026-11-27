@@ -100,6 +100,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const assetUrl=(view:string,key:string,value:string)=>resourceUrl(view,key,value,outputAudience)
   const audienceTitle=outputAudience?audienceTitleFor(outputAudience):undefined
   const tabsId=useId()
+  const overallOpinionId=useId()
   const video=useRef<HTMLVideoElement>(null)
   const playback=useRef<{key:string;time:number}>()
   const queuedSeek=useRef<{key:string;time:number}>()
@@ -175,6 +176,8 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const opinionEntries=opinionDraft?.key===boardKey?opinionDraft.entries:undefined
   const pendingOpinion=opinionReview?.key===boardKey?opinionReview:undefined
   const hasOpinionDraft=opinionEntries?.some(entry=>entry.text.trim())===true
+  const filledGroups=groups.filter(group=>opinionEntries?.some(entry=>entry.unitId===group.id&&entry.text.trim()))
+  const overallFilled=opinionEntries?.some(entry=>entry.unitId===null&&entry.text.trim())===true
   const feedbackTarget=draft.target==='whole'&&draft.confirmed?{scope:'whole',confirmed:true}
     :draft.target==='range'&&draft.start?.trim()&&draft.end?.trim()&&Number(draft.start)>=0&&Number.isFinite(Number(draft.end))&&Number(draft.end)>Number(draft.start)
       &&(!task?.previewDuration||Number(draft.end)<=task.previewDuration)
@@ -506,6 +509,15 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       {!unifiedBlueprint && !outputAudience && <div className={boardRevision?'cm-heading':'cm-preview-heading'}><h1>{reviewTitle}</h1></div>}
       {!boardRevision&&!outputAudience&&<PreviewSteps task={task} />}
       {boardRevision&&<section className="cm-panel cm-work">
+        {currentBoard?.revision===boardRevision&&<nav className="cm-blueprint-opinion-nav" aria-label="蓝图意见">
+          {(filledGroups.length>0||overallFilled)&&<span>已填写</span>}
+          {filledGroups.map(group=><button key={group.id} type="button" onClick={()=>{
+            const frame=boardFrame.current
+            frame?.scrollIntoView({block:'nearest'})
+            frame?.contentWindow?.postMessage({type:'clipmentor:open-blueprint-opinion',unitId:group.id},'*')
+          }}>{group.label}</button>)}
+          <a href={`#${overallOpinionId}`}>{overallFilled?'整体':'填写整体意见'}</a>
+        </nav>}
         {boardRevision && (currentBoard?.revision === boardRevision
           ? <iframe key={boardKey} ref={boardFrame} title="人审版蓝图" className="cm-review-board" sandbox="allow-scripts" srcDoc={currentBoard.html} onLoad={syncGroupOpinions} />
           : boardError ? <div className="cm-footer"><p role="status">{boardError}</p>
@@ -520,8 +532,8 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
               :<p>修改意见已保存，整理后显示要点。</p>}
           </section>}
           {task.blueprintOpinionDifferences && <BlueprintOpinionChanges differences={task.blueprintOpinionDifferences} />}
-          <label htmlFor="cm-blueprint-overall-opinion">整体意见</label>
-          <textarea id="cm-blueprint-overall-opinion" disabled={pending} maxLength={BLUEPRINT_OPINION_MAX_LENGTH} placeholder="不属于某一组的意见"
+          <label htmlFor={overallOpinionId}>整体意见</label>
+          <textarea id={overallOpinionId} disabled={pending} maxLength={BLUEPRINT_OPINION_MAX_LENGTH} placeholder="不属于某一组的意见"
             value={opinionEntries?.find(entry=>entry.unitId===null)?.text??''} onChange={event=>writeOpinion(null,event.target.value)} />
           {pendingOpinion?.placement&&<div role="status" className="cm-opinion-action">
             <span>{pendingOpinion.placement.multiple?'这条意见提到多个位置，可分别填写。':`要把这条意见移到${pendingOpinion.placement.label}吗？`}</span>
