@@ -36,17 +36,27 @@ export function productionActivity(task?:ProgressTask){
  return labels[task.stage]??'处理中'
 }
 
-type PreviewTask=ProgressTask&{renderId?:string;previewPending?:boolean;previewNeedsChanges?:boolean;previewReviewed?:boolean;deliveryHeld?:boolean}
+type PreviewTask=ProgressTask&{renderId?:string;previewPending?:boolean;previewNeedsChanges?:boolean;previewReviewed?:boolean;deliveryHeld?:boolean;
+ deliveryUnavailable?:boolean;canAcceptPreview?:boolean}
 
 export function hasPlayablePreview(task?:PreviewTask){
  return !!task?.renderId&&(task.previewPending===true||task.status==='awaiting_review'||task.status==='completed')
 }
 
-export function previewStatus(task?:PreviewTask){
+export function previewActions(task?:PreviewTask) {
+ const watchable=hasPlayablePreview(task)
+ const held=!!(task?.deliveryHeld||task?.previewNeedsChanges)
+ const available=watchable&&!held&&!task?.deliveryUnavailable
+ return {watchable,held,canConfirm:available&&task?.status==='awaiting_review'&&task.canAcceptPreview===true,
+  canDownload:available&&task?.status==='completed',canDownloadDraft:available&&task?.previewPending===true}
+}
+
+export function previewStatus(task?:PreviewTask,readFailed=false){
+ if(!task)return readFailed?'读取状态失败':'正在读取'
  if(task?.deliveryHeld||task?.previewNeedsChanges)return '需修改'
  if(task&&(task.previewPending||['awaiting_review','completed'].includes(task.status))&&!hasPlayablePreview(task))return '预览暂不可用'
- if(task?.status==='completed')return '可下载'
- if(task?.status==='awaiting_review')return '待确认'
+ if(task?.status==='completed')return previewActions(task).canDownload?'可下载':'暂不可下载'
+ if(task?.status==='awaiting_review')return previewActions(task).canConfirm?'待确认':'暂不能确认'
  if(task?.previewPending)return task.status==='blocked'?'复核已暂停':task.active&&task.stage==='self_check'?'复核中':'待复核'
  if(task?.status==='cancelled')return '已取消'
  if(task?.status==='blocked')return '制作已暂停'
@@ -56,7 +66,8 @@ export function previewStatus(task?:PreviewTask){
 }
 
 export function previewProgress(task?:PreviewTask){
- const stage=task?.status==='completed'&&!task.deliveryHeld?4:task?.deliveryHeld||task?.previewPending?2:task?.status==='awaiting_review'?3:1
+ const actions=previewActions(task)
+ const stage=actions.canDownload?4:actions.canConfirm?3:actions.watchable||actions.held||task?.stage==='self_check'?2:1
  return ['蓝图确认','预览与修改','复核','确认成片','下载'].map((label,index)=>({
   label, done:index<stage&&(index!==2||task?.previewReviewed===true), current:index===stage,
  }))

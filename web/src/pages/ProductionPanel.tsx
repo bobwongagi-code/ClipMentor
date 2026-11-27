@@ -3,7 +3,7 @@ import { Check, Download, Play, Send } from 'lucide-react'
 import { BLUEPRINT_OPINION_MAX_LENGTH, BLUEPRINT_OPINION_TOTAL_MAX_LENGTH, type BlueprintOpinion, type BlueprintOpinionConfirmation, type BlueprintOpinionDifference, type BlueprintOpinionPlacement } from '../../../shared/clipmentor-blueprint-opinions'
 
 import { ProgressNode } from '../components/processing/ProgressNode'
-import { hasPlayablePreview, previewProgress, previewStatus, productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
+import { hasPlayablePreview, previewActions, previewProgress, previewStatus, productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
 
 import { projectResource, taskPage } from './taskNavigation'
 import { useReviewDraft } from './useReviewDraft'
@@ -23,7 +23,7 @@ export type Task = {
   previewDuration?:number; previewReviewed?:boolean
   canAcceptPreview?:boolean; previewPending?:boolean; previewNeedsChanges?:boolean; deliveryHeld?:boolean; reviewIssue?:ReviewIssue
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
-  confirmedAt?: number; materialAttachment?: {assetId:string;label:string}
+  confirmedAt?: number; materialAttachment?: {assetId:string;label:string}; materialAttachmentUnavailable?:boolean
   canContinueAnalysis?: boolean
 }
 export type Audience = 'new_contact' | 'existing_partner'
@@ -108,7 +108,12 @@ export async function readPanelState(response: Response): Promise<State | undefi
   return data
 }
 
-export default function ProductionPanel({ assets, onRecheck, requestApi, outputAudience, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh, showPreview = true, projectId, reviewProjectId, slotsFull = false }: { assets: { id: string; title: string; name: string }[]; onRecheck: () => void; requestApi: (url: string, init?: RequestInit) => Promise<Response>; outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task)=>void; unifiedBlueprint?:boolean; mediaRefresh?:number; showPreview?:boolean; projectId?:string; reviewProjectId?:string; slotsFull?:boolean }) {
+export default function ProductionPanel({ assets, intakeReady, requestApi, outputAudience, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh, showPreview = true, projectId, reviewProjectId, slotsFull = false, requestedAudience, onAudienceChange, onPreviewTask }: {
+  assets:{id:string;title:string;name:string}[]; intakeReady:boolean; requestApi:(url:string, init?:RequestInit)=>Promise<Response>
+  outputAudience?:Audience; sharedTask?:Task; onTask?:(task:Task|undefined, failed:boolean)=>void; unifiedBlueprint?:boolean
+  mediaRefresh?:number; showPreview?:boolean; projectId?:string; reviewProjectId?:string; slotsFull?:boolean
+  requestedAudience?:Audience; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
+}) {
   const endpoint = projectResource(outputAudience ? `${productionEndpoint}?audience=${outputAudience}` : productionEndpoint, projectId)
   const assetUrl=(view:string,key:string,value:string)=>projectResource(resourceUrl(view,key,value,outputAudience),projectId)
   const audienceTitle=outputAudience?audienceTitleFor(outputAudience):undefined
@@ -133,6 +138,9 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const [opinionReview,setOpinionReview]=useState<{key:string;draft?:OpinionDraft;entries:BlueprintOpinion[];confirmation?:BlueprintOpinionConfirmation;placement?:BlueprintOpinionPlacement}>()
   const [opinionNotice,setOpinionNotice]=useState<string>()
   const [confirmation, setConfirmation] = useState<{key:string;watched?:boolean;language?:boolean;acknowledged?:boolean}>()
+  const [downloadAfterConfirmation,setDownloadAfterConfirmation]=useState<{key:string;sequence:number}>()
+  const previewVisible=useRef(showPreview)
+  previewVisible.current=showPreview
   const boardFrame = useRef<HTMLIFrameElement>(null)
   const opinionPrompt = useRef<HTMLDivElement>(null)
   const nextRead = useRef(0)
@@ -158,20 +166,31 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     })
   }
   const owner=state?.outputOwner?.taskId??''
-  const [outputs,setOutputs]=useState<Partial<Record<Audience,{owner:string;task:Task}>>>({})
+  const [outputs,setOutputs]=useState<Partial<Record<Audience,{owner:string;task?:Task;failed:boolean}>>>({})
   const [selected,setSelected]=useState<{owner:string;audience:Audience}>()
-  const reportPartner=useCallback((task:Task)=>setOutputs(current=>({...current,existing_partner:{owner,task}})),[owner])
-  const reportContact=useCallback((task:Task)=>setOutputs(current=>({...current,new_contact:{owner,task}})),[owner])
-  const outputTask=(audience:Audience)=>outputs[audience]?.owner===owner?outputs[audience]?.task:undefined
+  const reportPartner=useCallback((task:Task|undefined,failed:boolean)=>setOutputs(current=>({...current,existing_partner:{owner,
+    task:task&&{...task,audience:'existing_partner'},failed}})),[owner])
+  const reportContact=useCallback((task:Task|undefined,failed:boolean)=>setOutputs(current=>({...current,new_contact:{owner,
+    task:task&&{...task,audience:'new_contact'},failed}})),[owner])
+  const outputState=(audience:Audience)=>outputs[audience]?.owner===owner?outputs[audience]:undefined
+  const outputTask=(audience:Audience)=>outputState(audience)?.task
   const sharedProgress=outputTask('existing_partner')
   const preferredAudience=state?.outputs?.map(output=>output.audience).find(audience=>hasPlayablePreview(outputTask(audience)))
-  const requestedAudience=projectId?new URLSearchParams(window.location.search).get('audience'):null
+  const activeOutput=state?.outputs?.find(output=>output.audience===requestedAudience)?.audience
+    ??(selected?.owner===owner?selected.audience:undefined)??preferredAudience??state?.outputs?.[0]?.audience
   useEffect(()=>{
     if(!preferredAudience||state?.outputs?.some(output=>output.audience===requestedAudience))return
     setSelected(current=>current?.owner===owner?current:{owner,audience:preferredAudience})
   },[owner,preferredAudience,requestedAudience,state?.outputs])
   const task = state?.task
-  useEffect(()=>{if(task)onTask?.(task)},[task,onTask])
+  useEffect(()=>{onTask?.(task??undefined,!!readError)},[task,onTask,readError])
+  const activePreview=activeOutput?outputTask(activeOutput):task??undefined
+  const previewAvailable=hasPlayablePreview(activePreview)
+  const showingVersions=state?.outputs?.some(({audience})=>hasPlayablePreview(outputTask(audience))||outputTask(audience)?.feedbackUsed===true)===true
+  useEffect(()=>{
+    if(activeOutput&&previewAvailable&&activeOutput!==requestedAudience)onAudienceChange?.(activeOutput)
+  },[activeOutput,previewAvailable,requestedAudience,onAudienceChange])
+  useEffect(()=>{onPreviewTask?.(showingVersions||previewAvailable?activePreview:undefined)},[activePreview,previewAvailable,showingVersions,onPreviewTask])
   const visual = task?.visualCriteria
   const visualKey = `${task?.taskId}:${task?.renderId}:${visual?.digest}`
   const languageConfirmed = Boolean(confirmation?.key === visualKey && confirmation.language)
@@ -226,8 +245,14 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
   const pending=(pendingAction?.key===actionKey && !pendingAction.controller.signal.aborted) || awaitingAcceptance
   const hasPreviewDraft=feedback.trim().length>0
   const discardPreviewDraft=()=>setFeedbackDraft(current=>sameDraft(current,feedbackDraft)?undefined:current)
-  const canAccept=task?.status==='awaiting_review'&&!pending&&task.canAcceptPreview!==false&&!task.deliveryHeld&&!task.deliveryUnavailable
-    &&!!task.renderId&&previewWatched&&languageConfirmed
+  const capabilities=previewActions(task??undefined)
+  const canAccept=capabilities.canConfirm&&!pending&&previewWatched&&languageConfirmed
+  useEffect(()=>{
+    if(!projectId||!downloadAfterConfirmation)return
+    if(!showPreview||feedbackKey!==downloadAfterConfirmation.key){setDownloadAfterConfirmation(undefined);return}
+    if(!task||!capabilities.canDownload||task.sequence<downloadAfterConfirmation.sequence)return
+    window.location.assign(taskPage(projectId,'downloads',outputAudience??task.audience))
+  },[projectId,downloadAfterConfirmation,showPreview,feedbackKey,task,capabilities.canDownload,outputAudience])
   useEffect(()=>()=>{actionController.current?.abort();actionController.current=undefined},[actionKey])
   useLayoutEffect(()=>{
     const column=mediaColumn.current
@@ -303,7 +328,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       try {
         const response = await requestApi(endpoint, { signal: AbortSignal.any([controller.signal,AbortSignal.timeout(15_000)]) })
         const data = await readPanelState(response)
-        if (!data) throw new Error('暂时无法读取制作状态')
+        if (!data || outputAudience&&data.task?.audience&&data.task.audience!==outputAudience) throw new Error('暂时无法读取制作状态')
         if (!controller.signal.aborted) {
           remember(data,readId)
           failures = 0
@@ -312,14 +337,14 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         }
       } catch {
         if (!controller.signal.aborted) {
-          if (++failures === 3) setReadError('制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。')
+          if (++failures === 3 || latestRead.current===0) setReadError('制作状态暂时无法更新，正在重新连接。请稍后核对最新状态。')
           timer = setTimeout(read, 8000)
         }
       }
     }
     void read()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [pollingActive, endpoint, requestApi])
+  }, [pollingActive, endpoint, requestApi, outputAudience])
 
   useEffect(() => {
     setBoard(undefined)
@@ -399,6 +424,9 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       return !blocked
     }
     if(!draftIsCurrent())return
+    if(name==='accept'&&projectId&&task?.taskId&&previewVisible.current){
+      setDownloadAfterConfirmation({key:feedbackKey,sequence:task.sequence})
+    }
     const controller=new AbortController()
     actionController.current=controller
     const signal=controller.signal
@@ -438,6 +466,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       }
       if(!stillCurrent())return
       if (!response.ok) {
+        if(name==='accept')setDownloadAfterConfirmation(undefined)
         const messages: Record<string,string> = {
           materials:materialsUnavailable,
           capacity:'当前已有五个任务在跑。名额空出后可以继续。',
@@ -469,7 +498,8 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       }
       const readId=++nextRead.current
       const next = await requestApi(endpoint,{signal}).catch(() => undefined)
-      const latest = next ? await readPanelState(next) : undefined
+      const readback=next?await readPanelState(next):undefined
+      const latest=outputAudience&&readback?.task?.audience&&readback.task.audience!==outputAudience?undefined:readback
       if(!stillCurrent()||readId<latestRead.current)return
       const confirmed = latest?.task?.status === 'completed' && !latest.task.deliveryUnavailable && !latest.task.deliveryHeld
         && !!task?.taskId && latest.task.taskId === task.taskId && latest.task.renderId === task.renderId
@@ -480,8 +510,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
       if (name==='accept' && confirmed) {
         setConfirmation(current => current?.key === visualKey ? undefined : current)
       }
-      if (name === 'accept' && task?.renderId && confirmed) {
-        if(projectId){window.location.assign(taskPage(projectId,'downloads'));return}
+      if (name === 'accept' && task?.renderId && confirmed && !projectId && previewVisible.current) {
         const link=document.createElement('a')
         link.href=assetUrl('panel_download','renderId',task.renderId)
         link.download=task.downloadName ?? ''
@@ -545,35 +574,38 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     : task?.stopReason === 'service' ? serviceUnavailable : undefined
   const canConfirm = !!task && (!!task.canConfirmBlueprint || !task.dualBlueprint && task.canApproveBlueprint===true)
   const reviewTitle = boardRevision ? '审核蓝图' : pendingPreview ? '视频预览' : awaitingPreview ? '预览与终审' : '成片已确认'
+  const Title=projectId?'h2':'h1'
   if(!state)return <p className="cm-caption" role="status">{readError || '正在读取制作状态…'}</p>
   if(state.outputs){
     const audiences=state.outputs.map(output=>output.audience)
     const primary=audiences.includes('existing_partner')?'existing_partner':audiences[0]
     const blueprintAudience=reviewableBlueprintRevision(outputTask(primary))?primary
       :audiences.find(audience=>!!reviewableBlueprintRevision(outputTask(audience)))??primary
-    const tabbed=audiences.some(audience=>hasPlayablePreview(outputTask(audience))||outputTask(audience)?.feedbackUsed===true)
+    const tabbed=showingVersions
     const sharedBlueprint=!tabbed&&showSharedBlueprint(outputTask(primary)??audiences.map(outputTask).find(Boolean))
-    const choice=selected?.owner===owner?selected.audience:undefined
-    const current=choice&&audiences.includes(choice)?choice
-      :audiences.find(audience=>audience===requestedAudience)??preferredAudience??audiences[0]
+    const current=activeOutput??audiences[0]
     const currentTask=outputTask(current)
+    function selectOutput(audience:Audience){
+      setSelected({owner,audience})
+      onAudienceChange?.(audience)
+    }
     function moveTab(event:KeyboardEvent<HTMLButtonElement>,index:number){
       const next=event.key==='Home'?0:event.key==='End'?audiences.length-1
         :event.key==='ArrowRight'?(index+1)%audiences.length:event.key==='ArrowLeft'?(index-1+audiences.length)%audiences.length:-1
       if(next<0)return
       event.preventDefault()
       const audience=audiences[next]
-      setSelected({owner,audience})
+      selectOutput(audience)
       document.getElementById(`${tabsId}-${audience}`)?.focus()
     }
     return <div className={tabbed?'cm-preview-page':undefined}>
-      <div className={tabbed?'cm-preview-heading':'cm-heading'}><h1>{tabbed?'视频预览':productionPageTitle(sharedProgress)}</h1></div>
+      <div className={tabbed?'cm-preview-heading':'cm-heading'}><Title>{tabbed?'视频预览':productionPageTitle(sharedProgress)}</Title></div>
       {tabbed&&currentTask&&!projectId&&<PreviewSteps task={currentTask} />}
       {tabbed&&<div className="cm-preview-tabs" role="tablist" aria-label="查看成片版本">
         {audiences.map((audience,index)=><button type="button" role="tab" key={audience} id={`${tabsId}-${audience}`}
           aria-selected={audience===current} aria-controls={`${tabsId}-panel-${audience}`} tabIndex={audience===current?0:-1}
-          onClick={()=>setSelected({owner,audience})} onKeyDown={event=>moveTab(event,index)}>
-          <strong>{audienceTitleFor(audience)}</strong><span>{previewStatus(outputTask(audience))}</span>
+          onClick={()=>selectOutput(audience)} onKeyDown={event=>moveTab(event,index)}>
+          <strong>{audienceTitleFor(audience)}</strong><span>{previewStatus(outputTask(audience),outputState(audience)?.failed)}</span>
         </button>)}
       </div>}
       <div className="cm-output-list">
@@ -581,7 +613,7 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
         const visible=tabbed?current===audience:!sharedBlueprint||audience===blueprintAudience
         return <section key={`${owner}:${audience}`} id={`${tabsId}-panel-${audience}`} hidden={!visible}
         role={tabbed?'tabpanel':undefined} aria-label={sharedBlueprint?'共用蓝图':audienceTitleFor(audience)}>
-        <ProductionPanel assets={assets} onRecheck={onRecheck} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint}
+        <ProductionPanel assets={assets} intakeReady={intakeReady} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint}
           projectId={projectId} reviewProjectId={reviewProjectId} slotsFull={slotsFull} outputAudience={audience} sharedTask={sharedProgress} showPreview={visible}
           onTask={audience==='existing_partner'?reportPartner:reportContact} />
       </section>})}
@@ -589,20 +621,19 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
     </div>
   }
   return <>
-    {!task ? <>
-      <div className="cm-heading"><h1>素材已上传</h1><p>四份素材均已保存到当前工程。</p></div>
+    {!task ? intakeReady&&<>
+      <div className="cm-heading"><Title>素材已上传</Title><p>四份素材均已保存到当前工程。</p></div>
       <section className="cm-panel">
         <ul className="cm-saved-assets">{assets.map(asset => <li key={asset.id}>
           <Check size={17} aria-hidden="true" /> <strong>{asset.title}</strong><span>{asset.name}</span>
         </li>)}</ul>
         <div className="cm-footer">
           <p>{state?.unavailable ? serviceUnavailable : state ? '自动检查和修订蓝图，交你确认后再剪辑。' : '正在检查制作服务…'}</p>
-          {state && <button className="cm-button secondary" disabled={pending} onClick={onRecheck}>从上传开始</button>}
           <button className="cm-button" disabled={!state || !!state.unavailable || pending || slotsFull} onClick={() => void action('start')}><Play size={17} /> {slotsFull?'等待名额':'开始制作'}</button>
         </div>
       </section>
     </> : boardRevision || awaitingPreview || completed || pendingPreview ? <>
-      {!unifiedBlueprint && !outputAudience && <div className={boardRevision?'cm-heading':'cm-preview-heading'}><h1>{reviewTitle}</h1></div>}
+      {!unifiedBlueprint && !outputAudience && <div className={boardRevision?'cm-heading':'cm-preview-heading'}><Title>{reviewTitle}</Title></div>}
       {!boardRevision&&!outputAudience&&!projectId&&<PreviewSteps task={task} />}
       {boardRevision&&<section className="cm-panel cm-work">
         <nav className="cm-blueprint-opinion-nav" aria-label="蓝图意见">
@@ -775,7 +806,8 @@ export default function ProductionPanel({ assets, onRecheck, requestApi, outputA
               {(awaitingPreview||completed)&&task.renderId&&task.attachments?.map(file=><a key={file.assetId} className="cm-button secondary"
                 href={`${assetUrl('panel_attachment','renderId',task.renderId!)}&${new URLSearchParams({assetId:file.assetId})}`}
                 download={file.fileName}><Download size={17} /> 下载 Storyboard</a>)}
-              {completed&&task.renderId&&!task.deliveryHeld&&!task.deliveryUnavailable&&<a className="cm-button" href={projectId?taskPage(projectId,'downloads'):assetUrl('panel_download','renderId',task.renderId)} download={projectId?undefined:task.downloadName}><Download size={17} /> {projectId?'打开下载页':'下载成片'}</a>}
+              {capabilities.canDownloadDraft&&task.renderId&&<a className="cm-button secondary" href={assetUrl('panel_draft_download','renderId',task.renderId)} download><Download size={17} /> 下载未复核版本</a>}
+              {capabilities.canDownload&&task.renderId&&<a className="cm-button" href={projectId?taskPage(projectId,'downloads',outputAudience??task.audience):assetUrl('panel_download','renderId',task.renderId)} download={projectId?undefined:task.downloadName}><Download size={17} /> {projectId?'打开下载页':'下载成片'}</a>}
             </div>
             {task.deliveryUnavailable&&<p role="alert">随片资料暂时无法下载。</p>}
           </section>

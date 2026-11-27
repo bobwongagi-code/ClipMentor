@@ -60,12 +60,21 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  };
  const replayGallery=(views:ReturnType<typeof reviewReplayViews>)=>{
   const stamp=(seconds:number)=>`原片 ${Number(seconds.toFixed(2))} 秒`;
-  const controls=views.map(({frame},i)=>`<button type="button" data-show="${i}" aria-pressed="${i===0}">${esc(frame.selection?.shortLabel?.zh??stamp(frame.seconds))}</button>`).join('');
+  const keys=views.map(({frame})=>{
+   const label=frame.selection?.shortLabel;
+   return label?JSON.stringify([label.zh,label.ms]):undefined;
+  });
+  const areas=[...new Set(keys.filter(key=>key!==undefined))];
+  const controls=views.map(({frame},i)=>{
+   const name=frame.selection?.shortLabel?.zh;
+   const ambiguous=name&&views.some((view,index)=>index!==i&&view.frame.selection?.shortLabel?.zh===name);
+   return `<button type="button" data-show="${i}" aria-pressed="${i===0}">${esc(name?(ambiguous?`${name} · ${stamp(frame.seconds)}`:name):stamp(frame.seconds))}</button>`;
+  }).join('');
   const frames=views.map(({row,index,frame},i)=>{
    const label=frame.selection?.shortLabel;
-   return `<figure data-replay-frame="${i}"${label?' data-recap-frame':''}${i===0?'':' hidden'}>${image(row,index,label?.zh??stamp(frame.seconds))}<figcaption>${label?`<strong>${esc(label.zh)}</strong> <span lang="ms">${esc(label.ms)}</span>`:''} <span class="replay-time">${stamp(frame.seconds)}</span></figcaption></figure>`;
+   return `<figure data-replay-frame="${i}"${keys[i]!==undefined?` data-recap-frame="${areas.indexOf(keys[i])}"`:''}${i===0?'':' hidden'}>${image(row,index,label?.zh??stamp(frame.seconds))}<figcaption>${label?`<strong>${esc(label.zh)}</strong> <span lang="ms">${esc(label.ms)}</span>`:''} <span class="replay-time">${stamp(frame.seconds)}</span></figcaption></figure>`;
   }).join('');
-  return `<div class="replay-gallery"><div class="replay-navigation" role="group" aria-label="回看画面">${controls}<button type="button" data-show="recap" aria-pressed="false">总览</button></div><div class="stage-cue" style="${stageStyle(views[0].row)}">${esc(views[0].row.stage_text)}</div><div class="replay-frames">${frames}</div></div>`;
+  return `<div class="replay-gallery"><div class="replay-navigation" role="group" aria-label="回看画面">${controls}${areas.length>1?'<button type="button" data-show="recap" aria-pressed="false">总览</button>':''}</div><div class="stage-cue" style="${stageStyle(views[0].row)}">${esc(views[0].row.stage_text)}</div><div class="replay-frames">${frames}</div></div>`;
  };
  const questionHtml=(id:string)=>{const q=[...questions.get(id)??[]];return q.length?`<aside class="questions"><h3>需要你看一眼</h3>${q.map(v=>`<p>${esc(v)}</p>`).join('')}</aside>`:'';};
  const visualQuestions=(id:string)=>references.filter(({criterion})=>criterion.sectionId===id).map(({criterion,base64})=>
@@ -95,11 +104,21 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  for(const gallery of document.querySelectorAll('.replay-gallery')){
   const buttons=[...gallery.querySelectorAll('[data-show]')];
   const frames=[...gallery.querySelectorAll('[data-replay-frame]')];
+  let selected=frames[0];
   for(const button of buttons)button.addEventListener('click',()=>{
    const choice=button.dataset.show,recap=choice==='recap';
+   if(!recap)selected=frames.find(frame=>frame.dataset.replayFrame===choice);
+   const representative=new Map();
+   if(recap)for(const frame of frames){
+    const area=frame.dataset.recapFrame;
+    if(area!==undefined&&(!representative.has(area)||frame===selected))representative.set(area,frame);
+   }
    gallery.classList.toggle('is-recap',recap);
    for(const item of buttons)item.setAttribute('aria-pressed',String(item===button));
-   for(const frame of frames)frame.hidden=recap?!frame.hasAttribute('data-recap-frame'):frame.dataset.replayFrame!==choice;
+   for(const frame of frames){
+    frame.hidden=recap?representative.get(frame.dataset.recapFrame)!==frame:frame!==selected;
+    frame.toggleAttribute('data-recap-current',recap&&!frame.hidden&&frame===selected);
+   }
   });
  }
  }</script>`;
@@ -228,6 +247,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
 .replay-frames figcaption{padding:8px 10px;font-size:13px;overflow-wrap:anywhere}
 .replay-frames strong{display:block;font-size:15px;color:#302719}.replay-time{display:block;color:#5d645a;font-size:12px}
 .is-recap .replay-frames{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:5px}
+.is-recap [data-recap-current]{outline:2px solid #8a6727;outline-offset:-2px;background:#faefd0}
 .replay-navigation{display:flex;flex-wrap:wrap;gap:6px;padding:10px}
 .replay-navigation button{border:1px solid #c8c1b4;background:white;color:#302719;border-radius:6px;padding:6px 9px;font:inherit;font-size:13px;cursor:pointer}
 .replay-navigation button[aria-pressed="true"]{background:#faefd0;border-color:#846a35;font-weight:650}

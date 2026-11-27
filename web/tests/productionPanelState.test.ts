@@ -64,4 +64,8 @@ test('playable, reviewed and downloadable are separate preview states',()=>{
  assert.equal(previewProgress(held)[4].current,false)
  assert.equal(previewStatus({...held,deliveryHeld:false}),'可下载')
  assert.equal(previewStatus({...held,deliveryHeld:false,renderId:undefined}),'预览暂不可用')
+ const awaiting={...paused,status:'awaiting_review',previewPending:false}
+ assert.equal(previewStatus(awaiting),'暂不能确认')
+ assert.equal(previewStatus({...awaiting,canAcceptPreview:false}),'暂不能确认')
+ assert.equal(previewStatus({...awaiting,canAcceptPreview:true}),'待确认')
 })

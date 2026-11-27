@@ -152,6 +152,31 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
   const posters=new Map<string,Promise<Buffer>>();
   let posterTail=Promise.resolve();
   const fileStamp=(info:BigIntStats)=>[info.dev,info.ino,info.size,info.mtimeNs,info.ctimeNs].join(':');
+  const verifiedMaterials=new Map<string,Promise<boolean>>();
+  async function openPanelMaterial(asset:Parameters<typeof intactAsset>[0]){
+    const prefix='/media/uploads/';
+    const name=asset.src.startsWith(prefix)?asset.src.slice(prefix.length):'';
+    const file=isSafeUploadName(name)?resolveUploadFile(name):undefined;
+    if(!file||!asset.sourceContentHash)throw Error('随片资料暂不可用');
+    const handle=await open(file,'r');
+    try{
+      const before=await handle.stat({bigint:true});
+      if(!before.isFile()||!before.size)throw Error('随片资料暂不可用');
+      const stamp=fileStamp(before);
+      const unchanged=async()=>fileStamp(await handle.stat({bigint:true}))===stamp;
+      const key=JSON.stringify([file,stamp,asset.sourceContentHash]);
+      let verified=verifiedMaterials.get(key);
+      if(!verified){
+        verified=sha256File(file,()=>handle.createReadStream({start:0,autoClose:false}))
+          .then(hash=>hash===asset.sourceContentHash&&unchanged());
+        verifiedMaterials.set(key,verified);
+        if(verifiedMaterials.size>12)verifiedMaterials.delete(verifiedMaterials.keys().next().value!);
+        void verified.catch(()=>{if(verifiedMaterials.get(key)===verified)verifiedMaterials.delete(key);});
+      }
+      if(!await verified||!await unchanged())throw Error('随片资料暂不可用');
+      return {file,handle,unchanged};
+    }catch(error){await handle.close();throw error;}
+  }
   async function previewPoster(file:string,signature:string){
     const key=JSON.stringify([file,signature]);
     let poster=posters.get(key);
@@ -239,6 +264,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       return handler(child.projectId,origin,query,req,res,readBody,child);
     }
     if(task?.productionChild){
+      const audience=query.get('audience');
+      if(audience!==null&&audience!==task.productionChild.audience)throw Error('制作输出不存在');
       const child=await productionTaskStore.load(task.productionChild.projectId,task.productionChild.taskId);
       if(child.projectId===projectId||child.input.panelDelivery?.audience!==task.productionChild.audience
         ||child.blueprintApproval?.sourceProjectId!==projectId||child.blueprintApproval.sourceTaskId!==task.taskId)
@@ -360,14 +387,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const saved=await boundPreviewProject();
         const asset=saved.doc.assets.find(item=>item.id===id&&item.kind==='image'&&item.sourceContentHash===hash);
         if(!asset||query.get('assetId')!==id)throw Error('随片资料暂不可用');
-        const file=resolveUploadFile(asset.src.split('/').at(-1)!);
-        if(!file)throw Error('随片资料暂不可用');
-        const handle=await open(file,'r');
+        const {file,handle,unchanged}=await openPanelMaterial(asset);
         try{
-          const before=await handle.stat({bigint:true});
-          const unchanged=()=>handle.stat({bigint:true}).then(after=>
-            after.size===before.size&&after.mtimeNs===before.mtimeNs&&after.ctimeNs===before.ctimeNs);
-          if(!before.isFile()||!before.size||!await intactAsset(asset,()=>sha256File(file,()=>handle.createReadStream({start:0,autoClose:false}))))throw Error('随片资料暂不可用');
           const current=await currentPreviewTask();
           if(!current||current.taskId!==task.taskId||current.sequence!==task.sequence
             ||current.updatedAt!==task.updatedAt||!await unchanged())throw Error('预览已变化，请刷新');
@@ -464,7 +485,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             input.embedded=true;
             input.narrationDecisions=narrationDecisions;
             if(isPanelBlueprintDraft(task))input.teachingExcerptUnit=representativeTeachingExcerpt(saved.doc)?.unitId;
-            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel-opinions-v5', artifactIdentity), undefined, 'human');
+            const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), 'panel-opinions-v6', artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
             return result.artifacts[0].path;
           })();
@@ -638,10 +659,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         reviewIssue??={kind:'binding',message:'当前预览或随片资料暂不可用。'};
       const delivery=task?.input.panelDelivery;
       const audience=delivery?.audience;
-      const attachment=audience&&currentPreviewProject?.doc.assets.find(asset=>
-        asset.kind==='image'&&asset.id===(audience==='new_contact'?delivery.ctaAssetId:delivery.productAssetId)
-        &&asset.sourceContentHash===(audience==='new_contact'?delivery.ctaAssetHash:delivery.productAssetHash)
-        &&asset.src.startsWith('/media/uploads/')&&!!resolveUploadFile(asset.src.slice('/media/uploads/'.length)));
+      const materialId=audience==='new_contact'?delivery?.ctaAssetId:audience==='existing_partner'?delivery?.productAssetId:undefined;
+      const materialHash=audience==='new_contact'?delivery?.ctaAssetHash:audience==='existing_partner'?delivery?.productAssetHash:undefined;
+      const attachment=currentPreviewProject?.doc.assets.find(asset=>asset.kind==='image'&&asset.id===materialId&&asset.sourceContentHash===materialHash);
+      const material=attachment&&await openPanelMaterial(attachment).catch(()=>undefined);
+      if(material)await material.handle.close();
       send({ task:task ? {
         taskId:task.taskId,...(task.blueprintApproval?{sourceTaskId:task.blueprintApproval.sourceTaskId}:{}),
         status: outputUnavailable||!running&&!queued&&uncheckedDraft?'blocked':queued?'queued':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
@@ -669,7 +691,8 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ...(pendingPreviewRenderId?{renderId:pendingPreviewRenderId,previewPending:true,canAcceptPreview:false,
           ...(previewHasBoundContentIssue(task)?{previewNeedsChanges:true}:{})}:{}),
         ...(sharedDeliveryHeld?{deliveryHeld:true}:{}),
-        ...(attachment?{materialAttachment:{assetId:attachment.id,label:audience==='new_contact'?'CTA 海报':'产品图'}}:{}),
+        ...(material&&attachment?{materialAttachment:{assetId:attachment.id,label:audience==='new_contact'?'CTA 海报':'产品图'}}
+          :materialId&&currentPreviewProject?{materialAttachmentUnavailable:true}:{}),
         ...(attachments.length?{attachments}:{}),...(deliveryUnavailable?{deliveryUnavailable:true}:{}),
       } : null,
         unavailable: (config && 'unavailable' in config) || (!task && isProjectConnected(projectId)) ? panelServiceUnavailable : undefined,

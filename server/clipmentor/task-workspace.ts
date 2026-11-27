@@ -66,22 +66,24 @@ async function projectSummary(entry: Entry, active: IsActive, deferred: IsDeferr
   const children = task && (task.productionChildren?.length || task.productionChild)
     ? await readProductionOutputs(task).catch(()=>null) : [];
   const name = displayName(entry, task);
-  if(!children)return {id:entry.id,name,status:'paused',stage:task?.stage,updatedAt:task?.updatedAt??entry.updatedAt??0,outputs:[]} satisfies ClipMentorTaskSummary;
-  const outputs: ClipMentorTaskSummary['outputs'] = children.flatMap(child => child.input.panelDelivery?.audience
-    ? [{ audience: child.input.panelDelivery.audience, status: displayStatus(child, active, deferred) }] : []);
+  const manifest=task?.productionChildren?.length?task.productionChildren:task?.productionChild?[task.productionChild]:[];
+  const outputs: ClipMentorTaskSummary['outputs'] = manifest.map(({audience})=>{
+    const child=children?.find(output=>output.input.panelDelivery?.audience===audience);
+    return child?{audience,status:displayStatus(child,active,deferred),stage:child.stage,
+      ...(child.status==='awaiting_review'?{awaitingConfirmation:true}:{})}:{audience,status:'unavailable'};
+  });
   const statuses = outputs.map(output => output.status);
   const status = !task ? 'materials'
     : statuses.find(value => value === 'preview') ?? statuses.find(value => value === 'blueprint')
     ?? statuses.find(value => value === 'running') ?? statuses.find(value => value === 'queued')
     ?? statuses.find(value => value === 'paused') ?? statuses.find(value => value === 'waiting')
-    ?? (statuses.length && statuses.every(value => value === 'completed') ? 'completed'
+    ?? (statuses.includes('unavailable')?'paused':statuses.length && statuses.every(value => value === 'completed') ? 'completed'
       : statuses.length && statuses.every(value => value === 'cancelled' || value === 'completed') ? 'cancelled' : displayStatus(task, active, deferred));
   return {
     id: entry.id,
     name,
-    status, stage: children.find(child => displayStatus(child, active, deferred) === status)?.stage ?? task?.stage,
-    ...(task?.status==='awaiting_review'||children.some(child=>child.status==='awaiting_review')?{awaitingConfirmation:true}:{}),
-    updatedAt: Math.max(entry.updatedAt ?? 0, task?.updatedAt ?? 0, ...children.map(child => child.updatedAt)),
+    status, stage: outputs.find(output=>output.status===status)?.stage??task?.stage,
+    updatedAt: Math.max(entry.updatedAt ?? 0, task?.updatedAt ?? 0, ...(children??[]).map(child => child.updatedAt)),
     outputs,
   } satisfies ClipMentorTaskSummary;
 }

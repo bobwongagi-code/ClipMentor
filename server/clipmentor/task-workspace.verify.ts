@@ -35,7 +35,7 @@ const {runtimeProfile}=await import('../runtime-profile');
 assert.equal(runtimeProfile().rootDir,directory);
 const {clipMentorProductionPlugin}=await import('../plugins/clipmentor-production');
 const {createProductionTask,productionTaskStore}=await import('./production-task');
-const {getStoredEntry,setStoredEntry}=await import('../plugins/project-store');
+const {deleteStoredEntry,getStoredEntry,setStoredEntry}=await import('../plugins/project-store');
 const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
 const entered=new Set<string>();
 const gates=new Map<string,PromiseWithResolvers<void>>();
@@ -164,8 +164,15 @@ try{
   assert.equal(material.status,200);
   assert.deepEqual(Buffer.from(await material.arrayBuffer()),poster);
   assert.equal((await download('panel_material','product')).status,409,'different audience material is not offered');
+  const panelTask=async()=>((await (await download('panel')).json()) as {task:{materialAttachment?:{assetId:string};materialAttachmentUnavailable?:boolean;renderId?:string}}).task;
+  assert.equal((await panelTask()).materialAttachment?.assetId,'cta');
   await writeFile(posterFile,Buffer.from('different bytes'));
   assert.equal((await download('panel_material','cta')).status,409,'mutated attachment is rejected');
+  const staleMaterial=await panelTask();
+  assert.equal(staleMaterial.materialAttachment,undefined,'do not show a dead attachment link');
+  assert.equal(staleMaterial.materialAttachmentUnavailable,true);
+  assert.equal(staleMaterial.renderId,'workspace-render','supplemental image availability does not remove a playable preview');
+  assert.equal((await download('panel_draft_download')).status,200,'the supplemental image does not gate a saved early download');
   const issue='point:teaching:not_supported';
   task.repairContext={receipt:{projectId,videoSha256:hash(videoBytes),scope:'rendered_preview_continuous_review',full_film_accepted:false,
     result:{issues:[issue],finish_reasons:['STOP']},effective_review:{manifest_binding:'frozen_at_request',blockers:[issue]}}};
@@ -173,6 +180,35 @@ try{
   assert.equal((await download('panel_draft_download')).status,409,'bound negative review prevents early download');
   assert.equal((await download('panel_video')).status,200,'the same preview is still playable');
   console.log('workspace: saved preview download, final refusal, audience attachment binding and hold passed');
+
+  const partnerProject=randomUUID(), removedProject=randomUUID();
+  for(const id of [partnerProject,removedProject])assert.equal((await request('task-workspace',{id})).status,201);
+  const partner=await createProductionTask({...fixtureInput(partnerProject),
+    panelDelivery:{...task.input.panelDelivery!,audience:'existing_partner'}});
+  partner.blueprintApproval={sourceProjectId:projectId,sourceTaskId:task.taskId,sourceRevision:revision,
+    digest:'fixture',requirementsDigest:'fixture',confirmedAt:Date.now()};
+  partner.status='completed';
+  partner.stage='self_check';
+  await productionTaskStore.save(partner);
+  task.productionChild={projectId:partnerProject,taskId:partner.taskId,audience:'existing_partner'};
+  await productionTaskStore.save(task);
+  const panel=(audience?:string)=>request('production-task?'+new URLSearchParams({projectId,view:'panel',...(audience?{audience}:{})}));
+  assert.equal((await panel()).status,200,'legacy bookmarks may omit the audience');
+  assert.equal((await panel('existing_partner')).status,200);
+  assert.equal((await panel('new_contact')).status,409,'an explicit different audience cannot use the legacy output');
+  await deleteStoredEntry('project:'+removedProject);
+  task.productionChildren=[task.productionChild,{projectId:removedProject,taskId:randomUUID(),audience:'new_contact'}];
+  await productionTaskStore.save(task);
+  const workspace=await (await request('task-workspace')).json();
+  const partial=workspace.tasks.find((entry:{id:string})=>entry.id===projectId);
+  assert.equal(partial.status,'paused','a missing output cannot report the whole project as confirmed');
+  assert.deepEqual(partial.outputs,[
+    {audience:'existing_partner',status:'completed',stage:'self_check'},
+    {audience:'new_contact',status:'unavailable'},
+  ]);
+  assert.equal((await panel('existing_partner')).status,200,'the remaining sibling can still be read');
+  assert.equal((await panel('new_contact')).status,409);
+  console.log('workspace: retained sibling and legacy audience stay independently bound');
 }finally{
   for(const gate of gates.values())gate.resolve();
   await new Promise<void>(resolve=>server.close(()=>resolve()));

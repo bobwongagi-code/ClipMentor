@@ -43,6 +43,32 @@ try{
   assert.equal((html.match(/ data-recap-frame/g)??[]).length,4);
   assert.match(html,/data-replay-frame="0"><button/);
   assert.match(html,/data-show="recap" aria-pressed="false">总览/);
+  const alternate={...samples[1],key:'step-0-alternate',frame:30,seconds:6,
+   selection:{...samples[1].selection,segmentId:'alternate-segment',start:6}};
+  const alternateBoard={...board,rows:board.rows.map(row=>row===rows[0]?{...row,frames:[...samples,alternate],replayFrames:[...samples,alternate]}:row)};
+  const alternateHtml=humanReviewBoardPage(alternateBoard,data,lint,[],[],true);
+  assert.equal((alternateHtml.match(/data-recap-frame="0"/g)??[]).length,2,'two views of the same area share a recap slot');
+  assert.match(alternateHtml,/一 · 原片 2 秒/);
+  assert.match(alternateHtml,/一 · 原片 6 秒/);
+  const views=[undefined,'0','1','2','3','0'].map((area,index)=>({
+   dataset:{replayFrame:String(index),recapFrame:area},hidden:index!==0,current:false,
+   toggleAttribute(name:string,enabled:boolean){assert.equal(name,'data-recap-current');this.current=enabled;},
+  }));
+  const actions=['recap','5'].map(show=>({dataset:{show},click:()=>{},
+   addEventListener(_:string,click:()=>void){this.click=click;},setAttribute(){},
+  }));
+  const replay=alternateHtml.match(/<script>(\{\s*for\(const gallery of document\.querySelectorAll\('\.replay-gallery'\)\).*?)<\/script>/s)?.[1];
+  assert(replay);
+  runInNewContext(replay,{document:{querySelectorAll:()=>[{
+   classList:{toggle(){}},querySelectorAll:(selector:string)=>selector==='[data-show]'?actions:views,
+  }]}});
+  actions[0].click();
+  assert.deepEqual(views.flatMap((view,index)=>view.hidden?[]:[index]),[1,2,3,4]);
+  actions[1].click();
+  assert.deepEqual(views.flatMap((view,index)=>view.hidden?[]:[index]),[5]);
+  actions[0].click();
+  assert.deepEqual(views.flatMap((view,index)=>view.hidden?[]:[index]),[2,3,4,5]);
+  assert.deepEqual(views.flatMap((view,index)=>view.current?[index]:[]),[5]);
   assert.equal((html.match(/data-blueprint-opinion="/g)??[]).length,new Set(board.rows.filter(row=>row.stage==='explanation').map(row=>row.unit_id)).size);
   assert.equal(JSON.stringify(board),before);
  });

@@ -5,9 +5,8 @@ export type ClipMentorTaskSummary = {
   id: string;
   name: string;
   status: ClipMentorTaskStatus;
-  awaitingConfirmation?: boolean;
   stage?: string;
   updatedAt: number;
-  outputs: Array<{ audience: 'new_contact' | 'existing_partner'; status: ClipMentorTaskStatus }>;
+  outputs: Array<{ audience: 'new_contact' | 'existing_partner'; status: ClipMentorTaskStatus | 'unavailable'; stage?:string; awaitingConfirmation?:boolean }>;
 };
 export type ClipMentorWorkspace = { tasks: ClipMentorTaskSummary[]; running: number; limit: number };

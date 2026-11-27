@@ -226,7 +226,7 @@ test.describe('production gateway responses', () => {
           } } })
         }
         return route.fulfill({ json: { task: {
-          taskId: 'delivery-task', stage: 'self_check', status: confirmedDelivery ? 'completed' : 'awaiting_review',
+          taskId: 'delivery-task', stage: 'self_check', status: confirmedDelivery ? 'completed' : 'awaiting_review',canAcceptPreview:!confirmedDelivery,
           sequence: confirmedDelivery ? 4 : 3, active: false, renderId: 'one-render', downloadName: 'confirmed.mp4',
         } } })
       })
@@ -269,7 +269,7 @@ test.describe('production gateway responses', () => {
       }
       return route.fulfill({ json: { task: {
         taskId: 'restoring-task', stage: 'self_check', active: false, sequence: 3,
-        ...(previewAvailable ? { status: 'awaiting_review', renderId: 'restoring-render' } : { status: 'blocked' }),
+        ...(previewAvailable ? { status: 'awaiting_review', canAcceptPreview:true, renderId: 'restoring-render' } : { status: 'blocked' }),
       } } })
     })
     try {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Check, Download, Film, Image, Send, Upload } from 'lucide-react'
 import './clipmentor.css'
-import ProductionPanel, { productionEndpoint, readPanelState } from './ProductionPanel'
+import ProductionPanel, { productionEndpoint, readPanelState, type Audience, type Task } from './ProductionPanel'
 import { projectResource, taskPage, workspaceEndpoint } from './taskNavigation'
 
 const slots = [
@@ -98,8 +98,9 @@ function Feedback({ label, messages, onSend }: {
 
 const intakeEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/intake`
 
-export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit }: {
+export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit, requestedAudience,onAudienceChange,onPreviewTask }: {
   projectId?: string; workspaceNew?: boolean; embedded?: boolean; running?: number; limit?: number
+  requestedAudience?:Audience; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
 } = {}) {
   const [materials, setMaterials] = useState<Partial<Record<Slot, Material>>>({})
   const urls = useRef<Partial<Record<Slot, string>>>({})
@@ -128,6 +129,8 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
   const ready = !sizeExceeded && requestedSlots.every(({ key }) => materials[key]?.status === 'ready')
   const slotsFull = running !== undefined && limit !== undefined && running >= limit
   const slotsLoading = workspaceNew && (running === undefined || limit === undefined)
+  const readyCount=slots.filter(({key})=>materials[key]?.status==='ready').length
+  const IntakeTitle=embedded&&!workspaceNew?'h2':'h1'
 
   const requestApi = useCallback(async (url: string, init?: RequestInit) => {
     const response = await fetch(url, { ...init, mode: 'same-origin', redirect: 'error', cache: 'no-store' })
@@ -309,12 +312,12 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
         </li>)}
       </ol></nav>}
       {showProduction && <ProductionPanel assets={(receipt ?? repair)?.assets.map((asset, index) => ({ ...asset, title: slots[index].title })) ?? []} requestApi={requestApi}
-        projectId={projectId} reviewProjectId={projectId??receipt?.projectId??repair?.projectId}
-        slotsFull={slotsFull} mediaRefresh={mediaRefresh} onRecheck={() => { setReceipt(undefined); setHasSavedProduction(false); setUploadError('') }} />}
+        projectId={projectId} reviewProjectId={projectId??receipt?.projectId??repair?.projectId} intakeReady={!!receipt}
+        slotsFull={slotsFull} mediaRefresh={mediaRefresh} requestedAudience={requestedAudience} onAudienceChange={onAudienceChange} onPreviewTask={onPreviewTask} />}
       {checkingReceipt ? <p className="cm-caption" role="status">正在检查上传记录…</p> : step === 0 && (!showProduction || repair) && <>
         {repair
           ? <div className="cm-heading"><h2>补传缺失素材</h2><p>请选择工程里登记的原文件，补传后即可继续。</p></div>
-          : <div className="cm-heading"><h1>{workspaceNew?'新建任务':'上传制作素材'}</h1><p>{workspaceNew?'选好四份素材。开始制作后，可以回任务列表看进度。':'选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。'}</p></div>}
+          : <div className="cm-heading"><IntakeTitle>{workspaceNew?'新建任务':'上传制作素材'}</IntakeTitle><p>{workspaceNew?'选好四份素材。开始制作后，可以回任务列表看进度。':'选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。'}</p></div>}
         <section className="cm-panel">
           {workspaceNew&&<label className="cm-task-name">{registeredName===undefined?'任务名称（选填）':'已登记的任务名称'}
             <input maxLength={80} value={registeredName??taskName} onChange={event=>setTaskName(event.target.value)} disabled={uploading||registeredName!==undefined}/>
@@ -322,7 +325,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
           <div className="cm-materials">
             {requestedSlots.map(({ key, title, accept, icon: Icon }) => {
               const material = materials[key]
-              return <label className="cm-upload" data-dragging={dragSlot === key} key={key}
+              return <label className="cm-upload" data-dragging={dragSlot === key} data-state={material?.status} key={key}
                 onDragOver={event => { event.preventDefault(); setDragSlot(key) }}
                 onDragLeave={() => setDragSlot(undefined)}
                 onDrop={event => { event.preventDefault(); setDragSlot(undefined); addFile(key, event.dataTransfer.files[0]) }}>
@@ -332,13 +335,16 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
                 {material && <span className="cm-filename">{material.file.name}</span>}
                 <span className="cm-material-state" role="status" data-error={material?.status === 'error'}>
                   {material?.detail ?? (repair ? repair.assets[slots.findIndex(slot => slot.key === key)].name
-                    : key === 'source' ? workspaceNew?'MP4、MOV、WebM · 需有音轨':'MP4、MOV、WebM' : 'PNG、JPG、WebP')}
+                    : (key === 'source' ? 'MP4、MOV、WebM · 需有音轨' : 'PNG、JPG、WebP')+(workspaceNew?' · 拖入或选择':''))}
                 </span>
               </label>
             })}
           </div>
           <div className="cm-footer">
-            {workspaceNew&&<span role="status">{slotsLoading?'正在读取名额，可以先选好素材。':slotsFull?'名额已满，可以先选好素材。':`已选 ${slots.filter(({key})=>materials[key]?.status==='ready').length} / 4 份 · 合计上限 64 MiB`}</span>}
+            {workspaceNew&&<div className="cm-upload-count" role="status">
+              <p>{readyCount===4&&!sizeExceeded?'四份素材已就绪':`已选 ${readyCount} / 4 份`} · 合计上限 64 MiB</p>
+              {slotsLoading?<p>正在读取运行名额。</p>:slotsFull&&<p>{readyCount===4?'名额空出后可以开始制作。':'名额已满，可以先选好素材。'}</p>}
+            </div>}
             <button className="cm-button" disabled={!ready || uploading || slotsLoading || workspaceNew && slotsFull} onClick={() => void uploadMaterials()}><Upload size={17} /> {uploading ? '正在上传素材…' : workspaceNew && slotsFull ? '等待运行名额' : demo || workspaceNew ? '开始制作' : repair ? '补传素材' : '上传素材'}</button>
           </div>
         </section>

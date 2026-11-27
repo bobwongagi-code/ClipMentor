@@ -176,11 +176,11 @@ test('saved materials lead to board, preview and download on the same page', asy
       }
       if (body.action === 'approve_blueprint') {
         expect(body.revision).toBe('r2')
-        task = { status: 'awaiting_review', stage: 'self_check', renderId: 'render-1', downloadName:'JUDYDOLL-fixture.mp4', sequence: 3, visualCriteria }
+        task = { status: 'awaiting_review', canAcceptPreview:true, stage: 'self_check', renderId: 'render-1', downloadName:'JUDYDOLL-fixture.mp4', sequence: 3, visualCriteria }
       }
       if (body.action === 'revise_preview') {
         expect(body.renderId).toBe('render-1')
-        task = { status: 'awaiting_review', stage: 'self_check', renderId: 'render-2', downloadName:'JUDYDOLL-fixture.mp4', feedbackUsed: true, sequence: 4, visualCriteria }
+        task = { status: 'awaiting_review', canAcceptPreview:true, stage: 'self_check', renderId: 'render-2', downloadName:'JUDYDOLL-fixture.mp4', feedbackUsed: true, sequence: 4, visualCriteria }
       }
       if (body.action === 'accept') {
         expect(body.languageConfirmed).toBe(true)
@@ -288,7 +288,7 @@ test('both previews keep feedback, approval and downloads bound to their own end
     const productionDifferences=audience==='existing_partner'?{groups:[
       {label:'第 1 组',changes:[{before:'原句较长',after:'句子缩短，意思保留'}],kept:[]},
     ]}:undefined
-    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',stage:'self_check',sequence:accepted.has(audience)?2:1,renderId:`render-${audience}`,active:false,feedbackUsed:false,productionDifferences}}
+    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',canAcceptPreview:!accepted.has(audience),stage:'self_check',sequence:accepted.has(audience)?2:1,renderId:`render-${audience}`,active:false,feedbackUsed:false,productionDifferences}}
       :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
@@ -467,7 +467,7 @@ test('late successful acceptance cannot download an older render', async ({ page
       await route.fulfill({json:{accepted:true}}).catch(()=>{})
       return
     }
-    await route.fulfill({json:{task:{taskId:'same-task',status:'awaiting_review',stage:'self_check',sequence,renderId:`render-${sequence}`,active:false,feedbackUsed:false}}})
+    await route.fulfill({json:{task:{taskId:'same-task',status:'awaiting_review', canAcceptPreview:true,stage:'self_check',sequence,renderId:`render-${sequence}`,active:false,feedbackUsed:false}}})
   })
   await page.goto('/')
   try{
@@ -544,7 +544,7 @@ test('an open two-output tab observes an externally persisted newer shared bluep
     // The real handler ignores audience when the current parent has no children.
     await route.fulfill({json:changed
       ?{task:{taskId:'new-shared',status:'awaiting_blueprint',stage:'copy_review',revision:'new-draft',sequence:1,active:false}}
-      :audience?{task:{taskId:audience,status:'awaiting_review',stage:'self_check',renderId:`old-${audience}`,sequence:1,active:false}}
+      :audience?{task:{taskId:audience,status:'awaiting_review', canAcceptPreview:true,stage:'self_check',renderId:`old-${audience}`,sequence:1,active:false}}
         :{task:null,outputOwner:{taskId:'old-shared',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
@@ -577,7 +577,7 @@ test('two tabs keep attachment and accepted download identities separate for bot
       accepted.add(audience!)
       await route.fulfill({json:{accepted:true}});return
     }
-    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',stage:'self_check',renderId:`render-${audience}`,sequence:accepted.has(audience)?2:1,active:false,attachments:[{assetId:`storyboard-${audience}`,fileName:`${audience}.html`}]}}
+    await route.fulfill({json:audience?{task:{taskId:audience,status:accepted.has(audience)?'completed':'awaiting_review',canAcceptPreview:!accepted.has(audience),stage:'self_check',renderId:`render-${audience}`,sequence:accepted.has(audience)?2:1,active:false,attachments:[{assetId:`storyboard-${audience}`,fileName:`${audience}.html`}]}}
       :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
@@ -619,7 +619,7 @@ test('reopening the panel reads the saved acceptance without replaying the actio
       await route.fulfill({json:{accepted:true}}).catch(()=>{})
       return
     }
-    await route.fulfill({json:{task:{taskId:'one-job',status:posts?'completed':'awaiting_review',stage:'self_check',sequence:posts+1,renderId:'approved-render',active:false,feedbackUsed:false}}})
+    await route.fulfill({json:{task:{taskId:'one-job',status:posts?'completed':'awaiting_review',canAcceptPreview:!posts,stage:'self_check',sequence:posts+1,renderId:'approved-render',active:false,feedbackUsed:false}}})
   })
   await page.goto('/')
   try{
