@@ -13,7 +13,7 @@ const build = (outDir: string, apiPath: string) => execFileSync(process.execPath
   ['node_modules/vite/bin/vite.js', 'build', '--outDir', outDir, '--emptyOutDir'],
   {
     env: {
-      ...process.env, CLIPMENTOR_PUBLIC_API_BASE_PATH: apiPath,
+      ...process.env, NODE_ENV:'production', CLIPMENTOR_PUBLIC_API_BASE_PATH: apiPath,
       CLIPMENTOR_PROJECT_ID: 'dev-only-project', CLIPMENTOR_BACKEND_PORT: 'invalid-dev-only-port',
     },
     stdio: 'pipe',

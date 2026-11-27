@@ -27,7 +27,7 @@ function positiveNumber(value: unknown, fallback: number): number {
     : fallback;
 }
 
-function emptyProject(args: Record<string, unknown>): unknown {
+export function emptyProject(args: Record<string, unknown>): unknown {
   const timelineId = `tl_${randomUUID()}`;
   const timeline = {
     id: timelineId,

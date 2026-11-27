@@ -473,7 +473,7 @@ test('late successful acceptance cannot download an older render', async ({ page
   try{
     await page.getByRole('textbox',{name:'修改意见'}).fill('旧预览意见')
     await checkFinalReview(page)
-    await page.getByRole('button',{name:'确认并下载成片'}).click()
+    await page.getByRole('button',{name:'保留草稿并确认成片'}).click()
     await expect.poll(()=>posts).toBe(1)
     sequence=2
     await page.clock.fastForward(8000)

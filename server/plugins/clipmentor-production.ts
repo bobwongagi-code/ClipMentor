@@ -20,6 +20,17 @@ import {authorizePreviewRetry} from '../clipmentor/production-preview-retry';
 import {canLaunchSharedFollower} from '../clipmentor/production-shared-clock';
 import {resolveUploadFile} from '../media-dir';
 import {sha256File} from '../../shared/node-content-hash';
+import {runtimeProfile} from '../runtime-profile';
+import {createProductionCapacity,isProductionCapacityFull} from '../clipmentor/production-capacity';
+import {createWorkspaceProject,readTaskWorkspace} from '../clipmentor/task-workspace';
+
+type SharedLauncher=(task:ProductionTask,pausedProducer?:ProductionTask)=>Promise<boolean>;
+const processWorkspaces=process as typeof process & {
+ clipMentorCapacity?:Map<string,ReturnType<typeof createProductionCapacity>>;
+ clipMentorSharedLaunchers?:Map<string,SharedLauncher>;
+};
+const workspaceCapacities:Map<string,ReturnType<typeof createProductionCapacity>>=processWorkspaces.clipMentorCapacity??=new Map();
+const sharedLaunchers:Map<string,SharedLauncher>=processWorkspaces.clipMentorSharedLaunchers??=new Map();
 
 async function json(req:IncomingMessage){const parts:Buffer[]=[];let size=0;for await(const part of req){size+=part.length;if(size>128000)throw new Error('Production request exceeds 128KB');parts.push(Buffer.from(part));}return JSON.parse(Buffer.concat(parts).toString('utf8'));}
 /** Local service entry. Formal multi-user hosting remains a separate deployment task. */
@@ -28,9 +39,38 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
  const reviewBoard=createBlueprintReviewBoardHandler();
  const active=new Map<string,Promise<unknown>>();
  const preparing=new Map<string,Promise<boolean>>();
+ const deferred=new Map<string,Promise<boolean>>();
+ const scheduling=new AbortController();
  const controls=new Set<string>();
- const launch=(task:ProductionTask,restoring=false,pausedProducer?:ProductionTask)=>{
-  if(active.has(task.taskId)||productionExecutionActive(task.projectId,task.taskId))throw new Error('Production task already running');
+ const root=runtimeProfile().rootDir;
+ const capacity=workspaceCapacities.get(root)??createProductionCapacity();
+ workspaceCapacities.set(root,capacity);
+ const slotFor=(task:ProductionTask)=>task.blueprintApproval?.sourceProjectId??task.projectId;
+ const launch=(task:ProductionTask,restoring=false,pausedProducer?:ProductionTask):Promise<boolean>=>{
+  if(scheduling.signal.aborted)return Promise.resolve(false);
+  const queued=deferred.get(task.taskId);
+  if(queued)return queued;
+  let release:()=>void;
+  try{release=capacity.reserve(slotFor(task));}
+  catch(error){
+   if(!isProductionCapacityFull(error))throw error;
+   const next=capacity.wait(slotFor(task),scheduling.signal).then(releaseSlot=>{
+    deferred.delete(task.taskId);
+    if(!releaseSlot)return false;
+    if(scheduling.signal.aborted){releaseSlot();return false;}
+    return startExecution(task,true,undefined,releaseSlot);
+   });
+   deferred.set(task.taskId,next);
+   void next.catch(error=>console.error('ClipMentor queued task unavailable',task.taskId,error));
+   return next;
+  }
+  return startExecution(task,restoring,pausedProducer,release);
+ };
+ const startExecution=(task:ProductionTask,restoring:boolean,pausedProducer:ProductionTask|undefined,releaseSlot:()=>void)=>{
+  if(active.has(task.taskId)||productionExecutionActive(task.projectId,task.taskId)){
+   releaseSlot();
+   return preparing.get(task.taskId)??Promise.resolve(false);
+  }
   const ready=Promise.withResolvers<boolean>();
   preparing.set(task.taskId,ready.promise);
   const finishPreparation=(prepared:boolean)=>{preparing.delete(task.taskId);ready.resolve(prepared);};
@@ -107,7 +147,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    active.delete(task.taskId);
    finishPreparation(false);
    // The second output starts without another browser action, including after recovery.
-   await launchSharedFollower(task,false);
+   try{await launchSharedFollower(task,false);}finally{releaseSlot();}
   });
   active.set(task.taskId,work);
   void work.catch(error=>console.error('ClipMentor production worker failed',task.taskId,error));
@@ -131,18 +171,33 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     sibling=await productionTaskStore.load(sibling.projectId,sibling.taskId);
    }
    if(!canLaunchSharedFollower(sibling)||active.has(sibling.taskId)||productionExecutionActive(sibling.projectId,sibling.taskId))continue;
-   const ready=launch(sibling,true,pausedProducer);
+   const dispatcher=sharedLaunchers.get(root);
+   if(!dispatcher)continue;
+   const ready=dispatcher(sibling,pausedProducer);
    if(waitForBinding)await ready;
   }
  }
  const isActive=(id:string,projectId:string)=>active.has(id)||productionExecutionActive(projectId,id);
- const panel=createProductionPanel(launch,isActive,controls);
+ const isDeferred=(id:string)=>deferred.has(id);
+ const panel=createProductionPanel(launch,isActive,controls,undefined,projectId=>capacity.reserve(projectId),isDeferred);
  return {name:'clipmentor-production-task',configureServer(server){
+  const dispatchShared:SharedLauncher=(task,pausedProducer)=>{
+   const address=server.httpServer?.address();
+   if(!address||typeof address!=='object')return Promise.resolve(false);
+   const origin=`http://127.0.0.1:${address.port}`;
+   task.input.author.origin=origin;task.input.reviewer.origin=origin;
+   return launch(task,true,pausedProducer);
+  };
+  server.httpServer?.once('close',()=>{
+   if(sharedLaunchers.get(root)===dispatchShared)sharedLaunchers.delete(root);
+   scheduling.abort();
+  });
   let startup:Promise<void>|undefined;
   const recoverOnListen=()=>{
    const address=server.httpServer?.address();
    if(!address||typeof address!=='object')return;
    const origin=`http://127.0.0.1:${address.port}`;
+   sharedLaunchers.set(root,dispatchShared);
    startup=(async()=>{
     activateOfflineAgentRuntimeBackend();
     const index=(await getStoredEntry('projects')).value;
@@ -173,6 +228,33 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
   if(server.httpServer?.listening)recoverOnListen();
   else server.httpServer?.once('listening',recoverOnListen);
   server.middlewares.use('/api/clipmentor/material-intake',createMaterialIntakeHandler());
+  let taskList: { until:number; result:ReturnType<typeof readTaskWorkspace> }|undefined;
+  server.middlewares.use('/api/clipmentor/task-workspace',async(req:IncomingMessage,res:ServerResponse)=>{
+   const send=(status:number,body:unknown)=>res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}).end(JSON.stringify(body));
+   if(!editorCredentialAuthorized(req,true)||req.headers['sec-fetch-site']!=='same-origin'){
+    send(403,{error:'无法访问任务列表。'});return;
+   }
+   try{
+    await startup;
+    if(req.method==='GET'){
+     if(!taskList||Date.now()>=taskList.until){
+      taskList={until:Date.now()+2500,result:readTaskWorkspace(isActive,()=>capacity.running,isDeferred)};
+     }
+     send(200,{...await taskList.result,running:capacity.running});return;
+    }
+    if(req.method==='POST'){
+     const body=await json(req);
+     const project=await createWorkspaceProject(body.id,body.name);
+     taskList=undefined;
+     send(201,project);return;
+    }
+    send(405,{error:'不支持此操作。'});
+   }catch(error){
+    if(error instanceof Error&&error.message==='invalid_workspace_project'){send(400,{error:'请核对任务名称。'});return;}
+    if(req.method==='GET')taskList=undefined;
+    send(409,{error:req.method==='GET'?'暂时无法读取任务。':'暂时无法新建任务，请重试。'});
+   }
+  });
   server.middlewares.use('/api/clipmentor/production-task',async(req:IncomingMessage,res:ServerResponse)=>{
    // The mounted path is not necessarily a valid standalone URL. Parse only
    // its query here; malformed paths must still reach the original auth/catch.
@@ -181,13 +263,13 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
    if(req.method==='GET'&&new URLSearchParams(query).get('view')==='storyboard'){await storyboard(req,res);return;}
    const send=(status:number,body:unknown)=>{res.statusCode=status;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify(body));};
    if(!editorCredentialAuthorized(req,true)){send(403,{error:'Editor origin required'});return;}
-   let controlId:string|undefined,panelRequest=false;
+   let controlId:string|undefined,panelRequest=false,releaseSlot:(()=>void)|undefined;
    try{
     const address=server.httpServer?.address();const port=address&&typeof address==='object'?address.port:server.config.server.port;
     const origin=`http://127.0.0.1:${port}`;
     const params=new URLSearchParams(query);
     await startup;
-    if(/^panel(?:_board|_video|_download|_reference|_attachment)?$/.test(params.get('view')??'')){
+    if(/^panel(?:_board|_video|_poster|_download|_draft_download|_reference|_attachment|_material)?$/.test(params.get('view')??'')){
      panelRequest=true;
      await panel(params.get('projectId')??'',origin,params,req,res,()=>json(req));return;
     }
@@ -207,6 +289,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(body.action==='create'){
      const input={...body.input,author:{...body.input?.author,origin},reviewer:{...body.input?.reviewer,origin}} as ProductionInput;
      if(input.authorBackend!==undefined||input.reviewerBackend!==undefined||input.panelDelivery!==undefined)throw new Error('Panel production configuration is available only from the configured panel');
+     releaseSlot=capacity.reserve(input.projectId);
      const task=await createProductionTask(input);launch(task);send(202,{taskId:task.taskId,projectId:task.projectId,status:'queued'});return;
     }
     controlId=String(body.projectId);
@@ -216,6 +299,7 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(body.action==='cancel'){send(202,await cancelProductionTask(task));return;}
     if(isActive(task.taskId,task.projectId))throw new Error('Production task already running');
     if(['resume','feedback','accept'].includes(String(body.action)))await publishedProductionParent(task);
+    if(['resume','feedback','retry_preview_review'].includes(body.action))releaseSlot=capacity.reserve(slotFor(task));
     if(body.action==='retry_preview_review'){
      await publishedProductionParent(task);
      const snapshot=await loadOfflineStoredProject(task.projectId);
@@ -241,11 +325,12 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
       {digest:body.visualCriteriaDigest,confirmed:body.confirmedVisualCriteria,renderId:body.renderId,watched:body.previewWatched}));return;}
     throw new Error('Unknown production action');
    }catch(error){
+    if(isProductionCapacityFull(error)){send(409,{reason:'capacity',error:error.message});return;}
     if(panelRequest)console.error('ClipMentor panel request failed',error);
     const code=error instanceof Error?error.message:'';
     const issue=panelRequest?panelReviewIssue(error):undefined;
     send(409,{error:issue?.message??(panelRequest?panelServiceUnavailable:code||'Production request failed'),...(issue?{issue}:{}),production_approved:false});
-   }finally{if(controlId)controls.delete(controlId);}
+   }finally{releaseSlot?.();if(controlId)controls.delete(controlId);}
   });
  }};
 }

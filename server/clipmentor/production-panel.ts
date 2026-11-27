@@ -3,7 +3,11 @@ import {failedInitialBreakdownWrite} from './production-analysis-recovery';
 import {panelProductionBudget} from './production-budget';
 import { open, readFile, stat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
+import {sha256File} from '../../shared/node-content-hash';
+import {ffmpegBin} from '../media-binaries';
 import {digestValue} from '../agent-runs/store-values';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
@@ -30,6 +34,7 @@ import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
 import {productionDeliverables,productionAttachmentSlots} from './production-deliverables';
 import {verifyProductionOutput} from './production-format';
 import {pendingProductionPreview,openPendingProductionPreview} from './production-playable-preview';
+import {isProductionCapacityFull} from './production-capacity';
 import {productionPreviewChapters} from './production-preview-chapters';
 import {previewHasBoundContentIssue} from './production-shared-review';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
@@ -131,7 +136,7 @@ export function combinePanelBlueprintEndings(primary:import('../../src/editor/ty
 }
 
 /** Fixed-project local frontend adapter, using the existing task ledger and worker. */
-export function createProductionPanel(launch:(task:ProductionTask)=>void, active:(id:string,projectId:string)=>boolean, controls = new Set<string>(), renderExcerpt=renderTeachingExcerpt) {
+export function createProductionPanel(launch:(task:ProductionTask)=>void, active:(id:string,projectId:string)=>boolean, controls = new Set<string>(), renderExcerpt=renderTeachingExcerpt, reserveSlot: (projectId:string)=>()=>void = ()=>()=>{}, deferred: (taskId:string)=>boolean = ()=>false) {
   let preflight: { until:number; result:Promise<PanelSettings> } | undefined;
   const settings = (fresh=false) => {
     if (fresh || !preflight || Date.now() >= preflight.until) {
@@ -140,9 +145,32 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     return preflight.result;
   };
   const boards = new Map<string,{ identity:string; artifactIdentity:string; revision:string; criteriaDigest?:string; requirementsDigest?:string; siblingRevision?:string; assertUnchanged?:()=>Promise<void>; file:Promise<string> }>();
-  let pendingExcerpt:{identity:string;result:Promise<Buffer>}|undefined;
-  let cachedExcerpt:{identity:string;bytes:Buffer}|undefined;
+  const pendingExcerpts=new Map<string,Promise<Buffer>>();
+  let excerptTail=Promise.resolve();
+  const cachedExcerpts=new Map<string,Buffer>();
   const verifiedPreviews = new Map<string,Promise<void>>();
+  const posters=new Map<string,Promise<Buffer>>();
+  let posterTail=Promise.resolve();
+  const fileStamp=(info:BigIntStats)=>[info.dev,info.ino,info.size,info.mtimeNs,info.ctimeNs].join(':');
+  async function previewPoster(file:string,signature:string){
+    const key=JSON.stringify([file,signature]);
+    let poster=posters.get(key);
+    if(!poster){
+      poster=posterTail.then(async()=>{
+        if(fileStamp(await stat(file,{bigint:true}))!==signature)throw Error('预览已变化，请刷新');
+        const result=await promisify(execFile)(ffmpegBin(),[
+          '-nostdin','-loglevel','error','-threads','1','-i',file,'-an','-frames:v','1',
+          '-vf','scale=144:-2','-threads','1','-vcodec','mjpeg','-f','image2pipe','pipe:1',
+        ],{timeout:5000,maxBuffer:128*1024,encoding:'buffer'});
+        if(!result.stdout.length||fileStamp(await stat(file,{bigint:true}))!==signature)throw Error('成片缩略图暂不可用');
+        return result.stdout;
+      });
+      posters.set(key,poster);
+      if(posters.size>12)posters.delete(posters.keys().next().value!);
+      posterTail=poster.then(()=>{},()=>{if(posters.get(key)===poster)posters.delete(key);});
+    }
+    return poster;
+  }
   async function openVerifiedPreview(task:ProductionTask,file:string){
     const receipt=task.completed.self_check?.artifact.receipt as {videoSha256?:string}|undefined;
     const legacyPreview=receipt===undefined&&task.status==='awaiting_review';
@@ -194,8 +222,11 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if(children.some(child=>child.blueprintApproval?.sourceRevision!==body.revision))
           throw Error('蓝图版本已变化，请刷新');
         if(!previewReviewCredential())throw Error(missingPreviewReviewCredential);
-        children=await queueBlueprintContinuations(task);
-        for(const child of children)if(child.status==='queued'&&!active(child.taskId,child.projectId))launch(child);
+        const release=reserveSlot(projectId);
+        try{
+          children=await queueBlueprintContinuations(task);
+          for(const child of children)if(child.status==='queued'&&!active(child.taskId,child.projectId))launch(child);
+        }finally{release();}
         res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');
         res.end(JSON.stringify({accepted:true}));return;
       }
@@ -277,6 +308,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if(!current||current.taskId!==task?.taskId||!currentBinding||!pendingPreview||digestValue(currentBinding)!==digestValue(pendingPreview))
           throw Error('预览已变化，请刷新');
         if(current.blueprintApproval)await publishedProductionParent(current);
+        return current;
       };
       const verifyPreview=async()=>{
         if(!task||!preview)throw Error('这个预览已过期或文件缺失');
@@ -292,6 +324,24 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           throw Error('预览已变化，请刷新');
         return productionDeliverables(saved.doc,undefined,task.completed.export!.at,task.input.panelDelivery);
       };
+      if(view==='panel_poster'){
+        if(!task||query.get('renderId')!==task.completed.export?.artifact.renderId)throw Error('预览已变化，请刷新');
+        await boundPreviewProject();
+        const media=pendingPreview?await openPendingProductionPreview(pendingPreview)
+          :preview?{file:preview,handle:await openVerifiedPreview(task,preview)}:undefined;
+        if(!media)throw Error('预览暂不可用');
+        try{
+          const stamp=fileStamp(await media.handle.stat({bigint:true}));
+          const bytes=await previewPoster(media.file,stamp);
+          const current=await currentPreviewTask();
+          if(!current||current.taskId!==task.taskId||current.sequence!==task.sequence||current.updatedAt!==task.updatedAt
+            ||fileStamp(await media.handle.stat({bigint:true}))!==stamp)throw Error('预览已变化，请刷新');
+          await boundPreviewProject();
+          res.setHeader('Content-Type','image/jpeg');
+          res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');
+          res.end(bytes);return;
+        }finally{await media.handle.close();}
+      }
       if(view==='panel_attachment'){
         const output=(await deliveryOutputs()).find(o=>o.assetId===query.get('assetId'));
         if(!output)throw Error('随片资料不存在');
@@ -299,6 +349,34 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         res.setHeader('Content-Disposition',attachmentDisposition(output.fileName));
         res.setHeader('X-Content-Type-Options','nosniff');
         res.setHeader('Cache-Control','no-store');res.end(output.bytes);return;
+      }
+      if(view==='panel_material'){
+        const delivery=task?.input.panelDelivery;
+        const role=delivery?.audience;
+        if(!task||!delivery||!role||query.get('renderId')!==task.completed.export?.artifact.renderId
+          ||!preview&&!pendingPreview)throw Error('随片资料暂不可用');
+        const id=role==='new_contact'?delivery.ctaAssetId:delivery.productAssetId;
+        const hash=role==='new_contact'?delivery.ctaAssetHash:delivery.productAssetHash;
+        const saved=await boundPreviewProject();
+        const asset=saved.doc.assets.find(item=>item.id===id&&item.kind==='image'&&item.sourceContentHash===hash);
+        if(!asset||query.get('assetId')!==id)throw Error('随片资料暂不可用');
+        const file=resolveUploadFile(asset.src.split('/').at(-1)!);
+        if(!file)throw Error('随片资料暂不可用');
+        const handle=await open(file,'r');
+        try{
+          const before=await handle.stat({bigint:true});
+          const unchanged=()=>handle.stat({bigint:true}).then(after=>
+            after.size===before.size&&after.mtimeNs===before.mtimeNs&&after.ctimeNs===before.ctimeNs);
+          if(!before.isFile()||!before.size||!await intactAsset(asset,()=>sha256File(file,()=>handle.createReadStream({start:0,autoClose:false}))))throw Error('随片资料暂不可用');
+          const current=await currentPreviewTask();
+          if(!current||current.taskId!==task.taskId||current.sequence!==task.sequence
+            ||current.updatedAt!==task.updatedAt||!await unchanged())throw Error('预览已变化，请刷新');
+          await boundPreviewProject();
+          const extension=file.match(/\.(?:png|jpe?g|webp)$/i)?.[0]??'.png';
+          res.setHeader('Content-Disposition',attachmentDisposition((role==='new_contact'?'CTA 海报':'产品图')+extension));
+          await serveDiskFile(req,res,file,handle);
+        }finally{await handle.close();}
+        return;
       }
       if (view === 'panel_board') {
         if (!task || active(task.taskId,projectId)||!['awaiting_blueprint','blocked'].includes(task.status)
@@ -327,23 +405,26 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const excerpt=representativeTeachingExcerpt(saved.doc);
           if(!excerpt)throw Error('当前蓝图没有可播放的回看选段');
           await assertBoardCurrent();
-          let bytes=cachedExcerpt?.identity===identity?cachedExcerpt.bytes:undefined;
+          const cacheKey=JSON.stringify([projectId,identity]);
+          let bytes=cachedExcerpts.get(cacheKey);
           if(!bytes){
-            if(!pendingExcerpt){
-              const result=(async()=>{
-                const result=await renderExcerpt(excerpt,AbortSignal.timeout(45_000));
-                if(!result.length||result.length>TEACHING_EXCERPT_MAX_BYTES)throw Error('代表预览文件无效');
+            let pending=pendingExcerpts.get(cacheKey);
+            if(!pending){
+              pending=excerptTail.then(async()=>{
+                await assertBoardCurrent();
+                const rendered=await renderExcerpt(excerpt,AbortSignal.timeout(45_000));
+                if(!rendered.length||rendered.length>TEACHING_EXCERPT_MAX_BYTES)throw Error('代表预览文件无效');
                 await verifyTeachingExcerptAsset(excerpt.asset);
                 await assertBoardCurrent();
-                cachedExcerpt={identity,bytes:result};
-                return result;
-              })();
-              pendingExcerpt={identity,result};
-              const clear=()=>{if(pendingExcerpt?.result===result)pendingExcerpt=undefined;};
-              void result.then(clear,clear);
+                cachedExcerpts.set(cacheKey,rendered);
+                if(cachedExcerpts.size>2)cachedExcerpts.delete(cachedExcerpts.keys().next().value!);
+                return rendered;
+              });
+              pendingExcerpts.set(cacheKey,pending);
+              const clear=()=>{pendingExcerpts.delete(cacheKey);};
+              excerptTail=pending.then(clear,clear);
             }
-            if(pendingExcerpt.identity!==identity)throw Error('另一个代表预览正在生成');
-            bytes=await pendingExcerpt.result;
+            bytes=await pending;
           }
           await verifyTeachingExcerptAsset(excerpt.asset);
           await assertBoardCurrent();
@@ -411,21 +492,29 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         res.setHeader('Content-Type','image/jpeg');res.setHeader('Cache-Control','no-store');
         res.end(Buffer.from(frame.base64,'base64'));return;
       }
-      if (view === 'panel_video' || view === 'panel_download') {
-        if(view==='panel_video'&&task&&pendingPreview){
+      if (view === 'panel_video' || view === 'panel_download' || view === 'panel_draft_download') {
+        if (view === 'panel_download' && task?.status !== 'completed') throw new Error('请先完成终审');
+        if(view!=='panel_download'&&task&&pendingPreview){
           if(query.get('renderId')!==pendingPreview.renderId)throw Error('这个预览已过期或文件缺失');
           await boundPreviewProject();
           const {file,handle}=await openPendingProductionPreview(pendingPreview);
           try{
             await boundPreviewProject();
-            await assertCurrentPendingPreview();
+            const current=await assertCurrentPendingPreview();
+            if(view==='panel_draft_download'){
+              if(previewHasBoundContentIssue(current)||await sharedPreviewDeliveryHeld(current))throw Error('当前预览暂不可下载');
+              const latest=await assertCurrentPendingPreview();
+              if(latest.sequence!==current.sequence||latest.updatedAt!==current.updatedAt)throw Error('预览已变化，请刷新');
+              res.setHeader('Content-Disposition',attachmentDisposition('未复核_'+deliveryFileName(task.input.product.name,
+                task.input.panelDelivery?.audience,'video',task.completed.export!.at)));
+            }
             await serveDiskFile(req,res,file,handle);
           }finally{await handle.close();}
           return;
         }
+        if(view==='panel_draft_download')throw Error('当前预览暂不可下载');
         const file = preview;
         if (!file || query.get('renderId') !== task?.completed.export?.artifact.renderId) throw new Error('这个预览已过期或文件缺失');
-        if (view === 'panel_download' && task.status !== 'completed') throw new Error('请先完成终审');
         if(task.input.panelDelivery){
           const saved=await boundPreviewProject();
           if(view==='panel_download')await productionAttachmentSlots(saved.doc,undefined,task.completed.export!.at,task.input.panelDelivery);
@@ -449,8 +538,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       }
       const config = task ? null : await settings();
       const running = !!task && active(task.taskId,projectId);
+      const queued=!!task&&!running&&deferred(task.taskId);
       const waiting=!!task?.sharedProduction&&!task.sharedProduction.prepared&&task.status==='queued';
-      const stopped = task && !running && !waiting && ['blocked','running','queued'].includes(task.status);
+      const stopped = task && !running && !waiting && !queued && ['blocked','running','queued'].includes(task.status);
       const draft=task&&!running&&['blocked','awaiting_blueprint'].includes(task.status)&&['blueprint','copy_review'].includes(task.stage)
         ?await loadOfflineStoredProject(projectId):null;
       const draftRevision=draft?.doc.clipMentorAnalysis?.blueprint.length?draft.revision:undefined;
@@ -531,7 +621,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         }catch{deliveryUnavailable=true;}
       }
       const outputUnavailable=needPreview&&(!playablePreview||task?.status==='completed'&&deliveryUnavailable);
-      const sharedDeliveryHeld=needPreview&&!!task&&await sharedPreviewDeliveryHeld(task);
+      const sharedDeliveryHeld=(needPreview||!!pendingPreviewRenderId)&&!!task&&await sharedPreviewDeliveryHeld(task);
       if(sharedDeliveryHeld)reviewIssue=panelReviewIssue('preview_shared_body_requires_reconciliation');
       const canAcceptPreview=task?.status==='awaiting_review'&&!!playablePreview&&!deliveryUnavailable&&!sharedDeliveryHeld
         &&(!task.input.panelDelivery||!!task.completed.self_check?.artifact.receipt);
@@ -546,11 +636,19 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       }
       if(needPreview&&task?.status==='awaiting_review'&&!canAcceptPreview)
         reviewIssue??={kind:'binding',message:'当前预览或随片资料暂不可用。'};
+      const delivery=task?.input.panelDelivery;
+      const audience=delivery?.audience;
+      const attachment=audience&&currentPreviewProject?.doc.assets.find(asset=>
+        asset.kind==='image'&&asset.id===(audience==='new_contact'?delivery.ctaAssetId:delivery.productAssetId)
+        &&asset.sourceContentHash===(audience==='new_contact'?delivery.ctaAssetHash:delivery.productAssetHash)
+        &&asset.src.startsWith('/media/uploads/')&&!!resolveUploadFile(asset.src.slice('/media/uploads/'.length)));
       send({ task:task ? {
         taskId:task.taskId,...(task.blueprintApproval?{sourceTaskId:task.blueprintApproval.sourceTaskId}:{}),
-        status: outputUnavailable||!running&&uncheckedDraft?'blocked':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
+        status: outputUnavailable||!running&&!queued&&uncheckedDraft?'blocked':queued?'queued':waiting?'waiting':running && task.status === 'blocked' ? 'running' : stopped ? 'blocked' : task.status,
         stage: task.stage, revision: task.projectRevision, sequence: task.sequence,
         active: running,stopReason:outputUnavailable?'service':stopReason,feedbackUsed: task.feedbackUsed,
+        ...(!running&&task.status==='blocked'&&(canResumeUndispatchedAnalysis(task)||canResumeSavedAnalysis(task)||failedInitialBreakdownWrite(task))
+          ?{canContinueAnalysis:true}:{}),
         hasBlueprintFeedback:!!task.blueprintFeedback,blueprintFeedbackSummary:blueprintFeedbackPoints(task),
         ...(task.blueprintOpinions?.differences?{blueprintOpinionDifferences:task.blueprintOpinions.differences}:{}),
         ...(task.blueprintApproval&&task.completed.copy_review?.artifact.productionDifferences
@@ -562,6 +660,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),
         ...(reviewIssue?{reviewIssue}:{}),
         ...(task.status==='awaiting_review'?{canAcceptPreview}:{}),
+        ...(task.finalAcceptance&&task.status==='completed'?{confirmedAt:task.finalAcceptance.confirmedAt}:{}),
         ...(currentPreviewProject?{reviewGroups:blueprintReviewGroups(currentPreviewProject.doc),previewChapters,previewDuration,
           previewReviewed:!!task.completed.self_check?.artifact.receipt&&!!verifiedProject}:{}),
         ...(task.status==='awaiting_review'&&criteria?{visualCriteria:{digest:criteria.digest}}:{}),
@@ -570,6 +669,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ...(pendingPreviewRenderId?{renderId:pendingPreviewRenderId,previewPending:true,canAcceptPreview:false,
           ...(previewHasBoundContentIssue(task)?{previewNeedsChanges:true}:{})}:{}),
         ...(sharedDeliveryHeld?{deliveryHeld:true}:{}),
+        ...(attachment?{materialAttachment:{assetId:attachment.id,label:audience==='new_contact'?'CTA 海报':'产品图'}}:{}),
         ...(attachments.length?{attachments}:{}),...(deliveryUnavailable?{deliveryUnavailable:true}:{}),
       } : null,
         unavailable: (config && 'unavailable' in config) || (!task && isProjectConnected(projectId)) ? panelServiceUnavailable : undefined,
@@ -579,6 +679,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
     if (req.method !== 'POST' || view !== 'panel') throw new Error('不支持的制作操作');
     if (controls.has(projectId)) throw new Error('该工程正在处理上一次操作');
     controls.add(projectId);
+    let releaseSlot:(()=>void)|undefined;
     try {
       const body = await readBody();
       const existing = manifestTask?await productionTaskStore.load(projectId,manifestTask.taskId):await currentPanelTask(projectId);
@@ -598,12 +699,14 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         if (saved.doc.clipMentorAnalysis || saved.doc.timelines.some(t => t.items.length)) throw new Error('该工程已有制作记录');
         const api = { provider:config.provider, model:config.model, apiMode:config.apiMode, origin };
         const index = (await getStoredEntry('projects')).value;
-        const name = Array.isArray(index) ? index.find(row => row?.id === projectId)?.name : undefined;
+        const entry = Array.isArray(index) ? index.find(row => row?.id === projectId) : undefined;
+        const name = entry?.clipMentorTask ? undefined : entry?.name;
         if(body.doneCriteria!==undefined)throw Error('source_requirements_maintenance_only');
         const doneCriteria=await readPanelSourceCriteria(projectId,source,sales);
         const openingComparison=declaredPanelOpening(saved.doc,sourcePerformanceCriterion(doneCriteria??[]),source.id,sales.id);
         if(doneCriteria)frozenTeachingTopics(saved.doc,{input:{sourceAssetId:source.id,doneCriteria}});
         const salesFact=panelSalesEvidence(source.id,sales.id,openingComparison.results);
+        releaseSlot=reserveSlot(projectId);
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
           openingComparison,...(doneCriteria?{doneCriteria}:{}),
@@ -622,6 +725,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
           const reuseAnalysis=canResumeSavedAnalysis(existing);
           const restartUnpublished=failedInitialBreakdownWrite(existing);
           if (!canResumeUndispatchedAnalysis(existing)&&!reuseAnalysis&&!restartUnpublished) throw new Error('这次暂停不能从分析入口继续');
+          releaseSlot=reserveSlot(existing.blueprintApproval?.sourceProjectId??projectId);
           if (isProjectConnected(projectId)) throw new Error('请先关闭该工程的 OpenChatCut 编辑器');
           if (restartUnpublished) {
             const materials = registeredAssets(saved.doc.assets);
@@ -700,6 +804,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             revision:latest.revision,boardIdentity:subject.identity,groups:reviewGroups,endings:reviewEndings,
           }):undefined;
           if(productionConfirmation){
+            releaseSlot=reserveSlot(projectId);
             productionOpeningComparison(existing,latestPolicy,latest.doc);
             const children=await createBlueprintContinuations(existing,latest,latestPolicy,origin,guards,review);
             for(const child of children)if(child.status==='queued')launch(child);
@@ -737,6 +842,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             feedback=body.text;
             unitIds=panelFeedbackTarget(body.feedbackTarget,reviewGroups,false).unitIds;
           }
+          releaseSlot=reserveSlot(existing.blueprintApproval?.sourceProjectId??projectId);
           if(draftFeedback){
             if(latest.doc.clipMentorAnalysis?.source.asset_id!==existing.input.sourceAssetId)
               throw Error('蓝图对应的原片已变化，请重新打开审片板');
@@ -774,6 +880,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             if (!previewReviewCredential()) throw Error(missingPreviewReviewCredential);
             const target=panelFeedbackTarget(body.feedbackTarget,blueprintReviewGroups(saved.doc),true);
             const anchor=await productionFeedbackAnchor(existing,saved.doc);
+            releaseSlot=reserveSlot(existing.blueprintApproval?.sourceProjectId??projectId);
             await productionFeedback(existing,{kind:target.kind,text:body.text,preview:anchor.preview,unit_ids:target.unitIds??[],item_ids:[],
               ...(target.range?{output_range_seconds:target.range}:{})},productionTaskStore,saved.doc);
             launch(existing);
@@ -782,12 +889,16 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       }
       send({ accepted:true });
     } catch(error){
+      if(isProductionCapacityFull(error)){
+        res.statusCode=409;send({reason:'capacity',error:error.message});return;
+      }
       const issue=panelReviewIssue(error);
       if(!issue)throw error;
       if(!(error instanceof PanelReviewIssue))console.error('ClipMentor panel action failed',projectId,error);
       res.statusCode=409;
       send({error:issue.message,issue});
     } finally {
+      releaseSlot?.();
       controls.delete(projectId);
     }
   };

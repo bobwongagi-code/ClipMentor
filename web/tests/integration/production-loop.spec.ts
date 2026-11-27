@@ -204,6 +204,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const prospect = page.getByRole('tabpanel', { name: '新建联达人版', exact: true })
     await expect(page.getByRole('region', { name: '已合作达人版', exact: true }).getByLabel('制作阶段')).toBeVisible()
     await expect(page.getByRole('region', { name: '新建联达人版', exact: true }).getByLabel('制作阶段')).toBeVisible()
+    await page.getByRole('tab',{name:/已合作达人版/}).click()
     await page.screenshot({ path: join(proof, '02-two-output-progress.png'), fullPage: true })
     await expect(partner.locator('video')).toBeVisible()
     await page.getByRole('tab',{name:/新建联达人版/}).click()

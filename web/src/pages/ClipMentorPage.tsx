@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import { Check, Download, Film, Image, Send, Upload } from 'lucide-react'
 import './clipmentor.css'
 import ProductionPanel, { productionEndpoint, readPanelState } from './ProductionPanel'
+import { projectResource, taskPage, workspaceEndpoint } from './taskNavigation'
 
 const slots = [
   { key: 'source', title: '爆款原片', accept: 'video/mp4,video/webm,video/quicktime', icon: Film, formats: ['.mp4', '.webm', '.mov'] },
@@ -97,7 +98,9 @@ function Feedback({ label, messages, onSend }: {
 
 const intakeEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/intake`
 
-export default function ClipMentorPage() {
+export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit }: {
+  projectId?: string; workspaceNew?: boolean; embedded?: boolean; running?: number; limit?: number
+} = {}) {
   const [materials, setMaterials] = useState<Partial<Record<Slot, Material>>>({})
   const urls = useRef<Partial<Record<Slot, string>>>({})
   const demo = !__CLIPMENTOR_API_BASE_PATH__ || new URLSearchParams(window.location.search).get('demo') === '1'
@@ -106,10 +109,13 @@ export default function ClipMentorPage() {
   const [hasSavedProduction, setHasSavedProduction] = useState(false)
   const [mediaRefresh, setMediaRefresh] = useState(0)
   const [accessLost, setAccessLost] = useState(false)
-  const [checkingReceipt, setCheckingReceipt] = useState(!demo)
+  const [checkingReceipt, setCheckingReceipt] = useState(!demo && !workspaceNew)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
   const uploadActive = useRef(false)
+  const creationId = useRef<string>()
+  const [taskName, setTaskName] = useState('')
+  const [registeredName, setRegisteredName] = useState<string>()
   const [step, setStep] = useState(0)
   const [dragSlot, setDragSlot] = useState<Slot>()
   const [blueprintNotes, setBlueprintNotes] = useState<Message[]>([])
@@ -120,6 +126,8 @@ export default function ClipMentorPage() {
   // Leave headroom for the multipart headers within the server's request limit.
   const sizeExceeded = size > 64 * 1024 * 1024 - 4096
   const ready = !sizeExceeded && requestedSlots.every(({ key }) => materials[key]?.status === 'ready')
+  const slotsFull = running !== undefined && limit !== undefined && running >= limit
+  const slotsLoading = workspaceNew && (running === undefined || limit === undefined)
 
   const requestApi = useCallback(async (url: string, init?: RequestInit) => {
     const response = await fetch(url, { ...init, mode: 'same-origin', redirect: 'error', cache: 'no-store' })
@@ -133,12 +141,12 @@ export default function ClipMentorPage() {
   }, [])
 
   useEffect(() => {
-    if (demo) return
+    if (demo || workspaceNew) return
     const controller = new AbortController()
     void (async () => {
       try {
         try {
-          const response = await requestApi(intakeEndpoint, { signal: controller.signal })
+          const response = await requestApi(projectResource(intakeEndpoint, projectId), { signal: controller.signal })
           if (!response.ok) {
             if (!controller.signal.aborted) setUploadError('无法读取上传记录，请稍后刷新。')
             if (response.status === 404 || response.status === 401 || response.status === 403) return
@@ -157,7 +165,7 @@ export default function ClipMentorPage() {
         }
         if (!controller.signal.aborted) {
           // A missing upload receipt cannot hide a previously saved task.
-          const response = await requestApi(productionEndpoint, { signal: controller.signal })
+          const response = await requestApi(projectResource(productionEndpoint, projectId), { signal: controller.signal })
           const saved = await readPanelState(response)
           if (!controller.signal.aborted && (saved?.task || saved?.outputs?.length)) setHasSavedProduction(true)
         }
@@ -169,7 +177,7 @@ export default function ClipMentorPage() {
       }
     })()
     return () => controller.abort()
-  }, [demo, requestApi])
+  }, [demo, workspaceNew, projectId, requestApi])
 
   function addFile(slot: Slot, file?: File) {
     if (!file || uploadActive.current || receipt) return
@@ -208,7 +216,7 @@ export default function ClipMentorPage() {
       setStep(1)
       return
     }
-    if (!ready || uploadActive.current || receipt) return
+    if (!ready || uploadActive.current || receipt || slotsLoading || (workspaceNew && slotsFull)) return
     const body = new FormData()
     const files = requestedSlots.map(({ key }) => materials[key]!.file)
     requestedSlots.forEach(({ key },index) => body.append(key,files[index]))
@@ -227,11 +235,34 @@ export default function ClipMentorPage() {
     setUploading(true)
     setUploadError('')
     try {
-      const response = await requestApi(intakeEndpoint, { method: 'POST', body }).catch(() => undefined)
+      let target = projectId
+      if (workspaceNew) {
+        creationId.current ??= crypto.randomUUID()
+        const response = await requestApi(workspaceEndpoint, {method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({id:creationId.current,name:taskName.trim()})})
+        const saved = await response.json().catch(() => undefined)
+        if (!response.ok || saved?.id !== creationId.current) throw new Error(saved?.error || '暂时无法新建任务，请重试。')
+        target = saved.id
+        setRegisteredName(typeof saved.name==='string'?saved.name:taskName.trim())
+      }
+      const targetIntake = projectResource(intakeEndpoint,target)
+      const complete = async (uploaded: IntakeReceipt) => {
+        if (target && uploaded.projectId !== target) throw new Error('上传记录与当前任务不一致。')
+        if (workspaceNew) {
+          // Still open the saved task if another task took the slot during upload.
+          const started = await requestApi(projectResource(productionEndpoint,target), {method:'POST',
+            headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'start'})}).catch(() => undefined)
+          const result = await started?.json().catch(() => undefined)
+          const url = taskPage(target)
+          if (started?.ok && result?.accepted === true) window.location.assign(url)
+          else window.location.assign(`${url}&start=${result?.reason==='capacity'?'capacity':'check'}`)
+        } else finish(uploaded)
+      }
+      const response = await requestApi(targetIntake, { method: 'POST', body }).catch(() => undefined)
       const result = await response?.json().catch(() => undefined)
       if (response?.ok && result?.projectId && result.assets?.length === slots.length
         && (!repair || result.projectId === repair.projectId)) {
-        finish(result)
+        await complete(result)
         return
       }
       if (response && !response.ok && response.status < 500 && !result?.commitUncertain) {
@@ -239,7 +270,7 @@ export default function ClipMentorPage() {
       }
       // A disconnected response can follow a successful commit. Read the
       // receipt once and bind each submitted entry before moving on.
-      const readback = await requestApi(intakeEndpoint).catch(() => undefined)
+      const readback = await requestApi(targetIntake).catch(() => undefined)
       const saved: IntakeReceipt | undefined = readback?.ok
         ? (await readback.json().catch(() => undefined))?.receipt
         : undefined
@@ -254,7 +285,7 @@ export default function ClipMentorPage() {
           throw new Error('工程内保存的素材与本次上传不一致。')
         }
       }
-      finish(saved)
+      await complete(saved)
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : '上传未确认')
     } finally {
@@ -265,25 +296,29 @@ export default function ClipMentorPage() {
 
   const source = materials.source
   const showProduction = !demo && (receipt || hasSavedProduction)
-  return <div className="cm-shell">
-    <header className="cm-header">
+  return <div className={embedded?'cm-embedded-task':'cm-shell'}>
+    {!embedded&&<header className="cm-header">
       <div className="cm-brand"><img src="/clipmentor-mark.svg" alt="" /><strong>ClipMentor</strong></div>
       {demo && <span className="cm-demo">流程演示</span>}
-    </header>
-    <main className="cm-main page-enter">
+    </header>}
+    <div className={embedded?'cm-task-surface':'cm-main page-enter'}>
       {accessLost ? <p className="cm-caption cm-upload-error" role="alert">制作服务访问已失效，请刷新页面。</p> : <>
-      {!showProduction && <nav aria-label="制作步骤"><ol className="cm-steps">
+      {!showProduction && !embedded && <nav aria-label="制作步骤"><ol className="cm-steps">
         {stages.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined}>
           <span>{index < step ? <Check size={15} /> : index + 1}</span>{label}
         </li>)}
       </ol></nav>}
       {showProduction && <ProductionPanel assets={(receipt ?? repair)?.assets.map((asset, index) => ({ ...asset, title: slots[index].title })) ?? []} requestApi={requestApi}
-        mediaRefresh={mediaRefresh} onRecheck={() => { setReceipt(undefined); setHasSavedProduction(false); setUploadError('') }} />}
+        projectId={projectId} reviewProjectId={projectId??receipt?.projectId??repair?.projectId}
+        slotsFull={slotsFull} mediaRefresh={mediaRefresh} onRecheck={() => { setReceipt(undefined); setHasSavedProduction(false); setUploadError('') }} />}
       {checkingReceipt ? <p className="cm-caption" role="status">正在检查上传记录…</p> : step === 0 && (!showProduction || repair) && <>
         {repair
           ? <div className="cm-heading"><h2>补传缺失素材</h2><p>请选择工程里登记的原文件，补传后即可继续。</p></div>
-          : <div className="cm-heading"><h1>上传制作素材</h1><p>选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。</p></div>}
+          : <div className="cm-heading"><h1>{workspaceNew?'新建任务':'上传制作素材'}</h1><p>{workspaceNew?'选好四份素材。开始制作后，可以回任务列表看进度。':'选好原片、商品图、销量截图和 CTA 行动号召图，再开始拆解。'}</p></div>}
         <section className="cm-panel">
+          {workspaceNew&&<label className="cm-task-name">{registeredName===undefined?'任务名称（选填）':'已登记的任务名称'}
+            <input maxLength={80} value={registeredName??taskName} onChange={event=>setTaskName(event.target.value)} disabled={uploading||registeredName!==undefined}/>
+          </label>}
           <div className="cm-materials">
             {requestedSlots.map(({ key, title, accept, icon: Icon }) => {
               const material = materials[key]
@@ -297,19 +332,20 @@ export default function ClipMentorPage() {
                 {material && <span className="cm-filename">{material.file.name}</span>}
                 <span className="cm-material-state" role="status" data-error={material?.status === 'error'}>
                   {material?.detail ?? (repair ? repair.assets[slots.findIndex(slot => slot.key === key)].name
-                    : key === 'source' ? 'MP4、MOV、WebM' : 'PNG、JPG、WebP')}
+                    : key === 'source' ? workspaceNew?'MP4、MOV、WebM · 需有音轨':'MP4、MOV、WebM' : 'PNG、JPG、WebP')}
                 </span>
               </label>
             })}
           </div>
           <div className="cm-footer">
-            <button className="cm-button" disabled={!ready || uploading} onClick={() => void uploadMaterials()}><Upload size={17} /> {uploading ? '正在上传并回读…' : demo ? '开始制作' : repair ? '补传素材' : '上传素材'}</button>
+            {workspaceNew&&<span role="status">{slotsLoading?'正在读取名额，可以先选好素材。':slotsFull?'名额已满，可以先选好素材。':`已选 ${slots.filter(({key})=>materials[key]?.status==='ready').length} / 4 份 · 合计上限 64 MiB`}</span>}
+            <button className="cm-button" disabled={!ready || uploading || slotsLoading || workspaceNew && slotsFull} onClick={() => void uploadMaterials()}><Upload size={17} /> {uploading ? '正在上传素材…' : workspaceNew && slotsFull ? '等待运行名额' : demo || workspaceNew ? '开始制作' : repair ? '补传素材' : '上传素材'}</button>
           </div>
         </section>
         {(sizeExceeded || uploadError) && <p className="cm-caption cm-upload-error" role="alert">
           {sizeExceeded ? '素材合计接近或超过 64 MiB，请减小文件后再上传。' : uploadError}
         </p>}
-        {!repair && <p className="cm-caption" role="status">{demo ? '本地检查文件能否打开，素材留在当前浏览器。演示流程尚未连接制作服务。'
+        {!repair && !workspaceNew && <p className="cm-caption" role="status">{demo ? '本地检查文件能否打开，素材留在当前浏览器。演示流程尚未连接制作服务。'
           : '合计上限 64 MiB。原片须有音轨，上传后会核对工程中的四份素材。'}</p>}
       </>}
       {showProduction && !receipt && !repair && uploadError && <p className="cm-caption cm-upload-error" role="alert">{uploadError}</p>}
@@ -351,6 +387,6 @@ export default function ClipMentorPage() {
         </section>
       </>}
       </>}
-    </main>
+    </div>
   </div>
 }

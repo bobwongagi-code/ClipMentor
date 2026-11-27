@@ -7,6 +7,8 @@ export function deliveryFileName(product:string,audience:string|undefined,kind:'
 }
 export function attachmentDisposition(name:string){
  const encoded=encodeURIComponent(name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
- const suffix=name.toLowerCase().endsWith('.pdf')?'pdf':'mp4';
- return `attachment; filename="ClipMentor-${suffix==='pdf'?'Storyboard':'video'}.${suffix}"; filename*=UTF-8''${encoded}`;
+ const suffix=name.toLowerCase().match(/\.(pdf|png|jpe?g|webp)$/)?.[1]??'mp4';
+ const type=suffix==='pdf'?'Storyboard':suffix==='mp4'?'video':'image';
+ const marker=name.startsWith('未复核_')?'unreviewed-':'';
+ return `attachment; filename="ClipMentor-${marker}${type}.${suffix}"; filename*=UTF-8''${encoded}`;
 }

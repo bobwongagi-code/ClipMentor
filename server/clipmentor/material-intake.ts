@@ -20,6 +20,7 @@ import { withSerializedProjectStore } from '../plugins/project-store';
 import { sha256File } from '../../shared/node-content-hash';
 import { CLIPMENTOR_OUTPUT_CANVAS } from './production-format';
 import { hasWebmDocType } from './video-input';
+import { CLIPMENTOR_TASK_LIMIT } from '../../shared/clipmentor-tasks';
 
 const maxRequestBytes = 64 * 1024 * 1024;
 const slots = ['source', 'product', 'sales', 'cta'] as const;
@@ -123,7 +124,7 @@ async function restoreRegisteredFiles(projectId: string, revision: string, asset
 }
 
 export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFile?: typeof sha256File } = {}) {
-  let uploading = false;
+  const uploading = new Set<string>();
   return async (req: IncomingMessage, res: ServerResponse) => {
     const send = (status: number, value: unknown) => {
       res.statusCode = status;
@@ -171,11 +172,11 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
       send(413, { error: '请提交四份素材，合计不得超过 64 MiB' });
       return;
     }
-    if (uploading) {
-      send(409, { error: '已有上传正在保存' });
+    if (uploading.has(projectId) || uploading.size >= CLIPMENTOR_TASK_LIMIT) {
+      send(409, { error: uploading.has(projectId) ? '这个任务的素材正在保存，请稍后查看。' : '上传较多，请稍后重试。' });
       return;
     }
-    uploading = true;
+    uploading.add(projectId);
     const written: string[] = [];
     let commitUncertain = false;
     let retained: string[] = [];
@@ -295,7 +296,7 @@ export function createMaterialIntakeHandler({ hashFile = sha256File }: { hashFil
     } finally {
       await Promise.allSettled(written.filter(file => !commitUncertain || !retained.includes(file)).map(file => unlink(file)));
       if (ownership?.status === 'claimed') await releaseProjectEditOwnership(ownership.claim).catch(() => undefined);
-      uploading = false;
+      uploading.delete(projectId);
     }
   };
 }

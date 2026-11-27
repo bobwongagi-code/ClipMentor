@@ -8,13 +8,16 @@ export default defineConfig(({ mode, command, isPreview }) => {
     CLIPMENTOR_PROJECT_ID: projectId,
     CLIPMENTOR_BACKEND_PORT = '5199',
     CLIPMENTOR_PUBLIC_API_BASE_PATH = '',
+    CLIPMENTOR_PUBLIC_WORKSPACE = '',
   } = loadEnv(mode, process.cwd(), 'CLIPMENTOR_')
   const development = command === 'serve' && !isPreview
   const backendPort = Number(CLIPMENTOR_BACKEND_PORT)
   if (development && (!/^\d{1,5}$/.test(CLIPMENTOR_BACKEND_PORT) || backendPort < 1 || backendPort > 65535)) {
     throw new Error('Invalid CLIPMENTOR_BACKEND_PORT')
   }
-  const localApiEnabled = development && /^[a-zA-Z0-9_-]{1,160}$/.test(projectId ?? '')
+  const localFixedProject = development && /^[a-zA-Z0-9_-]{1,160}$/.test(projectId ?? '')
+  const localWorkspace = development && !projectId
+  const localApiEnabled = localFixedProject || localWorkspace
   const publicApiPath = command === 'build' ? CLIPMENTOR_PUBLIC_API_BASE_PATH : ''
   if (publicApiPath && (!publicApiPath.startsWith('/')
     || publicApiPath.slice(1).split('/').some(segment => !segment || /[^a-zA-Z0-9_-]/.test(segment)))) {
@@ -28,15 +31,21 @@ export default defineConfig(({ mode, command, isPreview }) => {
         if (!localApiEnabled) return
         server.middlewares.use('/api/clipmentor', (req, res, next) => {
           const url = new URL(req.url ?? '/', 'http://localhost')
-          if (url.pathname !== '/intake' && url.pathname !== '/production') { next(); return }
+          const workspace = url.pathname === '/tasks' && localWorkspace
+          if (!workspace && url.pathname !== '/intake' && url.pathname !== '/production') { next(); return }
           const intake = url.pathname === '/intake'
           const view = url.searchParams.get('view') ?? 'panel'
-          if (!intake && !['panel', 'panel_board', 'panel_video', 'panel_download', 'panel_reference', 'panel_attachment'].includes(view)) {
+          if (!intake && !workspace && !['panel', 'panel_board', 'panel_video', 'panel_poster', 'panel_download', 'panel_draft_download', 'panel_reference', 'panel_attachment', 'panel_material'].includes(view)) {
             res.writeHead(404).end()
             return
           }
-          const params = new URLSearchParams({ projectId })
-          if (!intake) {
+          const id = localFixedProject ? projectId ?? '' : url.searchParams.get('projectId') ?? ''
+          if (!workspace && !/^[a-zA-Z0-9_-]{1,160}$/.test(id)) {
+            res.writeHead(400).end()
+            return
+          }
+          const params = new URLSearchParams(workspace ? {} : { projectId: id })
+          if (!intake && !workspace) {
             params.set('view', view)
             for (const key of ['revision', 'boardIdentity', 'renderId', 'criterion', 'audience', 'assetId', 'excerpt']) {
               const value = url.searchParams.get(key)
@@ -54,7 +63,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
           }
           const upstream = request({
             hostname: '127.0.0.1', port: backendPort, method: req.method,
-            path: `/api/clipmentor/${intake ? 'material-intake' : 'production-task'}?${params}`,
+            path: `/api/clipmentor/${workspace?'task-workspace':intake?'material-intake':'production-task'}?${params}`,
             headers: {
               origin: `http://127.0.0.1:${backendPort}`, 'sec-fetch-site': 'same-origin',
               'content-type': req.headers['content-type'] ?? '',
@@ -77,7 +86,10 @@ export default defineConfig(({ mode, command, isPreview }) => {
         })
       },
     }],
-    define: { __CLIPMENTOR_API_BASE_PATH__: JSON.stringify(apiBasePath) },
+    define: {
+      __CLIPMENTOR_API_BASE_PATH__: JSON.stringify(apiBasePath),
+      __CLIPMENTOR_WORKSPACE__: JSON.stringify(localWorkspace || !!publicApiPath && CLIPMENTOR_PUBLIC_WORKSPACE==='1'),
+    },
     resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   }
 })

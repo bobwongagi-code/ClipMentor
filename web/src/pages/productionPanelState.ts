@@ -29,6 +29,7 @@ export function productionPageTitle(task?:BoardTask){
 }
 
 export function productionActivity(task?:ProgressTask){
+ if(task?.status==='queued')return '等待运行名额'
  if(!task?.active)return '等待继续'
  if(task.blueprintConfirmed&&['blueprint','copy_review'].includes(task.stage))return '调整画面安排'
  const labels:Record<string,string>={analysis:'分析原片',blueprint:'生成剪辑蓝图',copy_review:'生成剪辑蓝图',audio:'准备配音',edit:'剪辑',export:'生成预览',self_check:'检查预览'}
@@ -49,6 +50,8 @@ export function previewStatus(task?:PreviewTask){
  if(task?.previewPending)return task.status==='blocked'?'复核已暂停':task.active&&task.stage==='self_check'?'复核中':'待复核'
  if(task?.status==='cancelled')return '已取消'
  if(task?.status==='blocked')return '制作已暂停'
+ if(task?.status==='queued')return '等待运行名额'
+ if(task?.status==='waiting')return '等待共用主体'
  return '制作中'
 }
 
