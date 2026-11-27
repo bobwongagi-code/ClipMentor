@@ -292,20 +292,24 @@ test('both previews keep feedback, approval and downloads bound to their own end
       :{task:null,outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
-  const existing=page.getByRole('region',{name:'已合作达人版'}),fresh=page.getByRole('region',{name:'新建联达人版'})
+  const existing=page.getByRole('tabpanel',{name:'已合作达人版'}),fresh=page.getByRole('tabpanel',{name:'新建联达人版'})
   await expect(existing.locator('video')).toHaveAttribute('src',/audience=existing_partner/)
-  await expect(fresh.locator('video')).toHaveAttribute('src',/audience=new_contact/)
+  await expect(page.locator('video')).toHaveCount(1)
   await existing.getByText('制作调整',{exact:true}).click()
   await existing.getByText('第 1 组 · 修改对照',{exact:true}).click()
   await expect(existing.getByText('句子缩短，意思保留',{exact:true})).toBeVisible()
+  await page.getByRole('tab',{name:/新建联达人版/}).click()
+  await expect(fresh.locator('video')).toHaveAttribute('src',/audience=new_contact/)
   await expect(fresh.getByText('制作调整',{exact:true})).toHaveCount(0)
   expect(actions).toEqual([])
   await fresh.getByRole('textbox',{name:'修改意见'}).fill('只改新建联结尾')
   await acknowledgeOverallFeedback(fresh)
   await fresh.getByRole('button', {name:'提交修改'}).click()
+  await page.getByRole('tab',{name:/已合作达人版/}).click()
   await checkFinalReview(existing)
   await existing.getByRole('button',{name:'确认并下载成片'}).click()
   await expect(existing.getByRole('link',{name:'下载成片'})).toHaveAttribute('href',/audience=existing_partner/)
+  await page.getByRole('tab',{name:/新建联达人版/}).click()
   await expect(fresh.getByRole('link',{name:'下载成片'})).toHaveCount(0)
   await checkFinalReview(fresh)
   await fresh.getByRole('button',{name:'确认并下载成片'}).click()
@@ -544,7 +548,8 @@ test('an open two-output tab observes an externally persisted newer shared bluep
         :{task:null,outputOwner:{taskId:'old-shared',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}})
   })
   await page.goto('/')
-  await expect(page.getByRole('region',{name:'新建联达人版'}).locator('video')).toBeVisible()
+  await page.getByRole('tab',{name:/新建联达人版/}).click()
+  await expect(page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video')).toBeVisible()
   const other=await context.newPage()
   try{
     // Consumer-only fixture: a newer owning task has already been persisted.
@@ -580,7 +585,8 @@ test('two tabs keep attachment and accepted download identities separate for bot
   try{
     await other.goto('/')
     for(const [audience,title] of [['existing_partner','已合作达人版'],['new_contact','新建联达人版']] as const){
-      const first=page.getByRole('region',{name:title,exact:true}),second=other.getByRole('region',{name:title,exact:true})
+      const first=page.getByRole('tabpanel',{name:title,exact:true}),second=other.getByRole('tabpanel',{name:title,exact:true})
+      for(const window of [page,other])await window.getByRole('tab',{name:new RegExp(title)}).click()
       const attachment=first.getByRole('link',{name:'下载 Storyboard'})
       const url=new URL((await attachment.getAttribute('href'))!,'http://fixture')
       expect(Object.fromEntries(url.searchParams)).toEqual({view:'panel_attachment',renderId:`render-${audience}`,audience,assetId:`storyboard-${audience}`})
@@ -835,4 +841,65 @@ test('a repair cannot adopt a different asset manifest from the same project', a
   await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '素材已上传' })).toHaveCount(0)
   expect(posts).toBe(1)
+})
+
+test('pending preview keeps a timed opinion across variant and review changes without early submission', async ({ page }) => {
+  await page.clock.install()
+  await page.setViewportSize({width:360,height:780})
+  const clip=await readFile(source)
+  const posts:unknown[]=[]
+  let reviewed=false
+  await page.route('**/api/clipmentor/intake',route=>route.fulfill({json:{receipt:{projectId:'fixture',assets:['source','product','sales','cta'].map(id=>({id,name:id}))}}}))
+  await page.route('**/api/clipmentor/production*',async route=>{
+    const request=route.request(),url=new URL(request.url())
+    const audience=url.searchParams.get('audience')
+    if(request.method()==='POST'){
+      posts.push(request.postDataJSON())
+      await route.fulfill({json:{accepted:true}});return
+    }
+    if(url.searchParams.get('view')==='panel_video'){
+      const match=/^bytes=(\d+)-(\d*)$/.exec(request.headers()['range']??'')
+      const headers={'Accept-Ranges':'bytes'}
+      if(!match){await route.fulfill({contentType:'video/webm',headers,body:clip});return}
+      const start=Number(match[1]),end=match[2]?Math.min(clip.length-1,Number(match[2])):clip.length-1
+      await route.fulfill({status:206,contentType:'video/webm',headers:{...headers,'Content-Range':`bytes ${start}-${end}/${clip.length}`},body:clip.subarray(start,end+1)})
+      return
+    }
+    if(!audience){await route.fulfill({json:{task:null,outputOwner:{taskId:'parent',sequence:1},outputs:[{audience:'existing_partner'},{audience:'new_contact'}]}});return}
+    if(audience==='new_contact'){
+      await route.fulfill({json:{task:{taskId:audience,sequence:1,status:'waiting',stage:'copy_review',active:false,blueprintConfirmed:true}}});return
+    }
+    await route.fulfill({json:{task:{taskId:audience,sequence:reviewed?2:1,status:reviewed?'awaiting_review':'blocked',stage:'self_check',active:false,blueprintConfirmed:true,
+      renderId:'existing-render',previewPending:!reviewed,previewReviewed:reviewed,canAcceptPreview:reviewed,previewDuration:.2,
+      ...(reviewed?{visualCriteria:{digest:'reviewed-digest'}}:{}),
+      previewChapters:[{id:'group',label:'第 1 组',seconds:.12}],reviewGroups:[{id:'group',label:'第 1 组'}]}}})
+  })
+  await page.goto('/')
+  const tab=page.getByRole('tab',{name:/已合作达人版/})
+  const panel=page.getByRole('tabpanel',{name:'已合作达人版'})
+  await expect(tab).toHaveAttribute('aria-selected','true')
+  await expect(panel.getByRole('button',{name:'用当前时间',exact:true})).toBeEnabled()
+  await panel.getByRole('navigation',{name:'视频章节'}).getByRole('button',{name:/第 1 组/}).click()
+  await expect.poll(()=>panel.locator('video').evaluate((video:HTMLVideoElement)=>video.currentTime)).toBeCloseTo(.12,2)
+  await panel.getByRole('button',{name:'用当前时间',exact:true}).click()
+  await expect(panel.getByLabel('开始秒数')).not.toHaveValue('')
+  await panel.getByLabel('结束秒数').fill('0.19')
+  await panel.getByRole('textbox',{name:'修改意见'}).fill('检查工具移开的时机')
+  await expect(panel.getByRole('button',{name:'提交修改'})).toBeDisabled()
+  await expect(panel.getByRole('button',{name:'确认并下载成片'})).toBeDisabled()
+  await expect(page.locator('[href*="panel_download"]')).toHaveCount(0)
+  await tab.press('ArrowRight')
+  await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
+  await expect(page.locator('video')).toHaveCount(0)
+  await page.getByRole('tab',{name:/新建联达人版/}).press('ArrowLeft')
+  await expect(panel.getByRole('textbox',{name:'修改意见'})).toHaveValue('检查工具移开的时机')
+  expect(posts).toHaveLength(0)
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(360)
+  reviewed=true
+  await page.clock.fastForward(8000)
+  await expect(panel.getByRole('button',{name:'提交修改'})).toBeEnabled()
+  await expect(panel.getByRole('textbox',{name:'修改意见'})).toHaveValue('检查工具移开的时机')
+  await panel.getByRole('button',{name:'提交修改'}).click()
+  expect(posts).toHaveLength(1)
+  expect(posts[0]).toMatchObject({action:'revise_preview',renderId:'existing-render',feedbackTarget:{scope:'range',end:.19}})
 })

@@ -78,7 +78,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       const state = async () => (await fetch(origin + '/api/clipmentor/production?audience=existing_partner', { signal: AbortSignal.timeout(5000) })).json()
       const audit = async () => (await fetch(origin + '/audit', { signal: AbortSignal.timeout(5000) })).json()
       const checkpoint = async (stage: string) => writeFile(join(proof, 'stage-' + stage + '.json'), JSON.stringify({ state: await state(), audit: await audit(), posts, downloads }, null, 2))
-      const partner = (p: Page) => p.getByRole('region', { name: '已合作达人版', exact: true })
+      const partner = (p: Page) => p.getByRole('tabpanel', { name: '已合作达人版', exact: true })
       await page.goto(origin)
       const inputs = (await audit()).inputs
       for (const [label, key] of [['爆款原片', 'source'], ['商品图', 'product'], ['销量截图', 'sales'], ['CTA 行动号召图', 'cta']]) await page.getByLabel(label, { exact: true }).setInputFiles(inputs[key])

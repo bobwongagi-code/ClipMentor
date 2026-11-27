@@ -34,3 +34,27 @@ export function productionActivity(task?:ProgressTask){
  const labels:Record<string,string>={analysis:'分析原片',blueprint:'生成剪辑蓝图',copy_review:'生成剪辑蓝图',audio:'准备配音',edit:'剪辑',export:'生成预览',self_check:'检查预览'}
  return labels[task.stage]??'处理中'
 }
+
+type PreviewTask=ProgressTask&{renderId?:string;previewPending?:boolean;previewNeedsChanges?:boolean;previewReviewed?:boolean;deliveryHeld?:boolean}
+
+export function hasPlayablePreview(task?:PreviewTask){
+ return !!task?.renderId&&(task.previewPending===true||task.status==='awaiting_review'||task.status==='completed')
+}
+
+export function previewStatus(task?:PreviewTask){
+ if(task?.deliveryHeld||task?.previewNeedsChanges)return '需修改'
+ if(task&&(task.previewPending||['awaiting_review','completed'].includes(task.status))&&!hasPlayablePreview(task))return '预览暂不可用'
+ if(task?.status==='completed')return '可下载'
+ if(task?.status==='awaiting_review')return '待确认'
+ if(task?.previewPending)return task.status==='blocked'?'复核已暂停':task.active&&task.stage==='self_check'?'复核中':'待复核'
+ if(task?.status==='cancelled')return '已取消'
+ if(task?.status==='blocked')return '制作已暂停'
+ return '制作中'
+}
+
+export function previewProgress(task?:PreviewTask){
+ const stage=task?.status==='completed'&&!task.deliveryHeld?4:task?.deliveryHeld||task?.previewPending?2:task?.status==='awaiting_review'?3:1
+ return ['蓝图确认','预览与修改','复核','确认成片','下载'].map((label,index)=>({
+  label, done:index<stage&&(index!==2||task?.previewReviewed===true), current:index===stage,
+ }))
+}

@@ -51,3 +51,17 @@ test('shared waiting text uses the same approved production activity',()=>{
  assert.equal(productionActivity({stage:'blueprint',status:'blocked',active:false,blueprintConfirmed:true}),'等待继续')
  assert.equal(productionActivity({stage:'blueprint',status:'running',active:true}),'生成剪辑蓝图')
 })
+
+import {hasPlayablePreview,previewProgress,previewStatus} from '../src/pages/productionPanelState.js'
+test('playable, reviewed and downloadable are separate preview states',()=>{
+ const paused={status:'blocked',stage:'self_check',active:false,renderId:'the-movie',previewPending:true}
+ assert.equal(hasPlayablePreview(paused),true)
+ assert.equal(previewStatus(paused),'复核已暂停')
+ assert.equal(previewProgress(paused).filter(step=>step.current)[0].label,'复核')
+ assert.equal(previewProgress(paused)[2].done,false)
+ const held={...paused,status:'completed',previewPending:false,previewReviewed:true,deliveryHeld:true}
+ assert.equal(previewStatus(held),'需修改')
+ assert.equal(previewProgress(held)[4].current,false)
+ assert.equal(previewStatus({...held,deliveryHeld:false}),'可下载')
+ assert.equal(previewStatus({...held,deliveryHeld:false,renderId:undefined}),'预览暂不可用')
+})

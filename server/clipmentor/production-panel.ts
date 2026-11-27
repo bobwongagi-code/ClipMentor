@@ -30,6 +30,7 @@ import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
 import {productionDeliverables,productionAttachmentSlots} from './production-deliverables';
 import {verifyProductionOutput} from './production-format';
 import {pendingProductionPreview,openPendingProductionPreview} from './production-playable-preview';
+import {productionPreviewChapters} from './production-preview-chapters';
 import {previewHasBoundContentIssue} from './production-shared-review';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
 import {deliveryFileName,attachmentDisposition} from './delivery-filename';
@@ -507,12 +508,14 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       const needPreview=!!task?.input.panelDelivery&&['awaiting_review','completed'].includes(task.status);
       if(needPreview)try{verifiedProject=await verifyPreview();}catch{playablePreview=null;}
       let pendingPreviewRenderId:string|undefined;
+      let pendingProject:Awaited<ReturnType<typeof boundPreviewProject>>|undefined;
       if(pendingPreview)try{
         await boundPreviewProject();
         const {handle}=await openPendingProductionPreview(pendingPreview);
         await handle.close();
-        await boundPreviewProject();
+        const saved=await boundPreviewProject();
         await assertCurrentPendingPreview();
+        pendingProject=saved;
         pendingPreviewRenderId=pendingPreview.renderId;
         if(reviewIssue?.kind==='binding')reviewIssue=undefined;
       }catch{/* Missing or stale media stays outside the playable preview. */}
@@ -532,6 +535,15 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
       if(sharedDeliveryHeld)reviewIssue=panelReviewIssue('preview_shared_body_requires_reconciliation');
       const canAcceptPreview=task?.status==='awaiting_review'&&!!playablePreview&&!deliveryUnavailable&&!sharedDeliveryHeld
         &&(!task.input.panelDelivery||!!task.completed.self_check?.artifact.receipt);
+      const currentPreviewProject=pendingProject??(!outputUnavailable&&playablePreview?previewProject:undefined);
+      const exportedDuration=task?.completed.export?.artifact.durationSeconds;
+      const previewDuration=typeof exportedDuration==='number'&&Number.isFinite(exportedDuration)&&exportedDuration>0?exportedDuration:undefined;
+      let previewChapters:ReturnType<typeof productionPreviewChapters>=[];
+      // Navigation is optional. A maintenance problem in older placement
+      // data need not hide otherwise verified playable media.
+      if(currentPreviewProject&&matchesExportedPreviewProject(task?.completed.export?.artifact,currentPreviewProject)){
+        try{previewChapters=productionPreviewChapters(currentPreviewProject.doc,previewDuration);}catch{}
+      }
       if(needPreview&&task?.status==='awaiting_review'&&!canAcceptPreview)
         reviewIssue??={kind:'binding',message:'当前预览或随片资料暂不可用。'};
       send({ task:task ? {
@@ -549,7 +561,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         ...(task.input.panelDelivery?{dualBlueprint,
           ...(task.input.panelDelivery.audience?{audience:task.input.panelDelivery.audience}:{})}:{}),
         ...(reviewIssue?{reviewIssue}:{}),
-        ...(task.status==='awaiting_review'?{canAcceptPreview,reviewGroups:previewProject?blueprintReviewGroups(previewProject.doc):[]} :{}),
+        ...(task.status==='awaiting_review'?{canAcceptPreview}:{}),
+        ...(currentPreviewProject?{reviewGroups:blueprintReviewGroups(currentPreviewProject.doc),previewChapters,previewDuration,
+          previewReviewed:!!task.completed.self_check?.artifact.receipt&&!!verifiedProject}:{}),
         ...(task.status==='awaiting_review'&&criteria?{visualCriteria:{digest:criteria.digest}}:{}),
         ...(playablePreview&&!outputUnavailable?{downloadName:deliveryFileName(task.input.product.name,task.input.panelDelivery?.audience,'video',task.completed.export!.at),
           renderId:task.completed.export?.artifact.renderId}:{}),

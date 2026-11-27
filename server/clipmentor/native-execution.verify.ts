@@ -3,6 +3,7 @@ import {nativeExecutionMapping,checkSourceBreakdown,registerGroupedPlayback} fro
 import {deliveryTimeline,deliverySectionsFromDoc} from '../../src/clipmentor/delivery-sections';
 import {productionPreviewFacts,productionPreviewReviewInput} from './production-preview-facts';
 import {productionTeachingPresentation} from './production-teaching-presentation';
+import {productionPreviewChapters} from './production-preview-chapters';
 import {stageCuePalette,stageCueTopStripProps} from '../../src/clipmentor/blueprint-picture-notices';
 import {makeDraft} from '../../src/editor/store';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -31,6 +32,17 @@ const before=JSON.stringify(project),good=nativeExecutionMapping(project);
 assert.deepEqual(good.issues,[]);assert.deepEqual(good.placements.U1,{timeline_id:'tl',original_frames:[0,60],explanation_frames:[120,210]});
 assert.deepEqual(good.placements.U2,{timeline_id:'tl',original_frames:[60,120],explanation_frames:[210,270]});
 assert.equal(good.bindings.length,5);assert.equal(JSON.stringify(project),before,'actual inspection cannot revise or restamp the blueprint');
+assert.deepEqual(productionPreviewChapters(project,9),[
+ {id:'U1',label:'第 1 组',seconds:0},{id:'U2',label:'第 2 组',seconds:2},
+]);
+{
+ const shared=structuredClone(project);
+ shared.clipMentorAnalysis!.source_breakdown!.units[0].placement=good.placements.U1;
+ shared.clipMentorAnalysis!.source_breakdown!.units[1].placement={...good.placements.U2,original_frames:[0,60]};
+ assert.deepEqual(productionPreviewChapters(shared,9).map(chapter=>chapter.seconds),[0,7],
+  'a chapter anchored on shared original playback jumps to its own explanation');
+ assert.equal(productionPreviewChapters(shared,6).length,1,'a chapter never points beyond the file');
+}
 assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON.stringify(checkSourceBreakdown(project,true).issues));
 {
  const scheduled=structuredClone(project);
