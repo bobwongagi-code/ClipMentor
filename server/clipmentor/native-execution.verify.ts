@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import {nativeExecutionMapping,checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
+import {nativeExecutionMapping,checkSourceBreakdown,registerGroupedPlayback} from '../../src/clipmentor/source-breakdown';
 import {deliveryTimeline,deliverySectionsFromDoc} from '../../src/clipmentor/delivery-sections';
 import {productionPreviewFacts,productionPreviewReviewInput} from './production-preview-facts';
+import {productionTeachingPresentation} from './production-teaching-presentation';
+import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
 import {makeDraft} from '../../src/editor/store';
 import type {ProjectDoc} from '../../src/editor/types';
 import bookends from '../../src/agent/tools/fixtures/barely-there-bookend-replacement-20261029.json';
@@ -30,6 +32,69 @@ assert.deepEqual(good.issues,[]);assert.deepEqual(good.placements.U1,{timeline_i
 assert.deepEqual(good.placements.U2,{timeline_id:'tl',original_frames:[60,120],explanation_frames:[210,270]});
 assert.equal(good.bindings.length,5);assert.equal(JSON.stringify(project),before,'actual inspection cannot revise or restamp the blueprint');
 assert.equal(checkSourceBreakdown(project,true).status,'structurally_ready',JSON.stringify(checkSourceBreakdown(project,true).issues));
+{
+ const compact=structuredClone(project);
+ const analysis=compact.clipMentorAnalysis!;
+ const unit=analysis.source_breakdown!.units[0];
+ const plan=(analysis.blueprint[0] as any).internal_review.plan;
+ unit.original_source_ranges=[[.5,1.5]];
+ plan.phases[0].source_range_seconds=[.5,1.5];
+ plan.original_playback={mode:'selected_cuts',ranges:[[.5,1.5]],purpose:'Keep the visible action'};
+ registerGroupedPlayback(unit,plan,(analysis.blueprint[0] as any).internal_review.copy);
+ assert.equal(checkSourceBreakdown(compact).status,'structurally_ready',JSON.stringify(checkSourceBreakdown(compact).issues));
+ assert(nativeExecutionMapping(compact).issues.some(i=>i.code==='native_mapping_original_outside_selected_replay'),
+  'retaining the old full clip cannot pass as the short playback');
+ const timeline=compact.timelines[0];
+ const source=timeline.items.shift()!;
+ timeline.items.unshift(
+  {...source,id:'short-original',startFrame:15,srcInFrame:15,durationInFrames:30},
+  {...source,id:'other-original',startFrame:60,srcInFrame:60,durationInFrames:60});
+ assert.deepEqual(nativeExecutionMapping(compact).issues,[]);
+ const mixed=structuredClone(compact);
+ mixed.timelines[0].items.push({...source,id:'unauthorized-overlapping-original',startFrame:15,srcInFrame:0,durationInFrames:12});
+ assert(nativeExecutionMapping(mixed).issues.some(i=>i.code==='native_mapping_original_outside_selected_replay'),
+  'a separate unselected audible layer cannot hide underneath a legal replay');
+ assert.equal(checkSourceBreakdown(compact,true).status,'structurally_ready','the saved short edit must be valid with the same evidence');
+ assert.deepEqual(analysis.source_breakdown!.segments,project.clipMentorAnalysis!.source_breakdown!.segments);
+ delete plan.original_playback.mode;
+ assert(checkSourceBreakdown(compact).issues.some(i=>i.code==='original_segment_outside_playback'),'legacy playback notes cannot be treated as authorization to trim');
+ plan.original_playback={mode:'selected_cuts',ranges:[[.5,2.5]],purpose:'Remove loops'};
+ unit.original_source_ranges=[[.5,2.5]];
+ plan.phases[0].source_range_seconds=[.5,2.5];
+ assert(checkSourceBreakdown(compact).issues.some(i=>i.code==='picture_plan_original_outside_evidence'),'a neighboring group cannot authorize an extra source stretch');
+}
+{
+ const authored=structuredClone(project);
+ const timeline=authored.timelines[0];
+ const input=(authored.clipMentorAnalysis!.blueprint[1] as any).internal_review.plan;
+ input.viewer_stage_cues.layout={revisit:{text_color:'#222222'}};
+ const text=(id:string,text:string,startFrame:number,durationInFrames:number)=>({
+  id,name:id,kind:'text' as const,track:'V2',startFrame,durationInFrames,props:{text,color:'#ffffff',backgroundColor:'#000000'},transform:{y:24},
+ });
+ timeline.items.push(text('original-cue','Video asal',3,30),text('explanation-cue','Lihat semula',120,90),
+  text('second-cue','Lihat semula',210,60),text('caption','Line 1',121,89),
+  text('other-caption','Line 1',211,59),text('ending-copy','Line 1',270,30),
+  text('crossing','Lihat semula',200,40));
+ const before=JSON.stringify(authored),style=productionTeachingPresentation(authored,{apply:true});
+ const get=(id:string)=>style.doc.timelines[0].items.find(item=>item.id===id)!;
+ assert.deepEqual(stageCuePalette(undefined,'original'),{backgroundColor:'#0D5EA6',color:'#FFFFFF'});
+ assert.deepEqual(stageCuePalette({color:'invalid',text_color:'#222222'},'explanation'),{backgroundColor:'#FFD83D',color:'#222222'});
+ assert.deepEqual(stageCuePalette({color:'#24212A'},'explanation'),{backgroundColor:'#24212A',color:'#FFFFFF'});
+ assert.equal(get('original-cue').props?.backgroundColor,'#0D5EA6');
+ assert.equal(get('original-cue').props?.placement,'top_strip');
+ assert.equal(get('original-cue').transform,undefined);
+ assert.equal(get('explanation-cue').props?.color,'#111111');
+ assert.equal(get('caption').props?.backgroundColor,'#FFD83D');
+ assert.equal(get('caption').transform?.y,24);
+ assert.equal(get('caption').props?.placement,undefined,'subtitle copies stay independent of the stage strip');
+ assert.equal(get('second-cue').props?.color,'#222222');
+ assert.equal(get('clipmentor-stage-U2-original-0').props?.placement,'top_strip','missing but approved phase cues are recovered');
+ for(const id of ['other-caption','ending-copy','crossing'])assert.deepEqual(get(id),timeline.items.find(item=>item.id===id));
+ assert.equal(JSON.stringify(authored),before);
+ assert.deepEqual(productionTeachingPresentation(style.doc,{apply:true}).doc,style.doc);
+ assert.deepEqual(productionTeachingPresentation(authored).doc,authored);
+ assert.deepEqual(style.units.map(unit=>[unit.originalSeconds,unit.explanationSeconds]),[[2,3],[2,2]]);
+}
 const combined=structuredClone(project);
 const combinedAnalysis=combined.clipMentorAnalysis!;
 const combinedUnit=combinedAnalysis.source_breakdown!.units[1];
@@ -65,6 +130,15 @@ for(const [index,id] of ['L3','L4','L5'].entries()){
   {...middleSwap.timelines[0].items.find(item=>item.id==='revisit2')!,id:'picture-'+id,startFrame:start,durationInFrames:30});
 }
 assert.deepEqual(nativeExecutionMapping(middleSwap).issues,[]);
+const silentBeat=structuredClone(middleSwap);
+const silentTimeline=silentBeat.timelines[0];
+const secondLine= silentTimeline.items.find(item=>item.id==='line2')!;
+const sourceStart=secondLine.startFrame;
+for(const item of silentTimeline.items)if(item.startFrame>=270)item.startFrame+=10;
+silentTimeline.items.push({id:'cue-over-silent-beat',name:'teaching cue',kind:'text',track:'V2',startFrame:sourceStart,
+ durationInFrames:370-sourceStart,props:{text:'Lihat semula'}});
+const silentCue=productionTeachingPresentation(silentBeat,{apply:true}).doc.timelines[0].items.find(item=>item.id==='cue-over-silent-beat');
+assert.equal(silentCue?.props?.placement,'top_strip','a silent product-identification beat keeps the teaching-phase strip');
 [middleReview.plan.phases[3],middleReview.plan.phases[4]]=[middleReview.plan.phases[4],middleReview.plan.phases[3]];
 assert(nativeExecutionMapping(middleSwap).issues.some(issue=>issue.id==='U2'&&issue.code==='unit_output_order_invalid'));
 // Editor defaults may persist an empty gap-cap map; only actual gap edits are nonlinear.

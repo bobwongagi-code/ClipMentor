@@ -148,7 +148,7 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
    const ids=picturePhaseLineIds(phase);if(stage==='explanation'&&!ids.length)fail('讲解阶段没有现行句ID');
    const lines=ids.map(id=>{const l=lineById.get(id);if(!l)fail('阶段引用不存在的句子: '+id);return lineView(l);});
    const cue=obj(operational.viewer_stage_cues),cueRows=stage==='original'?[obj(cue.original)]:arr(cue.revisit).map(obj).filter(r=>arr(r.line_ids).some(id=>ids.includes(txt(id))));
-   const colors=stageCueColors(obj(cue.layout)[stage==='original'?'original':'revisit']);
+   const colors=stageCueColors(obj(cue.layout)[stage==='original'?'original':'revisit'],stage==='original'?'original':'explanation');
    const picture=txt(phase.picture)||txt(obj(operational.composition).detail),notices:string[]=[];
    for(const finding of pictureNotices.filter(f=>f.row_keys.includes(`${txt(selected.unit.unit_id)}/${index}`)))notices.push(finding.message);
    if(!colors.length)notices.push('未声明可显示的阶段标识色值');

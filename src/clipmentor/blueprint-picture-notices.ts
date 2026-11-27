@@ -5,11 +5,32 @@ const arr = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
 const text = (v: unknown) => typeof v === 'string' ? v : '';
 const window = (v: unknown): [number, number] | null => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === 'number' && Number.isFinite(n)) && v[0] >= 0 && v[1] >= v[0] ? [v[0], v[1]] : null;
 
-/** Display only recorded palette values from the active stage cue. */
-export function stageCueColors(style:unknown):string[]{
+type TeachingPhase = 'original' | 'explanation';
+const phasePalette = {
+ original: {backgroundColor:'#0D5EA6',color:'#FFFFFF'},
+ explanation: {backgroundColor:'#FFD83D',color:'#111111'},
+} as const;
+
+/** Preview and production use the same phase palette and explicit overrides. */
+export function stageCuePalette(style:unknown,phase:TeachingPhase){
  const colors=typeof style==='string'?[...style.matchAll(/#[a-fA-F0-9]{6}\b/g)].map(m=>m[0])
   :[text(obj(style).color),text(obj(style).text_color)];
- return colors.filter(color=>/^#[a-fA-F0-9]{6}$/.test(color));
+ const valid = (color: string|undefined) => color && /^#[a-fA-F0-9]{6}$/.test(color) ? color : undefined;
+ const backgroundColor=valid(colors[0]);
+ const color=valid(colors[1]);
+ if(!backgroundColor)return {...phasePalette[phase],color:color??phasePalette[phase].color};
+ // An explicit background with no foreground should remain readable.
+ const [red,green,blue]=[1,3,5].map(offset=>{
+  const channel=parseInt(backgroundColor.slice(offset,offset+2),16)/255;
+  return channel<=.04045?channel/12.92:((channel+.055)/1.055)**2.4;
+ });
+ const luminance=.2126*red+.7152*green+.0722*blue;
+ return {backgroundColor,color:color??(luminance<.19?'#FFFFFF':'#111111')};
+}
+
+export function stageCueColors(style:unknown,phase:TeachingPhase):string[]{
+ const palette=stageCuePalette(style,phase);
+ return [palette.backgroundColor,palette.color];
 }
 
 export const picturePhaseIssueCode={

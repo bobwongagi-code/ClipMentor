@@ -6,6 +6,7 @@ import {openingUnderlayShortfall,pictureRepairWriteError} from './production-cap
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
 import {firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
+import {productionTeachingPresentation} from './production-teaching-presentation';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
 import {guardBlueprintOpinionWrite} from './production-blueprint-opinions';
 import {confirmedCopyReviewScopeConflict,currentExecutionPreparation,currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
@@ -468,7 +469,11 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  let assertQualifiedWrite:((doc:ProjectDoc)=>void)|undefined;
  const opinions=task.repairContext?.pending_blueprint_feedback?undefined:task.blueprintOpinions;
  let opinionStop:Error|undefined;
+ const styleTeaching=()=>!!task.input.panelDelivery&&!reflowBaseline
+  &&!task.sharedProduction?.prepared&&!task.repairContext?.final_feedback;
  const editor=await openHeadlessEditor({creatorStoryboardDraft:task.stage==='blueprint'&&!!task.input.panelDelivery,projectId:task.projectId,runId:task.taskId,origin:task.input.author.origin,review:task.input.reviewer,reviewBackend:task.input.reviewerBackend,retryGateway:task.input.humanBlueprintReview,voice:task.input.voice,signal:stage.signal,finalFeedback:task.repairContext?.final_feedback as Record<string,unknown>|undefined,
+  ...(task.stage==='edit'&&task.input.panelDelivery?{projectForTimelinePreview:(doc:ProjectDoc)=>
+   styleTeaching()?productionTeachingPresentation(doc,{apply:true}).doc:doc}:{}),
   ...(task.input.panelDelivery||opinions?{assertCanvas:(next:ProjectDoc)=>{
    if(task.input.panelDelivery)assertProductionCanvas(next);
    if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);
@@ -1064,6 +1069,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   let editArtifact:Record<string,unknown>|undefined;
   if(task.stage==='edit'){
    const normalized=migrateProjectDoc(next);if(!normalized)throw Error('Invalid saved project');next=normalized;
+   const presentation=task.input.panelDelivery?productionTeachingPresentation(next,{apply:styleTeaching()}):{doc:next,units:[]};
+   if(presentation.doc!==next){next=presentation.doc;editor.context.commands.applyDoc(next);}
    if(task.input.panelDelivery)assertProductionCanvas(next);
    let executionReport:Awaited<ReturnType<typeof productionExecutionReport>>;
    try{executionReport=await productionExecutionReport(beforeExecution!,next,task.input.voice);}catch(error){
@@ -1074,7 +1081,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    }
    assertSharedProduction(task,next);assertLocalFeedbackPreservation(beforeExecution!,next,task.repairContext?.final_feedback as Record<string,unknown>|undefined);
    editArtifact={revision:revisionOf(next),analysisRevision:analysis.revision,runId:run.id,
-    blueprintReadiness:await productionBlueprintReadiness(next,task.input.voice),executionReport,semantic_quality:'not_certified_by_structure'};
+    blueprintReadiness:await productionBlueprintReadiness(next,task.input.voice),executionReport,semantic_quality:'not_certified_by_structure',
+    ...(presentation.units.length?{teachingPresentation:presentation.units}:{})};
    await stage.checkpointEditPublication?.({baseRevision:editor.revision,repairEpoch:task.repairs,feedbackUsed:task.feedbackUsed,
     outputDigest:feedbackProjectDigest(next),requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),artifact:editArtifact});
   }
@@ -1156,6 +1164,10 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
  const doneCriteria=productionAuthorCriteria(task,policy,doc);
  const openingResults=productionOpeningComparison(task,policy,doc)?.results;
  return {evidenceInspection:productionEvidenceInspection(doc,task),task:task.input.brief,stage:task.stage,goal,feedback:task.stage==='blueprint'?task.blueprintFeedback??task.feedback??null:task.feedback??null,repairContext:task.repairContext?.repair?{repair:task.repairContext.repair,revision:task.repairContext.revision,final_feedback:task.repairContext.final_feedback??null}:task.repairContext??null,
+  ...(task.input.panelDelivery&&(task.stage==='blueprint'||task.stage==='edit'&&!task.sharedProduction?.prepared
+   &&!task.repairContext?.final_feedback&&!isBoundCanvasReflow(task,doc))?{teachingPresentation:task.stage==='blueprint'
+   ?'证据窗保留为事实记录。需要压缩示范时用 original_playback:{mode:"selected_cuts",ranges,purpose} 登记实际原声选段，和 original 阶段保持一致。逐部位流程先逐处看清，只有总览能帮助回到整张脸时才放在末尾。用 viewer_stage_cues.layout 交接已认可的样式。读图停留交代看哪里、在哪个口播词或动作上转移注意力。'
+   :'按已审原声选段和回看顺序执行。用近景、按口播移动的提示或局部放大交代读图重点。位置已经清楚的脸部可以保持干净。把阶段名称和拆卡字幕放在各自原声／实测音频时段，宿主会把阶段名称放进贯穿视频顶边的窄条。用 view_timeline_frames 抽查原声切讲解、对照对象和关键局部，按手机尺寸检查是否遮挡。'}:{}),
   ...(task.stage==='blueprint'&&task.repairContext?.narration_repair_findings?{narrationRepair:{
    findings:task.repairContext.narration_repair_findings,
    instruction:'对照现行口播和独立审核，逐项修正列出的口播及其同文字幕，核对当句回看是否仍匹配。保留已核选题、未点名的教学组和片头片尾。版本号、标题和短标的改动不能代替口播修订。'} }:{}),

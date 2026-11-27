@@ -573,7 +573,7 @@ const PLAN_FIELDS = {
   original: ['text', 'zh', 'enter', 'exit'],
   revisit: ['line_ids', 'text', 'zh', 'enter', 'exit', 'meaning'],
   experience_group: ['line_ids', 'source_seconds', 'duration_frames', 'caption_frames', 'tail_without_caption_frames', 'audio_seconds'],
-  original_playback: ['ranges', 'purpose', 'person_visual_only'],
+  original_playback: ['ranges', 'purpose', 'person_visual_only', 'mode'],
   person_visual_only: ['point_id', 'segment_id', 'source_range_seconds'],
   visual_only_points: ['point_id', 'segment_id', 'source_range_seconds', 'treatment'],
 } as const;

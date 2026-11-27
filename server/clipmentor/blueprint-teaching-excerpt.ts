@@ -60,7 +60,7 @@ export function representativeTeachingExcerpt(doc:ProjectDoc,data=readBlueprint(
   const unitBinding=breakdown.units.find(u=>u.unit_id===unitId);
   if(!originalLabel||!revisitLabel||!line||!unitBinding||!copyLineSourceBinding(breakdown,unitBinding,line.raw,operational))return [];
   const layout=row(cues.layout);
-  const palette=[stageCueColors(layout.original),stageCueColors(layout.revisit)];
+  const palette=[stageCueColors(layout.original,'original'),stageCueColors(layout.revisit,'explanation')];
   // Show the longest registered action before the planned replay. An arbitrary
   // original tail can contain the next action, even inside the saved group.
   const anchor=selected.reduce((a,b)=>b.end-b.first>a.end-a.first?b:a);
@@ -85,9 +85,9 @@ export function representativeTeachingExcerpt(doc:ProjectDoc,data=readBlueprint(
  for(const [index,label] of [picked.originalLabel,picked.revisitLabel].entries()){
   items.push({id:'stage-'+index,kind:'text',track:'track-v2',name:label,width,height,
    startFrame:index===0?0:originalFrames,durationInFrames:index===0?originalFrames:startFrame-originalFrames,
-   transform:{y:-39},props:{text:label,color:picked.palette[index][1]??(index===0?'#ffffff':'#111111'),
-    backgroundColor:picked.palette[index][0]??(index===0?'#0D5EA6':'#FFD83D'),
-    backgroundOpacity:1,fontSize:Math.round(width*0.049),fontWeight:700,paddingX:Math.round(width*0.23),textShadow:'none'}});
+   props:{text:label,placement:'top_strip',color:picked.palette[index][1],
+    backgroundColor:picked.palette[index][0],
+    backgroundOpacity:1,fontWeight:700,textShadow:'none'}});
  }
  const state:TimelineState={fps,width,height,fit:'contain',trackOrder:['track-v2','track-v1'],items,selectedId:null};
  return {unitId:picked.unitId,asset,state};

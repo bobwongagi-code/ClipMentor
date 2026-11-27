@@ -7,6 +7,7 @@ import { selectTransitionPreviewAdapter, staticEffectPreviewStatus, staticPrevie
 import type { SelectedPreviewStatus, SelectedPreviewStatusListener } from '../gl/previewAdapter';
 import { captionTrackEntries, CSS_TRANSITION_TYPES, isAudioTransition, isRasterMediaKind, isVisualItemKind, timelineTrackIds, trackKind } from './types';
 import { previewTextEditFields } from '../components/preview/previewTextEdit';
+import { isNativeTextTopStrip } from '../../shared/native-text-style';
 import type { AspectFit, CssTransitionType, GlslTransitionType, ProjectDoc, Timeline, TimelineItem, TimelineState, TransitionDirection } from './types';
 import { sourceFrameAt } from './sourceLimit';
 import { nestedSequenceFrom, resolveTimelineRenderPlan, SequenceGraphError, type SequenceGraphLimits } from './sequenceGraph';
@@ -309,10 +310,11 @@ function TimelineContent({ state, project, transparent, browserRenderer = false,
         // Captions off hides on-screen text clips too (render-layer only).
         const captionsOff = state.captionsHidden === true
           || (state.captionsHidden === undefined && captionEntries.length > 0 && captionEntries.every((entry) => !entry.captions?.enabled));
-        const hiddenByCaptions = captionsOff && previewTextEditFields(item) !== null;
+        const topStrip = item.kind==='text' && isNativeTextTopStrip(item.props);
+        const hiddenByCaptions = captionsOff && !topStrip && previewTextEditFields(item) !== null;
         const fillBackground = isBackgroundFillActive(state, item);
         const foreground = (
-          <ClipWrapper item={item} frameOffset={-eb} hiddenByCaptions={hiddenByCaptions}>
+          <ClipWrapper item={topStrip?{...item,transform:undefined,zoom:undefined,keyframes:undefined}:item} frameOffset={-eb} hiddenByCaptions={hiddenByCaptions}>
             {(borderRadius) => item.kind === 'sequence'
               ? <VisualClipSurface item={item} fit={fit} canvasW={state.width} canvasH={state.height} borderRadius={borderRadius}>
                   <NestedSequenceLayer item={item} project={project} parentWidth={state.width} parentHeight={state.height} fit={fit} frameOffset={-eb} browserRenderer={browserRenderer} sequenceLimits={sequenceLimits} muted={isMuted(item.track)} />
