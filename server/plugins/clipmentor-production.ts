@@ -16,6 +16,9 @@ import {loadOfflineStoredProject} from '../external-agent/offline-project-store'
 import {createStoryboardHandler} from '../clipmentor/storyboard-api';
 import {createBlueprintReviewBoardHandler} from '../clipmentor/blueprint-review-board-api';
 import {prepareSharedProduction,publishedProductionParent,queueBlueprintContinuations,readProductionOutputs} from '../clipmentor/production-continuation';
+import {authorizePreviewRetry} from '../clipmentor/production-preview-retry';
+import {resolveUploadFile} from '../media-dir';
+import {sha256File} from '../../shared/node-content-hash';
 
 async function json(req:IncomingMessage){const parts:Buffer[]=[];let size=0;for await(const part of req){size+=part.length;if(size>128000)throw new Error('Production request exceeds 128KB');parts.push(Buffer.from(part));}return JSON.parse(Buffer.concat(parts).toString('utf8'));}
 /** Local service entry. Formal multi-user hosting remains a separate deployment task. */
@@ -186,6 +189,16 @@ export function clipMentorProductionPlugin(worker:StageWorker=productionStageWor
     if(body.action==='cancel'){send(202,await cancelProductionTask(task));return;}
     if(isActive(task.taskId,task.projectId))throw new Error('Production task already running');
     if(['resume','feedback','accept'].includes(String(body.action)))await publishedProductionParent(task);
+    if(body.action==='retry_preview_review'){
+     await publishedProductionParent(task);
+     const snapshot=await loadOfflineStoredProject(task.projectId);
+     const src=task.completed.export?.artifact.path??task.completed.export?.artifact.downloadUrl;
+     const file=typeof src==='string'&&/^\/media\/uploads\/[^/?#]+\.mp4$/.test(src)?resolveUploadFile(src.slice('/media/uploads/'.length)):null;
+     if(!file||!snapshot||snapshot.revision!==task.projectRevision)throw Error('preview_retry_export_changed');
+     const next=authorizePreviewRetry(task,body,await sha256File(file));
+     await saveProductionControl(task,next,productionTaskStore,undefined,snapshot.doc,task.sequence);
+     launch(next);send(202,{taskId:task.taskId,projectId:task.projectId,status:'queued'});return;
+    }
     if(body.action==='resume'){
      const blocked=blueprintRepairNotice(task);
      if(blocked)throw Error(blocked);

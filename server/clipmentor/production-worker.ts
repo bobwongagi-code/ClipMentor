@@ -46,7 +46,8 @@ import {openHeadlessEditor,type RenderSnapshotBinding} from './headless-editor';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import type {ProjectDoc} from '../../src/editor/types';
 import {productionPreviewFacts,previewFactsDigest,assertPreviewExportBinding,productionPreviewReviewInput} from './production-preview-facts';
-import {previewBlueprintAlignmentDigest} from './preview-review';
+import {previewBlueprintAlignmentDigest,previewReviewRepairBlock} from './preview-review';
+import {previewRetryReadback,unavailablePreviewReceiptReason} from './production-preview-retry';
 import {productionDeliverables} from './production-deliverables';
 import {collectSavedPreviewVisualEvidence} from './preview-visual-evidence';
 import {productionOpeningComparison,productionReviewRequirements,productionTeachingBrief,assertConfirmedReviewGroups} from './production-task';
@@ -821,14 +822,32 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    const alignedInput=alignmentDigest===undefined?undefined:productionPreviewReviewInput(doc,facts.input,packet);
    if(alignedInput&&previewBlueprintAlignmentDigest(alignedInput)!==alignmentDigest)throw Error('preview_blueprint_alignment_binding_stale');
    const input=alignedInput??facts.input;
-   const reviewed=await executeWithRecovery('review_clipmentor_preview',{action:'request',operationId:operation('independent-review'),maxRequests:1,src,videoSha256:await sha256File(file),input,
+   const videoSha256=await sha256File(file);
+   const retry=task.previewReviewRetry?.renderId===exported?.renderId?task.previewReviewRetry:undefined;
+   const reviewOperation=retry?.operationId??operation('independent-review');
+   let reviewed:Record<string,unknown>|undefined;
+   if(retry){
+    if(retry.videoSha256!==videoSha256)throw Error('preview_retry_export_changed');
+    if(!stage.hasEffect?.('preview_review',reviewOperation)){
+     const saved=await editor.execute('review_clipmentor_preview',{action:'read',operationId:retry.priorOperationId,videoSha256},'preview-retry-read') as Record<string,unknown>;
+     const readback=previewRetryReadback(task,saved);
+     if(readback==='stop')
+      return {artifact:{receipt:saved,revision:editor.revision},pause:'preview_retry_original_outcome_unavailable'};
+     if(readback==='reuse')reviewed=saved;
+    }
+   }
+   reviewed??=await executeWithRecovery('review_clipmentor_preview',{action:'request',operationId:reviewOperation,maxRequests:1,src,videoSha256,input,
     executionManifest},'preview-review') as Record<string,unknown>;
-   if(reviewed.error||reviewed.status!=='completed')throw new Error('连续成片复核未取得有效回执');
+   if(reviewed.error||reviewed.status!=='completed')return {artifact:{receipt:reviewed,revision:editor.revision},pause:unavailablePreviewReceiptReason(reviewed)};
    if(criteria&&reviewed.visualCriteriaDigest!==criteria.digest)throw Error('handoff_visual_criteria_preview_missing_or_stale');
    const result=await collectSavedPreviewVisualEvidence(reviewed,args=>editor.execute('review_clipmentor_preview',args,'preview-visual-evidence'));
    const gate=result.effective_review as {can_use_as_pass?:boolean;blueprint_alignment_input_sha256?:string}|undefined;
    if(alignmentDigest!==undefined&&gate?.blueprint_alignment_input_sha256!==alignmentDigest)throw Error('preview_blueprint_alignment_receipt_missing_or_stale');
-   if(!gate?.can_use_as_pass)return {artifact:{receipt:result,revision:editor.revision},repair:'edit'};
+   if(!gate?.can_use_as_pass){
+    const artifact={receipt:result,revision:editor.revision};
+    const reason=previewReviewRepairBlock(result);
+    return reason||retry?{artifact,pause:reason??'preview_retry_content_review_required'}:{artifact,repair:'edit'};
+   }
    return {artifact:{receipt:result,preview:src,deliverables,requirementsDigest:digestValue(policy?.brief.doneCriteria??[]),...(criteria?{visualCriteriaDigest:criteria.digest}:{}),executionReport:task.completed.edit?.artifact.executionReport??null,language_review:'final_operator_required',complete_film_accepted:false}};
   }
   // Only these author stages may call the API model; review/export have separate host paths.

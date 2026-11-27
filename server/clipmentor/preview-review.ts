@@ -178,6 +178,21 @@ export function previewReceiptFailure(receipt:unknown):string|undefined{
   return 'preview_review_invalid_judgment_schema';
 }
 
+/** Only an evidenced negative finding under the current manifest can authorize editing. */
+export function previewReviewRepairBlock(receipt:unknown):string|undefined{
+ const failure=previewReceiptFailure(receipt);
+ if(failure)return failure;
+ if(!object(receipt)||!object(receipt.result)||!object(receipt.effective_review))return 'preview_review_evidence_unverified';
+ const result=receipt.result,gate=receipt.effective_review;
+ const issues=result.issues,blockers=gate.blockers;
+ const negative=(issue:unknown):issue is string=>typeof issue==='string'&&issue.endsWith(':not_supported');
+ if(!Array.isArray(issues)||!Array.isArray(blockers)||gate.manifest_binding!=='frozen_at_request'
+  ||!Array.isArray(result.finish_reasons)||result.finish_reasons.length!==1||result.finish_reasons[0]!=='STOP'
+  ||!issues.some(negative)||issues.some(issue=>!negative(issue))
+  ||blockers.some(issue=>issue!=='saved_review_not_passed'&&!issues.includes(issue))
+  ||!issues.every(issue=>blockers.includes(issue)))return 'preview_review_evidence_unverified';
+}
+
 export function previewAlignmentRepairPause(previous:unknown,current:unknown):string|undefined{
   if(!object(current)||!object(current.effective_review)||!text(current.effective_review.blueprint_alignment_input_sha256)
     ||!Array.isArray(current.effective_review.blockers))return;
@@ -188,7 +203,8 @@ export function previewAlignmentRepairPause(previous:unknown,current:unknown):st
   if(Array.isArray(previous)&&previewAlignmentFindingKeys(current).some(key=>previous.includes(key)))return 'preview_blueprint_alignment_no_progress';
 }
 
-export type PreviewReviewFormat='compact'|'original';
+export const previewReviewFormats=['decision-first','compact','original'] as const;
+export type PreviewReviewFormat=(typeof previewReviewFormats)[number];
 
 function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: PreviewReviewInput, format:PreviewReviewFormat) {
   const clean = validatePreviewReviewInput(input);
@@ -207,23 +223,25 @@ function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: 
  '\n逐点用本组实际画面、字幕或口播核对 approved_connection 和 filming_conditions：具体说出实际内容怎样兑现已审手法和购买判断依据，没兑现填 not_supported，证据不清填 insufficient_evidence。逐组 continuity.teaching 核对已审原声与讲解顺序、approved_narration 和 approved_cues 是否在对应阶段或句子出现且指向本组。短标附 output_ranges 时，在给定阶段时窗内引用。教学证据必须落在 approved_teaching_ranges 内（没有时用 output_range_seconds），跨段则分条。逐项短标给本组 visual_organization 证据，quote 逐字记录实际看到的文字，同一短标在本组可共用一条证据。reference_text 是工程记录，不可充当实际听到或看到的证明，也不代表额外文字已获批准。\n顶层另必填 blueprint_alignment（同“判断”结构）：连续检查整片（含组间及片尾），核查是否有未审新增、替换的教学论断、口播、短标或视觉主张。发现则填 not_supported 并给成片位置；无法核清填 insufficient_evidence；确认兑现已审范围且无此类新增才填 supported，简述检查范围并给实际时间证据。允许已审原声、背景、片头片尾和正常画面组织。':''
  }`+(format==='compact'?
   '\n先完成全部 coverage、continuity 和要求的全片判断，再检查 JSON 闭合。observed 与 reasoning 只写短句，指出当前判断所需的对象和位置，避免重述任务或复制一整段画面。相同承接证据可以引用同一实际区间。只保留足以支撑当前判断的证据，必须的单元、时间、引文和独立视觉证据仍逐项填写。':'');
+  const responseInstruction=format==='decision-first'?instruction+
+    '\n使用紧凑 JSON，无 Markdown 或额外说明。先在每个判断中填 status，再写一句 reasoning，再给必要证据。observed 只写区分现象所需的一句话。承接只给最近的前后证据，删除重复举例。所有组、跨组和整片检查必须齐全。对于 not_supported，给实际成片时间、对象和可复核的内容差异。无法定位就填 insufficient_evidence。保持引文原样。':instruction;
   const shell = { contents: [{ role: 'user', parts: [
-    part, { text: instruction },
+    part, { text: responseInstruction },
   ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json' } };
   for(const {base64,...criterion} of criteria??[])shell.contents[0].parts.push({text:JSON.stringify(criterion)},
     {inlineData:{mimeType:'image/jpeg',data:base64}} as typeof shell.contents[0]['parts'][number]);
-  return {shell,clean,instruction};
+  return {shell,clean,instruction:responseInstruction};
 }
 
 /** Pure bounded preflight without reading/base64-encoding the whole file or minting an unverified URL. */
-export function previewReviewIdentity(sha256:string, bytes:number, input:PreviewReviewInput, format:PreviewReviewFormat='compact') {
+export function previewReviewIdentity(sha256:string, bytes:number, input:PreviewReviewInput, format:PreviewReviewFormat='decision-first') {
   if(!/^[a-f0-9]{64}$/.test(sha256)||!Number.isSafeInteger(bytes)||bytes<=0)throw Error('Invalid preview media identity');
   const {shell,clean,instruction}=previewReviewShell({inlineData:{mimeType:'video/mp4',data:''},videoMetadata:{fps:5}},input,format);
   if(Buffer.byteLength(JSON.stringify(shell))+4*Math.ceil(bytes/3)>INLINE_REQUEST_MAX_BYTES)throw Error('Preview exceeds bounded inline request size');
   return {input:clean,video_sha256:sha256,input_sha256:hash(JSON.stringify(clean)),instruction_sha256:hash(instruction),version:PREVIEW_REVIEW_VERSION,
     logical_request_sha256:videoRequestDigest(shell,{sha256,bytes})};
 }
-export function buildPreviewReviewRequest(video: VideoInput, input: PreviewReviewInput, format:PreviewReviewFormat='compact') {
+export function buildPreviewReviewRequest(video: VideoInput, input: PreviewReviewInput, format:PreviewReviewFormat='decision-first') {
   const media=videoInput(video),{shell,clean,instruction}=previewReviewShell(media.part,input,format);
   const body = JSON.stringify(shell);
   if (Buffer.byteLength(body) > INLINE_REQUEST_MAX_BYTES) throw new Error('Inline request exceeds size limit');
@@ -258,10 +276,11 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
   }
   const continuityRows: unknown[] = value.continuity;
   const covered = new Set<string>();
-  const positive = (f: Finding, teaching: boolean, id: string) => {
-    if (f.status !== 'supported') { issues.push(`${id}:${f.status}`); return; }
-    if (!f.evidence.length) issues.push(`${id}:unsupported_positive`);
-    if (teaching && !f.evidence.some((e) => e.channel !== 'original')) issues.push(`${id}:appearance_not_teaching`);
+  const assessFinding = (f: Finding, teaching: boolean, id: string) => {
+    if (f.status !== 'supported') issues.push(`${id}:${f.status}`);
+    if (f.status==='insufficient_evidence')return;
+    if (!f.evidence.length) issues.push(`${id}:${f.status==='supported'?'unsupported_positive':'negative_evidence_missing'}`);
+    if (f.status==='supported'&&teaching&&!f.evidence.some((e) => e.channel !== 'original')) issues.push(`${id}:appearance_not_teaching`);
     for (const e of f.evidence) {
       if (e.channel === 'narration' || e.channel === 'annotation') {
         const matchingText = input.reference_text.filter((r) => r.channel === e.channel
@@ -273,7 +292,7 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
   };
   if(input.check_blueprint_alignment){
     if(!finding(value.blueprint_alignment))issues.push('missing_blueprint_alignment');
-    else positive(value.blueprint_alignment,false,'blueprint_alignment');
+    else assessFinding(value.blueprint_alignment,false,'blueprint_alignment');
   }
   const inApprovedRanges=(e:ReviewReceipt,windows:Array<[number,number]>)=>
     windows.some(([start,end])=>e.start_seconds<end&&e.end_seconds>start
@@ -284,7 +303,11 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
     if (!object(row) || !text(row.point_id) || !input.points.some((p) => p.point_id === row.point_id)
       || covered.has(row.point_id) || !receipts(row.depiction) || !finding(row.teaching)) { issues.push('invalid_coverage_row'); continue; }
     covered.add(row.point_id);
-    positive(row.teaching, true, row.point_id);
+    const {teaching,point_id:pointId}=row;
+    assessFinding(teaching, true, pointId);
+    if(teaching.status==='not_supported'&&input.check_blueprint_alignment
+      &&!input.units.some(unit=>unit.point_ids.includes(pointId)&&teaching.evidence.some(e=>inApprovedUnit(e,unit))))
+      issues.push(`${row.point_id}:negative_evidence_outside_unit`);
     if(input.check_blueprint_alignment&&!row.point_id.startsWith('delivery/')&&row.teaching.status==='supported'){
       const teaching=row.teaching;
       const units=input.units.filter(unit=>unit.point_ids.includes(row.point_id as string));
@@ -326,8 +349,10 @@ export function evaluatePreviewTeachingJudgment(value: unknown, input: PreviewRe
     }
     if (JSON.stringify([...row.point_ids].sort()) !== JSON.stringify([...expected.point_ids].sort())) issues.push(`${row.unit_id}:unit_point_mismatch`);
     if ((!row.previous.length&&!filmOriginPrevious(row,input)) || !row.current.length) issues.push(`${row.unit_id}:missing_front_back_evidence`);
-    positive(row.narrative, false, `${row.unit_id}:narrative`);
-    positive(row.teaching, true, `${row.unit_id}:teaching`);
+    assessFinding(row.narrative, false, `${row.unit_id}:narrative`);
+    assessFinding(row.teaching, true, `${row.unit_id}:teaching`);
+    if(input.check_blueprint_alignment&&window&&[row.narrative,row.teaching].some(f=>f.status==='not_supported'
+      &&!f.evidence.some(e=>e.start_seconds<window[1]&&e.end_seconds>window[0])))issues.push(`${row.unit_id}:negative_evidence_outside_unit`);
     for (const e of row.teaching.evidence) if (!row.current.some((c) => e.start_seconds < c.end_seconds && e.end_seconds > c.start_seconds)) {
       issues.push(`${row.unit_id}:teaching_evidence_outside_current`);
     }

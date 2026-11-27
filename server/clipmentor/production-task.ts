@@ -19,7 +19,8 @@ import type {ReviewApiConfig} from './copy-review-api';
 import {openingComparisonCriterion,openingComparisonShape,parseProductionSourceCriteria,sourcePerformanceCriterion,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {frozenTeachingTopics} from './production-source-policy';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
-import {previewAlignmentFindingKeys,previewAlignmentRepairPause,previewReceiptFailure} from './preview-review';
+import {previewAlignmentFindingKeys,previewAlignmentRepairPause,previewReviewRepairBlock} from './preview-review';
+import {productionDeadline} from './production-preview-retry';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest,matchesExportedPreviewProject} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
@@ -99,6 +100,7 @@ export interface ProductionTask {
  productionChild?:{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'};
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
  sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
+ previewReviewRetry?:{operationId:string;priorOperationId:string;renderId:string;videoSha256:string;reason:string;authorizedAt:number};
  blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;openingPictureAdjustment?:{before:string;after:string};confirmedAt:number};
  blueprintReview?:BlueprintReviewRecord;
  finalAcceptance?:{renderId:string;watched:true;malayReviewed:true;confirmedAt:number};
@@ -559,7 +561,7 @@ export interface StageContext {
  checkpointEditPublication?(publication:EditPublication):Promise<void>;
  checkpointTeachingAnalysis?(publication:TeachingAnalysisPublication):Promise<void>;
 }
-export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
+export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';pause?:string;awaitBlueprintFeedback?:true}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
 
 async function checkedHumanBlueprint(task:ProductionTask){
@@ -619,7 +621,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    restoreSafe();throw error;
   }
  };
- const deadline=task.createdAt+task.input.budget.maxElapsedMs;
+ const deadline=productionDeadline(task);
  const timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-now()));
  const check=()=>{abort.signal.throwIfAborted();if(now()>=deadline)throw new Error('Production deadline exceeded');};
  // Older tasks may already have split counters while still keeping review-kind
@@ -657,7 +659,9 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   if(activeEffects.has(id))throw Error('production_effect_in_progress');
   activeEffects.add(id);
   try{
-  const decision=productionEffectDecision(old,!!recover,remaining(kind));
+  const authorized=kind==='preview_review'&&task.stage==='self_check'&&name===task.previewReviewRetry?.operationId
+   &&task.completed.export?.artifact.renderId===task.previewReviewRetry.renderId;
+  const decision=productionEffectDecision(old,!!recover,authorized?1:remaining(kind));
   if(decision.action!=='submit'){
    await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
    check();
@@ -693,6 +697,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    if(task.completed[task.stage]){index++;continue;}
    const result=await worker(task,ctx);check();await published();check();
    if(typeof result.artifact?.revision==='string')task.projectRevision=result.artifact.revision;
+   if(result.pause){task.repairContext=productionRepairContext(task.repairContext,result.artifact);throw new Error(result.pause);}
    if(result.repair){
     const issue=result.artifact.blueprint_structure_issue;
     let pause:string|undefined;
@@ -702,8 +707,8 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      pause=await structuralRepairPause(task,issue,source?.asset_id===task.input.sourceAssetId&&saved?.revision===task.projectRevision
       ?source.sourceContentHash:undefined);
     }
-    if(task.stage==='self_check')pause=previewReceiptFailure(result.artifact.receipt)
-     ??previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt);
+    if(task.stage==='self_check')pause=previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt)
+     ??previewReviewRepairBlock(result.artifact.receipt);
     const executionError=result.artifact.execution_validation_error;
     if(task.stage==='edit'&&typeof executionError==='string'&&executionError===task.repairContext?.execution_validation_error)
      pause='execution_mapping_repair_no_progress 待维护侧核对 '+executionError;
@@ -823,7 +828,7 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
  reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore,prepare?:(signal:AbortSignal)=>Promise<boolean>){
  return withProductionExecution(task,async controller=>{
   const advance=()=>advanceWithinExecution(task,worker,store,Date.now,controller);
-  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
+  const deadline=productionDeadline(task);
   const timer=setTimeout(()=>controller.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-Date.now()));
   try{
   if(blueprintRepairStopped(task)||['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
@@ -848,7 +853,7 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
   while(task.status==='blocked'&&!blueprintRepairStopped(task)){
    const from={stage:task.stage,repairs:task.repairs};
    const stop=(reason:'cancelled_or_expired'|'checkpoint_unpersisted'|'no_verified_progress')=>recordProductionDecision(task,{scope:'recovery',action:'stop',reason,fromStage:from.stage,fromEpoch:from.repairs});
-   if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs){await stop('cancelled_or_expired');return advance();}
+   if(controller.signal.aborted||Date.now()>=productionDeadline(task)){await stop('cancelled_or_expired');return advance();}
    if(task.error?.includes('checkpoint_write_failed:')){await stop('checkpoint_unpersisted');return task;}
    const repaired=structuredClone(task);
    try{

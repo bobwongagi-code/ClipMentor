@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import {
   buildPreviewReviewRequest, previewReviewIdentity, reviewClipMentorPreview, validatePreviewReviewInput,
-  PREVIEW_REVIEW_ENDPOINT, type PreviewReviewFormat,
+  PREVIEW_REVIEW_ENDPOINT, previewReviewFormats, type PreviewReviewFormat,
 } from './preview-review.ts';
 import { postSourceVideoTransport, SourceVideoTransportError } from './source-video-transport.ts';
 import {atomicWriteFile} from '../plugins/project-store-durable.ts';
@@ -57,16 +57,19 @@ function locateRequest(format:PreviewReviewFormat){
   const fingerprint=createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+prepared.version+request).digest('hex');
   return {format,prepared,fingerprint};
 }
-let bound:ReturnType<typeof locateRequest>; // Preflight before reserving or incurring charges.
-try{bound=locateRequest('compact');}
-catch(error){if(!prior)throw error;bound=locateRequest('original');}
-if(prior&&prior.fingerprint!==bound.fingerprint&&bound.format!=='original')bound=locateRequest('original');
+// Preflight before reserving or incurring charges. Stop at the first historical match.
+let bound:ReturnType<typeof locateRequest>|undefined;
+if(!prior)bound=locateRequest(previewReviewFormats[0]);
+else for(const format of previewReviewFormats){
+  try{const candidate=locateRequest(format);if(candidate.fingerprint===prior.fingerprint){bound=candidate;break;}}
+  catch{/* A historical smaller request can still match. */}
+}
+if(!bound)throw Error('Operation belongs to different review input');
 const {format,prepared,fingerprint}=bound;
 if(!prior){
   if(outputExists)throw Error('Output already exists; no request sent');
   await publishOperationPreparation(ledger,{identity_version:'video-logical-v1',fingerprint,account,model_retry_policy:'no_automatic_retry'});
 }else{
-  if(prior.fingerprint!==fingerprint)throw Error('Operation belongs to different review input');
   if(prior.status==='completed'){
     console.log(JSON.stringify({status:'cached',output:prior.output,requests_sent:0}));
     return;

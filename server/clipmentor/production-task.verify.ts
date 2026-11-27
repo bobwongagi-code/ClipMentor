@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import * as production from './production-task';
 import {bindBlueprintFeedbackSummary,blueprintFeedbackPoints,captureBlueprintFeedbackSummary} from './production-feedback';
+import {authorizePreviewRetry,previewRetryReadback,productionDeadline,unavailablePreviewReceiptReason} from './production-preview-retry';
 import {advanceProductionTask,productionFeedback,acceptProductionTask,PRODUCTION_STAGES,validateProductionInput,cancelActiveProductionTask,runProductionWithRecovery,type ProductionInput,type ProductionTask,type TaskStore} from './production-task';
 const input:ProductionInput={projectId:'test',sourceAssetId:'source',product:{name:'Fixture',category:'test'},brief:'Fixture production without a provider',
  voice:{provider:'minimax',voiceId:'fixture'},
@@ -10,6 +11,8 @@ const fresh=():ProductionTask=>({version:1,taskId:'test',projectId:'test',input:
  completed:{},effects:{},attempts:{model:0,review:0,observation:0,tts:0,render:0},repairs:0,feedbackUsed:false});
 let saved:ProductionTask;
 const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){return structuredClone(saved);}};
+const negativePreviewReceipt={result:{finish_reasons:['STOP'],issues:['group:teaching:not_supported']},
+ effective_review:{manifest_binding:'frozen_at_request',blockers:['group:teaching:not_supported','saved_review_not_passed']}};
 {
  const task=fresh();task.stage='edit';task.input.budget.maxRepairs=3;
  let edits=0;
@@ -21,11 +24,17 @@ const store:TaskStore={async save(t){saved=structuredClone(t);},async load(){ret
  assert.equal(task.status,'blocked');
  assert.match(saved.error??'',/execution_mapping_repair_no_progress/);
 }
-for(const finish of ['MAX_TOKENS','STOP']){
+for(const [finish,issue,error] of [
+ ['MAX_TOKENS','invalid_judgment_schema','preview_review_incomplete_generation'],
+ ['STOP','invalid_judgment_schema','preview_review_invalid_judgment_schema'],
+ ['STOP','invalid_coverage_row','preview_review_evidence_unverified'],
+ ['STOP','group:missing_continuity','preview_review_evidence_unverified'],
+ ['STOP','group:unverified_quote','preview_review_evidence_unverified'],
+]){
  const task=fresh();task.stage='self_check';
  task.completed.export={at:1,artifact:{revision:'rendered',renderId:'kept-render'}};
- const receipt={result:{finish_reasons:[finish],issues:['invalid_judgment_schema']},
-  effective_review:{can_use_as_pass:false,blockers:['invalid_judgment_schema']}};
+ const receipt={result:{finish_reasons:[finish],issues:[issue]},
+  effective_review:{can_use_as_pass:false,manifest_binding:'frozen_at_request',blockers:[issue,'saved_review_not_passed']}};
  const visited:string[]=[];
  await advanceProductionTask(task,async current=>{
   visited.push(current.stage);
@@ -36,7 +45,7 @@ for(const finish of ['MAX_TOKENS','STOP']){
  assert.equal(task.stage,'self_check');
  assert.equal(saved.completed.export?.artifact.renderId,'kept-render');
  assert.deepEqual(saved.repairContext?.receipt,receipt);
- assert.equal(saved.error,finish==='STOP'?'Error: preview_review_invalid_judgment_schema':'Error: preview_review_incomplete_generation');
+ assert.equal(saved.error,'Error: '+error);
  assert.deepEqual(saved.attempts,{model:0,review:0,observation:0,tts:0,render:0});
 }
 for(const mode of ['missing-evidence','same-finding','same-group-finding','intervening-edit-error','changed-finding'] as const){
@@ -52,9 +61,10 @@ for(const mode of ['missing-evidence','same-finding','same-group-finding','inter
   const finding={status:'not_supported',reasoning:changed?'Extra graphic':'Extra narration',
    evidence:[{channel:'visual_organization',observed:changed?'Graphic at the end':'New narration',start_seconds:checks}]};
   const perGroup=mode==='same-group-finding';
+  const issue=perGroup?'group:teaching:not_supported':'blueprint_alignment:not_supported';
   const receipt={effective_review:{blueprint_alignment_input_sha256:'a'.repeat(64),
-   blockers:[missing?'missing_blueprint_alignment':perGroup?'group:teaching:not_supported':'blueprint_alignment:not_supported']},
-   result:{judgment:perGroup?{continuity:[{unit_id:'group',teaching:finding}]}:{blueprint_alignment:finding}}};
+   manifest_binding:'frozen_at_request',blockers:[missing?'missing_blueprint_alignment':issue,'saved_review_not_passed']},
+   result:{finish_reasons:['STOP'],issues:[issue],judgment:perGroup?{continuity:[{unit_id:'group',teaching:finding}]}:{blueprint_alignment:finding}}};
   return {artifact:{receipt},repair:'edit'};
  },store);
  assert.equal(task.status,mode==='changed-finding'?'awaiting_review':'blocked');
@@ -63,6 +73,46 @@ for(const mode of ['missing-evidence','same-finding','same-group-finding','inter
   assert.match(saved.error??'',mode==='missing-evidence'?/alignment_evidence_missing/:/alignment_no_progress/);
   assert(saved.repairContext?.receipt,'latest independent receipt remains available on pause');
  }
+}
+{
+ const task=fresh(),videoSha256='a'.repeat(64),priorOperationId='758ce328-71a9-40c9-b989-fa4e461d149a';
+ task.stage='self_check';task.status='blocked';task.projectRevision='current';task.createdAt=1;task.sequence=19;
+ task.input.budget.preview_review=1;task.attempts.preview_review=1;
+ task.completed.export={at:1,artifact:{revision:'current',renderId:'kept-render'}};
+ const taskKey='self_check:initial:0:'+priorOperationId;
+ task.effects[taskKey]={kind:'preview_review',operationId:priorOperationId,status:'completed',result:{body:{
+  projectId:task.projectId,operationId:priorOperationId,videoSha256,receipt_persisted:true,status:'failed',requestsAttempted:1,
+ }}};
+ const request={renderId:'kept-render',sequence:task.sequence,videoSha256,priorOperationId,confirmed:true,reason:'One extra review for the saved video'};
+ for(const patch of [{renderId:'other'},{videoSha256:'b'.repeat(64)},{sequence:18},{priorOperationId:'unknown'},{reason:'  '},{confirmed:false}])
+  assert.throws(()=>authorizePreviewRetry(task,{...request,...patch},videoSha256),/preview_retry/);
+ const uncertain=structuredClone(task);uncertain.effects[taskKey].status='reserved';
+ assert.throws(()=>authorizePreviewRetry(uncertain,request,videoSha256),/not_reconciled/);
+ const next=authorizePreviewRetry(task,request,videoSha256);
+ assert.equal(task.status,'blocked');assert.deepEqual(next.input.budget,task.input.budget);
+ assert.equal(next.previewReviewRetry?.reason,request.reason);
+ assert(productionDeadline(next)>Date.now());
+ const readback={projectId:task.projectId,operationId:priorOperationId,videoSha256,scope:'rendered_preview_continuous_review',full_film_accepted:false};
+ assert.equal(previewRetryReadback(next,{...readback,status:'reserved'}),'stop');
+ assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:false}),'stop');
+ assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:true}),'request');
+ assert.equal(previewRetryReadback(next,{...readback,status:'completed',effective_review:{can_use_as_pass:true}}),'reuse');
+ assert.equal(previewRetryReadback(next,{...readback,status:'completed',...negativePreviewReceipt}),'reuse');
+ assert.equal(previewRetryReadback(next,{...readback,status:'failed',receipt_persisted:true,videoSha256:'b'.repeat(64)}),'stop');
+ assert.equal(unavailablePreviewReceiptReason({transport_diagnostic:{error_kind:'curl_timeout',response_boundary:'no_final_response_unattributed'}}),'preview_review_timeout_unconfirmed');
+ assert.equal(unavailablePreviewReceiptReason({transport_diagnostic:{error_kind:'curl_timeout',response_boundary:'final_response'}}),'preview_review_receipt_unavailable');
+ let calls=0;
+ const check=async (t:ProductionTask,ctx:Parameters<production.StageWorker>[1])=>{
+  assert.equal(t.stage,'self_check');
+  await assert.rejects(ctx.effect('preview_review','unrelated',async()=>++calls),/budget exhausted/);
+  await ctx.effect('preview_review',t.previewReviewRetry!.operationId,async()=>++calls);
+  return {artifact:{receipt:'test-timeout'},pause:'preview_review_receipt_unavailable'};
+ };
+ await advanceProductionTask(next,check,store);
+ await advanceProductionTask(saved,check,store);
+ assert.equal(calls,1);assert.equal(saved.attempts.preview_review,2);assert.equal(saved.attempts.render,0);
+ assert.equal(saved.completed.export?.artifact.renderId,'kept-render');
+ assert.throws(()=>authorizePreviewRetry(saved,request,videoSha256),/authority_mismatch/);
 }
 for(const committed of [false,true]){
  const checkpointTask=fresh();
@@ -261,7 +311,7 @@ for(const [from,target] of [['copy_review','blueprint'],['self_check','edit']] a
  const rewinding=fresh();rewinding.stage=from;
  for(const stage of PRODUCTION_STAGES.slice(0,PRODUCTION_STAGES.indexOf(from)))rewinding.completed[stage]={at:1,artifact:{saved:true}};
  let rewindCheckpoint:ProductionTask|undefined;
- await advanceProductionTask(rewinding,async t=>t.repairs===0?{artifact:{issue:'fixture negative'},repair:target}:{artifact:{saved:true}},
+ await advanceProductionTask(rewinding,async t=>t.repairs===0?{artifact:{receipt:negativePreviewReceipt},repair:target}:{artifact:{saved:true}},
   {...store,async save(t){if(t.repairs===1&&!rewindCheckpoint)rewindCheckpoint=structuredClone(t);}});
  assert(rewindCheckpoint);assert.equal(rewindCheckpoint.stage,target,'rewind target and invalidation must be in the same durable checkpoint');
  assert(!rewindCheckpoint.completed[target]);
@@ -324,7 +374,7 @@ console.log('production-task: all stages, saved resume, spent/zero/deadline budg
 const localRepair=fresh();localRepair.stage='self_check';localRepair.repairContext={final_feedback:{kind:'execution',item_ids:['frozen-item'],preview:{timelineId:'frozen-timeline'}}};
 let localFailed=false,scopeSeen=false;
 await advanceProductionTask(localRepair,async t=>{
- if(t.stage==='self_check'&&!localFailed){localFailed=true;return{artifact:{receipt:{status:'needs_revision'}},repair:'edit'};}
+ if(t.stage==='self_check'&&!localFailed){localFailed=true;return{artifact:{receipt:negativePreviewReceipt},repair:'edit'};}
  if(t.stage==='edit'){assert.deepEqual((t.repairContext!.final_feedback as {item_ids:string[]}).item_ids,['frozen-item']);scopeSeen=true;}
  return{artifact:{saved:true}};
 },store);
