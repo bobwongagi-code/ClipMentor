@@ -22,8 +22,16 @@ export function panelReviewIssue(error:unknown){
   return {kind:'binding',message:'原片分析已暂停，已上传素材仍在。'} as const;
  const opinionIssue=message.match(/blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\n]+)$/u);
  if(opinionIssue)return {kind:'content',message:opinionIssue[1]+(message.includes('blueprint_repair_no_progress')?' 同一问题再次出现，修改已暂停。':'')} as const;
- if(/suspected_gate_defect|门禁问题/.test(message))
+ if(/suspected_gate_defect|门禁问题|teaching_confirmed_scope_requires_maintenance|teaching_whole_film_confirmed_criterion_invalid|production_confirmed_groups_(missing|changed)|confirmed_copy_review_reference_binding_invalid/.test(message))
   return {kind:'gate',message:'制作已暂停，当前进度已保存。'} as const;
+ if(/^(?:Error: )?copy_review_confirmed_selection_conflict$/.test(message))
+  return {kind:'gate',message:'审核提出了已确认范围外的内容，现有讲解已保留。'} as const;
+ if(/production_opening_underlay_shortfall/.test(message))
+  return {kind:'binding',message:'片头配音长于现有画面安排，已暂停制作。'} as const;
+ if(/preview_review_(?:receipt_unavailable|timeout_unconfirmed|incomplete_generation|invalid_judgment_schema|evidence_unverified)|preview_retry_original_outcome_unavailable/.test(message))
+  return {kind:'binding',message:'成片已保存，复核暂未完成。'} as const;
+ if(/production_confirmed_teaching_baseline_changed/.test(message))
+  return {kind:'gate',message:'现有讲解已保留。选题变更需由你决定。'} as const;
  if(/binding|_scope_|_stale|_schema_|_format|review_reference_invalid|author_self_check_invalid|execution_mapping_repair_no_progress|feedback_(target_missing|unit_placement_missing|execution_targets_required|changed_)|绑定错|版本.*变化|预览.*变化|版本记录不匹配|片尾.*齐备|片尾.*变化|证据.*缺失/i.test(message))
   return {kind:'binding',message:'请刷新后查看当前版本。'} as const;
  if(/(?:teaching_baseline_repair|teaching_final_narration_repair|preview_blueprint_alignment|blueprint_repair)_no_progress/.test(message))

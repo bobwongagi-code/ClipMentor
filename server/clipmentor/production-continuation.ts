@@ -6,7 +6,7 @@ import {productionOutputsMatch} from './production-decisions';
 import {digestValue} from '../agent-runs/store-values';
 import {withSerializedProjectStore,getStoredEntry,isStoredProjectDeleted} from '../plugins/project-store';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
-import {copyReviewSubject,copyTeachingPacketFromDoc,checkCopyProduction} from '../../src/clipmentor/production-gate';
+import {copyReviewSubject,copyTeachingPacketFromDoc,checkCopyProduction,type CopyProductionReview,type TeachingPacket} from '../../src/clipmentor/production-gate';
 import {storeAgentArtifact,agentRuntimeKey} from '../../src/persist/agentRuntimeStore';
 import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGeneration';
 import {agentSessionGenerationKey} from '../../shared/agent-session-generation';
@@ -15,9 +15,12 @@ import {runProjectMigrations} from '../../src/persist/migrations';
 import {deliverySectionsFromDoc,deliveryAudio,type DeliverySection} from '../../src/clipmentor/delivery-bindings';
 import {productionFeedbackAnchor} from './production-feedback';
 import {confirmedTeachingDigest} from './production-teaching-baseline';
+import {confirmedOutputCopyLocks} from './production-blueprint-opinions';
+import {boundVisualCriteria,plannedVisualCriteria,visualCriteriaPlanApproved} from './visual-done-criteria';
 import type {ProjectDoc} from '../../src/editor/types';
-import {HANDOFF_TEMPLATE_VERSION,type HandoffPolicy} from '../../shared/clipmentor-handoff';
-import {createProductionTask,latestPanelProductionTask,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,type ProductionTask} from './production-task';
+import {revisionOf} from '../../src/agent/external-edit-session';
+import {HANDOFF_TEMPLATE_VERSION,handoffDigest,type HandoffPolicy} from '../../shared/clipmentor-handoff';
+import {createProductionTask,latestPanelProductionTask,productionCopyRequirements,productionTaskStore,saveProductionCheckpoint,saveProductionControl,compactProductionCheckpoints,type EntryPreconditions,confirmedGroupsFromBlueprint,type ProductionTask} from './production-task';
 
 export type ProductionAudience='new_contact'|'existing_partner';
 
@@ -65,6 +68,8 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
   return existing;
  }
  const doc=selectProductionAudience(source.doc,audience);
+ const confirmedGroups=parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?confirmedGroupsFromBlueprint(doc):undefined;
+ if(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&!confirmedGroups?.length)throw Error('production_confirmed_groups_missing');
  const remainingModels=parent.input.budget.model-parent.attempts.model;
  if(remainingModels<1)throw Error('本次制作已达到处理上限');
  const selectedRequirements=requirements?structuredClone(requirements):undefined;
@@ -90,8 +95,9 @@ export async function createBlueprintContinuation(parent:ProductionTask,source:{
   digest:(await copyReviewSubject(saved.doc)).digest,requirementsDigest:digestValue(selectedRequirements?.brief.doneCriteria??[]),confirmedAt:Date.now(),
   ...(selectedRequirements?{requirements:selectedRequirements}:{}),
   ...(parent.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{confirmedTeachingDigest:confirmedTeachingDigest(doc)}:{}),
-  ...(parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
+  ...(confirmedGroups?.length||parent.completed.blueprint?.artifact.teaching_baseline_digest?{teachingBrief:{instruction:parent.input.brief,
    objective:selectedRequirements?.brief.objective,feedback:parent.blueprintFeedback,sourceAdviceSeparated:true as const,
+   ...(confirmedGroups?.length?{confirmedGroups}:{}),
    ...(teachingCriteria.length?{doneCriteria:teachingCriteria}:{})}}:{})};
  const task=await createProductionTask({...parent.input,projectId,
   author:{...parent.input.author,origin},reviewer:{...parent.input.reviewer,origin},
@@ -207,6 +213,97 @@ export async function publishedProductionParent(task:ProductionTask){
  if(parent?.taskId!==approval.sourceTaskId||!(await readProductionOutputs(parent)).some(child=>child.taskId===task.taskId&&child.projectId===task.projectId))
   throw Error('production_outputs_binding_invalid');
  return parent;
+}
+
+/** A current independent pass may advance a refinement under the original
+ * approval when its teaching and both variant-specific delivery choices stand. */
+export async function confirmedProductionRefinement(task:ProductionTask,doc:ProjectDoc){
+ const approval=task.blueprintApproval,audience=task.input.panelDelivery?.audience;
+ if(!audience||!approval?.confirmedTeachingDigest||!approval.teachingBrief?.confirmedGroups?.length)return;
+ const parent=await publishedProductionParent(task);
+ const key='project:'+approval.sourceProjectId;
+ const entry=await getStoredEntry(key);
+ const source=entry.found?runProjectMigrations(entry.value):null;
+ if(!parent||!source||revisionOf(source.doc)!==approval.sourceRevision)throw Error('production_confirmed_blueprint_source_stale');
+ const baseline=selectProductionAudience(source.doc,audience);
+ if((await copyReviewSubject(baseline)).digest!==approval.digest
+  ||confirmedTeachingDigest(baseline)!==approval.confirmedTeachingDigest
+  ||confirmedTeachingDigest(doc)!==approval.confirmedTeachingDigest
+  ||!confirmedDeliveryMatches(baseline,doc,approval.openingPictureAdjustment))return;
+ confirmedOutputCopyLocks(parent.blueprintOpinions,source.doc,baseline)?.(doc);
+ return {key,digest:digestValue(entry.value)};
+}
+
+/** Explicitly approved opening timing changes keep the performance claim,
+ * visual materials and each ending exactly as they were confirmed. */
+export function confirmedDeliveryMatches(before:ProjectDoc,after:ProjectDoc,
+ adjustment:NonNullable<ProductionTask['blueprintApproval']>['openingPictureAdjustment']){
+ const expected=deliverySectionsFromDoc(before),current=deliverySectionsFromDoc(after);
+ if(digestValue(expected)===digestValue(current))return true;
+ if(!adjustment)return false;
+ const from=expected.find(section=>section.kind==='performance_opening');
+ const to=current.find(section=>section.kind==='performance_opening');
+ if(!from||!to||from.picture.layout?.kind!=='original_underlay'||to.picture.layout?.kind!=='original_underlay'
+  ||digestValue(from.picture)!==adjustment.before||digestValue(to.picture)!==adjustment.after)return false;
+ const timingOnly=({...to.picture,display:from.picture.display,layout:{...to.picture.layout,range:from.picture.layout.range}});
+ return digestValue(timingOnly)===digestValue(from.picture)
+  &&digestValue(current.map(section=>section===to?{...section,picture:from.picture}:section))===digestValue(expected);
+}
+
+/** Carry forward the author attachment only for an authorized opening reflow.
+ * The new picture still needs its own independent receipt. */
+export async function priorAuthorCheckForOpeningAdjustment(task:ProductionTask,doc:ProjectDoc,packet:TeachingPacket,briefDigest:string|undefined){
+ const adjustment=task.blueprintApproval?.openingPictureAdjustment;
+ const opening=packet.delivery_sections?.find(section=>section.kind==='performance_opening');
+ if(!briefDigest||!adjustment||!opening||digestValue(opening.picture)!==adjustment.after)return;
+ const comparable=(value:TeachingPacket)=>({
+  ...value,
+  delivery_sections:value.delivery_sections?.map(section=>section.kind==='performance_opening'?{...section,picture:opening.picture}:section),
+  units:value.units.map(unit=>{
+   const plan=unit.picture_plan,execution=plan?.execution_plan;
+   return execution?{...unit,picture_plan:{...plan,execution_plan:{...execution,plan_id:undefined}}}:unit;
+  }),
+ });
+ const current=digestValue(comparable(packet));
+ for(const effect of Object.values(task.effects).reverse()){
+  if(effect.kind!=='review'||effect.status!=='completed')continue;
+  const result=effect.result as {status?:number;body?:{operationId?:string;receipt?:CopyProductionReview}}|undefined;
+  const receipt=result?.body?.receipt,prior=receipt?.teaching_review?.packet;
+  if(result?.status!==200||result.body?.operationId!==effect.operationId||!prior||receipt.verdict!=='pass'
+   ||receipt.reviewer_run_id!=='clipmentor-review:'+effect.operationId||receipt.teaching_brief_digest!==briefDigest)continue;
+  const previous=prior.delivery_sections?.find(section=>section.kind==='performance_opening');
+  if(previous&&digestValue(previous.picture)===adjustment.before&&digestValue(comparable(prior))===current
+   &&await confirmedProductionRefinement(task,doc))return receipt.reviewer_run_id;
+ }
+}
+
+/** Borrow only an independently accepted review from this batch's body producer. */
+export async function loadSharedCopyReview(projectId:string){
+ const follower=await latestPanelProductionTask(projectId);
+ if(follower?.input.panelDelivery?.audience!=='new_contact'||!follower.sharedProduction?.prepared)return;
+ const {projectId:producerId,taskId}=follower.sharedProduction;
+ const parent=await publishedProductionParent(follower);
+ if(!parent?.productionChildren?.some(child=>child.projectId===producerId&&child.taskId===taskId&&child.audience==='existing_partner'))
+  throw Error('shared_copy_review_producer_invalid');
+ const producer=await productionTaskStore.load(producerId,taskId);
+ const checkpoint=producer.completed.copy_review?.artifact;
+ const producerReview=checkpoint?.receipt as {operationId?:string}|undefined;
+ if(!checkpoint||!producerReview?.operationId||producer.blueprintApproval?.sourceRevision!==follower.blueprintApproval?.sourceRevision)return;
+ const saved=await loadOfflineStoredProject(producerId);
+ const doc=saved?.doc,receipt=doc?.clipMentorAnalysis?.production_copy_review;
+ if(!saved||!doc||!receipt||saved.revision!==producer.projectRevision
+  ||receipt.content_digest!==checkpoint.blueprint_digest||receipt.reviewer_run_id!=='clipmentor-review:'+producerReview.operationId
+  ||producer.sharedProduction?.digest!==follower.sharedProduction.digest)return;
+ assertSharedProduction(producer,doc);
+ const requirement=await productionCopyRequirements(producerId);
+ const criteria=boundVisualCriteria(requirement.policy);
+ if(criteria&&!visualCriteriaPlanApproved(criteria,receipt))return;
+ const briefing=requirement.teachingBrief;
+ if(!briefing?.confirmedGroups?.length)return;
+ const gate=await checkCopyProduction(doc,'clipmentor',undefined,requirement.opening,!!requirement.endingPictures,await handoffDigest(briefing));
+ if(!gate.allowed||!receipt.teaching_review)return;
+ return {receipt,visual:plannedVisualCriteria(criteria),briefing,source:doc.clipMentorAnalysis!.source,
+  sourceSrc:doc.assets.find(asset=>asset.id===doc.clipMentorAnalysis!.source.asset_id)?.src};
 }
 
 /** Bind a child control to the same parent publication and session at commit. */

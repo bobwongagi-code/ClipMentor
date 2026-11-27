@@ -11,6 +11,8 @@ export const COPY_REVIEW_FAILURES = {
   picture_plan_shape_invalid: [400, 'request'],
   source_unavailable_or_changed: [409, 'source'],
   operation_unavailable: [409, 'reservation'],
+  production_confirmed_groups_missing: [409, 'reservation'],
+  production_confirmed_groups_changed: [409, 'reservation'],
   review_requirements_changed: [409, 'reservation'],
   legacy_failure_details_missing: [409, 'reservation'],
   frames_unavailable: [422, 'frames'],

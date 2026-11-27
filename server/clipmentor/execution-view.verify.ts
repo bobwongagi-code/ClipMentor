@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {digestValue} from '../agent-runs/store-values';
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
-import {currentExecutionView,currentReviewRepair} from './execution-view';
+import {confirmedCopyReviewScopeConflict,currentExecutionView,currentReviewRepair,replayConfirmedCopySuggestion} from './execution-view';
 import {matchMeasuredNarration,registeredAudioBindings} from './production-readiness';
 import {productionAuthorTaskData} from './production-worker';
 import phased from '../../src/agent/tools/fixtures/barely-there-mg-replacement-20261030.json';
@@ -12,7 +14,7 @@ import {revisionOf} from '../../src/agent/external-edit-session';
 import {productionFeedbackAnchor,bindProductionFeedback,assertLocalFeedbackPreservation,feedbackProjectDigest} from './production-feedback';
 import {productionFeedback,type ProductionTask} from './production-task';
 import {reusableVoiceForRequest} from './audio-reuse';
-import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest} from '../../src/clipmentor/production-gate';
+import {copyTeachingPacketFromDoc,buildCopyTeachingReviewRequest,checkCopyProduction} from '../../src/clipmentor/production-gate';
 import {executeCoreEditItem} from './headless-edit-item';
 import {makeDraft} from '../../src/editor/store';
 const project=structuredClone(saved.cases[0].doc) as unknown as ProjectDoc;
@@ -46,6 +48,47 @@ receipt.verdict='needs_revision';receipt.units[0].verdict='needs_revision';recei
 const repair=await currentReviewRepair(reviewProject);
 assert.equal(repair.status,'bound');assert.equal(repair.original_receipt!.content_digest,receipt.content_digest);assert.equal(repair.original_receipt!.verdict,receipt.verdict);assert.equal(repair.units![0].context!.unit_id,receipt.units[0].unit_id);
 assert.equal(repair.review_approved,false);
+const scopedUnit=view.packet.units[0],scopedPoint=scopedUnit.points.find(point=>point.treatment!=='omit')!;
+const scopedEvidence=(scopedPoint.teaching_basis?.evidence_ids??scopedPoint.evidence_ids)[0];
+const unselected={relation:'Another source teaching choice',evidence_ids:['other-source-evidence'],point_ids:[],line_ids:[],
+ assessment:'optional_depth' as const,reason:'Different choice beyond the confirmed group'};
+const groupChecks={...receipt.units[0].group_checks!,source_relations:[unselected]};
+receipt.units[0].group_checks=groupChecks;
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),false,'optional source suggestions do not trigger repairs');
+groupChecks.source_relations=[{...unselected,assessment:'material_gap'} as never];
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),true,'the same extra lesson cannot trigger a blueprint rework');
+groupChecks.source_relations=[{...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id]} as never];
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),true,'a selected point ID alone cannot authorize a proposed new topic');
+groupChecks.source_relations=[{...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id],evidence_ids:[scopedEvidence]} as never];
+assert.equal(confirmedCopyReviewScopeConflict(reviewProject,view.packet),false,'a real, bound omission still follows the existing review gate');
+// The real historical receipt is optional in CI and never copied into git.
+const archived=process.env.CLIPMENTOR_SWATCH_REVIEW;
+if(archived){
+ const before=await readFile(archived,'utf8'),receipt=JSON.parse(before).result.receipt as NonNullable<ProjectDoc['clipMentorAnalysis']>['production_copy_review'];
+ assert(receipt);
+ const proof=digestValue(receipt);
+ const projection=replayConfirmedCopySuggestion(receipt,proof,'U-cheek','G1',1,0);
+ assert.equal(projection.suggestion.disposition,'not_adopted');
+ assert.match(projection.suggestion.originalFinding.reason,/手背试色/);
+ assert.equal(projection.originalVerdict,'needs_revision');
+ assert.equal(projection.remaining.find(unit=>unit.unit_id==='U-cheek')?.findings.length,0);
+ for(const group of ['U-hook','U-use']){
+  const item=projection.remaining.find(unit=>unit.unit_id===group)!;
+  assert.deepEqual(item.findings,receipt.units.find(unit=>unit.unit_id===group)?.findings);
+  assert.equal(item.groupValidation.verdict,'insufficient_evidence');
+  assert.deepEqual('issues' in item.groupValidation?item.groupValidation.issues:[],['G1:l1_evidence_does_not_match_group']);
+ }
+ assert.throws(()=>replayConfirmedCopySuggestion(receipt,proof,'U-cheek','G1',0,0),/scope_invalid/);
+ assert.throws(()=>replayConfirmedCopySuggestion({...receipt,verdict:'pass'},proof,'U-cheek','G1',1,0),/receipt_changed/);
+ assert.equal(await readFile(archived,'utf8'),before);
+ console.log('Historical swatch review: one proposal removed, both independent L1 failures and original receipt retained.');
+}
+const approvedCopy=structuredClone(project);
+const approvedGroup=approvedCopy.clipMentorAnalysis!.production_copy_review!.units[0].group_checks!;
+approvedGroup.source_relations!.push({...unselected,evidence_ids:[view.packet.units[0].source_context!.evidence_ids[0]]});
+assert.equal((await checkCopyProduction(approvedCopy,'clipmentor')).allowed,true,'a saved optional suggestion preserves a valid release');
+approvedGroup.source_relations!.push({...unselected,assessment:'material_gap',point_ids:[scopedPoint.point_id],evidence_ids:[scopedEvidence]});
+assert.equal((await checkCopyProduction(approvedCopy,'clipmentor')).allowed,false,'a passing overall verdict cannot clear a bound missing decision');
 assert.deepEqual(buildCopyTeachingReviewRequest([{case_id:'same',packet:await copyTeachingPacketFromDoc(reviewProject)}]),reviewBefore);
 const stale=structuredClone(reviewProject);stale.clipMentorAnalysis!.production_copy_review!.content_digest='f'.repeat(64);assert.equal((await currentReviewRepair(stale)).status,'receipt_stale');
 // Actual shared edit engine: resolved frozen style, not just a helper return value.

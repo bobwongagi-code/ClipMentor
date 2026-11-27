@@ -20,7 +20,7 @@ try{
  const {deliveryPictureBindings,deliverySectionsFromDoc}=await import('../../src/clipmentor/delivery-sections');
  const {extractOneFrame}=await import('../plugins/extract-frames'),{ffmpegBin}=await import('../media-binaries');
  await test('Saved blueprint opinions preserve untouched scopes and name the exact confirmed sentence',async()=>{
-  const {prepareBlueprintOpinions,blueprintOpinionDifferences,guardBlueprintOpinionWrite}=await import('./production-blueprint-opinions');
+  const {prepareBlueprintOpinions,blueprintOpinionDifferences,guardBlueprintOpinionWrite,confirmedOutputCopyLocks,productionBlueprintDifferences}=await import('./production-blueprint-opinions');
   const {panelReviewIssue}=await import('./production-panel-review');
   const doc=clone(c.newBinding) as unknown as ProjectDoc;
   const units=doc.clipMentorAnalysis!.blueprint;
@@ -82,6 +82,11 @@ try{
   assert.throws(()=>blueprintOpinionDifferences(group.record!,next),/blueprint_opinion_confirmation_required/);
   const confirmed={...group.record!,confirmed:true};
   const differences=blueprintOpinionDifferences(confirmed,next);
+  const locks=confirmedOutputCopyLocks(confirmed,doc,doc)!;
+  assert.doesNotThrow(()=>locks(next),'production can improve other wording without another confirmation');
+  assert.equal(confirmedOutputCopyLocks(group.record,doc,doc),undefined,'an unconfirmed retention request is not a production lock');
+  assert.equal(productionBlueprintDifferences(doc,doc),undefined);
+  assert.deepEqual(productionBlueprintDifferences(doc,next)?.groups[0].changes,differences.groups[0].changes);
   assert.equal(differences.overall,undefined);
   assert.deepEqual(differences.groups[0].kept.slice(0,1),['Kod kekal.（编号保留。）']);
   assert.deepEqual(differences.groups[0].changes,[{before:'Ayat ini agak panjang.（这句略长。）',after:'Ayat pendek.（这句短。）'}]);
@@ -89,6 +94,7 @@ try{
   line(lockBroken,1).zh='保留号码。这句短。';
   assert.throws(()=>blueprintOpinionDifferences(confirmed,lockBroken),/第 1 句已确认保留/);
   line(lockBroken,1).narration_ms='Kod berubah. Ayat pendek.';
+  assert.throws(()=>locks(lockBroken),/第 1 句已确认保留/);
   assert.throws(()=>blueprintOpinionDifferences(confirmed,lockBroken),/第 1 句已确认保留/);
   assert.throws(()=>guardBlueprintOpinionWrite(confirmed,lockBroken),/^Error: blueprint_opinion_scope_locked/);
   assert.throws(()=>guardBlueprintOpinionWrite(clone(confirmed),lockBroken),error=>{

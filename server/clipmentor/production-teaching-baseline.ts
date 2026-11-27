@@ -199,6 +199,8 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   ...(task.input.sourceClosingRegistration?{sourceClosingRegistration:true as const}:{}),
   scope:baseline.review_scope, units:baseline.units.map(unit => unitDefinition(baseline,unit)),
   ...(confirmedDecisions?.length?{confirmedDecisions}:{}),
+  ...(task.blueprintApproval?.teachingBrief?.confirmedGroups?.length
+   ?{confirmedGroups:task.blueprintApproval.teachingBrief.confirmedGroups}:{}),
   ...(referenceBinding?{referenceBinding}:{}),
   rebuilding:!!task.repairContext?.teaching_rebuild,
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
@@ -312,10 +314,12 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
   &&effect.result.narrationSubject===narrationSubject)?.[1].result;
  if(!row(receipt)||!row(receipt.review))throw Error('human_blueprint_narration_receipt_missing');
  const reviewedUnits=receipt.review.units;
- const confirmed=readConfirmedTeachingChecks(receipt.review.confirmed_teaching_checks,teachingBaselineSource(doc,task,[]));
+ const source=teachingBaselineSource(doc,task,[]);
+ const confirmed=readConfirmedTeachingChecks(receipt.review.confirmed_teaching_checks,source);
+ const whole=readWholeFilmDecision(receipt.review.whole_film,source);
  if(!Array.isArray(reviewedUnits)||reviewedUnits.length!==baseline.units.length
   ||baseline.units.some(unit=>reviewedUnits.filter((answer:unknown)=>row(answer)&&answer.unit_id===unit.unit_id&&answer.status==='ok').length!==1)
-  ||!row(receipt.review.whole_film)||receipt.review.whole_film.status!=='ok'||confirmed?.some(check=>check.status!=='covered'))
+  ||wholeFilmIssue(whole)||confirmed?.some(check=>check.status!=='covered'))
   throw Error('human_blueprint_teaching_not_passed');
  const answers=checkedNarration(targets.length?receipt.review.narration_checks:receipt.review.narration_checks??[],targets);
  if(answers.some(answer=>answer.status!=='ok'))throw Error('human_blueprint_narration_not_passed');
@@ -342,10 +346,13 @@ type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takea
 type Decision = {unit_id:string;status:'ok'|'fix'|'unresolved';source_role:string;takeaway:string;evidence_ids:string[];reason:string;point_checks?:PointDecision[]};
 type FrozenTopicChecks={main_scope?:'pass'|'fail';closing_status?:'pass'|'fail'};
 const closingStatusIssue='收尾处置与任务声明不符';
+type WholeFilmCriterion={unit_id:string;point_id:string;field:'decision'|'claim_limit';evidence_id:string|null};
 type WholeFilmDecision = {
  status:Decision['status'];main_point_id:string|null;focus:string;alternative:string;reason:string;
  evidence_id:string|null;source_quote:string|null;affected_unit_ids:string[];
  frozen_topic_checks?:FrozenTopicChecks;
+ finding_kind?:'new_topic'|'confirmed_gap';
+ baseline_criteria?:WholeFilmCriterion[];
 };
 type ConfirmedDecisionCheck={id:string;status:'covered'|'missing';unit_id?:string;point_id?:string;evidence_id?:string;reason:string};
 type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[];whole_film?:WholeFilmDecision;narration_checks?:NarrationDecision[];
@@ -531,16 +538,22 @@ function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDec
   &&unit.coverage.some(coverage=>coverage.point_id===main_point_id&&['explain','visual_only'].includes(coverage.treatment)));
  const main=mainUnit?.points.find(point=>point.point_id===main_point_id);
  if((main_point_id!==null||status==='ok')&&!main)throw invalid();
- if(status==='ok'&&declaredClosingIssues(source).length)
+ if((status==='ok'||source.confirmedGroups&&value.finding_kind==='new_topic')&&declaredClosingIssues(source).length)
   throw Error('teaching_source_closing_invalid');
  const evidence=source.evidence.find(entry=>entry.id===evidence_id);
  if(status!=='unresolved'||evidence_id!==null||source_quote!==null){
   if(!evidence||!exactExcerpt(source_quote,evidence.text))throw invalid();
   if(status==='ok'&&!main?.teaching_basis?.evidence_ids.includes(evidence.id))throw invalid();
  }
+ const criteria=source.confirmedGroups&&status!=='ok'?readWholeFilmCriteria(value,source):undefined;
  const checks=source.frozenTopics||source.sourceClosingRegistration?readFrozenTopicChecks(value.frozen_topic_checks,!source.sourceClosing.factOnly):undefined;
+ if(source.confirmedGroups&&checks?.closing_status==='fail'){
+  const closingUnit=source.frozenTopics?.closingUnitId??source.units.at(-1)?.unit_id;
+  if(!criteria?.baseline_criteria?.some(anchor=>anchor.unit_id===closingUnit))
+   throw Error('teaching_whole_film_confirmed_criterion_invalid');
+ }
  const result:WholeFilmDecision={status,main_point_id:main?.point_id??null,focus,alternative,reason,evidence_id:evidence?.id??null,
-  source_quote:typeof source_quote==='string'?source_quote:null,affected_unit_ids,...(checks?{frozen_topic_checks:checks}:{})};
+  source_quote:typeof source_quote==='string'?source_quote:null,affected_unit_ids,...criteria,...(checks?{frozen_topic_checks:checks}:{})};
  if(status!=='ok'||!checks)return result;
  const affected=new Set<string>();
  if(checks.closing_status==='fail'){
@@ -550,8 +563,36 @@ function readWholeFilmDecision(value:unknown,source:BaselineSource):WholeFilmDec
  return affected.size?{...result,status:'fix',affected_unit_ids:[...affected]}:result;
 }
 
+function readWholeFilmCriteria(value:Row,source:BaselineSource):Pick<WholeFilmDecision,'finding_kind'|'baseline_criteria'>{
+ const invalid=()=>Error('teaching_whole_film_confirmed_criterion_invalid');
+ const {finding_kind,baseline_criteria,affected_unit_ids,evidence_id,status}=value;
+ if(finding_kind==='new_topic'&&status==='fix'&&baseline_criteria===undefined)return {finding_kind};
+ if(finding_kind!=='confirmed_gap'||!Array.isArray(baseline_criteria)||!Array.isArray(affected_unit_ids)
+  ||baseline_criteria.length!==affected_unit_ids.length)throw invalid();
+ const anchors=affected_unit_ids.map(unitId=>{
+  const matches=baseline_criteria.filter(entry=>row(entry)&&entry.unit_id===unitId);
+  const anchor=matches[0];
+  if(matches.length!==1||(anchor.field!=='decision'&&anchor.field!=='claim_limit')
+   ||(status==='fix'&&anchor.evidence_id==null))throw invalid();
+  const group=source.confirmedGroups?.find(group=>group.id===unitId);
+  const frozen=group?.points.find(point=>point.id===anchor.point_id&&point.treatment!=='omit');
+  const unit=source.units.find(unit=>unit.unit_id===unitId);
+  const point=unit?.points.find(point=>point.point_id===anchor.point_id);
+  if(!frozen||!point||normalized(point.teaching_question)!==normalized(frozen.question)||
+   (anchor.field==='decision'&&normalized(group?.decision)!==normalized(unit?.teaching_selection?.decision))||
+   !unit?.coverage.some(coverage=>coverage.point_id===point.point_id&&coverage.treatment===frozen.treatment)
+   ||(anchor.field==='claim_limit'&&(!frozen.boundary||frozen.boundary!==point.teaching_basis?.claim_limit))
+   ||(anchor.evidence_id!==null&&(typeof anchor.evidence_id!=='string'
+    ||!point.teaching_basis?.evidence_ids.includes(anchor.evidence_id)||!source.evidence.some(item=>item.id===anchor.evidence_id))))throw invalid();
+  return {unit_id:unitId,point_id:point.point_id,field:anchor.field,evidence_id:anchor.evidence_id} as WholeFilmCriterion;
+ });
+ if(evidence_id!==null&&!anchors.some(anchor=>anchor.evidence_id===evidence_id))throw invalid();
+ return {finding_kind,baseline_criteria:anchors};
+}
+
 export function wholeFilmIssue(whole:WholeFilmDecision|undefined){
  if(!whole||whole.status==='ok')return;
+ if(whole.finding_kind==='new_topic'&&whole.frozen_topic_checks?.closing_status!=='fail')return;
  const issues=[];
  if(whole.frozen_topic_checks?.closing_status==='fail')issues.push(closingStatusIssue);
  return issues.length?issues.join('。'):whole.reason;
@@ -681,7 +722,7 @@ export function validateTeachingBaselineReview(input: unknown, source: BaselineS
    return {feedback_scope:'baseline',units:rejected,...wholeFilmResult};
   }
  }
- const hasBaselineIssue=(whole_film&&whole_film.status!=='ok')||confirmedTeachingIssue(wholeFilmResult)
+ const hasBaselineIssue=wholeFilmIssue(whole_film)||confirmedTeachingIssue(wholeFilmResult)
   ||units.some(unit=>unit.status!=='ok');
  if (requiresBaseline && !source.rebuilding && !hasBaselineIssue){
   if(wholeFilmResult.narration_checks?.some(check=>check.status!=='ok'))
@@ -772,7 +813,7 @@ export function teachingRebuild(source: BaselineSource, doc: ProjectDoc, review:
  const wholeFilm:TeachingRebuild['wholeFilm']=wholeIssue||confirmedIssue?{
   definition:wholeTeachingMeaning(source,meaning),evidenceId:wholeIssue?whole?.evidence_id??null:null,evidence:wholeTeachingEvidence(source),
   status:whole?.status==='unresolved'?'unresolved':'fix',reason:[wholeIssue,confirmedIssue].filter(Boolean).join('；'),
-  unitIds:wholeIssue&&whole?.affected_unit_ids.length?whole.affected_unit_ids:source.units.map(unit=>unit.unit_id),
+  unitIds:wholeIssue&&whole?.affected_unit_ids.length?whole.affected_unit_ids:[],
  }:whole?undefined:previous?.wholeFilm;
  return {
   ...(meaning?{meaning}:{}),
@@ -847,8 +888,11 @@ const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画�
 function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireNarrationCriterion=true,selection=false){
  const pointOutput=selection?pointInstructions.replace('question_quote,source_evidence_id,source_quote','source_evidence_id')
   .replace('question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作','source_evidence_id 选择本点登记的原话或可见动作证据编号'):pointInstructions;
- const wholeFilmOutput=selection?wholeFilmInstructions.replace(',source_quote,',',')
-  .replace('evidence_id 和 source_quote 均填 null','evidence_id 填 null'):wholeFilmInstructions;
+ const wholeFilm=source.confirmedGroups
+  ?' 编辑已确认 confirmedGroups，只核对现行组是否兑现。输出 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。ok 时引用主讲点自己的原片证据，affected_unit_ids 为空。新增方向只记在 alternative，注明未采用。fix 或 unresolved 必须是已确认决定漏讲或事实边界违背，填 finding_kind:"confirmed_gap"，每个受影响组填 baseline_criteria:[{unit_id,point_id,field:"decision"或"claim_limit",evidence_id}]。每组选择本点已登记原片证据，总评 evidence_id 也须在其中。无法核清填 unresolved，没有可引证据时 evidence_id 和 source_quote 均填 null。当前事实问题不能记成新选题。'
+  :wholeFilmInstructions;
+ const wholeFilmOutput=selection?wholeFilm.replace(',source_quote,',',')
+  .replace('evidence_id 和 source_quote 均填 null','evidence_id 填 null'):wholeFilm;
  const feedbackInstructions=legacyReceipt
   ?'若有 feedback 原话，区分仅改措辞/版式与选题、功能或购买理由错误；后者标 baseline。首次收到要求改变选题的意见（rebuilding=false）时列出需重做的组；已经重选点（rebuilding=true）才核对各组是否兑现。原话中还有其他要求时一并保留，勿改写用户范围。'
   :source.feedback?'按 feedback 原话判断是否必须重做选题、功能或购买理由；须重做时将 feedback_requires_baseline 填 true，并列出有原片依据的退回项。仅改措辞或版式填 false。rebuilding=true 时核对已重选的教学能否兑现意见；保留其中其他要求。':'';
@@ -858,6 +902,7 @@ function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireN
   :'只读核验教学选题，不审稿。';
 
  return reviewInstructions(opening,feedbackInstructions,feedbackOutput)+(source.pointReview?wholeFilmOutput+(source.sourceClosing.factOnly?'':'收尾处置与 sourceClosing 不一致判 fix，证据决定结论且无法核清则判 unresolved。')+pointOutput:'')
+
  +(source.frozenTopics?' 核对实际讲解对象、引用和原片能支持的结论。仅因换窗、增加原先未选的镜头或发现另一处可以讲，不得退回。新增方向留在 alternative；只有现行方案的证据错误或真正漏讲才返回 fix，并指明实际内容和依据。':'')
  +(source.sourceClosing.factOnly?' 任务声明已记录原片弱促单事实。缺少重复注记、回放或讲解无需退回。若实际选题把弱促单升格或补写确定推荐，按内容判 fix，引用出错内容和原片依据。'
  :source.frozenTopics?' whole_film.frozen_topic_checks 填 {closing_status:"pass"|"fail"}。按 sourceClosing 核对实际收尾、证据和处置。总评在 reason 中说明具体问题。'

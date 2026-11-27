@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import {
   buildPreviewReviewRequest, previewReviewIdentity, reviewClipMentorPreview, validatePreviewReviewInput,
-  PREVIEW_REVIEW_ENDPOINT,
+  PREVIEW_REVIEW_ENDPOINT, previewReviewFormats, type PreviewReviewFormat,
 } from './preview-review.ts';
 import { postSourceVideoTransport, SourceVideoTransportError } from './source-video-transport.ts';
 import {atomicWriteFile} from '../plugins/project-store-durable.ts';
@@ -37,11 +37,9 @@ const file=resolve(options['--video']);
 const videoHash=await sha256File(file), videoBytes=(await stat(file)).size;
 const sourceBindingMatches=options['--expected-video-sha256']===undefined||videoHash===options['--expected-video-sha256'];
 const input = validatePreviewReviewInput(JSON.parse(await readFile(resolve(options['--input']), 'utf8')));
-const prepared = previewReviewIdentity(videoHash, videoBytes, input); // Preflight before reserving or incurring charges.
 const output = resolve(options['--out']);
 await mkdir(dirname(output), { recursive: true, mode: 0o700 });
 const ledger = join(dirname(output), `${options['--operation']}.operation.json`);
-const fingerprint = createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT + prepared.version + prepared.logical_request_sha256).digest('hex');
 const account = createHash('sha256').update(key).digest('hex');
 const release=tryLocalOperationLock(ledger+'.owner');
 if(!release)throw Error('Preview review operation is in progress');
@@ -50,15 +48,28 @@ try{await review();}finally{release();}
 async function review(){
 const outputExists=await access(output).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;});
 const original=await readFile(ledger,'utf8').catch(error=>{if(error.code==='ENOENT')return;throw error;});
-if(original===undefined){
+const prior=original===undefined?undefined:JSON.parse(original);
+if(prior&&!sourceBindingMatches)throw Error('Preview source binding mismatch; no request sent');
+const priorVideo=prior&&prior.identity_version!=='video-logical-v1'?await readFile(file):undefined;
+function locateRequest(format:PreviewReviewFormat){
+  const prepared=previewReviewIdentity(videoHash,videoBytes,input,format);
+  const request=priorVideo?buildPreviewReviewRequest(priorVideo,input,format).request_sha256:prepared.logical_request_sha256;
+  const fingerprint=createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+prepared.version+request).digest('hex');
+  return {format,prepared,fingerprint};
+}
+// Preflight before reserving or incurring charges. Stop at the first historical match.
+let bound:ReturnType<typeof locateRequest>|undefined;
+if(!prior)bound=locateRequest(previewReviewFormats[0]);
+else for(const format of previewReviewFormats){
+  try{const candidate=locateRequest(format);if(candidate.fingerprint===prior.fingerprint){bound=candidate;break;}}
+  catch{/* A historical smaller request can still match. */}
+}
+if(!bound)throw Error('Operation belongs to different review input');
+const {format,prepared,fingerprint}=bound;
+if(!prior){
   if(outputExists)throw Error('Output already exists; no request sent');
   await publishOperationPreparation(ledger,{identity_version:'video-logical-v1',fingerprint,account,model_retry_policy:'no_automatic_retry'});
 }else{
-  if(!sourceBindingMatches)throw Error('Preview source binding mismatch; no request sent');
-  const prior=JSON.parse(original);
-  const expected=prior.identity_version==='video-logical-v1'?fingerprint:
-    createHash('sha256').update(PREVIEW_REVIEW_ENDPOINT+prepared.version+buildPreviewReviewRequest(await readFile(file),input).request_sha256).digest('hex');
-  if(prior.fingerprint!==expected)throw Error('Operation belongs to different review input');
   if(prior.status==='completed'){
     console.log(JSON.stringify({status:'cached',output:prior.output,requests_sent:0}));
     return;
@@ -73,12 +84,12 @@ try {
   if(!sourceBindingMatches)throw new VideoMediaError('local_read','host_source_hash_mismatch');
   const media = await prepareVideoMedia(resolve(options['--video']), prepared.video_sha256, signal);
   mediaTransfer=media.receipt;
-  const result = await reviewClipMentorPreview(media, input, { key, signal, post: async (body, credential, signal) => {
+  const result = await reviewClipMentorPreview(media, input, { key, signal, format, post: async (body, credential, signal) => {
     signal.throwIfAborted();
     attempts=1;
     await atomicWriteFile(ledger, JSON.stringify({ status:'reserved',identity_version:'video-logical-v1',fingerprint,requests_attempted:attempts,model_retry_policy:'no_automatic_retry',media_transfer:mediaTransfer }));
     try {
-      const {body:_wire,input:_frozenInput,...requestInfo}=buildPreviewReviewRequest(media,input);
+      const {body:_wire,input:_frozenInput,...requestInfo}=buildPreviewReviewRequest(media,input,format);
       const archived=await externalCall({directory:dirname(output),kind:'video',purpose:'preview-continuous-review-v1',requestId:options['--operation'],
         identity:{operation:options['--operation'],fingerprint},signal,preserveErrors:true,
         execute:async childSignal=>{const r=await postSourceVideoTransport(body,credential,childSignal,options['--operation'],tmpdir());

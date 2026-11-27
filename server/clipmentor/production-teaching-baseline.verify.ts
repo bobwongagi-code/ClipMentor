@@ -1078,6 +1078,33 @@ try{
  selectedWrongPoint.units[0].point_checks[0].source_evidence_id=unrelatedSameWindow.id;
  assert.throws(()=>validateTeachingBaselineReview(selectedWrongPoint,{...strictPositive,
   evidence:[...strictPositive.evidence,unrelatedSameWindow]}),/evidence_selected_for_this_point/);
+ const {wholeFilmIssue}=await import('./production-teaching-baseline');
+ // Same known-good fixture, with the exact groups now explicitly approved.
+ {
+  const approved=strictPositive.units.map(unit=>({id:unit.unit_id,decision:'Preserve the confirmed demonstration.',
+   points:unit.points.map(point=>({id:point.point_id,question:point.teaching_question,treatment:'explain',
+    boundary:point.teaching_basis?.claim_limit}))}));
+  const scoped={...strictPositive,confirmedGroups:approved};
+  const main=selectedReceipt.whole_film.main_point_id;
+  const unit=scoped.units.find(unit=>unit.points.some(point=>point.point_id===main))!;
+  const formal={...selectedReceipt.whole_film,status:'fix',affected_unit_ids:[unit.unit_id]};
+  const suggestion={...selectedReceipt,whole_film:{...formal,finding_kind:'new_topic'}};
+  const read=validateTeachingBaselineReview(suggestion,scoped);
+  assert.equal(read.whole_film?.status,'fix','the original verdict stays in the receipt');
+  assert.equal(wholeFilmIssue(read.whole_film),undefined,'a different teaching topic is not a repair');
+  assert.equal(teachingRebuild(scoped,old,read).wholeFilm,undefined);
+  assert.deepEqual(validateTeachingBaselineReview(read,scoped),read);
+  assert.throws(()=>validateTeachingBaselineReview({...selectedReceipt,whole_film:formal},scoped),/confirmed_criterion_invalid/);
+  const anchor={unit_id:unit.unit_id,point_id:main,field:'claim_limit',evidence_id:formal.evidence_id};
+  const factual={...selectedReceipt,whole_film:{...formal,finding_kind:'confirmed_gap',baseline_criteria:[anchor],
+   reason:'The approved boundary does not allow saying the color was already applied.'}};
+  const factualRead=validateTeachingBaselineReview(factual,scoped);
+  assert.match(wholeFilmIssue(factualRead.whole_film)??'',/already applied/);
+  assert.deepEqual(teachingRebuild(scoped,old,factualRead).wholeFilm?.unitIds,[unit.unit_id]);
+  for(const changed of [{...anchor,unit_id:'other-group'},{...anchor,point_id:'other-point'},{...anchor,evidence_id:'wrong-evidence'}])
+   assert.throws(()=>validateTeachingBaselineReview({...factual,whole_film:{...factual.whole_film,baseline_criteria:[changed]}},scoped),/confirmed_criterion_invalid/);
+  assert.throws(()=>validateTeachingBaselineReview({...factual,whole_film:{...factual.whole_film,evidence_id:'wrong-evidence'}},scoped),/original_source_evidence/);
+ }
  const requiredDecision={category:'teaching_decision' as const,text:'Retain the confirmed demonstration decision.',
   source:{who:'editor',reference:'confirmed fixture'},rationale:'Retain its teaching role.',reconsiderWhen:'Editor revises the plan.',
   confirmedDecisionId:'fixture-demonstration'};
@@ -1453,6 +1480,10 @@ try{
  const approval:NonNullable<ProductionTask['blueprintApproval']>={sourceProjectId:otherStrict.projectId,sourceTaskId:otherStrict.taskId,sourceRevision:otherStrict.projectRevision!,
   digest:(await copyReviewSubject(other)).digest,requirementsDigest:'a'.repeat(64),confirmedAt:Date.now(),confirmedTeachingDigest:basisDigest};
  resumed.blueprintApproval=approval;
+ const missingScope={...resumed,stage:'copy_review' as const};
+ await assert.rejects(productionStageWorker(missingScope,{signal:new AbortController().signal,
+  async effect(){throw Error('provider called');}}),/production_confirmed_groups_missing/);
+
  const mutated=structuredClone(other);
  mutated.clipMentorAnalysis!.source_breakdown!.points[0].teaching_question='某次返修把共同教学问题改成了另外一件事？';
  await setStoredEntry('project:'+resumed.projectId,mutated);

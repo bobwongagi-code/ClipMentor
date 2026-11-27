@@ -19,7 +19,8 @@ import type {ReviewApiConfig} from './copy-review-api';
 import {openingComparisonCriterion,openingComparisonShape,parseProductionSourceCriteria,sourcePerformanceCriterion,visualDoneCriteria,type HandoffPolicy,type OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {frozenTeachingTopics} from './production-source-policy';
 import {assertFinalPreviewEvidence} from './production-preview-facts';
-import {previewAlignmentFindingKeys,previewAlignmentRepairPause} from './preview-review';
+import {previewAlignmentFindingKeys,previewAlignmentRepairPause,previewReviewRepairBlock} from './preview-review';
+import {productionDeadline} from './production-preview-retry';
 import {productionDeliverables} from './production-deliverables';
 import {feedbackProjectDigest,matchesExportedPreviewProject} from './production-feedback';
 import {sha256File} from '../../shared/node-content-hash';
@@ -76,7 +77,8 @@ export interface TeachingAnalysisPublication {
  baseRevision:string;revision:string;repairEpoch:number;inputDigest:string;outputDigest:string;artifact:Record<string,unknown>;
  analysis:NonNullable<ProjectDoc['clipMentorAnalysis']>;
 }
-export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[];sourceAdviceSeparated?:true};
+export type FrozenTeachingBrief={instruction:string;objective?:string;feedback?:string;doneCriteria?:string[];sourceAdviceSeparated?:true;
+ confirmedGroups?:Array<{id:string;decision?:string;firstGlance?:string;points:Array<{id:string;question:string;boundary?:string;treatment:string}>}>};
 type OriginalEffectKind=Exclude<EffectKind,'preview_review'>;
 type EffectCounts=Record<OriginalEffectKind,number>&Partial<Record<'preview_review',number>>;
 export interface ProductionInput {
@@ -98,7 +100,8 @@ export interface ProductionTask {
  productionChild?:{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'};
  productionChildren?:Array<{projectId:string;taskId:string;audience:'new_contact'|'existing_partner'}>;
  sharedProduction?:{projectId:string;taskId:string;prepared?:true;endFrame?:number;digest?:string};
- blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;confirmedAt:number};
+ previewReviewRetry?:{operationId:string;priorOperationId:string;renderId:string;videoSha256:string;reason:string;authorizedAt:number};
+ blueprintApproval?:{sourceProjectId:string;sourceTaskId:string;sourceRevision:string;digest:string;requirementsDigest:string;requirements?:HandoffPolicy;teachingBrief?:FrozenTeachingBrief;confirmedTeachingDigest?:string;openingPictureAdjustment?:{before:string;after:string};confirmedAt:number};
  blueprintReview?:BlueprintReviewRecord;
  finalAcceptance?:{renderId:string;watched:true;malayReviewed:true;confirmedAt:number};
  version:1;taskId:string;projectId:string;input:ProductionInput;stage:ProductionStage;
@@ -117,6 +120,7 @@ export interface ProductionTask {
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;
  effects:Record<string,{kind:EffectKind;operationId:string;status:'reserved'|'completed'|'failed';result?:unknown;error?:string;transportUnsubmitted?:true}>;
  attempts:EffectCounts;error?:string;projectRevision?:string;repairContext?:Record<string,unknown>;
+ approvedSourceReadRecovered?:true;
  editPublication?:EditPublication;
  teachingAnalysisPublication?:TeachingAnalysisPublication;
 }
@@ -279,12 +283,46 @@ export async function productionReviewRequirements(projectId:string){
  const {readHandoffPolicy}=await import('./handoff');
  return await readHandoffPolicy(projectId)??(await latestPanelProductionTask(projectId))?.blueprintApproval?.requirements??null;
 }
+export function confirmedGroupsFromBlueprint(doc:ProjectDoc):FrozenTeachingBrief['confirmedGroups']{
+ const analysis=doc.clipMentorAnalysis,breakdown=analysis?.source_breakdown;
+ if(!breakdown)return;
+ const units=analysis.blueprint.map(entry=>breakdown.units.find(unit=>unit.unit_id===entry.unit_id));
+ if(units.length!==breakdown.units.length||!units.every(unit=>unit!==undefined)||new Set(units).size!==units.length)return;
+ return units.map(unit=>({id:unit.unit_id,
+  ...(unit.teaching_selection?.decision?{decision:unit.teaching_selection.decision}:{}),
+  ...(unit.teaching_selection?.first_glance?{firstGlance:unit.teaching_selection.first_glance}:{}),
+  points:unit.coverage.flatMap(({point_id,treatment})=>{
+   const point=breakdown.points.find(p=>p.point_id===point_id);
+   return point?[{id:point_id,question:point.teaching_question,treatment,
+    ...(point.teaching_basis?.claim_limit?{boundary:point.teaching_basis.claim_limit}:{})}]:[];
+  })}));
+}
+
+/** A confirmed output cannot be reviewed against a fresh or partial selection. */
+export function assertConfirmedReviewGroups(task:ProductionTask|undefined,approvedDoc?:ProjectDoc){
+ if(!task?.blueprintApproval||!task.input.panelDelivery?.audience||
+  task.input.panelDelivery.editorialPolicy!=='exemplar-v1')return;
+ const groups=task.blueprintApproval.teachingBrief?.confirmedGroups;
+ if(!Array.isArray(groups)||!groups.length)throw Error('production_confirmed_groups_missing');
+ if(approvedDoc&&digestValue(groups)!==digestValue(confirmedGroupsFromBlueprint(approvedDoc)))
+  throw Error('production_confirmed_groups_changed');
+}
+
 export async function productionCopyRequirements(projectId:string){
  const {readHandoffPolicy}=await import('./handoff');
  const saved=await readHandoffPolicy(projectId),task=await latestPanelProductionTask(projectId);
+ assertConfirmedReviewGroups(task);
+ if(task?.blueprintApproval?.teachingBrief?.confirmedGroups?.length){
+  const original=await loadOfflineStoredProject(task.blueprintApproval.sourceProjectId);
+  if(original?.revision!==task.blueprintApproval.sourceRevision)throw Error('production_confirmed_blueprint_source_stale');
+  assertConfirmedReviewGroups(task,original.doc);
+ }
  const policy=saved??task?.blueprintApproval?.requirements??null;
  const doc=task?.input.panelDelivery
   ?(await loadOfflineStoredProject(projectId))?.doc:undefined;
+ if(task?.blueprintApproval?.teachingBrief?.confirmedGroups?.length&&!doc)
+  throw Error('production_confirmed_groups_changed');
+ assertConfirmedReviewGroups(task,doc);
  const opening=productionOpeningComparison(task,policy,doc);
  return {policy,opening,teachingBrief:productionTeachingBrief(task,policy,doc),
   endingPictures:task?.input.panelDelivery?.editorialPolicy==='exemplar-v1'};
@@ -300,8 +338,10 @@ export function productionTeachingBrief(task:ProductionTask|undefined,policy:Han
  // approvals freeze the viewed teaching without importing advice as criteria.
  const historicalRequest=doc&&!frozen.sourceAdviceSeparated?frozenTeachingTopics(doc,task)?.quote:undefined;
  const doneCriteria=[...new Set(historicalRequest?[historicalRequest,...criteria]:criteria)];
+ const confirmedGroups=frozen.confirmedGroups;
  return {instruction:frozen.instruction,...(objective!==undefined?{objective}:{}),
-  ...(frozen.feedback!==undefined?{feedback:frozen.feedback}:{}),...(doneCriteria.length?{doneCriteria}:{})};
+  ...(frozen.feedback!==undefined?{feedback:frozen.feedback}:{}),...(doneCriteria.length?{doneCriteria}:{}),
+  ...(confirmedGroups?.length?{confirmedGroups}:{})};
 }
 
 export function productionOpeningComparison(task:ProductionTask|null|undefined,policy:HandoffPolicy|null|undefined,doc:ProjectDoc|undefined){
@@ -521,7 +561,7 @@ export interface StageContext {
  checkpointEditPublication?(publication:EditPublication):Promise<void>;
  checkpointTeachingAnalysis?(publication:TeachingAnalysisPublication):Promise<void>;
 }
-export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';awaitBlueprintFeedback?:true}
+export interface StageResult {artifact:Record<string,unknown>;repair?:'analysis'|'blueprint'|'edit'|'copy_review';pause?:string;awaitBlueprintFeedback?:true}
 export type StageWorker=(task:ProductionTask,ctx:StageContext)=>Promise<StageResult>;
 
 async function checkedHumanBlueprint(task:ProductionTask){
@@ -581,7 +621,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    restoreSafe();throw error;
   }
  };
- const deadline=task.createdAt+task.input.budget.maxElapsedMs;
+ const deadline=productionDeadline(task);
  const timer=setTimeout(()=>abort.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-now()));
  const check=()=>{abort.signal.throwIfAborted();if(now()>=deadline)throw new Error('Production deadline exceeded');};
  // Older tasks may already have split counters while still keeping review-kind
@@ -619,7 +659,9 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   if(activeEffects.has(id))throw Error('production_effect_in_progress');
   activeEffects.add(id);
   try{
-  const decision=productionEffectDecision(old,!!recover,remaining(kind));
+  const authorized=kind==='preview_review'&&task.stage==='self_check'&&name===task.previewReviewRetry?.operationId
+   &&task.completed.export?.artifact.renderId===task.previewReviewRetry.renderId;
+  const decision=productionEffectDecision(old,!!recover,authorized?1:remaining(kind));
   if(decision.action!=='submit'){
    await recordProductionDecision(task,{scope:'effect',...decision,effectKey:id,...(old?{operationId:old.operationId}:{})});
    check();
@@ -655,6 +697,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    if(task.completed[task.stage]){index++;continue;}
    const result=await worker(task,ctx);check();await published();check();
    if(typeof result.artifact?.revision==='string')task.projectRevision=result.artifact.revision;
+   if(result.pause){task.repairContext=productionRepairContext(task.repairContext,result.artifact);throw new Error(result.pause);}
    if(result.repair){
     const issue=result.artifact.blueprint_structure_issue;
     let pause:string|undefined;
@@ -664,7 +707,8 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      pause=await structuralRepairPause(task,issue,source?.asset_id===task.input.sourceAssetId&&saved?.revision===task.projectRevision
       ?source.sourceContentHash:undefined);
     }
-    if(task.stage==='self_check')pause=previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt);
+    if(task.stage==='self_check')pause=previewAlignmentRepairPause(task.repairContext?.preview_alignment_findings,result.artifact.receipt)
+     ??previewReviewRepairBlock(result.artifact.receipt);
     const executionError=result.artifact.execution_validation_error;
     if(task.stage==='edit'&&typeof executionError==='string'&&executionError===task.repairContext?.execution_validation_error)
      pause='execution_mapping_repair_no_progress 待维护侧核对 '+executionError;
@@ -739,6 +783,13 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
      throw new Error('human_blueprint_verified_receipts_missing');
     humanApprovalRequired=!task.blueprintApproval||task.blueprintApproval.digest!==result.artifact.blueprint_digest
      ||typeof task.blueprintApproval.requirementsDigest!=='string'||task.blueprintApproval.requirementsDigest!==result.artifact.requirementsDigest;
+    if(humanApprovalRequired&&task.blueprintApproval?.requirementsDigest===result.artifact.requirementsDigest
+     &&task.blueprintApproval?.teachingBrief?.confirmedGroups?.length){
+     const {doc,guard}=await checkedHumanBlueprint(task);
+     const {confirmedProductionRefinement}=await import('./production-continuation');
+     const approvalGuard=await confirmedProductionRefinement(task,doc);
+     if(approvalGuard){humanApprovalRequired=false;reviewGuards=[guard,approvalGuard];}
+    }
     if(humanApprovalRequired&&task.blueprintOpinions&&!task.repairContext?.pending_blueprint_feedback){
      const {guard}=await checkedHumanBlueprint(task);
      reviewGuards=[guard];
@@ -756,7 +807,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    if(humanApprovalRequired){
     task.status='awaiting_blueprint';await publishStage(reviewGuards);break;
    }
-   await publishStage();index++;
+   await publishStage(reviewGuards);index++;
   }
   if(task.status==='running'){task.status='awaiting_review';await publishStage();}
   if(abort.signal.aborted&&String(abort.signal.reason).includes('cancelled by user'))abort.signal.throwIfAborted();
@@ -777,7 +828,7 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
  reconcile:(task:ProductionTask)=>Promise<void>,store=productionTaskStore,prepare?:(signal:AbortSignal)=>Promise<boolean>){
  return withProductionExecution(task,async controller=>{
   const advance=()=>advanceWithinExecution(task,worker,store,Date.now,controller);
-  const deadline=task.createdAt+task.input.budget.maxElapsedMs;
+  const deadline=productionDeadline(task);
   const timer=setTimeout(()=>controller.abort(new Error('Production deadline exceeded')),Math.max(0,deadline-Date.now()));
   try{
   if(blueprintRepairStopped(task)||['completed','cancelled','awaiting_blueprint','awaiting_review'].includes(task.status))return task;
@@ -802,7 +853,7 @@ export async function runProductionWithRecovery(task:ProductionTask,worker:Stage
   while(task.status==='blocked'&&!blueprintRepairStopped(task)){
    const from={stage:task.stage,repairs:task.repairs};
    const stop=(reason:'cancelled_or_expired'|'checkpoint_unpersisted'|'no_verified_progress')=>recordProductionDecision(task,{scope:'recovery',action:'stop',reason,fromStage:from.stage,fromEpoch:from.repairs});
-   if(controller.signal.aborted||Date.now()>=task.createdAt+task.input.budget.maxElapsedMs){await stop('cancelled_or_expired');return advance();}
+   if(controller.signal.aborted||Date.now()>=productionDeadline(task)){await stop('cancelled_or_expired');return advance();}
    if(task.error?.includes('checkpoint_write_failed:')){await stop('checkpoint_unpersisted');return task;}
    const repaired=structuredClone(task);
    try{

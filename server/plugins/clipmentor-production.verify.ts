@@ -28,7 +28,17 @@ resetSharedKvMemory();resetAgentRuntimeStoreMemory();resetServerRunStoreForTest(
 let release!:()=>void,started!:()=>void;
 const blocked=new Promise<void>(r=>{release=r;}),entered=new Promise<void>(r=>{started=r;});
 const steps:string[]=[],batchSteps:string[]=[];
-const plugin=clipMentorProductionPlugin(async(t)=>{if(t.sharedProduction?.prepared){batchSteps.push(`${t.input.panelDelivery?.audience}:${t.stage}`);return {artifact:{revision:t.projectRevision,blueprint_digest:t.blueprintApproval!.digest,requirementsDigest:t.blueprintApproval!.requirementsDigest,authorSelfCheck:'passed',gate:{allowed:true},panelDeliveryVerified:true,fixtureOnly:true}};}steps.push(t.stage);if(t.stage==='analysis'){started();await blocked;}return {artifact:{verifiedFixture:true}};});
+let previewRetryRequests=0;
+const plugin=clipMentorProductionPlugin(async(t,ctx)=>{
+ if(t.previewReviewRetry){
+  assert.equal(t.stage,'self_check');
+  assert.equal(t.completed.export?.artifact.renderId,t.previewReviewRetry.renderId);
+  await ctx.effect('preview_review',t.previewReviewRetry.operationId,async()=>++previewRetryRequests);
+  return {artifact:{receipt:{fixtureOnly:true}},pause:'preview_review_receipt_unavailable'};
+ }
+ if(t.sharedProduction?.prepared){batchSteps.push(`${t.input.panelDelivery?.audience}:${t.stage}`);return {artifact:{revision:t.projectRevision,blueprint_digest:t.blueprintApproval!.digest,requirementsDigest:t.blueprintApproval!.requirementsDigest,authorSelfCheck:'passed',gate:{allowed:true},panelDeliveryVerified:true,fixtureOnly:true}};}
+ steps.push(t.stage);if(t.stage==='analysis'){started();await blocked;}return {artifact:{verifiedFixture:true}};
+});
 const app=createMiniConnect(e=>{throw e;});
 const server=createServer((req,res)=>app.handle(req,res));server.listen(0,'127.0.0.1');await once(server,'listening');
 const address=server.address();assert(address&&typeof address==='object');const origin=`http://127.0.0.1:${address.port}`;
@@ -117,6 +127,43 @@ try{
    assert.equal((await readCurrentTask(input.projectId,created.taskId)).status,'completed','a launch read failure cannot rewrite a newer terminal checkpoint');
    assert.equal(steps.length,stepsBeforeStaleLaunch);
   }finally{pending.resolve();productionTaskStore.load=readCurrentTask;}
+ }
+ {
+  const projectId='preview-retry-fixture';
+  const {setStoredEntry}=await import('./project-store');
+  const {projectDoc}=await import('../external-agent/offline-runtime.verify-fixtures');
+  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
+  const {uploadDir}=await import('../media-dir');
+  await setStoredEntry('project:'+projectId,projectDoc());
+  const bytes=Buffer.from('fixture render identity'),filename='fixture-preview-retry.mp4';
+  const videoSha256=createHash('sha256').update(bytes).digest('hex');
+  await mkdir(uploadDir(),{recursive:true});await writeFile(join(uploadDir(),filename),bytes);
+  const saved=await createProductionTask({...input,projectId,author:{...input.author,origin},reviewer:{...input.reviewer,origin},budget:{...input.budget,preview_review:1}} as Parameters<typeof createProductionTask>[0]);
+  const priorOperationId='24d661a2-372f-4001-89b8-e611ee1ad7a8',renderId='fixture-saved-render';
+  saved.status='blocked';saved.stage='self_check';saved.createdAt=1;saved.projectRevision=(await loadOfflineStoredProject(projectId))!.revision;
+  saved.completed.export={at:2,artifact:{path:'/media/uploads/'+filename,renderId,revision:saved.projectRevision}};
+  saved.attempts.preview_review=1;
+  saved.effects['self_check:initial:0:'+priorOperationId]={kind:'preview_review',operationId:priorOperationId,status:'completed',
+   result:{body:{status:'failed',receipt_persisted:true,projectId,operationId:priorOperationId,videoSha256}}};
+  await productionTaskStore.save(saved);
+  const before=await productionTaskStore.load(projectId,saved.taskId);
+  const retry={action:'retry_preview_review',projectId,taskId:saved.taskId,renderId,videoSha256,priorOperationId,sequence:before.sequence,confirmed:true,reason:'One extra fixture review'};
+  assert.equal((await post(retry,false)).status,403);
+  assert.equal((await post({...retry,videoSha256:'a'.repeat(64)})).status,409);
+  assert.equal((await post({...retry,confirmed:false})).status,409);
+  const responses=await Promise.all([post(retry),post(retry)]);
+  assert.deepEqual(responses.map(response=>response.status).sort(),[202,409]);
+  let after=before;
+  for(let i=0;i<200;i++){
+   after=await productionTaskStore.load(projectId,saved.taskId);
+   if(after.error==='Error: preview_review_receipt_unavailable')break;
+   await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  assert.equal(previewRetryRequests,1);assert.equal(after.error,'Error: preview_review_receipt_unavailable');
+  assert.equal(after.attempts.preview_review,2);assert.equal(after.attempts.render,0);
+  assert.equal(after.completed.export?.artifact.renderId,renderId);
+  assert.equal(after.previewReviewRetry?.reason,retry.reason);
+  assert.equal((await post({...retry,sequence:after.sequence})).status,409);
  }
  const panelTask=await createProductionTask({...input,author:{...input.author,origin},reviewer:{...input.reviewer,origin},humanBlueprintReview:true} as Parameters<typeof createProductionTask>[0]);
  const panelGet=async()=>await (await fetch(`${origin}/api/clipmentor/production-task?view=panel&projectId=${input.projectId}`,{headers:{Origin:origin,'Sec-Fetch-Site':'same-origin'}})).json();

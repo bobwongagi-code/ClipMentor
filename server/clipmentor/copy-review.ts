@@ -1,13 +1,13 @@
 import {externalCall,readSavedExternalResponse} from './external-call';
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
-import {deliveryReview} from '../../src/clipmentor/delivery-sections';
+import {deliveryReview,deliveryReviewCriteria} from '../../src/clipmentor/delivery-sections';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CopyReviewRequest, CopyReviewResult, CopyReviewFailure } from '../../shared/clipmentor-copy-review';
 import { COPY_REVIEW_INPUT_POLICY, COPY_REVIEW_FAILURES, isCopyReviewFailure } from '../../shared/clipmentor-copy-review';
-import { assessTeachingReview, buildCopyTeachingReviewRequest, COPY_REVIEW_PROTOCOL, isCopyProductionReview,
+import { plannedGroupVisualReferences, assessTeachingReview, buildCopyTeachingReviewRequest, COPY_REVIEW_PROTOCOL, isCopyProductionReview,
   type CopyProductionReview, type TeachingEnvelope, assessNarrationChecks, assessGroupReview, normalizeGroupReview, GroupReviewContractError, checkCopyFindingQuotes } from '../../src/clipmentor/production-gate';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import {isResumablePreparation,publishOperationPreparation,tryLocalOperationLock} from './local-operation-lock';
@@ -54,6 +54,7 @@ export interface CopyReviewDependencies {
   frame(file: string, seconds: number, output: string, crop?: FrameCrop): Promise<string>;
   visualCriteria?(projectId:string):Promise<BoundVisualCriteria|undefined>;
   requirements?(projectId:string):Promise<{policy:HandoffPolicy|null;opening?:OpeningComparisonCriterion;teachingBrief?:FrozenTeachingBrief;endingPictures?:boolean}>;
+  sharedBodyReview?(projectId:string):ReturnType<typeof import('./production-continuation').loadSharedCopyReview>;
   run(prompt: string, frames: ReviewFrame[], runId: string, projectId: string, signal: AbortSignal, preparationIdentity?:string): Promise<unknown>;
 }
 
@@ -152,10 +153,20 @@ export function fitReviewSourceSamples<T extends {unit_id:string;phase:'context'
   return packed;
 }
 
-type ContentReview = {opening?:OpeningComparisonCriterion;openingDigest?:string;teachingBrief?:FrozenTeachingBrief;teachingDigest?:string;endingPictures?:true};
-async function reviewRequirements(deps:CopyReviewDependencies,projectId:string){
+type ReusedBody = {
+  producerReviewId:string;producerDigest:string;
+  units:CopyProductionReview['units'];teaching:TeachingEnvelope['review']['units'];
+  openingChecks:unknown[];visualChecks:NonNullable<CopyProductionReview['visual_criteria_checks']>;
+};
+type ContentReview = {reusedBody?:ReusedBody;opening?:OpeningComparisonCriterion;openingDigest?:string;teachingBrief?:FrozenTeachingBrief;teachingDigest?:string;endingPictures?:true};
+async function reviewRequirements(deps:CopyReviewDependencies,projectId:string,operationId?:string){
   if(!deps.requirements)return {visual:await deps.visualCriteria?.(projectId),content:undefined};
-  const {policy,opening,teachingBrief,endingPictures}=await deps.requirements(projectId);
+  const {policy,opening,teachingBrief,endingPictures}=await deps.requirements(projectId).catch(error=>{
+    const code=error instanceof Error?error.message:undefined;
+    if(code==='production_confirmed_groups_missing'||code==='production_confirmed_groups_changed')
+      throw failure(code,0,operationId);
+    throw error;
+  });
   const content:ContentReview={...(opening?{opening,openingDigest:await handoffDigest(opening)}:{}),
     ...(teachingBrief?{teachingBrief,teachingDigest:await handoffDigest(teachingBrief)}:{}),
     ...(endingPictures?{endingPictures:true}:{})};
@@ -169,9 +180,73 @@ async function currentReviewContractMatches(deps:CopyReviewDependencies,projectI
     &&content?.teachingDigest===teachingDigest&&content?.endingPictures===endingPictures;
 }
 
-function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,mode:false|'legacy-selection'|'selection-v1'=false): string {
-  const selection=mode==='selection-v1';
-  const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }],selection);
+async function reusableBody(request:CopyReviewRequest,deps:CopyReviewDependencies,
+ criteria:BoundVisualCriteria|undefined,content:ContentReview|undefined):Promise<ReusedBody|undefined>{
+ if(!content?.teachingBrief?.confirmedGroups?.length)return;
+ const former=await deps.sharedBodyReview?.(request.projectId);
+ if(!former)return;
+ const {receipt,briefing,source,sourceSrc}=former;
+ const previous=receipt.teaching_review;
+ const shared=({delivery_sections,...packet}:CopyReviewRequest['packet'])=>({
+  ...packet,delivery_sections:delivery_sections?.filter(section=>section.kind==='performance_opening'),
+ });
+ const sections=request.packet.delivery_sections??[];
+ const endings=sections.filter(section=>section.kind==='creator_invitation');
+ if(!previous||receipt.verdict!=='pass'||receipt.teaching_brief_digest!==content.teachingDigest
+  ||digestValue(briefing)!==digestValue(content.teachingBrief)||receipt.opening_comparison_digest!==content.openingDigest
+  ||request.source.hash!==source.sourceContentHash||request.source.src!==sourceSrc
+  ||request.source.fps!==source.fps||request.source.duration!==source.duration_seconds
+  ||digestValue(shared(previous.packet))!==digestValue(shared(request.packet))
+  ||endings.length!==1||endings[0].section_id!=='new_contact'||sections.length!==2)return;
+ const opening=sections.find(section=>section.kind==='performance_opening')!;
+ const reusedVisual=criteria?.entries.filter(({criterion})=>criterion.sectionId===opening.section_id)??[];
+ const visualChecks=reusedVisual.flatMap(entry=>{
+  if(!former.visual?.entries.some(candidate=>digestValue(candidate)===digestValue(entry)))return [];
+  const check=receipt.visual_criteria_checks?.find(check=>check.id===entry.criterion.id&&check.answer==='yes');
+  return check?[check]:[];
+ });
+ if(visualChecks.length!==reusedVisual.length)return;
+ const bindings=[opening.picture,...(opening.voice.existing_audio?[opening.voice.existing_audio]:[]),
+  ...reusedVisual.map(entry=>({src:entry.src,sha256:entry.sha}))];
+ for(const binding of bindings){
+  const file=deps.resolve(decodeURIComponent(binding.src.slice('/media/uploads/'.length)));
+  if(!file||await deps.hash(file).catch(()=>null)!==binding.sha256)
+   throw failure('source_unavailable_or_changed',0,request.operationId);
+ }
+ return {producerReviewId:receipt.reviewer_run_id,producerDigest:receipt.content_digest,
+  units:receipt.units,teaching:previous.review.units,visualChecks,
+  openingChecks:receipt.delivery_checks?.filter(check=>object(check)&&check.section_id===opening.section_id)??[]};
+}
+
+function endingReviewCriteria(criteria:BoundVisualCriteria|undefined,reused:ReusedBody|undefined){
+ if(!reused||!criteria)return criteria;
+ const entries=criteria.entries.filter(entry=>!reused.visualChecks.some(check=>check.id===entry.criterion.id));
+ return entries.length?{...criteria,entries}:undefined;
+}
+
+function endingReviewPrompt(request:CopyReviewRequest,criteria:BoundVisualCriteria|undefined,reused:ReusedBody,
+ confirmedGroups:FrozenTeachingBrief['confirmedGroups'],inlineFrames:boolean){
+ const scoped=request.packet.delivery_sections!.filter(section=>section.kind==='creator_invitation');
+ const projected=buildCopyTeachingReviewRequest([{case_id:'current',packet:request.packet}]).input.cases[0].packet;
+ return '本轮只独立复核新建联片尾。共用正文和片头已有与现行材料一致的独立回执。\n'
+  +(inlineFrames?'片尾计划合成帧附在本请求。':'先用 read_review_frames 读取全部片尾图像批次。')
+  +'核对片尾当前文案、字幕、事实边界和所附计划合成帧。不重新审核正文，不写替换稿。只返回 JSON。'
+  +'顶层仅填 delivery_checks'+(criteria?' 和 visual_criteria_checks':'')+'。'
+  +deliveryReviewCriteria(scoped)
+  +' 必须返回 ending_picture:{asset_id:实际观察的片尾素材ID,view:"planned_composition",both_visible:yes/no/unknown,observation:可辨内容}。只核绑定填 unknown。'
+  +(criteria?'逐项比较参照和片尾计划合成图，填写 visual_criteria_checks:[{id,answer:yes/no/unknown,observation,picture_stage}]。picture_stage 原样填写。'
+   +JSON.stringify(criteria.entries.map(entry=>entry.criterion)):'')
+  +' 已确认组选题只用于限定范围。数据：'+JSON.stringify({confirmedGroups,product:projected.product,
+   source_evidence:projected.source_evidence.filter(evidence=>scoped.some(section=>section.evidence_ids.includes(evidence.evidence_id))),
+   delivery_sections:projected.delivery_sections?.filter(section=>section.kind==='creator_invitation')})
+  +' 共用回执绑定：'+digestValue(reused);
+}
+
+function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:BoundVisualCriteria,content?:ContentReview,legacy=false,mode:false|'legacy-selection'|'selection-v1'|'bound-selection-v1'=false): string {
+  if(content?.reusedBody)return endingReviewPrompt(request,endingReviewCriteria(criteria,content.reusedBody),content.reusedBody,content.teachingBrief?.confirmedGroups,inlineFrames);
+  const selection=mode==='selection-v1'||mode==='bound-selection-v1';
+  const confirmed=content?.teachingBrief?.confirmedGroups;
+  const clean = buildCopyTeachingReviewRequest([{ case_id: 'current', packet: request.packet }],selection,!!confirmed);
   const copyReference=selection?'line_id,channel,caption_index?,label_index?':'line_id,channel,quote:逐字引文';
   const openingReferences=mode==='legacy-selection'
     ?'片头三段分别填 same_product_words、outcome_question_words、invitation_words，以对应词表的首尾编号组成 [起,止]，两端都计入，不抄 quote。'
@@ -193,10 +268,12 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
     '作者取舍理由仅保留在宿主绑定包，不作为通过依据；不能因选择了visual_only就通过，也不能因没有旁白引文就自动退稿。' +
     '画面问题用visual_check.sufficiency/evidence_refs/observed_relation/omission_loss及point.reason记录，copy_units.findings仍只引用真实口播/字幕/短标，不伪造表情句。' +
     '每条 source_relations 的 point_ids 和 line_ids 只允许引用当前 unit 的 points 和 lines。原始 evidence_ids 可引用该 unit 的 source_context 允许的全任务证据。covered 必须有本组 point_ids，且每个重点须由本组关联句子或已登记的 visual_only 重点实际承载。其他组的重点或句子 ID 不填入本组数组。' +
-    '原片关系如果只在别组展开，先独立判断它在本组是否必要。若本组无需单独讲解且省略不损失关键教学，可记 optional_depth，point_ids 和 line_ids 可空，在 reason 说明取舍和跨组承接；若本组确实缺少关键落点则记 material_gap，证据不足则记 uncertain。勿将没有本组落点的关系标为 covered。' +
+    (confirmed?'本轮按已确认的组选题验收。对每组核实际口播和回看是否兑现决定及一眼效果，事实越界照常退回。其他可教的购买判断只作选题建议，记 optional_depth 且 point_ids 和 line_ids 均为空，附原片证据及理由。建议不写入 findings，不改变组或文案总评。':
+     '原片关系如果只在别组展开，先独立判断它在本组是否必要。若本组无需单独讲解且省略不损失关键教学，可记 optional_depth，point_ids 和 line_ids 可空，在 reason 说明取舍和跨组承接；若本组确实缺少关键落点则记 material_gap，证据不足则记 uncertain。勿将没有本组落点的关系标为 covered。') +
     `source_relations中的uncertain保留未知，不自动代表现行主张有误。每条uncertain另给claim_impact:{status:affects_current_claim/does_not_affect_current_claim/unresolved,unknown_detail:具体未知,reason:为什么影响或不影响本稿,claims:[{${selection?copyReference:'line_id:受核对的现行句ID,channel:narration/caption/label,quote:该渠道逐字引文'}}]}。` +
     `记does_not_affect_current_claim时，该条source_relation的point_ids和line_ids均须非空：逐一写实际核对的现行重点和句子ID，claims中的line_id必须包含在外层line_ids，每个line_id有该渠道的${selection?'现行引用编号':'逐字quote'}，且关联当前point；不能只在reason或claims里提到ID而把外层数组留空。当前主张须分别有共享原始证据的covered关系支持，不要求不同主张挤在同一条covered中；不要填整组所有ID凑数。` +
-    '只有未知未进入当前主张、当前关系另有covered证据、并核对相关现行原句后，才能记does_not_affect_current_claim；不能仅因同一个point或文字听着安全就通过。影响当前主张或影响不明继续阻断；无法定位现行句就保留unresolved并说明缺口，不强造引用。未选关系的material_gap/uncertain仍可无现行ID，但不能豁免。不得将未选的关键教学缺口伪装成无关未知。' +
+    '只有未知未进入当前主张、当前关系另有covered证据、并核对相关现行原句后，才能记does_not_affect_current_claim；不能仅因同一个point或文字听着安全就通过。影响当前主张或影响不明继续阻断；无法定位现行句就保留unresolved并说明缺口，不强造引用。'+
+    (confirmed?'未选关系的未知可随建议记录，只有影响已确认决定或本稿主张的未知能退回。':'未选关系的material_gap/uncertain仍可无现行ID，但不能豁免。不得将未选的关键教学缺口伪装成无关未知。') +
     'delivery图片带supplied_full或planned_crop标签；存在裁切时两者都提供，planned_crop是宿主按冻结边距在原图上实际生成的裁后图，裁切效果以该图判断，不让文字描述代替实际裁后图。图片仍不是最终排版或成片。' +
     (criteria?'以下为宿主锁定的用户原话、参照与问题，独立于作者的计划。逐项比较参照图和对应段实际合成的计划画面，不能用计划文字、参照图本身或作者解释当作本方案的画面依据。顶层另返回 visual_criteria_checks，每项一次 {id,answer:yes/no/unknown,observation:图中实际所见,picture_stage:对应本方案的画面阶段标签}。picture_stage 必须逐字复制对应 criterion 的 pictureStage，不加 section_id、前缀或说明；说明只写 observation。缺图或无法判断填 unknown。\n'+
       JSON.stringify(criteria.entries.map(e=>e.criterion))+'\n':'')+
@@ -208,6 +285,9 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
       (content.opening.results?'固定三项 '+JSON.stringify(content.opening.results)+` 须在同一个成绩问句内。另填 ${selection?'opening_comparison.invitation_words 选择唯一的看拍法邀请的词窗':'opening_comparison.invitation_quote 逐字引用唯一的看拍法邀请'}。三条引文按前提、问句、邀请覆盖整段口播和同文字幕，连接词随所属引文，问句保留问号。创作者人数、额外结果陈述、错误指标或把 Revenue 说成佣金、商品 GMV 均退回。`:''):'')+
     (content?.endingPictures||content?.opening?.results?'各达人片尾的 delivery_checks 必须返回 ending_picture:{asset_id:实际查看的合成图标签中的素材ID,view:"planned_composition",both_visible:yes/no/unknown,observation:指出看到的图及实际可辨内容}。已合作核商品和Storyboard同屏；新建联核商品及任务已确认的合作条件，只有已确认佣金时才要求其同屏可辨。只核绑定填unknown。':'')
     +(mode?' 引用协议 selection-v1：在顶层填 reference_protocol:"selection-v1"。稿件引文统一用 {line_id,channel}，channel 为 narration/caption/label；'+(selection?'label 填从 0 起的 label_index；claim_impact 引用多卡字幕时，以从 0 起的 caption_index 选择一张。':'label 另填从 0 起的 label_index。')+'省略 quote 或引文的 text，由宿主回填。findings 照样提供 severity 和 reason，L1、source_relations、claim_impact 保留原有判定，引用同样只选编号。source_quote 仅填 evidence_id，必须已登记给本点。'+(openingReferences?openingReferences+JSON.stringify(openingReferenceWords(request.packet)??[]):''):'')
+    +(mode==='bound-selection-v1'?' L1视觉引证只选下列本组的 phase、source_seconds、evidence_id 组合。全片原片证据用于理解，但不替代本组可选视觉引用；若引同帧，只用本组可选编号。真实新增断言、错误素材或未兑现的决定仍退回。'
+      +JSON.stringify(plannedGroupVisualReferences(request.packet,reviewSourceSamples(request)))
+      +(content?.opening?' 片头的同款比较前提来自宿主登记的操作者原话。只核现行问句是否忠实保留这个给定前提。缺其他视频或对照截图不构成此给定前提缺失；独立核实仅限现行随附材料。若稿件额外加入「只有这条」、数量、其他视频表现或销量因果，仍须证据。只有登记的本片成绩能作为已提供的数字。':''):'')
     +'只返回JSON。';
 }
 
@@ -215,7 +295,7 @@ function reviewPrompt(request: CopyReviewRequest, inlineFrames=false,criteria?:B
 async function recordedReviewContract(request:CopyReviewRequest,deps:CopyReviewDependencies,prior:Row){
   const promptHash=prior.prompt_sha256;
   const matches=(visual?:BoundVisualCriteria,content?:ContentReview)=>[false,true].some(legacy=>
-    ([false,'legacy-selection','selection-v1'] as const).some(mode=>promptHash===digest(reviewPrompt(request,deps.runtime?.inlineFrames,visual,content,legacy,mode))));
+    ([false,'legacy-selection','selection-v1','bound-selection-v1'] as const).some(mode=>promptHash===digest(reviewPrompt(request,deps.runtime?.inlineFrames,visual,content,legacy,mode))));
   if(object(prior.review_contract)){
     const saved=prior.review_contract as {visual?:BoundVisualCriteria;content:ContentReview};
     if(!object(saved.content)||!matches(saved.visual,saved.content))return;
@@ -238,6 +318,21 @@ function receiptFromRaw(input: unknown, request: CopyReviewRequest,criteria?:Bou
   catch(error){
     if(!(error instanceof ReviewReferenceIssues))throw error;
     throw new CopyReviewError({code:'response_receipt_invalid',stage:'response_validation',requestsAttempted:1,retryable:false},JSON.stringify(error.issues));
+  }
+  const reused=content?.reusedBody;
+  if(reused){
+    const ending=request.packet.delivery_sections!.find(section=>section.kind==='creator_invitation')!;
+    const scoped=endingReviewCriteria(criteria,reused);
+    const visual=object(raw)?raw.visual_criteria_checks:undefined;
+    if(!object(raw)||Object.keys(raw).some(key=>!['delivery_checks','visual_criteria_checks'].includes(key))
+      ||!Array.isArray(raw.delivery_checks)||raw.delivery_checks.length!==1
+      ||!object(raw.delivery_checks[0])||raw.delivery_checks[0].section_id!==ending.section_id
+      ||(scoped?(!Array.isArray(visual)||visual.length!==scoped.entries.length
+       ||scoped.entries.some(({criterion})=>visual.filter(check=>object(check)&&check.id===criterion.id).length!==1)):visual!==undefined))
+      throw failure('response_scope_invalid',1);
+    raw={cases:[{case_id:'current',units:reused.teaching}],copy_units:reused.units,
+      delivery_checks:[...reused.openingChecks,...raw.delivery_checks],
+      ...(criteria?{visual_criteria_checks:[...reused.visualChecks,...(Array.isArray(visual)?visual:[])]}:{})};
   }
   if (!object(raw) || !Array.isArray(raw.cases) || raw.cases.length !== 1 || !object(raw.cases[0])
     || raw.cases[0].case_id !== 'current' || !Array.isArray(raw.copy_units)
@@ -290,6 +385,7 @@ function receiptFromRaw(input: unknown, request: CopyReviewRequest,criteria?:Bou
   const receipt = { scope: 'copy_and_planned_picture_only', protocol: COPY_REVIEW_PROTOCOL,
     analysis_revision: request.subject.revision, content_digest: request.subject.digest,
     author_run_id: request.authorRunId, reviewer_run_id: `clipmentor-review:${request.operationId}`,
+    ...(reused?{shared_body_review:{reviewer_run_id:reused.producerReviewId,content_digest:reused.producerDigest}}:{}),
     reviewed_at: Date.now(), verdict, units, ...(Array.isArray(raw.delivery_checks)?{delivery_checks:raw.delivery_checks}:{}),
     ...(content?{l1_evidence_contract:'v1' as const}:{}),...(content?.openingDigest?{opening_comparison_digest:content.openingDigest}:{}),
     ...(content?.endingPictures?{ending_picture_contract:'v1' as const}:{}),
@@ -556,19 +652,24 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
     if(prior)return prior;
     if(!preparing)throw failure('operation_unavailable',0,request.operationId);
   }
-  const {visual,content}=await reviewRequirements(deps,request.projectId);
+  const {visual,content:liveContent}=await reviewRequirements(deps,request.projectId,request.operationId);
   assertVisualCriteriaPlan(visual,request.packet.delivery_sections,request.packet.units.map(u=>u.unit_id));
   const criteria=plannedVisualCriteria(visual);
-  if(prior&&prior.receipt.teaching_brief_digest!==content?.teachingDigest)
+  const groups=liveContent?.teachingBrief?.confirmedGroups;
+  if(groups&&!prior&&digestValue(groups.map(group=>[group.id,group.points.map(point=>[point.id,point.question,point.treatment])]))
+    !==digestValue(request.packet.units.map(unit=>[unit.unit_id,unit.points.map(point=>
+      [point.point_id,point.question,point.treatment??'explain'])])))
+    throw failure('production_confirmed_groups_changed',0,request.operationId);
+  if(prior&&prior.receipt.teaching_brief_digest!==liveContent?.teachingDigest)
     throw failure('review_requirements_changed',prior.requestsAttempted===0||prior.requestsAttempted===1?prior.requestsAttempted:null,request.operationId);
   if(prior&&(prior.receipt.visual_criteria_digest!==criteria?.digest
-    ||prior.receipt.opening_comparison_digest!==content?.openingDigest
-    ||(prior.receipt.ending_picture_contract==='v1')!==!!content?.endingPictures
-    ||!!prior.receipt.l1_evidence_contract!==!!content))throw failure('operation_unavailable',1,request.operationId);
-  if(prior?.receipt.verdict==='pass'&&content?.opening?.results
-    &&deliveryReview(request.packet.delivery_sections??[],prior.receipt.delivery_checks,content.opening,!!content.endingPictures).verdict!=='pass')
+    ||prior.receipt.opening_comparison_digest!==liveContent?.openingDigest
+    ||(prior.receipt.ending_picture_contract==='v1')!==!!liveContent?.endingPictures
+    ||!!prior.receipt.l1_evidence_contract!==!!liveContent))throw failure('operation_unavailable',1,request.operationId);
+  if(prior?.receipt.verdict==='pass'&&liveContent?.opening?.results
+    &&deliveryReview(request.packet.delivery_sections??[],prior.receipt.delivery_checks,liveContent.opening,!!liveContent.endingPictures).verdict!=='pass')
     throw failure('review_requirements_changed',1,request.operationId);
-  if(!prior&&content?.opening&&(request.packet.delivery_sections??[]).filter(section=>section.kind==='performance_opening').length!==1)
+  if(!prior&&liveContent?.opening&&(request.packet.delivery_sections??[]).filter(section=>section.kind==='performance_opening').length!==1)
     throw failure('opening_comparison_section_missing',0,request.operationId);
   if (!prior && request.packet.units.some(u => u.source_context?.scope !== 'frozen_task_scope')) throw failure('source_review_scope_missing', 0, request.operationId);
   let file: string | null;
@@ -577,12 +678,16 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
     if (!file || await deps.hash(file) !== request.source.hash) throw new Error();
   } catch { throw failure('source_unavailable_or_changed', prior ? 1 : 0, request.operationId); }
   if (prior) return prior;
+  const reusedBody=await reusableBody(request,deps,criteria,liveContent);
+  const content=reusedBody?{...liveContent,reusedBody}:liveContent;
+  const scopedCriteria=endingReviewCriteria(criteria,reusedBody);
+  const scopedDelivery=request.packet.delivery_sections?.filter(section=>!reusedBody||section.kind==='creator_invitation')??[];
   let positions: ReturnType<typeof reviewSourceSamples>;
-  try { positions = reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
-  const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content,false,'selection-v1');
+  try { positions = reusedBody?[]:reviewSourceSamples(request); } catch { throw failure('frames_unavailable', 0, request.operationId); }
+  const prompt = reviewPrompt(request, deps.runtime?.inlineFrames,criteria,content,false,groups?.length?'bound-selection-v1':'selection-v1');
   const reviewContract=content?{review_contract:{visual:criteria,content}}:{};
   const criteriaDigest=content?digest(JSON.stringify(['l1-evidence-v1',criteria?.digest,content.openingDigest,
-    ...(content.teachingBrief?[content.teachingBrief]:[]),...(content.endingPictures?['ending-picture-v1']:[])])):criteria?.digest??null;
+    ...(content.teachingBrief?[content.teachingBrief]:[]),...(content.endingPictures?['ending-picture-v1']:[]),...(reusedBody?[digestValue(reusedBody)]:[])])):criteria?.digest??null;
   if(preparing&&preparing.criteria_digest!==criteriaDigest)
     throw failure(content?'review_requirements_changed':'operation_unavailable',0,request.operationId);
   if(outerSignal?.aborted)throw failure('review_cancelled_or_timed_out',0,request.operationId);
@@ -613,12 +718,12 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
     temporary=workspace;
     stage = 'frames_unavailable';
     const frames: ReviewFrame[] = [];
-    const packedPositions=fitReviewSourceSamples(positions,(criteria?.entries.length??0)+(request.packet.delivery_sections??[]).reduce((n,s)=>n+(s.picture.layout?deliveryLayoutStages(s.picture).length:s.picture.crop?2:1),0));
+    const packedPositions=fitReviewSourceSamples(positions,(scopedCriteria?.entries.length??0)+scopedDelivery.reduce((n,s)=>n+(s.picture.layout?deliveryLayoutStages(s.picture).length:s.picture.crop?2:1),0));
     for (const [i, p] of packedPositions.entries()) {
       outerSignal?.throwIfAborted();
       frames.push({ ...p, base64: await capture(p,file!,join(temporary, `${i}.jpg`)) });
     }
-    for(const section of request.packet.delivery_sections??[]){
+    for(const section of scopedDelivery){
       const picture=section.picture;let assetFile:string|null=null;
       const meta={unit_id:section.section_id,phase:'delivery' as const,source_seconds:0,asset_id:picture.asset_id};
       try{assetFile=deps.resolve(decodeURIComponent(picture.src.slice('/media/uploads/'.length)));if(!assetFile||await deps.hash(assetFile)!==picture.sha256)throw new Error('Delivery asset unavailable or changed');}
@@ -637,7 +742,7 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
       }
       try{if(await deps.hash(assetFile!)!==picture.sha256)throw new Error('Delivery asset changed');}catch(error){frameFailure={...meta,reason:'asset_unavailable_or_changed'};throw error;}
     }
-    if(criteria)for(const frame of await visualReferenceFrames(criteria,deps))frames.push({unit_id:frame.criterion.id,phase:'reference',source_seconds:frame.criterion.reference.seconds,base64:frame.base64});
+    if(scopedCriteria)for(const frame of await visualReferenceFrames(scopedCriteria,deps))frames.push({unit_id:frame.criterion.id,phase:'reference',source_seconds:frame.criterion.reference.seconds,base64:frame.base64});
     stage = 'source_unavailable_or_changed';
     if (await deps.hash(file!) !== request.source.hash) throw new Error('Source changed');
     stage = 'review_storage_failed';
@@ -650,6 +755,8 @@ async function runCopyReviewOperation(request:CopyReviewRequest,deps:CopyReviewD
       Object.assign(error,{preparationConfigurationChanged:true});throw error;
     }
     if(content&&!await currentReviewContractMatches(deps,request.projectId,criteria?.digest,content))
+      throw failure('review_requirements_changed',0,request.operationId);
+    if(reusedBody&&digestValue(reusedBody)!==digestValue(await reusableBody(request,deps,criteria,content)??null))
       throw failure('review_requirements_changed',0,request.operationId);
     outerSignal?.throwIfAborted();
     attempts = 1;
@@ -745,6 +852,7 @@ export async function runIsolatedCodexReview(prompt: string, frames: ReviewFrame
 export function copyReviewDependencies(): CopyReviewDependencies {
   return { directory: join(runtimeProfile().rootDir, 'clipmentor-copy-review'), resolve: resolveUploadFile, hash: sha256File,
     async requirements(projectId){const {productionCopyRequirements}=await import('./production-task');return productionCopyRequirements(projectId);},
+    async sharedBodyReview(projectId){const {loadSharedCopyReview}=await import('./production-continuation');return loadSharedCopyReview(projectId);},
     // Source samples are snapped to frame starts. Rounding milliseconds upward can select
     // the next frame, or EOF for the last frame; seek no later than the requested instant.
     async frame(file, seconds, output, crop) { await extractOneFrame(file, sourceFrameSeekMs(seconds * 1000), output, true, crop); return (await readFile(output)).toString('base64'); },

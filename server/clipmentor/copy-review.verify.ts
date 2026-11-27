@@ -19,7 +19,7 @@ import { projectServerRunToolResult } from '../../src/agent/serverRunToolResult'
 import { copyReviewSubject, copyTeachingPacketFromDoc, checkCopyProduction, normalizeGroupReview } from '../../src/clipmentor/production-gate';
 import groupedProject from '../../src/clipmentor/fixtures/grouped-registration-v1.json';
 import groupedRawResponse from '../../src/clipmentor/fixtures/four-group-raw-review-20261028.json';
-import { CopyReviewError, reviewClipMentorCopy, revalidateStoredCopyReview, type CopyReviewDependencies } from './copy-review';
+import { CopyReviewError, reviewClipMentorCopy, revalidateStoredCopyReview, type CopyReviewDependencies, type ReviewFrame } from './copy-review';
 import { externalCall } from './external-call';
 import { clipMentorCopyReviewPlugin } from '../plugins/clipmentor-copy-review';
 import type { ViteDevServer } from 'vite';
@@ -174,6 +174,106 @@ try {
   }};
   const rawTeaching=await reviewClipMentorCopy(teachingRequest,teachingDeps);
   assert.equal(rawTeaching.receipt.verdict,'pass');
+  {
+    const variant=structuredClone(teachingRequest);
+    const confirmedGroups=variant.packet.units.map(unit=>({id:unit.unit_id,decision:'Preserve the fixture decision',
+      points:unit.points.map(point=>({id:point.point_id,question:point.question,treatment:point.treatment??'explain'}))}));
+    const briefing={...teachingBrief,confirmedGroups};
+    const picture=async(name:string,color:string)=>{
+      const asset_id=name,src='/media/uploads/'+name+'.png';
+      const bytes=await sharp({create:{width:24,height:32,channels:3,background:color}}).png().toBuffer();
+      await writeFile(join(root,name+'.png'),bytes);
+      return {asset_id,src,sha256:createHash('sha256').update(bytes).digest('hex')};
+    };
+    const [openingImage,partnerImage,storyboard,recruitImage]=await Promise.all([
+      picture('opening','blue'),picture('partner','red'),picture('storyboard','yellow'),picture('recruit','green')]);
+    const makeSection=(section_id:string,kind:'performance_opening'|'creator_invitation',p:typeof openingImage)=>({
+      section_id,kind,line:{line_id:'line-'+section_id,narration_ms:'Lihat sini.',caption_lines:['Lihat sini.'],meaning_zh:'看这里。',labels:[]},
+      evidence_ids:['F1'],picture:{...p,description:'Synthetic review fixture'},voice:{provider:'fixture',voiceId:'fixture',speed:1 as const},
+    });
+    const opening=makeSection('opening','performance_opening',openingImage);
+    const partner=makeSection('existing_partner','creator_invitation',partnerImage);
+    const recruit=makeSection('new_contact','creator_invitation',recruitImage);
+    const existing={...partner,picture:{...partner.picture,layout:{kind:'product_storyboard' as const,
+      product:partnerImage,storyboard,attachment:storyboard}}};
+    const following={...recruit,picture:{...recruit.picture,layout:{kind:'recruitment_card' as const,poster:recruitImage}}};
+    const answer=(section:typeof opening,visible:'yes'|'no'='yes')=>({section_id:section.section_id,
+      verdict:'pass',claims_supported:'supported',purpose_clear:true,reason:'Synthetic check for this exact section.',
+      evidence_ids:section.evidence_ids,narration_checks:[{line_id:section.line.line_id,necessity:'necessary',naturalness:'natural',
+        omission_loss:'It announces the next step.',reason:'Synthetic review.'}],
+      ...(section.kind==='creator_invitation'?{ending_picture:{asset_id:section.picture.asset_id,
+        view:'planned_composition',both_visible:visible,observation:'Synthetic evidence'}}:{})});
+    const first={...variant,operationId:randomUUID(),packet:{...variant.packet,delivery_sections:[opening,existing]}};
+    const second=()=>({...variant,operationId:randomUUID(),packet:{...structuredClone(variant.packet),delivery_sections:[opening,following]}});
+    let producerCalls=0,endingCalls=0;
+    const io={...deps,requirements:async()=>({policy:null,teachingBrief:briefing,endingPictures:true}),
+      resolve:(name:string)=>name==='review-test.mp4'?'mock-original':join(root,name),
+      hash:async(file:string)=>file==='mock-original'?first.source.hash:createHash('sha256').update(await readFile(file)).digest('hex'),
+      frame:async()=> 'YQ=='};
+    const producer=await reviewClipMentorCopy(first,{...io,run:async(_prompt,frames)=>{
+      producerCalls++;
+      assert(frames.some(frame=>frame.phase==='original'));
+      assert(frames.some(frame=>frame.unit_id==='existing_partner'&&frame.asset_id===partnerImage.asset_id));
+      return {...teachingAnswer(),delivery_checks:[answer(opening),answer(existing)]};
+    }});
+    assert.equal(producer.receipt.verdict,'pass');
+    const reviewSource={...base.clipMentorAnalysis!.source,fps:first.source.fps,duration_seconds:first.source.duration,sourceContentHash:first.source.hash};
+    const former={receipt:producer.receipt,visual:undefined,briefing,source:reviewSource,sourceSrc:first.source.src};
+    const follower={...io,sharedBodyReview:async()=>former,
+      run:async(prompt:string,frames:ReviewFrame[])=>{
+        endingCalls++;
+        assert(!prompt.includes('CURRENT_PLAN_CONTENT')&&!prompt.includes('existing_partner')&&prompt.includes('confirmedGroups'));
+        assert(prompt.includes('read_review_frames'));
+        assert.deepEqual(frames.map(frame=>[frame.unit_id,frame.asset_id,frame.phase]),[['new_contact',recruitImage.asset_id,'delivery']]);
+        return {delivery_checks:[answer(following)]};
+    }};
+    const next=second(),completed=await reviewClipMentorCopy(next,follower);
+    assert.equal(completed.receipt.verdict,'pass');
+    assert.equal(completed.receipt.shared_body_review?.reviewer_run_id,producer.receipt.reviewer_run_id);
+    assert.deepEqual(completed.receipt.units,producer.receipt.units);
+    assert.deepEqual(completed.receipt.delivery_checks,[answer(opening),answer(following)]);
+    assert.equal((await reviewClipMentorCopy(next,follower,undefined,true)).cached,true);
+    assert.equal(producerCalls,1);assert.equal(endingCalls,1);
+    const hidden=await reviewClipMentorCopy(second(),{...follower,run:async()=>({delivery_checks:[answer(following,'no')]})});
+    assert.equal(hidden.receipt.verdict,'needs_revision','a valid shared body cannot clear a rejected ending');
+    const swapped=await reviewClipMentorCopy(second(),{...follower,run:async()=>({delivery_checks:[
+      {...answer(following),ending_picture:answer(existing).ending_picture}]})});
+    assert.equal(swapped.receipt.verdict,'insufficient_evidence','follower cannot borrow another ending picture answer');
+    await assert.rejects(reviewClipMentorCopy(second(),{...follower,run:async()=>({delivery_checks:[answer(opening),answer(following)]})}),/response_scope_invalid/);
+    const changedBody=second();
+    changedBody.packet.units[0].lines[0].meaning_zh='Changed candidate body.';
+    const checked=await reviewClipMentorCopy(changedBody,{...follower,run:async(prompt,frames)=>{
+      assert(prompt.includes('Changed candidate body.')&&frames.some(frame=>frame.phase==='original'));
+      return {...teachingAnswer(),delivery_checks:[answer(opening),answer(following)]};
+    }});
+    assert.equal(checked.receipt.shared_body_review,undefined);
+    const unsupported=second(),unsupportedLine='Serbuk sudah disapu di bawah mata.';
+    const oldLine=unsupported.packet.units[0].lines[0];
+    oldLine.narration_ms=unsupportedLine;oldLine.caption_lines=[unsupportedLine];
+    const rejected=await reviewClipMentorCopy(unsupported,{...follower,run:async(prompt,frames)=>{
+      assert(prompt.includes(unsupportedLine)&&frames.some(frame=>frame.phase==='original'));
+      const raw=teachingAnswer();
+      return {...raw,copy_units:raw.copy_units.map(unit=>({...unit,verdict:'needs_revision',findings:[
+        {severity:'blocking',line_id:oldLine.line_id,channel:'narration',quote:unsupportedLine,reason:'Brush position does not establish that the powder was applied.'},
+      ]})),delivery_checks:[answer(opening),answer(following)]};
+    }});
+    assert.notEqual(rejected.receipt.verdict,'pass','changed copy cannot borrow approval of an unsupported application claim');
+
+    const unknown=second();
+    unknown.packet.units[0].points[0].question='New scope';
+    await assert.rejects(reviewClipMentorCopy(unknown,follower),/production_confirmed_groups_changed/);
+    let forbidden=0;
+    await assert.rejects(reviewClipMentorCopy(second(),{...follower,
+      requirements:async()=>{throw Error('production_confirmed_groups_missing');},
+      run:async()=>{forbidden++;throw Error('must not dispatch');}}),/production_confirmed_groups_missing/);
+    assert.equal(forbidden,0);
+    await assert.rejects(reviewClipMentorCopy(second(),{...follower,
+      hash:async(file:string)=>file===join(root,'opening.png')?'f'.repeat(64):io.hash(file),
+      run:async()=>{forbidden++;throw Error('must not dispatch');}}),/source_unavailable_or_changed/);
+    assert.equal(forbidden,0,'a replaced shared opening cannot inherit an old review');
+
+    console.log('Shared review: one body, independently observed endings, changed body rechecked, missing scope never dispatched.');
+  }
   const withSelections=teachingAnswer();
   const selectedReceipt={...withSelections,reference_protocol:'selection-v1',
     cases:withSelections.cases.map(entry=>({...entry,units:entry.units.map(unit=>({...unit,

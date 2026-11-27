@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   assertExternalVideoUrlSize, buildPreviewReviewRequest, evaluatePreviewTeachingJudgment,
-  reviewClipMentorPreview, validatePreviewReviewInput,
+  reviewClipMentorPreview, validatePreviewReviewInput, previewReceiptFailure, previewReviewRepairBlock,
 } from './preview-review.ts';
 import type { PreviewReviewInput, PreviewTeachingJudgment, ReviewReceipt } from './preview-review.ts';
 
@@ -37,10 +37,24 @@ assert.doesNotThrow(() => assertExternalVideoUrlSize(14_525_235));
 assert.throws(() => assertExternalVideoUrlSize(42_647_784), /15MB/);
 assert.doesNotThrow(() => assertExternalVideoUrlSize(15_000_000));
 assert.throws(() => assertExternalVideoUrlSize(15_000_001));
+assert.equal(previewReceiptFailure({result:{finish_reasons:['MAX_TOKENS'],issues:['invalid_judgment_schema']}}),'preview_review_incomplete_generation');
+assert.equal(previewReceiptFailure({result:{finish_reasons:['STOP'],issues:['invalid_judgment_schema']}}),'preview_review_invalid_judgment_schema');
+assert.equal(previewReceiptFailure({result:{finish_reasons:['STOP'],issues:['U1:teaching:not_supported']}}),undefined);
+assert.equal(previewReceiptFailure({result:{finish_reasons:['STOP'],issues:[]}}),undefined);
+
 const video = new Uint8Array([1, 2, 3, 4]);
 const built = buildPreviewReviewRequest(video, input);
 assert.equal(buildPreviewReviewRequest(video, input).request_sha256, built.request_sha256);
 assert.notEqual(buildPreviewReviewRequest(new Uint8Array([1, 2, 3, 5]), input).request_sha256, built.request_sha256);
+const originalRequest=buildPreviewReviewRequest(video,input,'original');
+assert.equal(built.input_sha256,originalRequest.input_sha256);
+assert.notEqual(built.request_sha256,originalRequest.request_sha256);
+const compactRequest=buildPreviewReviewRequest(video,input,'compact');
+assert.match(JSON.parse(compactRequest.body).contents[0].parts[1].text,/先完成全部 coverage、continuity/);
+assert.match(JSON.parse(built.body).contents[0].parts[1].text,/先在每个判断中填 status/);
+assert.notEqual(compactRequest.request_sha256,built.request_sha256);
+assert.equal(compactRequest.input_sha256,built.input_sha256);
+assert.doesNotMatch(JSON.parse(originalRequest.body).contents[0].parts[1].text,/先完成全部 coverage、continuity/);
 const request = JSON.parse(built.body);
 assert.deepEqual(Buffer.from(request.contents[0].parts[0].inlineData.data, 'base64'), Buffer.from(video));
 assert.equal(request.contents[0].parts[0].fileData, undefined);
@@ -73,6 +87,15 @@ const unitGate = evaluatePreviewTeachingJudgment(omittedTeachingPoint, input);
 assert.equal(unitGate.unit_results[0].model_narrative, 'supported');
 assert.equal(unitGate.unit_results[0].teaching_status, 'review_required');
 assert.equal(omittedTeachingPoint.continuity[0].teaching.status, 'supported', 'Raw model opinions must not be rewritten by the gate');
+const route=(issues:string[],extra:string[]=[])=>({result:{issues,finish_reasons:['STOP']},
+ effective_review:{manifest_binding:'frozen_at_request',blockers:[...issues,'saved_review_not_passed',...extra]}});
+assert.equal(previewReviewRepairBlock(route(unitGate.issues)),undefined);
+assert.equal(previewReviewRepairBlock(route(unitGate.issues,['saved_evidence_invalid_or_binding_mismatch'])),'preview_review_evidence_unverified');
+assert.equal(previewReviewRepairBlock(route([...unitGate.issues,'U1:missing_continuity'])),'preview_review_evidence_unverified');
+omittedTeachingPoint.coverage[0].teaching.evidence[0].quote='Invented quote';
+assert.equal(previewReviewRepairBlock(route(evaluatePreviewTeachingJudgment(omittedTeachingPoint,input).issues)),'preview_review_evidence_unverified');
+omittedTeachingPoint.coverage[0].teaching.evidence=[];
+assert.equal(previewReviewRepairBlock(route(evaluatePreviewTeachingJudgment(omittedTeachingPoint,input).issues)),'preview_review_evidence_unverified');
 const falseQuote = good(); falseQuote.coverage[0].teaching.evidence[0].quote = 'Terbukti berkesan serta-merta';
 assert.ok(evaluatePreviewTeachingJudgment(falseQuote, input).issues.includes('P1:unverified_quote'));
 const wrongTime = good(); wrongTime.coverage[0].teaching.evidence[0].end_seconds = 11;

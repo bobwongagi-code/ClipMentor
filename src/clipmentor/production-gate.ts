@@ -83,6 +83,7 @@ export interface CopyProductionReview {
   verdict: Verdict;
   units: CopyUnitJudgment[];
   teaching_review?: TeachingEnvelope;
+  shared_body_review?:{reviewer_run_id:string;content_digest:string};
   delivery_checks?: unknown[];
   l1_evidence_contract?: 'v1';
   opening_comparison_digest?: string;
@@ -183,30 +184,52 @@ function groupL1EvidenceIssues(review: GroupReview, unit: TeachingPacket['units'
           ? [line.caption_lines.join(' ')] : ref.channel === 'label' ? line.labels : [];
         return matchesCopyQuote(ref.quote, candidates);
       }
-      if (ref.kind !== 'visual' || (ref.phase !== 'original' && ref.phase !== 'explanation') || typeof ref.source_seconds !== 'number') return false;
-      const time = ref.source_seconds;
-      if (ref.phase === 'original') {
-        const windows = window ? window.originals : unit.picture_plan?.original_source_ranges;
-        if (!windows?.some(range => l1SourceAt(time,range))) return false;
-      } else {
-        const parts = window?.explanations ?? unit.picture_plan?.line_source_ranges.map(line => ({lineId:line.line_id,source:line.source_range_seconds}));
-        if (!parts?.some(part => {
-          const line = unit.picture_plan?.line_source_ranges.find(line => line.line_id === part.lineId);
-          if (time===part.source[1]&&line?.context_source_ranges?.some(({source_range_seconds:[start,end]})=>time===start&&time===end)) return true;
-          if (!l1SourceAt(time,part.source)) return false;
-          const selected = [...(line?.evidence_source_ranges??[]),...(line?.context_source_ranges??[])];
-          return !selected.length || selected.some(slice => l1SourceAt(time,slice.source_range_seconds));
-        })) return false;
-      }
-      const item = source.find(evidence => evidence.evidence_id === ref.evidence_id);
-      // The observation header is generated from the registered evidence kind.
-      if (!item?.time_seconds?.length || !/^\[(?:source_frame|visible_action); /u.test(item.observation)) return false;
-      const [start, end] = item.time_seconds;
-      if (!(end === undefined || start === end ? time === start : time >= start && time < end)) return false;
-      return unit.points.some(point => point.treatment !== 'omit' && point.evidence_ids.includes(item.evidence_id));
+      return ref.kind==='visual'&&typeof ref.source_seconds==='number'&&
+        groupVisualEvidenceValid(unit,source,window,ref.phase,ref.source_seconds,ref.evidence_id);
     });
     return valid ? [] : [id + ':l1_evidence_does_not_match_group'];
   });
+}
+
+function groupVisualEvidenceValid(unit:TeachingPacket['units'][number],source:TeachingPacket['source_evidence'],
+ window:ReturnType<typeof playbackGroups>[number]|undefined,phase:unknown,time:number,evidenceId:unknown){
+ if(phase!=='original'&&phase!=='explanation')return false;
+  if (phase === 'original') {
+    const windows = window ? window.originals : unit.picture_plan?.original_source_ranges;
+    if (!windows?.some(range => l1SourceAt(time,range))) return false;
+  } else {
+    const parts = window?.explanations ?? unit.picture_plan?.line_source_ranges.map(line => ({lineId:line.line_id,source:line.source_range_seconds}));
+    if (!parts?.some(part => {
+      const line = unit.picture_plan?.line_source_ranges.find(line => line.line_id === part.lineId);
+      if (time===part.source[1]&&line?.context_source_ranges?.some(({source_range_seconds:[start,end]})=>time===start&&time===end)) return true;
+      if (!l1SourceAt(time,part.source)) return false;
+      const selected = [...(line?.evidence_source_ranges??[]),...(line?.context_source_ranges??[])];
+      return !selected.length || selected.some(slice => l1SourceAt(time,slice.source_range_seconds));
+    })) return false;
+  }
+  const item = source.find(evidence => evidence.evidence_id === evidenceId);
+  // The observation header is generated from the registered evidence kind.
+  if (!item?.time_seconds?.length || !/^\[(?:source_frame|visible_action); /u.test(item.observation)) return false;
+  const [start, end] = item.time_seconds;
+  if (!(end === undefined || start === end ? time === start : time >= start && time < end)) return false;
+  return unit.points.some(point => point.treatment !== 'omit' && point.evidence_ids.includes(item.evidence_id));
+}
+
+/** Offer only references that the gate can bind to these sampled frames. */
+export function plannedGroupVisualReferences(packet:TeachingPacket,samples:readonly {unit_id:string;phase:string;source_seconds:number}[]){
+ const labels=[];
+ for(const unit of packet.units){
+  const groups=playbackGroups(unit);
+  for(const [index,group] of (groups.length?groups:[undefined]).entries()){
+   const evidence=[...new Set(unit.points.filter(point=>point.treatment!=='omit').flatMap(point=>point.evidence_ids))];
+   const picks=samples.filter(frame=>frame.unit_id===unit.unit_id&&frame.phase!=='context').flatMap(frame=>{
+    const ids=evidence.filter(id=>groupVisualEvidenceValid(unit,packet.source_evidence,group,frame.phase,frame.source_seconds,id));
+    return ids.length?[{phase:frame.phase,source_seconds:frame.source_seconds,evidence_ids:ids}]:[];
+   });
+   labels.push({unit_id:unit.unit_id,group_id:'G'+(index+1),picks});
+  }
+ }
+ return labels;
 }
 
 function l1SourceAt(time:number,[start,end]:[number,number]) {
@@ -239,6 +262,9 @@ export function assessGroupReview(v: unknown, unit?: TeachingPacket['units'][num
 }
 export function isCopyProductionReview(v: unknown): v is CopyProductionReview {
   return row(v) && v.scope === 'copy_and_planned_picture_only' && text(v.protocol)
+    && (v.shared_body_review===undefined||row(v.shared_body_review)&&text(v.shared_body_review.reviewer_run_id)
+      &&v.shared_body_review.reviewer_run_id!==v.reviewer_run_id
+      &&typeof v.shared_body_review.content_digest==='string'&&/^[a-f0-9]{64}$/.test(v.shared_body_review.content_digest))
     && (v.l1_evidence_contract === undefined || v.l1_evidence_contract === 'v1')
     && (v.opening_comparison_digest === undefined || typeof v.opening_comparison_digest === 'string' && /^[a-f0-9]{64}$/.test(v.opening_comparison_digest))
     && (v.ending_picture_contract === undefined || v.ending_picture_contract === 'v1')
@@ -937,7 +963,7 @@ function reviewableDeliverySections(sections: DeliverySection[]): DeliverySectio
 }
 
 /** Only the current material and neutral criteria enter the independent request. */
-export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>, selection=false) {
+export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; packet: TeachingPacket }>, selection=false, confirmedSelection=false) {
   if (!cases.length || !distinct(cases.map((c) => c.case_id)) || cases.some((c) => !text(c.case_id) || !teachingPacket(c.packet))) throw new Error('Invalid teaching review packet');
   for (const { packet } of cases) for (const unit of packet.units) checkGroupedReviewHandoff(unit);
   const hasTeachingBasis = cases.some(({ packet }) => packet.units.some(unit => unit.points.some(point => point.teaching_basis)));
@@ -948,7 +974,10 @@ export function buildCopyTeachingReviewRequest(cases: Array<{ case_id: string; p
   const visualReview=selection?VISUAL_REVIEW_CRITERIA.replace('口播点原有的逐字引文要求不变。','口播点沿用现行编号。'):VISUAL_REVIEW_CRITERIA;
   const basisReview=selection?teachingBasisCriteria.replace('source_quote:{evidence_id,quote}，从本点 teaching_basis.evidence_ids 的一条原片动作或原话正文逐字摘录',
     'source_quote:{evidence_id}，从本点 teaching_basis.evidence_ids 选择一条原片动作或原话的编号'):teachingBasisCriteria;
-  return { instructions: `${GROUP_REVIEW_CRITERIA}\n\n${pointReview}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${visualReview}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${basisReview}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
+  const groupCriteria=confirmedSelection?GROUP_REVIEW_CRITERIA
+    .replace('先在任务范围还原，再分配各组，范围内无任何组承担的关键关系仍报缺口。局部范围外的钩子/收尾不强制加回。','全片背景用于验证已选关系和识别事实越界。审核是否兑现已确认的各组，不重选、不要求补讲其他位置。')
+    .replace('material_gap可发现清单未选的关系，point_ids/line_ids可空；没有ID不等于没有问题。','material_gap 只记已确认重点的实质遗漏，必须填写该组的已选 point_ids 及其登记证据。新选题用 optional_depth，point_ids 和 line_ids 留空。'):GROUP_REVIEW_CRITERIA;
+  return { instructions: `${groupCriteria}\n\n${pointReview}\n\n${NARRATION_REVIEW_CRITERIA}\n\n${visualReview}\n\n${deliveryReviewCriteria(cases.flatMap(c=>c.packet.delivery_sections??[]))}${basisReview}`, input: { cases: cases.map(({ case_id, packet }) => ({ case_id, packet: {
     ...(packet.delivery_sections?.length?{delivery_sections:reviewableDeliverySections(packet.delivery_sections)}:{}),
     audience: packet.audience,
     product: { name: packet.product.name, purchase_concerns: [...packet.product.purchase_concerns], unknowns: [...packet.product.unknowns] },

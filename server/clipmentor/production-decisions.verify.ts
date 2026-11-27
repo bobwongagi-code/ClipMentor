@@ -23,6 +23,14 @@ checkpoint.error='Error: picture_plan_revisits_mismatch';assert.deepEqual(routes
 checkpoint.error='Error: tool failed (revise_clipmentor_analysis: delivery_sections_invalid)';assert.deepEqual(routes(checkpoint,0),['author_checkpoint']);checkpoint.deliveryDraftRecoveryUsed=true;assert.deepEqual(routes(checkpoint),[]);
 checkpoint.error='Error: tool failed (read_clipmentor_source_video: Cannot read/bind saved source receipt; no model request sent).';assert.deepEqual(routes(checkpoint),['author_checkpoint']);delete checkpoint.deliveryDraftRecoveryUsed;assert.deepEqual(routes(checkpoint),[]);
 checkpoint.error='Error: tool failed (read_clipmentor_analysis: storyboard_current_plan_unavailable).';checkpoint.authorCheckContractRevision=2;assert.deepEqual(routes(checkpoint),['author_checkpoint']);delete checkpoint.authorCheckContractRevision;assert.deepEqual(routes(checkpoint),[]);
+const inheritedRead=fresh();
+inheritedRead.error='Error: tool failed (read_clipmentor_source_video: Saved source receipt unavailable or not bound to this project; no model request sent).';
+assert.deepEqual(routes(inheritedRead),[],'a standalone project cannot inherit receipt access');
+inheritedRead.input.panelDelivery={audience:'existing_partner'} as never;
+inheritedRead.blueprintApproval=fallback.blueprintApproval;
+assert.deepEqual(routes(inheritedRead),['approved_source_receipt']);
+inheritedRead.approvedSourceReadRecovered=true;
+assert.deepEqual(routes(inheritedRead),[],'the same read failure cannot reopen a recovered checkpoint');
 for(const status of ['queued','running','cancelled','completed','awaiting_blueprint','awaiting_review'] as const){checkpoint.status=status;checkpoint.error='Error: copy_scope_incomplete';assert.deepEqual(routes(checkpoint),[]);}
 const author=fresh();author.repairContext={audio_picture_repair:{groups:[]},pending_review_repair:{status:'bound'},author_self_check:[]};
 assert.deepEqual(productionAuthorDecision(author,false),{mode:'picture_capacity',pictureOnly:true,independent:true,selfCheck:true},'priority must not erase pending independent obligations');

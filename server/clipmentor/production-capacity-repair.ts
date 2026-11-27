@@ -1,4 +1,5 @@
 import type {ProjectDoc} from '../../src/editor/types';
+import {deliveryAudio,deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
 import {copyTeachingPacketFromDoc} from '../../src/clipmentor/production-gate';
 import {digestValue} from '../agent-runs/store-values';
 import {verifyProductionNarration} from './production-readiness';
@@ -14,6 +15,18 @@ export async function productionCapacityFacts(doc:ProjectDoc,voice?:{provider:st
   return{unit_id:unit.unit_id,lines,measured_audio_seconds:lines.reduce((n,l)=>n+l.audio.durationSeconds,0),
    registered_dynamic_seconds:available,reference_picture_capacity:'not_included_requires_planner_judgment'};
  });
+}
+
+/** Measure against the native opening underlay contract before dispatching an editor.
+ * Teaching replay capacity has different rules and can include registered reference pictures. */
+export function openingUnderlayShortfall(doc:ProjectDoc){
+ const section=deliverySectionsFromDoc(doc).find(item=>item.kind==='performance_opening');
+ const layout=section?.picture.layout;
+ const timeline=doc.timelines.find(item=>item.id===doc.activeTimelineId);
+ if(!section||layout?.kind!=='original_underlay'||!timeline)return;
+ const available=Math.round(layout.range[1]*timeline.fps)-Math.round(layout.range[0]*timeline.fps);
+ const measured=deliveryAudio(doc,section).frames;
+ if(measured>available)return {sectionId:section.section_id,available,measured};
 }
 
 /** Restrict this repair to picture plans; copy/CTA and unrelated units stay frozen. */

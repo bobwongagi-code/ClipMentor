@@ -4,7 +4,9 @@ import {createHash} from 'node:crypto';
 /** Decisions over existing facts only. These routes are candidates, never permissions:
  * the worker must still verify current source, receipts, ownership and budgets. */
 export type RecoveryRoute='picture_capacity'|'review_source_observation'|'visual_review_contract'|'continuation_brief'
- |'source_evidence_import'|'focused_author'|'focused_independent'|'focused_structure'|'author_checkpoint';
+ |'source_evidence_import'|'focused_author'|'focused_independent'|'focused_structure'|'author_checkpoint'|'approved_source_receipt';
+
+export const savedSourceReceiptUnavailable='Saved source receipt unavailable or not bound to this project; no model request sent';
 export type AuthorMode='ordinary'|'canvas_reflow'|'picture_capacity'|'independent_review'|'author_self_check'|'operator_revision';
 export function productionAuthorDecision(task:Pick<ProductionTask,'stage'|'repairContext'>,boundCanvasReflow:boolean,operatorRevision=false){
  if(operatorRevision&&task.stage==='blueprint')return {mode:'operator_revision' as const,pictureOnly:false,independent:false,selfCheck:false};
@@ -124,6 +126,10 @@ export function blockedProductionDecision(task:ProductionTask,contentRepairsRema
   }
  }
  if(!task.input.humanBlueprintReview||task.stage!=='blueprint')return {routes};
+ if(task.blueprintApproval&&task.input.panelDelivery?.audience&&moreModel&&!task.approvedSourceReadRecovered
+  &&error.includes(`(read_clipmentor_source_video: ${savedSourceReceiptUnavailable}).`)){
+  routes.push('approved_source_receipt');return {routes};
+ }
  if(error.startsWith('Error: 已用完自动返修额度')&&task.repairContext?.revision===task.projectRevision){routes.push('focused_structure');return {routes};}
  // Historical message decoding lives here; it selects inspection, not authority.
  const failedObservation=error.includes('observe_clipmentor_source_video: Source observation failed; read the saved receipt, do not retry');
