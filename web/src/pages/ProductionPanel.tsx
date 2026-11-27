@@ -562,7 +562,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     else player.currentTime=seconds
   }
 
-  function usePlaybackTime(field:'start'|'end'){
+  function setRangeFromPlayback(field:'start'|'end'){
     const player=video.current
     if(!player?.readyState)return
     const seconds=queuedSeek.current?.key===feedbackKey?queuedSeek.current.time:player.currentTime
@@ -756,7 +756,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
                   <option value="range">成片时间段</option>
                 </select></label>
                 <button type="button" className="cm-button secondary" disabled={pending||loadedVideo!==videoKey||videoFailure===videoKey}
-                  onClick={()=>usePlaybackTime('start')}>用当前时间</button>
+                  onClick={()=>setRangeFromPlayback('start')}>用当前时间</button>
               </div>
               {draft.target==='whole'&&<label className="cm-preview-check"><input type="checkbox" disabled={pending} checked={draft.confirmed===true}
                 onChange={event=>setFeedbackDraft({...draft,confirmed:event.target.checked})} /> 确认这条意见作用于整体</label>}
@@ -764,7 +764,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
                 <label>开始秒数<input type="number" min={0} max={task.previewDuration} step="any" value={draft.start??''} onChange={event=>setFeedbackDraft({...draft,start:event.target.value})} /></label>
                 <label>结束秒数<input type="number" min={0} max={task.previewDuration} step="any" value={draft.end??''} onChange={event=>setFeedbackDraft({...draft,end:event.target.value})} /></label>
                 {rangeIssue&&<p className="cm-preview-range-error" role="alert">{rangeIssue}</p>}
-                <button type="button" className="cm-button secondary" disabled={loadedVideo!==videoKey||videoFailure===videoKey} onClick={()=>usePlaybackTime('end')}>用当前时间作结束</button>
+                <button type="button" className="cm-button secondary" disabled={loadedVideo!==videoKey||videoFailure===videoKey} onClick={()=>setRangeFromPlayback('end')}>用当前时间作结束</button>
               </fieldset>}
               {draft.target?.startsWith('group:')&&<label className="cm-preview-scope"><span>修改内容</span><select disabled={pending} value={draft.kind??'content'}
                 onChange={event=>setFeedbackDraft({...draft,kind:event.target.value as 'content'|'execution'})}>
