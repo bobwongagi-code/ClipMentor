@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { echoesMediaSecret, videoRequestDigest, videoInput, VIDEO_URL_MAX_BYTES, VIDEO_REQUEST_MAX_BYTES, type VideoInput } from './video-input';
+import { PREVIEW_REVIEW_TIMEOUT_MS } from './preview-review-deadline';
 
 // Conservative Rootify route bounds. Larger official API limits do not prove gateway support.
 export const EXTERNAL_VIDEO_URL_MAX_BYTES = VIDEO_URL_MAX_BYTES;
 export const INLINE_REQUEST_MAX_BYTES = VIDEO_REQUEST_MAX_BYTES;
 export const PREVIEW_REVIEW_MODEL = 'gemini-3.8-flash';
 export const PREVIEW_REVIEW_ENDPOINT = `https://rootifyaiapi.rootifyglobal.com/v1beta/models/${PREVIEW_REVIEW_MODEL}:generateContent`;
-export const PREVIEW_REVIEW_TIMEOUT_MS = 600_000;
 // Five focus points plus unit receipts exceeded 8192 shared thought/output tokens in a real run.
 export const PREVIEW_REVIEW_MAX_OUTPUT_TOKENS = 16_384;
 export const PREVIEW_REVIEW_VERSION = 'teaching-evidence-v1';
@@ -172,7 +172,8 @@ export function previewAlignmentFindingKeys(receipt:unknown){
 export function previewReceiptFailure(receipt:unknown):string|undefined{
  if(!object(receipt)||!object(receipt.result))return;
  const result=receipt.result;
- if(Array.isArray(result.finish_reasons)&&(result.finish_reasons.length!==1||result.finish_reasons[0]!=='STOP'))
+ if((Array.isArray(result.finish_reasons)&&(result.finish_reasons.length!==1||result.finish_reasons[0]!=='STOP'))
+  ||(Array.isArray(result.issues)&&result.issues.includes('incomplete_generation')))
   return 'preview_review_incomplete_generation';
  if(Array.isArray(result.issues)&&result.issues.includes('invalid_judgment_schema'))
   return 'preview_review_invalid_judgment_schema';
@@ -203,7 +204,7 @@ export function previewAlignmentRepairPause(previous:unknown,current:unknown):st
   if(Array.isArray(previous)&&previewAlignmentFindingKeys(current).some(key=>previous.includes(key)))return 'preview_blueprint_alignment_no_progress';
 }
 
-export const previewReviewFormats=['decision-first','compact','original'] as const;
+export const previewReviewFormats=['bounded-thinking','decision-first','compact','original'] as const;
 export type PreviewReviewFormat=(typeof previewReviewFormats)[number];
 
 function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: PreviewReviewInput, format:PreviewReviewFormat) {
@@ -223,32 +224,36 @@ function previewReviewShell(part: ReturnType<typeof videoInput>['part'], input: 
  '\n逐点用本组实际画面、字幕或口播核对 approved_connection 和 filming_conditions：具体说出实际内容怎样兑现已审手法和购买判断依据，没兑现填 not_supported，证据不清填 insufficient_evidence。逐组 continuity.teaching 核对已审原声与讲解顺序、approved_narration 和 approved_cues 是否在对应阶段或句子出现且指向本组。短标附 output_ranges 时，在给定阶段时窗内引用。教学证据必须落在 approved_teaching_ranges 内（没有时用 output_range_seconds），跨段则分条。逐项短标给本组 visual_organization 证据，quote 逐字记录实际看到的文字，同一短标在本组可共用一条证据。reference_text 是工程记录，不可充当实际听到或看到的证明，也不代表额外文字已获批准。\n顶层另必填 blueprint_alignment（同“判断”结构）：连续检查整片（含组间及片尾），核查是否有未审新增、替换的教学论断、口播、短标或视觉主张。发现则填 not_supported 并给成片位置；无法核清填 insufficient_evidence；确认兑现已审范围且无此类新增才填 supported，简述检查范围并给实际时间证据。允许已审原声、背景、片头片尾和正常画面组织。':''
  }`+(format==='compact'?
   '\n先完成全部 coverage、continuity 和要求的全片判断，再检查 JSON 闭合。observed 与 reasoning 只写短句，指出当前判断所需的对象和位置，避免重述任务或复制一整段画面。相同承接证据可以引用同一实际区间。只保留足以支撑当前判断的证据，必须的单元、时间、引文和独立视觉证据仍逐项填写。':'');
-  const responseInstruction=format==='decision-first'?instruction+
+  const responseInstruction=format==='bounded-thinking'||format==='decision-first'?instruction+
     '\n使用紧凑 JSON，无 Markdown 或额外说明。先在每个判断中填 status，再写一句 reasoning，再给必要证据。observed 只写区分现象所需的一句话。承接只给最近的前后证据，删除重复举例。所有组、跨组和整片检查必须齐全。对于 not_supported，给实际成片时间、对象和可复核的内容差异。无法定位就填 insufficient_evidence。保持引文原样。':instruction;
   const shell = { contents: [{ role: 'user', parts: [
     part, { text: responseInstruction },
-  ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json' } };
+  ] }], generationConfig: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, temperature: 0, responseMimeType: 'application/json',
+    ...(format==='bounded-thinking'?{thinkingConfig:{thinkingLevel:'LOW' as const}}:{}) } };
   for(const {base64,...criterion} of criteria??[])shell.contents[0].parts.push({text:JSON.stringify(criterion)},
     {inlineData:{mimeType:'image/jpeg',data:base64}} as typeof shell.contents[0]['parts'][number]);
   return {shell,clean,instruction:responseInstruction};
 }
 
 /** Pure bounded preflight without reading/base64-encoding the whole file or minting an unverified URL. */
-export function previewReviewIdentity(sha256:string, bytes:number, input:PreviewReviewInput, format:PreviewReviewFormat='decision-first') {
+export function previewReviewIdentity(sha256:string, bytes:number, input:PreviewReviewInput, format:PreviewReviewFormat=previewReviewFormats[0]) {
   if(!/^[a-f0-9]{64}$/.test(sha256)||!Number.isSafeInteger(bytes)||bytes<=0)throw Error('Invalid preview media identity');
   const {shell,clean,instruction}=previewReviewShell({inlineData:{mimeType:'video/mp4',data:''},videoMetadata:{fps:5}},input,format);
   if(Buffer.byteLength(JSON.stringify(shell))+4*Math.ceil(bytes/3)>INLINE_REQUEST_MAX_BYTES)throw Error('Preview exceeds bounded inline request size');
   return {input:clean,video_sha256:sha256,input_sha256:hash(JSON.stringify(clean)),instruction_sha256:hash(instruction),version:PREVIEW_REVIEW_VERSION,
     logical_request_sha256:videoRequestDigest(shell,{sha256,bytes})};
 }
-export function buildPreviewReviewRequest(video: VideoInput, input: PreviewReviewInput, format:PreviewReviewFormat='decision-first') {
+export function buildPreviewReviewRequest(video: VideoInput, input: PreviewReviewInput, format:PreviewReviewFormat=previewReviewFormats[0]) {
   const media=videoInput(video),{shell,clean,instruction}=previewReviewShell(media.part,input,format);
   const body = JSON.stringify(shell);
   if (Buffer.byteLength(body) > INLINE_REQUEST_MAX_BYTES) throw new Error('Inline request exceeds size limit');
+  const thinkingLevel=shell.generationConfig.thinkingConfig?.thinkingLevel;
   return { body, input: clean, video_sha256: media.sha256, input_sha256: hash(JSON.stringify(clean)),
     instruction_sha256: hash(instruction), request_sha256: hash(body), version: PREVIEW_REVIEW_VERSION,
-    media_transfer: media.receipt };
+    media_transfer: media.receipt, ...(thinkingLevel?{thinking_level:thinkingLevel}:{}) };
 }
+
+type PreviewWireMetadata=Omit<ReturnType<typeof buildPreviewReviewRequest>,'body'|'input'>;
 
 /** The first physical segment has no predecessor. This boundary marker is not frame evidence. */
 function filmOriginPrevious(row:Record<string,unknown>,input:PreviewReviewInput){
@@ -403,17 +408,19 @@ export function parsePreviewTeachingJudgment(raw: string): unknown {
 /** One call, no hidden repair/retry/provider switch. Errors never echo keys or upstream bodies. */
 export async function reviewClipMentorPreview(
   video: VideoInput, input: PreviewReviewInput,
-  deps: { key: string; signal?: AbortSignal; format?:PreviewReviewFormat; post: (body: string, key: string, signal: AbortSignal) => Promise<{ status: number; body: unknown }> },
+  deps: { key: string; signal?: AbortSignal; format?:PreviewReviewFormat; post: (body: string, key: string, signal: AbortSignal, metadata: PreviewWireMetadata) => Promise<{ status: number; body: unknown }> },
 ) {
   if (!deps.key.trim() || /[\r\n]/.test(deps.key)) throw new Error('Preview review server credential unavailable');
-  const request = buildPreviewReviewRequest(video, input, deps.format);
+  const media=videoInput(video);
+  const {body, input:clean, ...metadata}=buildPreviewReviewRequest(media,input,deps.format);
+  const request={...metadata,input:clean};
   let response: { status: number; body: unknown };
   const signal=deps.signal ? AbortSignal.any([deps.signal,AbortSignal.timeout(PREVIEW_REVIEW_TIMEOUT_MS)]) : AbortSignal.timeout(PREVIEW_REVIEW_TIMEOUT_MS);
   signal.throwIfAborted();
-  try { response = await deps.post(request.body, deps.key, signal); }
+  try { response = await deps.post(body, deps.key, signal, metadata); }
   catch { throw new Error('Preview review transport failed; attempt consumed, no automatic retry'); }
   if(response.status!==200)return interpretPreviewResponse(response,request,deps.key);
-  if(JSON.stringify(response.body)?.includes(deps.key)||echoesMediaSecret(response.body,videoInput(video)))throw Error('Preview review response rejected for credential echo');
+  if(JSON.stringify(response.body)?.includes(deps.key)||echoesMediaSecret(response.body,media))throw Error('Preview review response rejected for credential echo');
   return interpretPreviewResponse(response,request,deps.key);
 }
 
@@ -421,12 +428,13 @@ export async function reviewClipMentorPreview(
 export function interpretPreviewResponse(response:{status:number;body:unknown},request:Omit<ReturnType<typeof buildPreviewReviewRequest>,'body'>,key:string){
   if (response.status !== 200) throw new Error(`Preview review HTTP ${Number.isInteger(response.status) ? response.status : 'error'}; attempt consumed, no automatic retry`);
   if (!object(response.body) || !Array.isArray(response.body.candidates)) throw new Error('Invalid preview review response; no automatic retry');
+  // A completion marker is only meaningful for the candidate that supplied the judgment.
+  const candidate=response.body.candidates.length===1?response.body.candidates[0]:undefined;
   const publicParts: string[] = [];
   const finishes: string[] = [];
-  for (const c of response.body.candidates) {
-    if (!object(c)) continue;
-    if (text(c.finishReason)) finishes.push(c.finishReason);
-    if (object(c.content) && Array.isArray(c.content.parts)) for (const part of c.content.parts) {
+  if (object(candidate)) {
+    if (text(candidate.finishReason)) finishes.push(candidate.finishReason);
+    if (object(candidate.content) && Array.isArray(candidate.content.parts)) for (const part of candidate.content.parts) {
       if (object(part) && !part.thought && typeof part.text === 'string') publicParts.push(part.text);
     }
   }
@@ -443,7 +451,8 @@ export function interpretPreviewResponse(response:{status:number;body:unknown},r
     video_sha256: request.video_sha256, input_sha256: request.input_sha256,
     instruction_sha256: request.instruction_sha256, request_sha256: request.request_sha256,
     media_transfer: request.media_transfer,
-    generation_options: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, fps: 5, temperature: 0 },
+    generation_options: { maxOutputTokens: PREVIEW_REVIEW_MAX_OUTPUT_TOKENS, fps: 5, temperature: 0,
+      ...(request.thinking_level?{thinkingLevel:request.thinking_level}:{}) },
     raw_public_judgment: raw, judgment,
     usage: response.body.usageMetadata, finish_reasons: finishes, requests_attempted: 1,
     ...evaluation };

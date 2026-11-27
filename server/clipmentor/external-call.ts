@@ -3,11 +3,15 @@ import {createHash, randomUUID} from 'node:crypto';
 import {appendFile, mkdir, open, readFile, readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {atomicWriteFile, syncDirectory} from '../plugins/project-store-durable.ts';
+import {PREVIEW_REVIEW_PROVIDER_MS,PREVIEW_REVIEW_PURPOSE} from './preview-review-deadline';
 
 /** Internal transport facts, never production approval. Identity must include scope,
  * question/configuration/schema, not just a media hash. Unknown submissions are not replayed. */
 export const EXTERNAL_DEADLINES = {text:120_000, voice:120_000, asr:120_000, review:600_000, video:600_000, export:600_000, download:120_000} as const;
 export type ExternalKind = keyof typeof EXTERNAL_DEADLINES;
+export function externalDeadline(kind:ExternalKind,purpose:string){
+  return kind==='video'&&purpose===PREVIEW_REVIEW_PURPOSE?PREVIEW_REVIEW_PROVIDER_MS:EXTERNAL_DEADLINES[kind];
+}
 export type FailureClass = 'configuration'|'rate_limit'|'remote'|'transport_unknown'|'deadline_unknown'|'cancelled_unknown'|'local_validation'|'local_storage'|'local_preflight';
 export class ExternalHttpError extends Error {
   readonly status:number;
@@ -55,8 +59,9 @@ export async function externalCall<T,R=T>(o:CallOptions<T,R>):Promise<R> {
   const inputHash=hash(JSON.stringify({version:1,kind:o.kind,purpose:o.purpose,identity:o.identity}));
   const directory=join(o.directory,'external-calls');
   const file=join(directory,`${inputHash}.json`), rawFile=join(directory,`${inputHash}.response`);
-  const timeout=o.timeoutMs??EXTERNAL_DEADLINES[o.kind];
-  if(!Number.isFinite(timeout)||timeout<=0||timeout>EXTERNAL_DEADLINES[o.kind])throw Error('external_deadline_invalid');
+  const maximum=externalDeadline(o.kind,o.purpose);
+  const timeout=o.timeoutMs??maximum;
+  if(!Number.isFinite(timeout)||timeout<=0||timeout>maximum)throw Error('external_deadline_invalid');
   o.signal?.throwIfAborted();
   await mkdir(directory,{recursive:true,mode:0o700});await syncDirectory(o.directory);
   let row:RecordRow={version:1,request_id:o.requestId??randomUUID(),input_sha256:inputHash,kind:o.kind,purpose:o.purpose,

@@ -156,6 +156,11 @@ export async function recoverProductionGateway(
       }
     }
     const row=record(result);
+    // A continuous preview may still be running after a timeout. The operation
+    // can be read back, but only separate operator authorization can submit it again.
+    if(name==='review_clipmentor_preview'&&row?.status!=='completed'){
+      await decide({operation_id:operationId,action:'stop',reason:'preview_review_original_readback_only'});return finish(result);
+    }
     const receipt=gatewayFailure(kind,result,operationId,projectId,args.videoSha256);
     const diagnostic=row?.diagnostic;
     // A parsed/schema failure needs local repair; a timed-out review may still be

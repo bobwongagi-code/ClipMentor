@@ -4,7 +4,9 @@ import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {externalCall,externalFailure,externalRecovery,ExternalHttpError,readExternalCapability,recordExternalCapability,summarizeExternalCalls,readSavedExternalResponse} from './external-call.ts';
+import {externalCall,externalDeadline,externalFailure,externalRecovery,ExternalHttpError,readExternalCapability,recordExternalCapability,summarizeExternalCalls,readSavedExternalResponse} from './external-call.ts';
+import {PREVIEW_REVIEW_PURPOSE,PREVIEW_REVIEW_PROVIDER_MS,PREVIEW_REVIEW_TIMEOUT_MS,PREVIEW_REVIEW_PROCESS_TIMEOUT_MS,
+ PREVIEW_REVIEW_PREPARATION_MS,PREVIEW_REVIEW_TRANSPORT_SECONDS} from './preview-review-deadline';
 import {externalFetch} from './external-fetch.ts';
 const directory=await mkdtemp(join(tmpdir(),'clipmentor-calls-'));
 let calls=0,tests=0;
@@ -12,6 +14,21 @@ const pass=(s:string)=>{tests++;console.log(`PASS ${s}`);};
 const base={directory,kind:'text' as const,purpose:'offline-v1',identity:{project:'p',model:'m',question:'q',input:'sha'},execute:async()=>{calls++;return {answer:'raw'};}};
 try{
  assert.deepEqual(await externalCall(base),{answer:'raw'});assert.deepEqual(await externalCall(base),{answer:'raw'});assert.equal(calls,1);pass('same semantic request resumes with zero additional provider calls');
+ assert.equal(externalDeadline('video','source-observation'),600_000);
+ assert.equal(externalDeadline('review',PREVIEW_REVIEW_PURPOSE),600_000);
+ assert.equal(externalDeadline('video',PREVIEW_REVIEW_PURPOSE),PREVIEW_REVIEW_PROVIDER_MS);
+ assert(PREVIEW_REVIEW_TRANSPORT_SECONDS*1000<PREVIEW_REVIEW_PROVIDER_MS);
+ assert(PREVIEW_REVIEW_PROVIDER_MS<PREVIEW_REVIEW_TIMEOUT_MS);
+ assert(PREVIEW_REVIEW_TIMEOUT_MS+PREVIEW_REVIEW_PREPARATION_MS<PREVIEW_REVIEW_PROCESS_TIMEOUT_MS);
+ const previewClock=Date.now;
+ const previewStart=previewClock();
+ Date.now=()=>previewStart;
+ try {
+  const preview={...base,kind:'video' as const,purpose:PREVIEW_REVIEW_PURPOSE};
+  assert.equal(await externalCall({...preview,execute:async()=>{Date.now=()=>previewStart+610_000;return 'valid delayed response';}}),'valid delayed response');
+  assert.equal(await externalCall({...preview,execute:async()=>assert.fail('delayed response must be reused')}),'valid delayed response');
+ } finally {Date.now=previewClock;}
+ pass('continuous preview reaches a reply after the old deadline and reuses the same archived operation');
  await externalCall({...base,identity:{...base.identity,question:'different'}});await externalCall({...base,identity:{...base.identity,model:'different'}});assert.equal(calls,3);pass('different question/model never reuses a judgment');
  const bad={...base,purpose:'parse-recovery',consume:()=>{throw Error('parse failed');}};
  await assert.rejects(externalCall(bad),/parse failed/);const before=calls;

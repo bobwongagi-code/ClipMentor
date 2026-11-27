@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { ProductionTask } from './production-task';
 import { previewReviewRepairBlock } from './preview-review';
+import { PREVIEW_REVIEW_PROCESS_TIMEOUT_MS } from './preview-review-deadline';
 
 // A single continuous review needs its own transport window even if production expired.
-const reviewWindowMs = 12 * 60_000;
+const reviewWindowMs = PREVIEW_REVIEW_PROCESS_TIMEOUT_MS + 60_000;
 
 export function productionDeadline(task: ProductionTask) {
  const regular = task.createdAt + task.input.budget.maxElapsedMs;

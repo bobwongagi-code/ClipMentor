@@ -368,6 +368,10 @@ try {
   const goodRead=await execClipMentorAnalysisTool('review_clipmentor_preview',formalRead,ctx) as any;
   assert.equal(goodRead.effective_review.status,'pass');assert.equal(goodRead.requestsSent,0);
   const countBeforeRead=calls;
+  await writeFile(rawPath,JSON.stringify({...makeResult(judgment),finish_reasons:['MAX_TOKENS']}));
+  const truncatedRead=await previewBridge({...formalRead,projectId:'project-a'},deps);
+  assert.equal(truncatedRead.effective_review.can_use_as_pass,false,'a parseable truncated reply cannot inherit a saved pass');
+  assert(truncatedRead.effective_review.blockers.includes('preview_review_incomplete_generation'));
   const bad=structuredClone(judgment);
   bad.continuity[0].teaching.evidence=[evidence(2.2,10,'全程只有两张静图')];
   await writeFile(rawPath,JSON.stringify(makeResult(bad)));

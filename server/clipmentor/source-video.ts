@@ -1,4 +1,4 @@
-import {externalCall,readSavedExternalResponse} from './external-call';
+import {EXTERNAL_DEADLINES,externalCall,readSavedExternalResponse} from './external-call';
 import { echoesMediaSecret, videoFileFormat, videoRequestDigest, videoInput, type VideoInput, type PreparedVideo } from './video-input';
 import { prepareVideoMedia, VideoMediaError } from './video-media';
 import { materialRange, prepareObservationMaterial } from './observation-material';
@@ -16,7 +16,7 @@ import { runtimeProfile } from '../runtime-profile';
 import { atomicWriteFile } from '../plugins/project-store-durable';
 import { getKey } from '../keystore';
 import { ffprobeBin } from '../media-binaries';
-import { INLINE_REQUEST_MAX_BYTES, PREVIEW_REVIEW_MODEL, PREVIEW_REVIEW_TIMEOUT_MS, PREVIEW_REVIEW_MAX_OUTPUT_TOKENS } from './preview-review';
+import { INLINE_REQUEST_MAX_BYTES, PREVIEW_REVIEW_MODEL, PREVIEW_REVIEW_MAX_OUTPUT_TOKENS } from './preview-review';
 import { inspectSourceObservation, SourceObservationValidationError } from './source-video-validation';
 export { inspectSourceObservation, validateSourceObservation } from './source-video-validation';
 import { postSourceVideoTransport, safeSourceTransportDiagnostic, SourceVideoTransportError } from './source-video-transport';
@@ -201,7 +201,8 @@ async function runSourceObservation(request:SourceVideoRequest,deps:SourceVideoD
   let mediaTransfer: PreparedVideo['receipt'] | undefined;
   let observationMaterial: ObservationMaterial | undefined;
   try {
-    const signal = outer ? AbortSignal.any([outer,AbortSignal.timeout(PREVIEW_REVIEW_TIMEOUT_MS)]) : AbortSignal.timeout(PREVIEW_REVIEW_TIMEOUT_MS);
+    const deadline=AbortSignal.timeout(EXTERNAL_DEADLINES.video);
+    const signal = outer ? AbortSignal.any([outer,deadline]) : deadline;
     const selected=deps.prepareObservation?await deps.prepareObservation(file,request.source.hash,request.source.duration,sourceObservationRange(input),signal):undefined;
     observationMaterial=selected?.binding;
     const submittedFile=selected?.file??file,submittedHash=selected?.binding.submitted_sha256??request.source.hash;

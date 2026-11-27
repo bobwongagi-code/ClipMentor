@@ -239,14 +239,16 @@ try {
  const cli=join(root,'transport-fixture.cjs');
  await writeFile(cli,String.raw`const fs=require('node:fs'),assert=require('node:assert/strict');
 const config=JSON.parse(process.env.SOURCE_TRANSPORT_FIXTURE);const args=process.argv.slice(2);
-const arg=n=>args[args.indexOf(n)+1];assert.equal(arg('--retry'),'0');assert.equal(arg('--max-time'),'595');assert.equal(arg('--connect-timeout'),'30');
+const arg=n=>args[args.indexOf(n)+1];assert.equal(arg('--retry'),'0');assert.equal(arg('--max-time'),String(config.timeout??595));assert.equal(arg('--connect-timeout'),'30');
+assert(arg('--write-out').includes('"time_posttransfer":"%{time_posttransfer}"'));
 assert.equal(arg('--proto'),'=https');assert.equal(arg('--max-redirs'),'0');assert.equal(arg('--noproxy'),'*');
 assert.equal(args.at(-1),'https://rootifyaiapi.rootifyglobal.com/v1beta/models/gemini-3.8-flash:generateContent');
 let auth='';process.stdin.on('data',b=>auth+=b);process.stdin.on('end',()=>{
 assert.equal(auth,'Authorization: Bearer '+config.key+'\n');assert(!args.some(x=>x.includes(config.key)));
 if(config.mode==='abort'){setTimeout(()=>{},10000);return;}
 const body=fs.readFileSync(arg('--data-binary').slice(1));const metrics={http_code:config.status,size_upload:config.partial?body.length/2:body.length,size_download:100,time_namelookup:0.001,time_connect:0.01,time_appconnect:0.02,time_pretransfer:0.021,time_starttransfer:0.03,time_total:190.8};
-fs.writeFileSync(arg('--dump-header'),'HTTP/1.1 100 Continue\r\nx-request-id: interim-only\r\n\r\nHTTP/1.1 '+config.status+' Result\r\nx-oneapi-request-id: final-gateway-id\r\nx-request-id: '+config.key+'\r\nSet-Cookie: cookie-sensitive\r\nLocation: https://private.invalid/key=hidden\r\n\r\n');
+Object.assign(metrics,config.metrics);
+fs.writeFileSync(arg('--dump-header'),'HTTP/1.1 100 Continue\r\nx-request-id: interim-only\r\n\r\n'+(config.status>=200?'HTTP/1.1 '+config.status+' Result\r\nx-oneapi-request-id: final-gateway-id\r\nx-request-id: '+config.key+'\r\nSet-Cookie: cookie-sensitive\r\nLocation: https://private.invalid/key=hidden\r\n\r\n':''));
 if(config.response!==undefined)fs.writeFileSync(arg('--output'),config.response);
 process.stdout.write(config.malformed?'not metrics':JSON.stringify(metrics).replace('\"http_code\":0','\"http_code\":000'));process.exit(config.exit||0);
 });`);
@@ -271,6 +273,26 @@ process.stdout.write(config.malformed?'not metrics':JSON.stringify(metrics).repl
   assert(caught instanceof SourceVideoTransportError);assert.equal(caught.diagnostic.error_kind,'curl_timeout');assert.equal(caught.diagnostic.curl_exit_code,28);
   assert.equal(caught.diagnostic.http_status,null);assert.equal(caught.diagnostic.upload_matches_request_bytes,!partial);
  }
+ const previewBefore=launched;
+ const previewTransport=(config:Record<string,unknown>)=>postSourceVideoTransport(original,key,new AbortController().signal,
+  randomUUID(),root,launcher({timeout:900,...config}),undefined,'preview');
+ const afterOldDeadline=await previewTransport({status:200,response:JSON.stringify({candidates:[]}),metrics:{time_posttransfer:'3.5',time_total:610}});
+ assert.equal(afterOldDeadline.status,200);assert.equal(afterOldDeadline.diagnostic.timeout_seconds,900);
+ assert.equal(afterOldDeadline.diagnostic.wait_after_upload_seconds,undefined,'the final response arrived');
+ await assert.rejects(previewTransport({status:100,exit:28,metrics:{time_posttransfer:'3.5',time_total:900,size_download:0}}),error=>{
+  assert(error instanceof SourceVideoTransportError);
+  assert.equal(error.diagnostic.response_boundary,'no_final_response_unattributed');
+  assert.equal(error.diagnostic.metrics.time_starttransfer,0.03,'the first byte is informational');
+  assert.equal(error.diagnostic.wait_after_upload_seconds,896.5);
+  return true;
+ });
+ await assert.rejects(previewTransport({status:100,exit:28,metrics:{time_posttransfer:'',time_total:900,size_download:0}}),error=>{
+  assert(error instanceof SourceVideoTransportError);
+  assert.equal(error.diagnostic.upload_matches_request_bytes,true);
+  assert.equal(error.diagnostic.wait_after_upload_seconds,undefined,'older curl must not infer upload completion time');
+  return true;
+ });
+ assert.equal(launched-previewBefore,3,'one launch per preview operation, including timeouts');
  let abortError:any;try{await postSourceVideoTransport(original,key,AbortSignal.timeout(100),randomUUID(),root,launcher({mode:'abort'}));}catch(e){abortError=e;}
  assert(abortError instanceof SourceVideoTransportError);assert.equal(abortError.diagnostic.error_kind,'aborted');
  assert.equal(abortError.diagnostic.http_status,null);
