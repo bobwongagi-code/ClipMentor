@@ -19,7 +19,7 @@ import {tileContactSheet,formatFrameLabel} from '../frame-grid';
 import {loadOfflineStoredProject} from '../external-agent/offline-project-store';
 import {blueprintReviewBoardPage} from './blueprint-review-board-page';
 import {humanReviewBoardPage} from './blueprint-review-board-human';
-import {reviewReplayViews,translatedLabels} from './blueprint-review-board-human-context';
+import {contextReviewFrame,frameFloor,matchingContextLabel,reviewReplayViews,translatedLabels} from './blueprint-review-board-human-context';
 import {deliveryLayoutStages,renderDeliveryLayoutFrames} from './delivery-layout-frames';
 import type {VisualReferenceFrame} from './visual-done-criteria';
 import type {PublishedNarrationDecision} from './production-teaching-baseline';
@@ -33,7 +33,6 @@ const txt=(v:unknown)=>typeof v==='string'?v:'';
 const hash=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex');
 function fail(message:string):never{throw Error('INPUT: '+message);}
 const window=(v:unknown):[number,number]|null=>Array.isArray(v)&&v.length===2&&v.every(n=>typeof n==='number'&&Number.isFinite(n))&&v[0]>=0&&v[1]>=v[0]?[v[0],v[1]]:null;
-const frameFloor=(v:number)=>Math.abs(v-Math.round(v))<=4*Number.EPSILON*Math.max(1,Math.abs(v))?Math.round(v):Math.floor(v);
 export const REVIEW_BOARD_FRAME_LIMIT=96;
 export interface ReviewBoardRow {
  key:string;unit_id:string;stage:'opening'|'original'|'explanation'|'closing';line_ids:string[];
@@ -174,13 +173,9 @@ export function planReviewBoards(input:BoardInput,variant?:string):{plans:Review
     if(!slice||slice[1]>duration)return [];
     // A short label is only a locator when the saved selection names it.
     // Order or equal counts cannot bind a label to a different shot.
-    const purpose=txt(entry.purpose);
-    const matches=labels.filter(({zh,ms})=>(zh&&purpose.includes(zh))||purpose.includes(ms));
-    const shortLabel=matches.length===1?matches[0]:undefined;
-    const first=Math.ceil(slice[0]*fps-1e-8);
-    const middle=frameFloor((slice[0]+slice[1])*fps/2);
-    const frame=slice[0]===slice[1]?frameFloor(slice[0]*fps):Math.min(last,shortLabel?Math.max(first,middle):first);
-    if(slice[0]!==slice[1]&&(frame/fps<slice[0]-1e-8||frame/fps>=slice[1]))return [];
+    const shortLabel=matchingContextLabel(labels,entry.purpose);
+    const frame=contextReviewFrame(slice,fps,duration,!!shortLabel);
+    if(frame===undefined)return [];
     return [{...samples([frame])[0],selection:{segmentId:txt(entry.segment_id),start:slice[0],end:slice[1],shortLabel}}];
    }):[];
    const replay=picks.filter((sample,index)=>picks.findIndex(pick=>pick.frame===sample.frame)===index);

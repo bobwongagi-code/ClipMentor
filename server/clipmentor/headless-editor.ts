@@ -1,4 +1,4 @@
-import {creatorExemplarCards} from './creator-exemplar-cards';
+import {creatorExemplarCards,creatorExemplars,legacyCreatorExamples} from './creator-exemplar-cards';
 import {sourceFrameSeekMs}from'../../shared/source-frame-seek';
 import {voiceAssetProvenance} from '../../shared/voice-word-timing';
 import {assertFrozenParameterChanges} from '../../src/clipmentor/execution-parameters';
@@ -331,8 +331,11 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
  }
  async function loadSkill(name:string,file='SKILL.md'){
   if(name==='clipmentor'&&file==='references/teaching-purpose.json')return JSON.stringify(teachingPurpose,null,2)+'\n';
+  const exemplar=name==='clipmentor'&&file.startsWith('references/creator-exemplar-')
+   ?creatorExemplars.get(file.slice('references/creator-exemplar-'.length,-'.json'.length)):undefined;
+  if(exemplar?.file===file)return JSON.stringify(exemplar,null,2)+'\n';
   const card=name==='clipmentor'?creatorExemplarCards.find(entry=>entry.file===file):undefined;
-  if(card)return JSON.stringify({title:card.title,entries:card.entries},null,2)+'\n';
+  if(card)return JSON.stringify({title:card.title,entries:card.entries.filter(entry=>legacyCreatorExamples.has(entry.id)).map(({id,payoff,why,mistake,limit})=>({id,payoff,why,mistake,limit}))},null,2)+'\n';
   if(!/^[a-z0-9_-]+$/.test(name)||!/^([a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_.-]+\.md$/.test(file)||file.includes('..'))throw new Error('Unsupported skill file');
   return readFile(new URL(`../../src/agent/skills/${name}/${file}`,import.meta.url),'utf8');
  }

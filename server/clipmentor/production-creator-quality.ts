@@ -1,3 +1,4 @@
+import {approvedEditingReference,creatorEditingAdvisories,creatorEditingFacts,creatorCopyTerminologyGaps} from './creator-edit-calibration';
 import type {OpeningComparisonCriterion,SourceTeachingGuidance} from '../../shared/clipmentor-handoff';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-bindings';
 import { creatorAnswer, creatorFilmQuestions, creatorGroupQuestions, creatorQuestions } from '../../src/clipmentor/creator-teaching-quality';
@@ -5,15 +6,26 @@ import { readBlueprint } from '../../src/clipmentor/blueprint-lint';
 import { originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
 import { hasConciseFilmingChoice } from '../../src/clipmentor/teaching-selection';
 import type { ProjectDoc } from '../../src/editor/types';
-import { creatorExemplarCards, creatorJudgment } from './creator-exemplar-cards';
+import { creatorExemplarCards, creatorExemplars, creatorJudgment, legacyCreatorExamples } from './creator-exemplar-cards';
 
 export const creatorQualityVersion = 'creator-teaching-v1';
-type GroupQuestion = typeof creatorGroupQuestions[number];
-type FilmQuestion = typeof creatorFilmQuestions[number];
+const copyGroupQuestions = [...creatorGroupQuestions,'evidence_boundary','copy_form','picture_support'] as const;
+const copyFilmQuestions = [...creatorFilmQuestions,'stage_visual'] as const;
+type GroupQuestion = typeof copyGroupQuestions[number];
+type FilmQuestion = typeof copyFilmQuestions[number];
 type Row = Record<string, unknown>;
 const row = (value: unknown): value is Row => !!value && typeof value === 'object' && !Array.isArray(value);
 const normalize = (value: string) => value.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
-const cardsByEntry = new Map(creatorExemplarCards.flatMap(card => card.entries.map(entry => [entry.id, entry] as const)));
+function worksheetQuestions(expanded: boolean) {
+  return {group:expanded?copyGroupQuestions:creatorGroupQuestions,film:expanded?copyFilmQuestions:creatorFilmQuestions};
+}
+
+function questionText(expanded: boolean, copy: boolean) {
+  const {group,film}=worksheetQuestions(expanded);
+  const questions: Record<string,string>=Object.fromEntries([...group,...film].map(key=>[key,creatorQuestions[key]]));
+  if(!copy)questions.opening='计划给观众什么继续看的理由？如何用当前已登记的三项成绩提问？';
+  return questions;
+}
 const selected = (doc: ProjectDoc) => new Map(readBlueprint(doc).selectedPlans.map(plan => [plan.unit.unit_id, plan]));
 const text = (value: unknown) => typeof value === 'string' ? value : undefined;
 
@@ -31,22 +43,34 @@ export function creatorOpeningMetricsValid(results: OpeningComparisonCriterion['
     && number.test(readable(results.revenue).replace(currency,''));
 }
 
-export function creatorAuthorInstruction(doc: ProjectDoc, decisions: readonly string[] = [], relationships: ReadonlyMap<string,string> = new Map()) {
+export function creatorAuthorInstruction(doc: ProjectDoc, decisions: readonly string[] = [], relationships: ReadonlyMap<string,string> = new Map(), rubric=false) {
   const baseline = doc.clipMentorAnalysis?.source_breakdown;
+  const needsExamples=!baseline?.units.length||baseline.units.some(unit=>
+    !creatorExemplars.has(unit.teaching_selection?.creator_quality?.analogy.entry??''));
   return {
-    version: creatorQualityVersion, judgment: creatorJudgment, questions: creatorQuestions, cards: creatorExemplarCards.map(({title,file,use})=>({title,file,use})),
+    version: rubric?'creator-teaching-v3':creatorQualityVersion, judgment: creatorJudgment,
+    questions: questionText(rubric, true),
+    ...(rubric
+      ? { ...(needsExamples?{exemplar_index:[...creatorExemplars.values()].map(({id,dimension,file,payoff})=>({id,dimension,file,use:payoff}))}:{}),
+          instruction_for_examples:'先用本片证据决定本组要教什么，再从简索引择一至两条最接近的单条参考。每组只登记一条实际用到的判断。只按给出的单条 file 读取。弱锚点只供参考。'}
+      : {cards:creatorExemplarCards.map(({title,file,use})=>({title,file,use}))}),
     ...(decisions.length ? { confirmed_decision_ids: decisions } : {}),
     ...(relationships.size ? { narration_relationships: {
       by_confirmed_decision_id: Object.fromEntries(relationships),
       instruction: '只按本组绑定的 confirmed_decision_id 使用具体要求。在马来语正文直接讲清对应的拍法与观众据此能判断什么，并用 plan.creator_conclusion_line_id 指向本组承载该关系的现行主讲句。句式自定。中文回译、标题、画面备注和作者问卷不能代替口播原句。',
     }} : {}),
     worksheet: baseline?.creator_quality,
-    groups: baseline?.units.map(unit => ({ unit_id: unit.unit_id, ...unit.teaching_selection })),
-    instruction: '分析阶段保留 decision、first_glance、omission_loss。各组 teaching_selection.creator_quality 写 next_decision、narration_why、still_focus 及 analogy:{entry,evidence_ids,application,difference}。先看共同判断，再用 load_skill 按 file 读取最接近的一至两张卡，借其中对本片有用的判断。只能用本任务该组已选证据编号。application 说清这项判断如何改变本组，difference 写本片成立条件和边界。如有已确认决定，选择它的 confirmed_decision_id。全片 source_breakdown.creator_quality 写 opening、balance，各用一句白话。写蓝图时按已核定的表编排实际原声、画面和马来语口播。每个讲解组在当前画面 plan.creator_conclusion_line_id 选择一个真正讲出取舍和作用的本组主讲句。只需要看图的细节作为组内画面或辅助点，写清读图任务。意外发现登记为建议。',
+    groups: baseline?.units.map(unit => {
+      const selection=unit.teaching_selection;
+      const entry=selection?.creator_quality?.analogy.entry;
+      const exemplar=rubric&&entry?creatorExemplars.get(entry):undefined;
+      return {unit_id:unit.unit_id,...selection,...(exemplar?{exemplar}:{})};
+    }),
+    instruction: '分析阶段保留 decision、first_glance、omission_loss。各组 teaching_selection.creator_quality 写 next_decision、narration_why、still_focus 及 analogy:{entry,evidence_ids,application,difference}。'+(rubric?'先看本组现有类比或用单条索引选相近例子。':'先看共同判断，再用 load_skill 按 file 读取最接近的一至两张卡，借其中对本片有用的判断。')+'只能用本任务该组已选证据编号。application 说清这项判断如何改变本组，difference 写本片成立条件和边界。如有已确认决定，选择它的 confirmed_decision_id。全片 source_breakdown.creator_quality 写 opening、balance，各用一句白话。写蓝图时按已核定的表编排实际原声、画面和马来语口播。每个讲解组在当前画面 plan.creator_conclusion_line_id 选择一个真正讲出取舍和作用的本组主讲句。只需要看图的细节作为组内画面或辅助点，写清读图任务。意外发现登记为建议。',
   };
 }
 
-export function creatorWorksheetGaps(doc: ProjectDoc, decisions: readonly string[], evidence: ReadonlySet<string>) {
+export function creatorWorksheetGaps(doc: ProjectDoc, decisions: readonly string[], evidence: ReadonlySet<string>, rubric=false) {
   const analysis = doc.clipMentorAnalysis, baseline = analysis?.source_breakdown;
   if (!analysis || !baseline) return ['film:worksheet'];
   const segments = new Map(baseline.segments.map(segment => [segment.segment_id, segment]));
@@ -64,8 +88,9 @@ export function creatorWorksheetGaps(doc: ProjectDoc, decisions: readonly string
       if (!creatorAnswer(quality?.[field])) add(field);
     if (quality && normalize(quality.narration_why) === normalize(selection!.decision)) add('narration_why');
     const analogy = quality?.analogy;
-    const card = analogy && creatorExemplarCards.find(item => item.entries.some(entry => entry.id === analogy.entry));
-    if (card) usedCards.add(card.title);
+    const exemplar = analogy && creatorExemplars.get(analogy.entry);
+    const eligible = exemplar && (rubric || legacyCreatorExamples.has(exemplar.id));
+    if (!rubric && eligible) usedCards.add(exemplar.anchor.basis);
     const unitSegments = new Set([...unit.original_segment_ids,...unit.explanation_segment_ids]);
     const associated = new Set(unit.coverage.filter(item => item.treatment !== 'omit').flatMap(item =>
       (points.get(item.point_id)?.segment_ids ?? []).flatMap(id => {
@@ -74,7 +99,7 @@ export function creatorWorksheetGaps(doc: ProjectDoc, decisions: readonly string
         const selectedPoint = points.get(item.point_id)?.teaching_basis?.evidence_ids;
         return [...segment.visible_evidence_ids,...segment.claim_evidence_ids].filter(id => !selectedPoint || selectedPoint.includes(id));
       })));
-    if (!analogy || !card || normalize(analogy.application) === normalize(analogy.difference)
+    if (!analogy || !eligible || normalize(analogy.application) === normalize(analogy.difference)
       || analogy.evidence_ids.some(id => !evidence.has(id) || !associated.has(id))) add('analogy');
     const decision = quality?.confirmed_decision_id;
     if (decision) {
@@ -82,7 +107,7 @@ export function creatorWorksheetGaps(doc: ProjectDoc, decisions: readonly string
       used.set(decision, (used.get(decision) ?? 0) + 1);
     }
   }
-  if (usedCards.size > 2) gaps.push('film:analogy_card_limit');
+  if (!rubric && usedCards.size > 2) gaps.push('film:analogy_card_limit');
   for (const id of decisions) if (used.get(id) !== 1) gaps.push('film:confirmed_decision:' + id);
   return [...new Set(gaps)].sort();
 }
@@ -204,22 +229,32 @@ export function creatorRegressionGaps(facts: ReturnType<typeof creatorBlueprintF
   return gaps;
 }
 
+export function creatorRubricFindings(doc:ProjectDoc, facts=creatorBlueprintFacts(doc)) {
+  return [...creatorEditingFacts(doc).findings,...creatorCopyTerminologyGaps(facts),
+    ...facts.filter(group=>group.narrated&&group.conclusion&&!group.unambiguousConclusion)
+      .map(group=>({code:'creator_conclusion_ambiguous',id:group.unit_id,targets:[group.conclusion!]}))];
+}
+
 export function creatorReviewWorksheet(doc: ProjectDoc, copy: boolean, evidence: ReadonlySet<string>,
-  performance?: OpeningComparisonCriterion['results'], relationships: ReadonlyMap<string,string> = new Map()) {
+  performance?: OpeningComparisonCriterion['results'], relationships: ReadonlyMap<string,string> = new Map(), rubric=false, sameMaterial=false) {
   const baseline = doc.clipMentorAnalysis?.source_breakdown;
   if (!baseline) throw Error('creator_worksheet_missing');
   const facts = copy ? creatorBlueprintFacts(doc) : [];
+  const editing=copy&&rubric?creatorEditingFacts(doc):undefined;
+  const advisory=creatorEditingAdvisories(editing?.facts,sameMaterial?undefined:approvedEditingReference);
   const opening = copy ? deliverySectionsFromDoc(doc).find(section => section.kind === 'performance_opening') : undefined;
   return {
-    version: creatorQualityVersion, judgment: creatorJudgment,
-    questions: copy ? creatorQuestions : {...creatorQuestions,opening:'计划给观众什么继续看的理由？如何用当前已登记的三项成绩提问？'},
+    version: rubric?'creator-teaching-v3':creatorQualityVersion, judgment: creatorJudgment,
+    questions: questionText(copy && rubric, copy),
+    ...(advisory.length?{editing_advisories:advisory}:{}),
+    ...(editing?{picture_evidence:editing.groups}:{}),
     ...(performance ? { performance } : {}),
     ...(opening ? { opening: { narration: opening.line.narration_ms, caption_lines: opening.line.caption_lines, layout: opening.picture.layout } } : {}),
     film: baseline.creator_quality,
     groups: baseline.units.map(unit => {
       const selection = unit.teaching_selection, quality = selection?.creator_quality;
-      const analogy = quality?.analogy, example = analogy && cardsByEntry.get(analogy.entry);
-      const neutral = example && { payoff: example.payoff, why: example.why, mistake: example.mistake, limit: example.limit };
+      const analogy = quality?.analogy, example = analogy && creatorExemplars.get(analogy.entry);
+      const neutral = example && { payoff: example.payoff, why: example.why, mistake: example.mistake, limit: example.limit, ...(rubric?{dimension:example.dimension,layers:example.layers,viewed:example.anchor.viewed,strength:example.writingControl?'writing_control':example.anchor.strength}:{}) };
       return {
         unit_id: unit.unit_id, decision: selection?.decision, first_glance: selection?.first_glance, omission_loss: selection?.omission_loss,
         next_decision: quality?.next_decision, narration_why: quality?.narration_why, still_focus: quality?.still_focus,
@@ -237,7 +272,7 @@ export function creatorReviewWorksheet(doc: ProjectDoc, copy: boolean, evidence:
 type Criterion<Q> = { question: Q; status: 'ok' | 'fix' | 'unresolved'; answer: string };
 export type CreatorChecks = {
   film: Criterion<FilmQuestion>[];
-  groups: { unit_id: string; checks: Criterion<GroupQuestion>[]; analogy: Omit<Criterion<'analogy'>,'question'> & { evidence_id?: string }; conclusion_line_id?: string }[];
+  groups: { unit_id: string; checks: Criterion<GroupQuestion>[]; analogy: Omit<Criterion<'analogy'>,'question'> & { evidence_id?: string; reference_only?: true }; conclusion_line_id?: string }[];
   suggestions?: string[];
 };
 
@@ -256,26 +291,29 @@ export function readCreatorChecks(value: unknown, input: ReturnType<typeof creat
   const invalid = () => Error('creator_review_criteria_invalid');
   if (!row(value) || !Array.isArray(value.groups) || value.groups.length !== input.groups.length) throw invalid();
   const groups = value.groups;
+  const questions=worksheetQuestions(input.version==='creator-teaching-v3' && !!input.copy);
   const suggestions = value.suggestions;
   if (suggestions !== undefined && (!Array.isArray(suggestions) || suggestions.length > 3 || !suggestions.every(creatorAnswer))) throw invalid();
   return {
-    film: readCriteria(value.film, creatorFilmQuestions),
+    film: readCriteria(value.film, questions.film),
     groups: input.groups.map(({ unit_id, analogy }) => {
       const matches = groups.filter(item => row(item) && item.unit_id === unit_id);
       const item = matches[0];
       if (matches.length !== 1 || !row(item)) throw invalid();
-      const checks = readCriteria(item.checks, creatorGroupQuestions);
+      const checks = readCriteria(item.checks, questions.group);
       const verdict = item.analogy;
       if (!row(verdict) || !creatorAnswer(verdict.answer)
         || (verdict.status !== 'ok' && verdict.status !== 'fix' && verdict.status !== 'unresolved')
         || (verdict.status === 'ok' && (typeof verdict.evidence_id !== 'string' || !analogy?.evidence_ids.includes(verdict.evidence_id)))
         || (verdict.evidence_id !== undefined && (typeof verdict.evidence_id !== 'string' || !analogy?.evidence_ids.includes(verdict.evidence_id))))
         throw invalid();
-      const analogyCheck: CreatorChecks['groups'][number]['analogy'] = { status: verdict.status, answer: verdict.answer,
+      const referenceOnly=input.version==='creator-teaching-v3' && (analogy?.strength==='weak'||analogy?.strength==='writing_control');
+    const analogyCheck: CreatorChecks['groups'][number]['analogy'] = { status: verdict.status, answer: verdict.answer,
+        ...(referenceOnly?{reference_only:true as const}:{}),
         ...(typeof verdict.evidence_id === 'string' ? { evidence_id: verdict.evidence_id } : {}) };
       const copy = input.copy?.find(group => group.unit_id === unit_id);
       const conclusion_line_id = item.conclusion_line_id;
-      if (copy?.narrated && analogyCheck.status === 'ok' && checks.every(check => check.status === 'ok')
+      if (copy?.narrated && (referenceOnly||analogyCheck.status === 'ok') && checks.every(check => check.status === 'ok')
         && (!copy.conclusion || conclusion_line_id !== copy.conclusion)) throw invalid();
       if (conclusion_line_id !== undefined && (typeof conclusion_line_id !== 'string'
         || !copy?.lines.some(line => line.id === conclusion_line_id && line.primary))) throw invalid();
@@ -291,15 +329,17 @@ export function hasBoundCreatorRejection(value: unknown, input: ReturnType<typeo
     && (item.status === 'fix' || item.status === 'unresolved') && creatorAnswer(item.answer);
   const namedRejection = (entries: unknown, questions: readonly string[]) => Array.isArray(entries)
     && entries.some(item => rejected(item) && typeof item.question === 'string' && questions.includes(item.question));
-  return namedRejection(value.film,creatorFilmQuestions) || (Array.isArray(value.groups) && value.groups.some(item =>
+  const questions=worksheetQuestions(input.version==='creator-teaching-v3' && !!input.copy);
+  return namedRejection(value.film,questions.film) || (Array.isArray(value.groups) && value.groups.some(item =>
     row(item) && input.groups.some(group => group.unit_id === item.unit_id)
-    && (namedRejection(item.checks,creatorGroupQuestions) || rejected(item.analogy))));
+    && (namedRejection(item.checks,questions.group) || (rejected(item.analogy)
+      && !input.groups.some(group=>group.unit_id===item.unit_id && (group.analogy?.strength==='weak'||group.analogy?.strength==='writing_control'))))));
 }
 
 export function creatorReviewIssues(receipt: CreatorChecks | undefined) {
   if (!receipt) return [];
   const groups = receipt.groups.map(group => ({
-    unit_id: group.unit_id, checks: [...group.checks,{question:'analogy',...group.analogy}],
+    unit_id: group.unit_id, checks: [...group.checks,...(group.analogy.reference_only?[]:[{question:'analogy',...group.analogy}])],
   }));
   return [{ unit_id: 'film', checks: receipt.film }, ...groups].flatMap(group =>
     group.checks.filter(check => check.status !== 'ok').map(check =>

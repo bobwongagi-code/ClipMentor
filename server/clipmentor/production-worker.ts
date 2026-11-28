@@ -1,10 +1,11 @@
-import {creatorAuthorInstruction,creatorBlueprintFacts,creatorNarrationRelationships,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,creatorSharedTeaching,creatorWorksheetGaps} from './production-creator-quality';
+import {usesCreatorRubric} from './production-generation';
+import {creatorAuthorInstruction,creatorBlueprintFacts,creatorNarrationRelationships,creatorOpeningMetricsValid,creatorRegressionGaps,creatorRubricFindings,creatorReviewIssues,creatorSharedTeaching,creatorWorksheetGaps} from './production-creator-quality';
 import {productionWorkDeadline} from './production-shared-clock';
 import {recoveredAnalysisWrite,sourceBreakdownFailures} from './production-analysis-recovery';
 import {productionReferenceSelection,productionReferenceTool,productionReferenceKinds} from './production-references';
 import {assertReferenceRepairTeaching,frozenTeachingTopics,retainedReferenceRepairTeaching,sourceClosingPolicy,sourceTeachingAdvice} from './production-source-policy';
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
-import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
+import {blueprintFindingKeys,blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
 import {openingUnderlayShortfall,pictureRepairWriteError} from './production-capacity-repair';
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
 import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
@@ -204,7 +205,11 @@ export async function prepareProductionCopyReview(
    if(reference&&reference.originalSha256!==doc.clipMentorAnalysis?.source.sourceContentHash)
     throw Error('creator_confirmed_reference_source_changed');
    const relationships=creatorNarrationRelationships(topics&&'guidance' in topics?topics.guidance:undefined);
-   for(const gap of creatorRegressionGaps(creatorBlueprintFacts(doc),reference,relationships))add(gap.code,gap.id);
+   const facts=creatorBlueprintFacts(doc);
+   for(const gap of creatorRegressionGaps(facts,reference,relationships))add(gap.code,gap.id);
+   if(usesCreatorRubric(task.input)){
+    for(const gap of creatorRubricFindings(doc,facts))add(gap.code,gap.id,gap.targets);
+   }
   }
   if(prepared&&topics&&'reviewViews' in topics&&topics.reviewViews?.length){
    try{
@@ -762,7 +767,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(invalidReplay)}`},repair:'blueprint'};
    }
    if(creatorDecisions){
-    const gaps=creatorWorksheetGaps(doc,creatorDecisions,new Set(teachingSourceEvidence(a).map(item=>item.id)));
+    const gaps=creatorWorksheetGaps(doc,creatorDecisions,new Set(teachingSourceEvidence(a).map(item=>item.id)),usesCreatorRubric(task.input));
     if(gaps.length)return creatorQualityRepair(task,doc,editor.revision,'worksheet','analysis',gaps.map(key=>({key,reason:'补齐当前组的达人问卷或本片证据'})));
    }
    const source=baselineSource(doc);
@@ -816,11 +821,25 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     copyInput=await prepareProductionCopyReview(task,doc,editor.revision,criteria,openingComparison,stage.signal);
     if(!('prepared' in copyInput)){
      if(creatorDecisions){
-      const gaps=blueprintFindings(copyInput.artifact.blueprint_structure_issue).filter(finding=>finding.code.startsWith('creator_'));
-      if(gaps.length)return creatorQualityRepair(task,doc,editor.revision,'regression','blueprint',gaps.map(gap=>({key:gap.id+':'+gap.code,
-       reason:gap.code==='creator_narration_relationship_missing'
-        ?'把已确认的关系写进现行马来语正文，并选择本组承载这层关系的主讲句编号':gap.code})),
-       gaps.some(gap=>gap.code==='creator_opening_metrics_unconfirmed')?'creator_opening_metrics_unconfirmed: 待维护侧核实并登记本片三项成绩':undefined);
+      const gaps=blueprintFindings(copyInput.artifact.blueprint_structure_issue).filter(finding=>finding.code.startsWith('creator_')||finding.code.startsWith('picture_plan_creator_'));
+      if(gaps.length){
+       const descriptions:Record<string,string>={
+        creator_narration_relationship_missing:'把已确认的关系写进现行马来语正文，并选择本组承载这层关系的主讲句编号。',
+        creator_copy_buyer_term:'在这句中用 pembeli 指买家。',
+        picture_plan_creator_stage_visual_invalid:'阶段条放在顶部，原片使用默认蓝底白字，讲解使用默认暖金底深棕字。',
+        picture_plan_creator_still_annotation_missing:'为这句的定格登记对应短标，使观众知道停下时看哪里。',
+       };
+       const rubric=usesCreatorRubric(task.input);
+       const findings=gaps.flatMap(gap=>{
+        const reason=descriptions[gap.code]??gap.code;
+        return rubric
+         ?blueprintFindingKeys(gap).map(key=>({key,repeatKey:key,reason}))
+         :[{key:gap.id+':'+gap.code,reason:reason.replace(/。$/u,'')}];
+       });
+       const result=creatorQualityRepair(task,doc,editor.revision,'regression','blueprint',findings,
+        gaps.some(gap=>gap.code==='creator_opening_metrics_unconfirmed')?'creator_opening_metrics_unconfirmed: 待维护侧核实并登记本片三项成绩':undefined);
+       return rubric?{...result,artifact:{...copyInput.artifact,...result.artifact}}:result;
+      }
      }
      return copyInput;
     }
@@ -862,7 +881,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     if(creatorIssues.length){
      const result=creatorQualityRepair(task,doc,editor.revision,task.stage,
       incorrectBindings.length||task.stage==='blueprint'||creatorIssues.some(issue=>issue.key.endsWith(':analogy'))?'analysis':'blueprint',creatorIssues);
-     if(creatorIssues.some(issue=>issue.repeatKey)&&narrationIssues.length&&narrationIssues.every(answer=>answer.baseline_criterion))
+     if((usesCreatorRubric(task.input)||creatorIssues.some(issue=>issue.repeatKey))&&narrationIssues.length&&narrationIssues.every(answer=>answer.baseline_criterion))
       Object.assign(result.artifact,narrationRepairArtifact(narrationIssues));
      return result;
     }
@@ -1314,14 +1333,19 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
  const frozenTopics=['analysis','blueprint'].includes(task.stage)?frozenTeachingTopics(doc,task):undefined;
  const doneCriteria=productionAuthorCriteria(task,policy,doc);
  const openingResults=productionOpeningComparison(task,policy,doc)?.results;
+ const creatorRubric=usesCreatorRubric(task.input);
  return {evidenceInspection:productionEvidenceInspection(doc,task),task:task.input.brief,stage:task.stage,goal,feedback:task.stage==='blueprint'?task.blueprintFeedback??task.feedback??null:task.feedback??null,repairContext:task.repairContext?.repair?{repair:task.repairContext.repair,revision:task.repairContext.revision,final_feedback:task.repairContext.final_feedback??null}:task.repairContext??null,
   ...(task.input.panelDelivery&&(task.stage==='blueprint'||task.stage==='edit'&&!task.sharedProduction?.prepared
    &&!task.repairContext?.final_feedback&&!isBoundCanvasReflow(task,doc))?{teachingPhasePalette:{original:stageCuePalette(undefined,'original'),explanation:stageCuePalette(undefined,'explanation')},teachingPresentation:task.stage==='blueprint'
-   ?'证据窗保留为事实记录。需要压缩示范时用 original_playback:{mode:"selected_cuts",ranges,purpose} 登记实际原声选段，和 original 阶段保持一致。选能讲清关系的展示顺序和大小：若细节看不清，先放大；若比较依赖同屏，先保留共同参照。读图停留交代看哪里、读出什么，按需要选择近景、标注或压缩口播。用 viewer_stage_cues.layout 交接本片已认可的样式；选用贯通顶栏时填 placement:"top_strip"、可选 height_fraction。没指定颜色时用 teachingPhasePalette。'
+   ?'证据窗保留为事实记录。需要压缩示范时用 original_playback:{mode:"selected_cuts",ranges,purpose} 登记实际原声选段，和 original 阶段保持一致。选能讲清关系的展示顺序和大小：若细节看不清，先放大；若比较依赖同屏，先保留共同参照。读图停留交代看哪里、读出什么，按需要选择近景、标注或压缩口播。'
+    +(creatorRubric?'阶段条和静帧按 creatorEditRubric 登记。':'用 viewer_stage_cues.layout 交接本片已认可的样式；选用贯通顶栏时填 placement:"top_strip"、可选 height_fraction。没指定颜色时用 teachingPhasePalette。')
    :'按已审原声选段和回看顺序执行。用近景、随口播出现的提示或局部放大交代读图重点。若口播逐处点名，切到被点名的部位或突出对应的格；只总结共同拍法时，用清楚的各处画面和短标举例，给总览单独的读图任务。大图与总览复用同一短标，标题、字幕和提示留出位置，保证画面主体不被盖住。仅在 viewer_stage_cues.layout 选 top_strip 时宿主应用贴顶通栏；其他版式照本片的配色和位置。用 view_timeline_frames 抽查原声切讲解、一个关键局部及总览或对照的进出点，在手机大小看字幕、焦点和留白，随后连实际配音听一次，逐词对位和听感未验时标明。'}:{}),
+  ...(creatorRubric&&task.stage==='blueprint'?{creatorEditRubric:
+   '每组在 viewer_stage_cues.layout 用 placement:"top_strip"。原片用标准蓝底白字，讲解用标准暖金底深棕字，省略色值即可用默认色。为定格在本句 context_source_ranges 登记源时点，purpose 对应本句的 labels 短标或对应中文标；标出实际要看的对象。阶段标题和同文字幕不作标注。用 pembeli 指买家。口播以简明第三人称解释取舍，每组不超过两句。实配时长、画面覆盖及可读性沿用成片复核。'
+  }:{}),
   ...(task.input.panelDelivery?.creatorQuality==='v1'&&['analysis','blueprint'].includes(task.stage)?{
    creatorQuality:creatorAuthorInstruction(doc,creatorConfirmedDecisions(doc,task),task.stage==='blueprint'
-    ?creatorNarrationRelationships(frozenTopics&&'guidance' in frozenTopics?frozenTopics.guidance:undefined):undefined),
+    ?creatorNarrationRelationships(frozenTopics&&'guidance' in frozenTopics?frozenTopics.guidance:undefined):undefined,creatorRubric),
    creatorQualityFindings:task.repairContext?.creator_quality_findings,
   }:{}),
   ...(task.stage==='blueprint'&&task.repairContext?.narration_repair_findings?{narrationRepair:{

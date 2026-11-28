@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 export interface ProductionGeneration {
  qualityRules:'v1';
  referenceRules?:'registered-v1';
- creatorRules?:'creator-teaching-v1'|'creator-teaching-v2';
+ creatorRules?:'creator-teaching-v1'|'creator-teaching-v2'|'creator-teaching-v3';
  commit?:string;
  trackedChanges?:boolean;
 }
@@ -14,7 +14,7 @@ declare const __CLIPMENTOR_PRODUCTION_BUILD__: ProductionGeneration | undefined;
 
 /** Capture the service's source/build identity once, when this module loads. */
 export const loadedProductionGeneration:Promise<ProductionGeneration>=(async()=>{
- const rules={qualityRules:'v1',referenceRules:'registered-v1',creatorRules:'creator-teaching-v2'} as const;
+ const rules={qualityRules:'v1',referenceRules:'registered-v1',creatorRules:'creator-teaching-v3'} as const;
  if(typeof __CLIPMENTOR_PRODUCTION_BUILD__!=='undefined')return {...__CLIPMENTOR_PRODUCTION_BUILD__,...rules};
  const built=process.env.OPENCHATCUT_BUILD_COMMIT;
  if(built&&/^[a-f0-9]{40}$/u.test(built))return {...rules,commit:built};
@@ -30,3 +30,8 @@ export const loadedProductionGeneration:Promise<ProductionGeneration>=(async()=>
  }catch{/* Packaged installs can lack Git and a build stamp. */}
  return rules;
 })();
+
+/** A paused task retains the contract frozen at admission. */
+export function usesCreatorRubric(input: {blueprintGeneration?: ProductionGeneration; panelDelivery?: {creatorQuality?: 'v1'}}) {
+ return input.panelDelivery?.creatorQuality === 'v1' && input.blueprintGeneration?.creatorRules === 'creator-teaching-v3';
+}

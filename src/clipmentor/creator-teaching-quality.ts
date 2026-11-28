@@ -6,6 +6,10 @@ export const creatorQuestions = {
   narration_why: '用口播讲清哪个拍法为什么成立？',
   still_focus: '画面停着时观众该看哪里？动态承担时说明看哪个变化。',
   opening: '片头给观众什么继续看的理由？播放量、销量和成交额是否各有依据、各占一行？',
+  evidence_boundary: '现行马来语的说法、素材与证据窗口对得上吗？指出核实不了或越界的说法。',
+  copy_form: '现行马来语是否用两句以内的第三人称讲解取舍，并用 pembeli 指买家？',
+  picture_support: '对应句的回看能承载读图任务吗？有定格时，哪条短标指出观众当时要看的对象？',
+  stage_visual: '原片和讲解的阶段可否从各自的顶部阶段条区分？按提交画面计划核对。',
   balance: '原片保留什么才能看懂，讲解把什么教清？',
 } as const;
 

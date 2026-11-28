@@ -31,12 +31,14 @@ for(const event of events){
   analysis=JSON.parse(artifact.body).analysis;assert.equal(analysis.analysis_id,'production:'+task.taskId);
  }
  if(!analysis||name!=='revise_clipmentor_analysis'||result.ok!==true)continue;
- const a=calls.get(toolCallId);assert.equal(a.expectedRevision,analysis.revision);
+ const a=calls.get(toolCallId);assert.equal(a.expectedRevision,analysis.revision,'The archived base and successful tool receipts leave an unrecorded revision. A newer full archive is required.');
  if(a.action==='append')analysis=await appendAnalysisFindings(analysis,a.records,a.actor,a.reason,suppliedImages);
  else {assert.equal(a.action,'set_source_breakdown');analysis.source_breakdown=structuredClone(a.record);analysis.revision++;}
  assert.equal(result.revision,analysis.revision);latest=toolCallId;
 }
-const readback=events.findLast((e:any)=>e.type==='server-tool-result'&&e.data.name==='read_clipmentor_analysis').data.result;
+assert.ok(analysis&&latest,'The interrupted run must have a complete archived analysis and a subsequent successful write.');
+const readback=events.findLast((e:any)=>e.type==='server-tool-result'&&e.data.name==='read_clipmentor_analysis')?.data.result;
+assert.ok(readback?.analysis?.source_breakdown,'The interrupted run must have a complete source-breakdown readback.');
 assert.equal(readback.revision,analysis.revision);
 analysis.source_breakdown.review_scope=readback.analysis.source_breakdown.review_scope;
 assert.deepEqual(analysis.source_breakdown,readback.analysis.source_breakdown);

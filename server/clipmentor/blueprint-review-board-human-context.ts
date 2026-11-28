@@ -20,11 +20,27 @@ export function unitUnknowns(data:Data,id:string){
  const ids=new Set([...array(unit?.original_segment_ids),...array(unit?.explanation_segment_ids)]);
  return [...new Set(array(breakdown.segments).map(object).filter(s=>ids.has(s.segment_id)).flatMap(s=>array(s.unknowns)).map(string).filter(Boolean))];
 }
-export function translatedLabels(data:Data,lineId:string){
- const raw=data.lines.find(l=>l.id===lineId)?.raw??{},labels=array(raw.labels).map(v=>typeof v==='string'?v:string(object(v).text)),given=raw.labels_zh;
+export function translatedLineLabels(raw:Record<string,unknown>){
+ const labels=array(raw.labels).map(v=>typeof v==='string'?v:string(object(v).text)),given=raw.labels_zh;
  // Validate original positions before hiding empty text in the presentation.
  const invalid=(raw.labels!==undefined&&!Array.isArray(raw.labels))||labels.some(v=>!v.trim())||!labelTranslationsShape(given,labels);
  return{invalid,pairs:labels.map((ms,i)=>({ms,zh:invalid?'':string(Array.isArray(given)?given[i]:undefined).trim()})).filter(p=>p.ms.trim())};
+}
+export function translatedLabels(data:Data,lineId:string){
+ return translatedLineLabels(data.lines.find(l=>l.id===lineId)?.raw??{});
+}
+export const frameFloor=(value:number)=>
+ Math.abs(value-Math.round(value))<=4*Number.EPSILON*Math.max(1,Math.abs(value))?Math.round(value):Math.floor(value);
+export function contextReviewFrame([from,to]:[number,number],fps:number,duration:number,hasLabel:boolean){
+ if(from===to)return frameFloor(from*fps);
+ const first=Math.ceil(from*fps-1e-8),middle=frameFloor((from+to)*fps/2);
+ const frame=Math.min(Math.max(0,frameFloor(duration*fps-1)),hasLabel?Math.max(first,middle):first);
+ return frame/fps<from-1e-8||frame/fps>=to?undefined:frame;
+}
+export function matchingContextLabel(labels:readonly {ms:string;zh:string}[],purpose:unknown){
+ const text=string(purpose);
+ const matches=labels.filter(({zh,ms})=>(zh&&text.includes(zh))||text.includes(ms));
+ return matches.length===1?matches[0]:undefined;
 }
 export function reviewReplayViews(rows:readonly ReviewBoardRow[],requireImages=true){
  const first=rows[0];

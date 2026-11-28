@@ -122,7 +122,7 @@ export interface ProductionTask {
  blueprintFeedbackRepair?:number;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
  previousBlueprintTeaching?:{revision:string;selection?:string;narration?:string};
- executionGenerations?:Array<ProductionGeneration&{checkpoint:number;repairEpoch:number;stage:ProductionStage;kind:'start'|'resume'}>;
+ executionGenerations?:Array<ProductionGeneration&{loadedCreatorRules?:ProductionGeneration['creatorRules'];checkpoint:number;repairEpoch:number;stage:ProductionStage;kind:'start'|'resume'}>;
  productionQueuedAt?:number;
  visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
  createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;sourceObservationUnavailableOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
@@ -518,7 +518,7 @@ export function validateProductionInput(v:ProductionInput){
   const generation=v.blueprintGeneration;
   if(!generation||v.panelDelivery?.blueprintQuality!=='v1'||generation.qualityRules!=='v1'
    ||generation.referenceRules!==undefined&&generation.referenceRules!=='registered-v1'
-   ||generation.creatorRules!==undefined&&generation.creatorRules!=='creator-teaching-v1'&&generation.creatorRules!=='creator-teaching-v2'
+   ||generation.creatorRules!==undefined&&generation.creatorRules!=='creator-teaching-v1'&&generation.creatorRules!=='creator-teaching-v2'&&generation.creatorRules!=='creator-teaching-v3'
    ||generation.commit!==undefined&&(typeof generation.commit!=='string'||! /^[a-f0-9]{40}$/u.test(generation.commit))
    ||generation.trackedChanges!==undefined&&(!generation.commit||typeof generation.trackedChanges!=='boolean'))
    throw Error('Invalid blueprint generation metadata');
@@ -739,7 +739,7 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
    check();await published();check();
    const history=task.executionGenerations??[];
    const started=history.length||task.attempts.model>0||task.repairs>0||task.status!=='queued';
-   task.executionGenerations=[...history,{...generation,...(task.input.panelDelivery.creatorQuality==='v1'?{creatorRules}:{}),checkpoint:task.sequence+1,repairEpoch:task.repairs,
+   task.executionGenerations=[...history,{...generation,...(task.input.panelDelivery.creatorQuality==='v1'?{creatorRules:task.input.blueprintGeneration?.creatorRules??'creator-teaching-v2',loadedCreatorRules:creatorRules}:{}),checkpoint:task.sequence+1,repairEpoch:task.repairs,
     stage:task.stage,kind:started?'resume':'start'}];
   }
   task.status='running';delete task.error;await save();

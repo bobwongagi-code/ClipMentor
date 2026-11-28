@@ -160,10 +160,11 @@ const host=createServer(async(req,res)=>{
  const missingEvidenceId=wholeFilmAction==='omission'?'fixture-unselected-result':wholeFilmAction==='selection-omission'?'V-hook':undefined;
  const wholeEvidence=missingEvidenceId?data.evidence.find((entry:any)=>entry.id===missingEvidenceId):mainEvidence;
  const criterion=(question:string)=>({question,status:'ok',answer:'用同框关系说明刷子落点。'});
+ const allowed=(keys:readonly string[])=>keys.filter(key=>Object.hasOwn(data.creatorWorksheet.questions,key));
  const verdict={
   ...(data.creatorWorksheet?{creator_checks:{
-   film:creatorFilmQuestions.map(criterion),
-   groups:data.creatorWorksheet.groups.map((group:any)=>({unit_id:group.unit_id,checks:creatorGroupQuestions.map(question=>
+   film:allowed([...creatorFilmQuestions,'stage_visual']).map(criterion),
+   groups:data.creatorWorksheet.groups.map((group:any)=>({unit_id:group.unit_id,checks:allowed([...creatorGroupQuestions,'evidence_boundary','copy_form','picture_support']).map(question=>
     question==='narration_why'&&relationshipMiss?{question,status:'fix',answer:relationshipMiss.reason}:criterion(question)),
     analogy:{status:'ok',answer:'同框给出当前落点的参照。',evidence_id:group.analogy.evidence_ids[0]},
     ...(data.creatorWorksheet.copy?.length?{conclusion_line_id:data.creatorWorksheet.copy.find((copy:any)=>copy.unit_id===group.unit_id)?.conclusion}:{})})),
@@ -730,6 +731,24 @@ try{
   assert.equal(negative.review.narration_checks?.[0].status,'fix');
   assert.throws(()=>panelNarrationPublication(doc,task,negative.digest,requirements),/human_blueprint_narration_not_passed/);
   console.log('PASS source-specific relation traverses actual combined copy review and bound publication; changed pointer and paired rejection refuse publication');
+  task.repairs++;
+  task.input.blueprintGeneration={qualityRules:'v1',creatorRules:'creator-teaching-v3'};
+  plan.creator_conclusion_line_id=goodId;
+  plan.viewer_stage_cues.layout={placement:'top_strip'};
+  const updated=await reviewed('creator-v3-picture-and-copy');
+  const sent=JSON.parse(JSON.parse(independentPrompts.at(-1)!).find((message:{role:string})=>message.role==='user').content).creatorWorksheet;
+  assert.deepEqual(Object.keys(sent.questions).sort(),
+   [...creatorFilmQuestions,...creatorGroupQuestions,'stage_visual','evidence_boundary','copy_form','picture_support'].sort());
+  assert.equal(sent.picture_evidence[0].stages.original.backgroundColor,'#0D5EA6');
+  assert.equal(sent.picture_evidence[0].stages.explanation.color,'#2F261A');
+  assert.equal(sent.groups[0].analogy.strength,'medium');
+  assert(panelNarrationPublication(doc,task,updated.digest,requirements).creatorTeachingReviewDigest);
+  assert.throws(()=>panelNarrationPublication(doc,task,positive.digest,requirements),/human_blueprint_narration_receipt_missing/);
+  plan.viewer_stage_cues.layout.original={color:'#000000',text_color:'#FFFFFF'};
+  assert.throws(()=>panelNarrationPublication(doc,task,updated.digest,requirements),/human_blueprint_creator_teaching_not_passed/);
+  delete plan.viewer_stage_cues.layout.original;
+  console.log('PASS v3 outbound review carries the selected layout and fixed questions; old receipts and wrong phase styles cannot publish');
+
  }
  const {registerHandoff,readHandoffPolicy,handoffKey}=await import('./handoff');
  let reviewBoardTask:ProductionTask|undefined;

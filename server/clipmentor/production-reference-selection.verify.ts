@@ -336,9 +336,9 @@ try{
  assert.equal(stages.length,2,'changing the citation format does not justify a new attempt on an unchanged subject');
 
  const generation=await loadedProductionGeneration;
- const start={qualityRules:'v1' as const,commit:'1'.repeat(40),trackedChanges:false};
+ const start={qualityRules:'v1' as const,creatorRules:'creator-teaching-v2' as const,commit:'1'.repeat(40),trackedChanges:false};
  const now=Date.now();
- const task={version:1,projectId,taskId:'generation-fixture',input:{panelDelivery:{blueprintQuality:'v1'},blueprintGeneration:start,
+ const task={version:1,projectId,taskId:'generation-fixture',input:{panelDelivery:{blueprintQuality:'v1',creatorQuality:'v1'},blueprintGeneration:start,
   budget:{model:0,review:0,observation:0,tts:0,render:0,maxElapsedMs:120000,maxRepairs:2}},stage:'analysis',status:'queued',
   createdAt:now,updatedAt:now,sequence:1,repairs:0,feedbackUsed:false,completed:{},effects:{},attempts:{model:0,review:0,observation:0,tts:0,render:0}} as import('./production-task').ProductionTask;
  let current=structuredClone(task);
@@ -355,6 +355,8 @@ try{
  assert.deepEqual(task.input.blueprintGeneration,start);
  assert.deepEqual(task.executionGenerations?.map(g=>[g.kind,g.commit,g.qualityRules,g.repairEpoch]),
   [['start',generation.commit,'v1',0],['resume',generation.commit,'v1',1]]);
+ assert.deepEqual(task.executionGenerations?.map(g=>[g.creatorRules,g.loadedCreatorRules]),
+  [['creator-teaching-v2',generation.creatorRules],['creator-teaching-v2',generation.creatorRules]]);
  assert.equal(providerRequests,0);
  console.log('ClipMentor reference replay: structured selection, unique prefix, ambiguous/unknown choices, one operation retry, fail closed, durable generation, zero provider calls'
   +(fixture?', actual JUDYDOLL saved analysis/cold read verified':''));

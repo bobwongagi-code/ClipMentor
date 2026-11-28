@@ -1,4 +1,5 @@
-import {creatorBlueprintFacts,creatorNarrationRelationships,creatorRelationshipGaps,creatorReviewWorksheet,readCreatorChecks,creatorReviewIssues,hasBoundCreatorRejection,type CreatorChecks} from './production-creator-quality';
+import {usesCreatorRubric} from './production-generation';
+import {creatorBlueprintFacts,creatorNarrationRelationships,creatorRelationshipGaps,creatorRubricFindings,creatorReviewWorksheet,readCreatorChecks,creatorReviewIssues,hasBoundCreatorRejection,type CreatorChecks} from './production-creator-quality';
 import {productionWorkDeadline} from './production-shared-clock';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
@@ -217,7 +218,8 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   ...(requireFirstGlance?{firstGlanceWriting:firstGlanceWritingUnits(baseline,strictQuality)}:{}),
   ...(strictQuality?{strictQuality:true as const}:{}),
   ...(task.input.panelDelivery?.creatorQuality==='v1'?{creatorWorksheet:creatorReviewWorksheet(doc,reviewNarration,new Set(evidence.map(item=>item.id)),
-   task.input.openingComparison?.results,creatorNarrationRelationships(confirmedDecisions))}:{}),
+   task.input.openingComparison?.results,creatorNarrationRelationships(confirmedDecisions),usesCreatorRubric(task.input),
+   task.input.panelDelivery.creatorReference?.originalSha256===analysis.source.sourceContentHash)}:{}),
   ...(reviewNarration?{narrationTargets:finalNarrationTargets(doc,baseline,requireFirstGlance,strictQuality),...(selectionRationale.length?{selectionRationale}:{})}:{}),
   ...(task.input.panelDelivery?.selectionPolicy==='v1'?{selection:{
    inventory:baseline.segments.filter(segment=>segment.inventory),
@@ -325,6 +327,7 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
   task.input.panelDelivery?.blueprintQuality==='v1');
  const timingRisks=task.input.panelDelivery?.selectionPolicy==='v1'?teachingReplayRisks(doc):undefined;
  const source=teachingBaselineSource(doc,task,[]);
+ if(usesCreatorRubric(task.input)&&creatorRubricFindings(doc).length)throw Error('human_blueprint_creator_teaching_not_passed');
  const worksheet=source.creatorWorksheet;
  const relationships=creatorNarrationRelationships(source.confirmedDecisions);
  if(worksheet&&relationships.size&&creatorRelationshipGaps(creatorBlueprintFacts(doc),relationships).length)
@@ -701,7 +704,7 @@ function readConfirmedTeachingChecks(raw:unknown,source:BaselineSource):Confirme
 function corroborateCreatorConclusion(checks:CreatorChecks,answers:NarrationDecision[]|undefined){
  if(!answers)return;
  for(const group of checks.groups){
-  if(!group.conclusion_line_id||group.analogy.status!=='ok'||group.checks.some(check=>check.status!=='ok'))continue;
+  if(!group.conclusion_line_id||(group.analogy.status!=='ok'&&!group.analogy.reference_only)||group.checks.some(check=>check.status!=='ok'))continue;
   if(!answers.some(answer=>answer.unit_id===group.unit_id&&answer.line_id===group.conclusion_line_id&&answer.status==='ok')){
    const criterion=group.checks.find(check=>check.question==='narration_why')!;
    criterion.status='fix';
@@ -1081,7 +1084,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
   await executeRun(run,{backend,provider:author.provider,model:author.model,origin:author.origin,openAiApiMode:author.apiMode,
    cacheMode:'short',maxOutputTokens:source.creatorWorksheet?6500:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
    ...(backend==='codex'?{localProductionCodex:true as const}:{}),instructions:baselineInstructions(source,false,true,true)
-    +(source.creatorWorksheet?' creatorWorksheet 是作者计划和匿名范例判断，二者均非证据。独立以达人视角答同一份问题。顶层 creator_checks={film:[{question,status,answer}],groups:[{unit_id,checks:[{question,status,answer}],analogy:{status,answer,evidence_id?},conclusion_line_id?}],suggestions?:string[]}。film 答 opening、balance。逐组答 decision、first_glance、omission_loss、next_decision、narration_why、still_focus。每题恰好一次，status 为 ok/fix/unresolved，answer 写当前材料中实际能学到什么或该题具体落空处，简短，不复述作者表。先看实际马来语及画面，报动作或缺可用取舍判 fix。六题与类比均通过的口播组须选 creatorWorksheet.copy 的 conclusion 所对应的主讲句；只有该句真的解释拍法与作用才给通过。类比通过须选本组 worksheet.analogy.evidence_ids 里的编号，用本片证据独立核对迁移与差异。分析预审还没有 copy，按本片证据检验选题与类比应用、按已登记成绩核对片头计划，实际分行和口播留到成稿阶段。现行路线之外的新方向只放 suggestions，最多三条。已有确认范围另填原有字段。':'')
+    +(source.creatorWorksheet?' creatorWorksheet 是作者计划和匿名范例判断，二者均非证据。独立以达人视角答同一份问题。顶层 creator_checks={film:[{question,status,answer}],groups:[{unit_id,checks:[{question,status,answer}],analogy:{status,answer,evidence_id?},conclusion_line_id?}],suggestions?:string[]}。film 答 opening、balance，逐组答 decision、first_glance、omission_loss、next_decision、narration_why、still_focus。若 questions 有 stage_visual 则增入 film；有 evidence_boundary、copy_form、picture_support 则增入逐组。退回只可挂本表列出的条目，按现行稿或画面举例。弱锚点只供参考，差异本身不可作为退回理由。仅有参考区间提示时也不得退回。画面题按 picture_evidence 的阶段条与定格短标判读，术语和证据边界以现行马来语及原片为准。每题恰好一次，status 为 ok/fix/unresolved，answer 写当前材料中实际能学到什么或该题具体落空处，简短，不复述作者表。先看实际马来语及画面，报动作或缺可用取舍判 fix。本表本组所有必判项通过的口播组须选 creatorWorksheet.copy 的 conclusion 所对应的主讲句；只有该句真的解释拍法与作用才给通过。弱锚点或写稿对照的类比状态不影响结论句的选择。纯画面组在 copy_form 答不适用并说明原因，还是要检查该组的真实画面。类比通过须选本组 worksheet.analogy.evidence_ids 里的编号，用本片证据独立核对迁移与差异。分析预审还没有 copy，按本片证据检验选题与类比应用、按已登记成绩核对片头计划，实际分行和口播留到成稿阶段。现行路线之外的新方向只放 suggestions，最多三条。已有确认范围另填原有字段。':'')
     +(source.creatorWorksheet?.copy?.some(group=>group.required_relationship)
      ?' 对 copy 中有 required_relationship 的组，先读 conclusion 对应的马来语原句。可用同组相邻的马来语口播确定这句承接的镜头或指代。判断原句是否交代登记的关系。只提到了两样东西、只报动作，或者关系只见于回译、字幕、标题、画面说明或作者的答案，均将 creator_checks 的 narration_why 判 fix，并指出缺失的联系。无法核对判 unresolved。现有教学基线判据也有同一缺口时，在对应 narration_checks 引用那个判据；关系要求可以比教学基线更具体，不得为它编造基线引文。已有组、教学点和原片证据仍支持该决定时，保留已确认选题。允许不同句式。实际原片与证据边界照原规则核对。':'')
     +(source.confirmedDecisions?' confirmedDecisions 是本次编辑确认的教学决定。顶层 confirmed_teaching_checks 每项返回 {id:confirmedDecisionId,status:covered/missing,reason,unit_id?,point_id?,evidence_id?}。covered 要选择实际讲到该决定的现行点和本点的原片证据。只出现相关画面、属于同一商品，或者藏在备注中时标 missing。missing 说明切实漏掉的教学决定，不要求特定用词或旧窗口。':'')

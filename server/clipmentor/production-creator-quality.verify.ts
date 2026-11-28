@@ -1,3 +1,4 @@
+import {creatorEditingAdvisories,creatorEditingFacts} from './creator-edit-calibration';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import grouped from '../../src/clipmentor/fixtures/grouped-registration-v1.json';
@@ -11,8 +12,8 @@ import {relative,isAbsolute} from 'node:path';
 import type {ProjectDoc} from '../../src/editor/types';
 import {parseProductionSourceCriteria,sourcePerformanceCriterion,sourceTeachingCriterion} from '../../shared/clipmentor-handoff';
 import {planReviewBoards,requiredReviewViewIssues} from './blueprint-review-board';
-import {blueprintRepairStopped} from './production-decisions';
-import {captureCreatorReference,creatorBlueprintFacts,creatorNarrationRelationships,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,
+import {blueprintRepairStopped,repeatedPictureRepair} from './production-decisions';
+import {captureCreatorReference,creatorBlueprintFacts,creatorNarrationRelationships,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,creatorAuthorInstruction,creatorRubricFindings,
  creatorReviewWorksheet,creatorWorksheetGaps,readCreatorChecks,type CreatorConfirmedReference} from './production-creator-quality';
 import {teachingSourceEvidence} from './production-teaching-baseline';
 
@@ -83,6 +84,86 @@ assert.equal(creatorOpeningMetricsValid({views:'N/A',units:'135',revenue:'RM5.31
 assert.equal(creatorOpeningMetricsValid(undefined),false);
 assert(blueprintRepairStopped({status:'blocked',error:'Error: creator_quality_repair_no_progress U:opening'}));
 assert(blueprintRepairStopped({status:'blocked',error:'Error: creator_opening_metrics_unconfirmed: 待核实'}));
+
+{
+ const known=structuredClone(grouped) as unknown as ProjectDoc;
+ const ledger=known.clipMentorAnalysis!.source_breakdown!;
+ const unit=ledger.units[0], currentUnit=current(known,unit.unit_id);
+ const plan=currentUnit.plan, candidate=currentUnit.candidate;
+ const phase=plan.phases.find((entry:Row)=>entry.mode==='explanation');
+ assert(phase);
+ const line=candidate.lines.find((entry:Row)=>entry.id===phase.line_id);
+ assert(line);
+ const point=ledger.points.find(item=>line.point_ids.includes(item.point_id))!;
+ const segment=ledger.segments.find(item=>point.segment_ids.includes(item.segment_id)
+  &&item.source_range_seconds[0]<=line.source_seconds[0]&&item.source_range_seconds[1]>=line.source_seconds[0])!;
+ assert(segment);
+ const position=line.source_seconds[0];
+ const contextId='fixture-context-still';
+ ledger.segments.push({...structuredClone(segment),segment_id:contextId});
+ unit.explanation_segment_ids.push(contextId);
+ phase.context_source_ranges=[{segment_id:contextId,source_range_seconds:[position,position],purpose:'辨认共同参照'}];
+ plan.viewer_stage_cues.layout={placement:'top_strip'};
+ plan.creator_conclusion_line_id=line.id;
+ line.labels=['Rujukan bersama'];
+ line.labels_zh=['共同参照'];
+ delete plan.selected_narration;
+ assert.equal(creatorEditingFacts(known).groups[0].stills[0].label,'Rujukan bersama');
+ assert.deepEqual(creatorRubricFindings(known),[]);
+ const termDoc=structuredClone(known);
+ const termLine=current(termDoc,unit.unit_id).candidate.lines.find((item:Row)=>item.id===line.id);
+ termLine.narration_ms='Dia tunjuk cara hubungi Customer Care pada label.';
+ assert(!creatorRubricFindings(termDoc).some(gap=>gap.code==='creator_copy_buyer_term'));
+ termLine.narration_ms='Kaedah ini buat pelanggan nampak perbezaannya.';
+ assert(creatorRubricFindings(termDoc).some(gap=>gap.code==='creator_copy_buyer_term'));
+
+ const suspect=structuredClone(known);
+ const suspectUnit=current(suspect,unit.unit_id);
+ const suspectLine=suspectUnit.candidate.lines.find((item:Row)=>item.id===line.id);
+ suspectLine.labels=['Bahagian lain'];suspectLine.labels_zh=['另一位置'];
+ const finding={code:'picture_plan_creator_still_annotation_missing',id:unit.unit_id,targets:[`${line.id} / ${contextId} / 源帧 ${Math.floor(position*known.clipMentorAnalysis!.source.fps)}`]};
+ assert.deepEqual(creatorRubricFindings(suspect),[finding]);
+ const sameFrame=structuredClone(known), collisionId='fixture-same-frame';
+ const collision= sameFrame.clipMentorAnalysis!.source_breakdown!;
+ collision.units[0].explanation_segment_ids.push(collisionId);
+ collision.segments.push({...structuredClone(segment),segment_id:collisionId});
+ const collidePlan=current(sameFrame,unit.unit_id).plan;
+ collidePlan.phases.find((row:Row)=>row.line_id===line.id).context_source_ranges.push({
+  segment_id:collisionId,source_range_seconds:[position,position],purpose:'辨认共同参照',
+ });
+ assert.deepEqual(creatorRubricFindings(sameFrame).map(gap=>gap.code),[finding.code,finding.code]);
+
+ const issue=(...rows:Row[])=>'blueprint_stage_incomplete:'+JSON.stringify(rows);
+ assert(repeatedPictureRepair(issue(finding,{code:'picture_plan_phase_range_invalid',id:unit.unit_id}),issue(finding)));
+ assert.equal(repeatedPictureRepair(issue(finding),issue({...finding,targets:['other-line']})),undefined);
+ const wrongColor=structuredClone(known);
+ current(wrongColor,unit.unit_id).plan.viewer_stage_cues.layout.revisit={color:'#334455'};
+ assert(creatorRubricFindings(wrongColor).some(gap=>gap.code==='picture_plan_creator_stage_visual_invalid'));
+ const noWorksheet=creatorAuthorInstruction(known,[],undefined,true);
+ assert(noWorksheet.exemplar_index?.some(entry=>entry.id==='GM-P06'));
+ unit.teaching_selection={decision:'保留共同参照',first_glance:'看出差异',omission_loss:'看不出相对差异',basis:'observed',buyer_roles:['reassurance'],creator_quality:{next_decision:'下一条保留共同参照。',narration_why:'保证两边在同一参照。',still_focus:'停留看可见位置。',
+  analogy:{entry:'BT-02',evidence_ids:[...registeredEvidence(known)].slice(0,1),application:'用共同参照辅助读图。',difference:'本片没有织物。'}}};
+ assert.equal(creatorAuthorInstruction(known,[],undefined,true).groups?.[0].exemplar?.id,'BT-02');
+ const worksheet=creatorReviewWorksheet(known,true,registeredEvidence(known),undefined,undefined,true);
+ const row=(question:string)=>({question,status:'ok',answer:'符合现行稿和本片原料。'});
+ const verdict={
+  film:[...creatorFilmQuestions,'stage_visual'].map(row),
+  groups:[{unit_id:unit.unit_id,checks:[...creatorGroupQuestions,'evidence_boundary','copy_form','picture_support'].map(row),
+   conclusion_line_id:line.id,analogy:{status:'fix',answer:'只看到和弱范例的做法不同。'}}],
+ };
+ assert.deepEqual(creatorReviewIssues(readCreatorChecks(verdict,worksheet)),[]);
+ const broken=structuredClone(verdict);
+ broken.groups[0].checks.at(-1)!.status='fix';
+ assert.deepEqual(creatorReviewIssues(readCreatorChecks(broken,worksheet)).map(item=>item.key),[unit.unit_id+':picture_support']);
+ const unknown=structuredClone(verdict);
+ unknown.groups[0].checks.at(-1)!.question='new_threshold_invented_by_reviewer';
+ assert.throws(()=>readCreatorChecks(unknown,worksheet),/creator_review_criteria_invalid/);
+ const bounds={originalShare:{low:.4,high:.6,margin:.12},stillsPerGroup:{low:0,high:2,margin:1}};
+ assert.deepEqual(creatorEditingAdvisories({originalShare:.68,stillsPerGroup:2},bounds),[]);
+ assert.deepEqual(creatorEditingAdvisories({originalShare:.86,stillsPerGroup:5},bounds).map(v=>v.question),['balance','picture_support']);
+ assert.deepEqual(creatorEditingAdvisories({stillsPerGroup:1},undefined),[]);
+ console.log('Creator v3 replay passed: same-line still annotation, phase colors, scoped repeated gaps, weak example, and outlier advisories.');
+}
 
 const [snapshot,reusablePath]=process.argv.slice(2);
 if(snapshot&&reusablePath){

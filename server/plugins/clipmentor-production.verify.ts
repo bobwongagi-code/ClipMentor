@@ -1113,6 +1113,7 @@ try{
   assert.equal(started?.input.openingComparison?.kind,'opening_comparison');
   assert.equal(started.input.panelDelivery?.blueprintQuality,'v1','ordinary panel start enables blueprint quality');
   assert.equal(started.input.panelDelivery?.creatorQuality,'v1','ordinary panel start enables the creator worksheet');
+  assert.equal(started.input.blueprintGeneration?.creatorRules,'creator-teaching-v3');
   assert.deepEqual(started.input.doneCriteria,[{...criteria[0],source:{...source,assetId:assets[0].id},evidence:{...evidence,assetId:assets[2].id}}]);
   assert(started.input.brief.includes(started.input.openingComparison.quote),'the author and reviewer get the same verbatim requirement');
   const {copyReviewDependencies}=await import('../clipmentor/copy-review');

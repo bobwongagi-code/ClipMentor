@@ -81,7 +81,7 @@ export function repeatedPictureRepair(previous:unknown,current:unknown,history:r
  const seen=new Set([...history,...pictureRepairCoverage(previous)]);
  const next=pictureRepairCoverage(current);
  const strictKeys=new Set(pictureRepairFindings(current).filter(({code})=>
-  /^(picture_plan_(?:required_demonstration_|demonstration_views_wrong_group)|opening_performance_card_)/u.test(code))
+  /^(picture_plan_(?:required_demonstration_|demonstration_views_wrong_group|creator_)|opening_performance_card_)/u.test(code))
   .flatMap(blueprintFindingKeys));
  const stalled=new Set(next.flatMap(signature=>{
   const [unit,keys]=JSON.parse(signature) as [string,string[]];

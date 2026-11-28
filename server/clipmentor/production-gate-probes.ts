@@ -1,3 +1,5 @@
+import {creatorEditingFacts} from './creator-edit-calibration';
+import {creatorRubricFindings} from './production-creator-quality';
 import { readFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { digestValue } from '../agent-runs/store-values';
@@ -12,7 +14,7 @@ import { blueprintFindingKeys, pictureRepairFindings } from './production-decisi
 // Bump when a structural rule's predicate or binding coordinates change.
 const gateVersion = 'blueprint-playback-v1';
 type Probe = { candidate: string; editor: string; approval: string; projectRevision: string; acceptedAt: string;
-  attestation: 'editor_viewed_accepted' };
+  attestation: 'editor_viewed_accepted'; rule?: 'creator-teaching-v3' };
 const folder = () => join(runtimeProfile().rootDir, 'clipmentor-gate-probes');
 
 function receiptPath(sourceHash: string, finding: string) {
@@ -41,6 +43,7 @@ export async function recordEditorApprovedGateProbe(doc: ProjectDoc, approval: O
   const analysis = doc.clipMentorAnalysis;
   const source = analysis?.source;
   if (!analysis || !source?.sourceContentHash || approval.attestation!=='editor_viewed_accepted'
+    ||approval.rule!==undefined&&approval.rule!=='creator-teaching-v3'
     ||!approval.editor?.trim()||!approval.approval?.trim()||!approval.projectRevision?.trim()
     ||!Number.isFinite(Date.parse(approval.acceptedAt))) {
     throw Error('Original identity and an independent editor acceptance record are required');
@@ -50,7 +53,7 @@ export async function recordEditorApprovedGateProbe(doc: ProjectDoc, approval: O
   if (revisionOf(doc) !== approval.projectRevision) throw Error('Accepted candidate revision changed');
   // Identity describes what was watched. Renaming IDs, changing audit text
   // or saving the same playback as a new revision does not add another vote.
-  const candidate = digestValue(analysis.blueprint.map(unit => {
+  const playback = analysis.blueprint.map(unit => {
     const internal = (unit as unknown as {internal_review?:Record<string,any>}).internal_review;
     const plan = internal?.[internal.current_picture_plan];
     const script = internal?.[internal.current_script_candidate];
@@ -59,8 +62,12 @@ export async function recordEditorApprovedGateProbe(doc: ProjectDoc, approval: O
         [phase.mode==='original'||phase.mode==='explanation'?phase.mode:null,phase.source_range_seconds??phase.source_seconds]) : [],
       copy: Array.isArray(script?.lines) ? script.lines.map((line:Record<string,unknown>)=>typeof line.narration_ms==='string'?line.narration_ms.normalize('NFKC').trim().replace(/\s+/gu,' '):null) : [],
     };
-  }));
-  const raw = [...productionBoardPhaseIssues(doc),...checkSourceBreakdown(doc).issues];
+  });
+  const candidate=digestValue(approval.rule==='creator-teaching-v3'
+    ? {rule:approval.rule,playback,picture:creatorEditingFacts(doc).groups.map(({stages,stills})=>({stages,
+      stills:stills.map(({frame,label})=>({frame,label:label?.normalize('NFKC').trim().replace(/\s+/gu,' ')}))}))}:playback);
+  const raw = [...productionBoardPhaseIssues(doc),...checkSourceBreakdown(doc).issues,
+    ...(approval.rule==='creator-teaching-v3'?creatorRubricFindings(doc):[])];
   const findings = new Set(pictureRepairFindings('blueprint_stage_incomplete:'+JSON.stringify(raw)).flatMap(blueprintFindingKeys));
   const results = [];
   if(findings.size)await mkdir(folder(),{recursive:true,mode:0o700});
