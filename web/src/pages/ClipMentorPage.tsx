@@ -3,7 +3,7 @@ import { Check, Download, Film, Image, Send, Upload } from 'lucide-react'
 import { uploadFeedback, uploadFeedbackFor } from '../../../shared/clipmentor-upload-feedback'
 import './clipmentor.css'
 import ProductionPanel, { productionEndpoint, readPanelState, type Audience, type Task } from './ProductionPanel'
-import { projectResource, taskPage, workspaceEndpoint } from './taskNavigation'
+import { projectResource, taskPage, workspaceEndpoint, type TaskView } from './taskNavigation'
 
 const slots = [
   { key: 'source', title: '爆款原片', accept: 'video/mp4,video/webm,video/quicktime', icon: Film, formats: ['.mp4', '.webm', '.mov'] },
@@ -101,9 +101,9 @@ function Feedback({ label, messages, onSend }: {
 
 const intakeEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/intake`
 
-export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit, requestedAudience,onAudienceChange,onPreviewTask }: {
+export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit, requestedAudience,onAudienceChange,onPreviewTask,workspaceView,taskStarted }: {
   projectId?: string; workspaceNew?: boolean; embedded?: boolean; running?: number; limit?: number
-  requestedAudience?:Audience; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
+  requestedAudience?:Audience; workspaceView?:TaskView; taskStarted?:boolean; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
 } = {}) {
   const [materials, setMaterials] = useState<Partial<Record<Slot, Material>>>({})
   const urls = useRef<Partial<Record<Slot, string>>>({})
@@ -302,24 +302,35 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
 
   const source = materials.source
   const showProduction = !demo && (receipt || hasSavedProduction)
-  return <div className={embedded?'cm-embedded-task':'cm-shell'}>
+  const savedMaterialsView=workspaceView==='materials'&&taskStarted
+  const materialTab=!workspaceView||workspaceView==='materials'
+  const savedAssets=(receipt??repair)?.assets??[]
+  return <div className={embedded?'cm-embedded-task':demo?'cm-shell':'cm-shell cm-workspace-v2 cm-direct-review'}>
     {!embedded&&<header className="cm-header">
       <div className="cm-brand"><img src="/clipmentor-mark.svg" alt="" /><strong>ClipMentor</strong></div>
       {demo && <span className="cm-demo">流程演示</span>}
     </header>}
     <div className={embedded?'cm-task-surface':'cm-main page-enter'}>
-      {accessLost ? <p className="cm-caption cm-upload-error" role="alert">制作服务访问已失效，请刷新页面。</p> : <>
+      {accessLost ? <p className="cm-caption cm-upload-error" role="alert">登录已失效，请刷新页面。</p> : <>
       {!showProduction && !embedded && <nav aria-label="制作步骤"><ol className="cm-steps">
         {stages.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined}>
           <span>{index < step ? <Check size={15} /> : index + 1}</span>{label}
         </li>)}
       </ol></nav>}
-      {showProduction && <ProductionPanel assets={(receipt ?? repair)?.assets.map((asset, index) => ({ ...asset, title: slots[index].title })) ?? []} requestApi={requestApi}
+      {savedMaterialsView&&!repair&&<section className="cm-panel" aria-label="制作素材">
+        <h2>制作素材</h2>
+        {savedAssets.length?<ul className="cm-saved-assets">{savedAssets.map((asset,index)=><li key={asset.id}>
+          <Check size={17} aria-hidden="true"/><strong>{slots[index].title}</strong><span>{asset.name}</span>
+        </li>)}</ul>:<p role="status">{checkingReceipt?'正在确认上传情况…':uploadError||'暂时确认不了上传情况，请稍后刷新。'}</p>}
+      </section>}
+      {!materialTab&&repair&&<p className="cm-caption" role="status">有素材需要补传。请打开「素材」标签，选择当初上传的文件。</p>}
+      {!materialTab&&!showProduction&&!checkingReceipt&&<p className="cm-panel" role="status">请先上传四份素材，开始制作。</p>}
+      {showProduction && <div hidden={savedMaterialsView}><ProductionPanel assets={(receipt ?? repair)?.assets.map((asset, index) => ({ ...asset, title: slots[index].title })) ?? []} requestApi={requestApi}
         projectId={projectId} reviewProjectId={projectId??receipt?.projectId??repair?.projectId} intakeReady={!!receipt}
-        slotsFull={slotsFull} mediaRefresh={mediaRefresh} requestedAudience={requestedAudience} onAudienceChange={onAudienceChange} onPreviewTask={onPreviewTask} />}
-      {checkingReceipt ? <p className="cm-caption" role="status">正在检查上传记录…</p> : step === 0 && (!showProduction || repair) && <>
+        slotsFull={slotsFull} mediaRefresh={mediaRefresh} requestedAudience={requestedAudience} onAudienceChange={onAudienceChange} onPreviewTask={onPreviewTask} workspaceView={workspaceView} showPreview={!savedMaterialsView} /></div>}
+      {checkingReceipt ? <p className="cm-caption" role="status">正在确认上传情况…</p> : materialTab && step === 0 && (!showProduction || repair) && <>
         {repair
-          ? <div className="cm-heading"><h2>补传缺失素材</h2><p>请选择工程里登记的原文件，补传后即可继续。</p></div>
+          ? <div className="cm-heading"><h2>补传缺少的素材</h2><p>请选当初上传的原文件，补传后继续制作。</p></div>
           : <div className="cm-heading"><IntakeTitle>{workspaceNew?'新建任务':'上传制作素材'}</IntakeTitle><p>{workspaceNew?'选好四份素材。开始制作后，可以回任务列表看进度。':'上传原片、商品图、销量截图和合作海报。'}</p></div>}
         <section className="cm-panel">
           {workspaceNew&&<label className="cm-task-name">{registeredName===undefined?'任务名称（选填）':'已登记的任务名称'}
@@ -343,19 +354,19 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
               </label>
             })}
           </div>
-          <div className="cm-footer">
+          <div className={embedded?'cm-footer cm-action-bar':'cm-footer'}>
             {workspaceNew&&<div className="cm-upload-count" role="status">
-              <p>{readyCount===4&&!sizeExceeded?'四份素材已就绪':`已选 ${readyCount} / 4 份`} · 合计上限 64 MiB</p>
+              <p>{readyCount===4&&!sizeExceeded?'四份素材已就绪':`已选 ${readyCount} / 4 份`} · 合计上限 64 MB</p>
               {slotsLoading?<p>正在读取运行名额。</p>:slotsFull&&<p>{readyCount===4?'名额空出后可以开始制作。':'名额已满，可以先选好素材。'}</p>}
             </div>}
-            <button className="cm-button" disabled={!ready || uploading || slotsLoading || workspaceNew && slotsFull} onClick={() => void uploadMaterials()}><Upload size={17} /> {uploading ? '正在上传素材…' : workspaceNew && slotsFull ? '等待运行名额' : demo || workspaceNew ? '开始制作' : repair ? '补传素材' : '上传素材'}</button>
+            <button className="cm-button" disabled={!ready || uploading || slotsLoading || workspaceNew && slotsFull} onClick={() => void uploadMaterials()}><Upload size={17} /> {uploading ? '正在上传…' : workspaceNew && slotsFull ? '等待空位' : demo || workspaceNew ? '开始制作' : repair ? '补传素材' : '上传素材'}</button>
           </div>
         </section>
         {(sizeExceeded || uploadError) && <p className="cm-caption cm-upload-error" role="alert">
-          {sizeExceeded ? '素材合计接近或超过 64 MiB，请减小文件后再上传。' : uploadError}
+          {sizeExceeded ? '四份素材合计快到 64 MB 上限，请压缩后再传。' : uploadError}
         </p>}
         {!repair && !workspaceNew && <p className="cm-caption" role="status">{demo ? '本地检查文件能否打开，素材留在当前浏览器。演示流程尚未连接制作服务。'
-          : '合计上限 64 MiB。原片须有音轨，上传后会核对工程中的四份素材。'}</p>}
+          : '合计上限 64 MB。原片须有音轨，上传后会核对工程中的四份素材。'}</p>}
       </>}
       {showProduction && !receipt && !repair && uploadError && <p className="cm-caption cm-upload-error" role="alert">{uploadError}</p>}
       {step === 1 && <>

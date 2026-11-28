@@ -234,12 +234,12 @@ try{
    {unit_id:'other-group',teaching_selection:{first_glance:'另一组选题'}},
    {unit_id:group.unit_id,teaching_selection:{first_glance:' 先看上脸首笔，再看 <同框参照>。 '}},
   ]}}};
-  for(const embedded of [false,true]){
-   const html=humanReviewBoardPage(board,updated,p.lint,materials,[],embedded);
-   assert.equal(heading(html),'先看上脸首笔，再看 &lt;同框参照&gt;。');
-  }
+  assert.equal(heading(humanReviewBoardPage(board,updated,p.lint,materials)),'先看上脸首笔，再看 &lt;同框参照&gt;。');
+  const embedded=()=>humanReviewBoardPage(board,updated,p.lint,materials,[],true);
+  assert.match(embedded(),/达人一眼得到：先看上脸首笔，再看 &lt;同框参照&gt;。/u);
   updated.analysis.source_breakdown.units[1].teaching_selection.first_glance=' ';
-  assert.equal(heading(humanReviewBoardPage(board,updated,p.lint,materials,[],true)),original);
+  assert(!embedded().includes('先看上脸首笔'));
+  assert(embedded().includes(legacyIntent));
  });
  await test('Audience CTA routes are concise and both endings share the teaching body',()=>{
   const merged={...board,rows:[...board.rows.filter(r=>r.stage!=='closing'),...p.plans.flatMap(plan=>plan.rows.filter(r=>r.stage==='closing').map(r=>({...r,ending_variant:plan.variant})))]};

@@ -43,8 +43,9 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const version=board.candidate_id.match(/(?:^|[-_])v(\d+)/iu)?.[1];
  const revision=version?`第${version}版候选`:'现行保存候选';
  const breakdown=obj(data.analysis.source_breakdown);
+ const teachingGroup=(id:string)=>arr(breakdown.units).map(obj).find(unit=>unit.unit_id===id);
  const teaching=(id:string)=>{
-  const group=arr(breakdown.units).map(obj).find(unit=>unit.unit_id===id);
+  const group=teachingGroup(id);
   const brief=text(obj(group?.teaching_selection).first_glance).trim();
   if(brief)return brief;
   const u=data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit;const intent=text(u?.intent_zh).trim();
@@ -112,7 +113,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  };
 
  const stageZh=new Map([['Video asal','原片'],['Lihat semula','回看讲解'],['Ulasan semula','回看讲解']]);
- const stageList=(rows:ReviewBoardRow[])=>{if(embedded)return '';const pairs=[...new Map(rows.flatMap(r=>stageTranslations(data,r)).map(p=>[p.ms+'\0'+p.zh,p])).values()];return pairs.length?`<p class="stage-translations">阶段标识：${pairs.map(p=>`${esc(p.ms)+((p.zh||stageZh.get(p.ms))?' → '+esc(p.zh||stageZh.get(p.ms)):'')}`).join('；')}</p>`:'';};
+ const stageList=(rows:ReviewBoardRow[])=>{const pairs=[...new Map(rows.flatMap(r=>stageTranslations(data,r)).map(p=>[p.ms+'\0'+p.zh,p])).values()];return pairs.length?`<p class="stage-translations">阶段标识：${pairs.map(p=>`${esc(p.ms)+((p.zh||stageZh.get(p.ms))?' → '+esc(p.zh||stageZh.get(p.ms)):'')}`).join('；')}</p>`:'';};
  const unknownBlock=(id:string)=>{const unknowns=unitUnknowns(data,id);return `<details class="evidence-boundaries"><summary>证据边界与未知</summary>${unknowns.length?`<ul>${unknowns.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p>本组没有登记未知项，不等于已全部核实。</p>'}</details>`;};
  const opening=board.rows.find(r=>r.stage==='opening');const openingHtml=opening?`<section class="delivery opening${opening.deliveryLayout?' layered-opening':''}" data-card="opening"><h2>片头</h2><div class="delivery-body"><div class="provided">${opening.deliveryLayout?opening.frames.map((frame,i)=>`<figure>${image(opening,i)}<figcaption>${esc(frame.label)}</figcaption></figure>`).join(''):image(opening,0)}</div><div>${embedded?'':visualQuestions(opening.unit_id)}${copy(opening)}${embedded?'':questionHtml(questionKey(opening))}</div></div></section>`:'';
  const excerptUnit=embedded&&unitIds.includes(teachingExcerptUnit??'')?teachingExcerptUnit:undefined;
@@ -121,8 +122,9 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   const target=document.getElementById(link.hash.slice(1));
   if(!target)return;
   event.preventDefault();
-  const appendix=target.closest('details.source-speech');
-  if(appendix)appendix.open=true;
+  for(let parent=target.parentElement;parent;parent=parent.parentElement){
+   if(parent instanceof HTMLDetailsElement)parent.open=true;
+  }
   target.scrollIntoView({block:'start'});
  });
  }</script>`;
@@ -220,17 +222,26 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   const focused=reviewedRuns.some(({views})=>views.length);
   const pictureNotes=(run:ReviewBoardRow[])=>embedded?'':`<details class="picture-note"><summary>审核依据</summary>${run.map(r=>`<p>${esc(r.picture)}</p>`).join('')}</details>`;
   const playback=reviewedRuns.map(({run,views},position)=>{
+   if(run[0].stage==='original'&&embedded)return `<div class="source-block"><h3>原片</h3><div class="source-rail">${run.map(r=>strip(r,'source-strip')).join('')}</div></div>`;
    if(run[0].stage==='original')return focused
     ?`<div class="focused-original"><h3>${embedded?'原片画面':'原片选帧'}</h3><div class="source-rail">${run.map(r=>`<div>${stageCue(r,stageStyle(r))}${strip(r,'source-strip')}</div>`).join('')}</div>${position===0&&excerpt?`<details class="picture-note"><summary>原片观察</summary>${excerpt}${stageList(run)}</details>`:''}</div>`
     :`<div class="source-block"><h3>原片</h3>${run.map(r=>strip(r,'source-strip')).join('')}${position===0?excerpt:''}</div>${stageList(run)}`;
    if(views.length){
     const copyById=new Map(run.flatMap(r=>r.lines.map(l=>[l.id,{r,l}] as const)));
-    return `<div class="focused-explanation"><h3>讲解</h3>${replayGallery(views)}<div class="focused-copy">${[...copyById.values()].map(({l})=>`<div class="focused-line"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p></div>`).join('')}<details class="picture-note"><summary>字幕与来源</summary>${stageList(run)}${[...copyById.values()].map(({r,l})=>`${sourceLink(r,index,originals)}${copy(r,[l])}`).join('')}</details>${pictureNotes(run)}</div></div>`;
+    return `<div class="focused-explanation"><h3>讲解</h3>${replayGallery(views)}<div class="focused-copy">${[...copyById.values()].map(({l})=>`<div class="focused-line"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p></div>`).join('')}<details class="picture-note"><summary>${embedded?'审核依据':'字幕与来源'}</summary>${stageList(run)}${[...copyById.values()].map(({r,l})=>`${sourceLink(r,index,originals)}${copy(r,[l])}`).join('')}</details>${pictureNotes(run)}</div></div>`;
    }
+   if(embedded)return run.map(r=>`<div class="explanation"><div><h3>讲解</h3>${strip(r,'explanation-strip')}</div><div class="explanation-copy">${r.lines.map(l=>`<div class="line-copy"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p></div>`).join('')}<details class="picture-note"><summary>审核依据</summary>${sourceLink(r,index,originals)}${stageList([r])}${copy(r)}</details></div></div>`).join('');
    return run.flatMap(r=>r.lines.map(l=>`<div class="explanation"><div>${mock(r,l)}</div><div class="explanation-copy"><h3>讲解</h3>${sourceLink(r,index,originals)}${stageList([r])}${copy(r,[l])}${pictureNotes([r])}</div></div>`)).join('');
   }).join('');
-  const opinion=embedded?`<details class="group-opinion"><summary>第 ${index+1} 组意见</summary><textarea rows="3" maxlength="${BLUEPRINT_OPINION_MAX_LENGTH}" data-blueprint-opinion="${esc(id)}" aria-label="第 ${index+1} 组意见" placeholder="只针对本组"></textarea></details>`:'';
+  const opinion=embedded?`<details class="group-opinion"><summary>第 ${index+1} 组意见</summary><textarea rows="3" maxlength="${BLUEPRINT_OPINION_MAX_LENGTH}" data-blueprint-opinion="${esc(id)}" aria-label="第 ${index+1} 组意见" placeholder="没意见可不填"></textarea></details>`:'';
   const lesson=teaching(id);
+  if(embedded){
+   const decision=text(obj(teachingGroup(id)?.teaching_selection).decision).trim()
+    ||text(data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit.intent_zh).trim();
+   const chars=[...decision],short=chars.length>20?chars.slice(0,19).join('')+'…':decision;
+   const evidence=speechBlock(index,originals);
+   return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组</span>${esc(short)}</h2>${lesson&&lesson!==short?`<p class="gain">达人一眼得到：${esc(lesson)}</p>`:''}${id===excerptUnit?excerptHtml:''}${playback}${excerpt||evidence||short!==decision?`<details class="picture-note"><summary>审核依据</summary>${short!==decision?`<p>${esc(decision)}</p>`:''}${excerpt}${stageList(originals)}${evidence}</details>`:''}${opinion}</section>`;
+  }
   return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组${lesson?' · 教什么':''}</span>${esc(lesson)}</h2>${id===excerptUnit?excerptHtml:''}${playback}${speechBlock(index,originals)}${embedded?'':check+unknownBlock(id)+questionHtml(id)}${opinion}</section>`;
  }).join('');
 
@@ -249,7 +260,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   const prompt=audience==='new_contact'?'请核对佣金等合作数字是否正确。':'';
   const route=label==='新建联达人'?(embedded?'合作海报':'上传的 CTA 素材'):label==='已合作达人'?(embedded?'商品图和原片分镜':'产品图＋Storyboard'):'';
   const fullPicture=row.full_picture?.jpeg?`<details class="picture-note"><summary>${embedded?'查看原图':'核对未裁原图'}</summary><img style="display:block;width:100%;height:auto" src="data:image/jpeg;base64,${row.full_picture.jpeg}" alt="片尾素材原图"></details>`:'';
-  return `<article class="ending"><h3>${esc(label)}</h3>${route?`<p class="ending-route">${esc(route)}</p>`:''}<div class="ending-body"><div class="provided"><p class="sampling-note">${embedded?'片尾画面':'计划上屏'}</p>${image(row,0)}${fullPicture}</div>${embedded?'':visualQuestions(row.unit_id)}${prompt?`<p>${esc(prompt)}</p>`:''}${copy(row)}${embedded?'':questionHtml(questionKey(row))}</div></article>`;
+  return `<article class="ending"><h3>${esc(label)}</h3>${route?`<p class="ending-route">${esc(route)}</p>`:''}<div class="ending-body"><div class="provided"><p class="sampling-note">${embedded?'片尾画面':'计划上屏'}</p>${image(row,0)}${fullPicture}</div>${embedded?'':visualQuestions(row.unit_id)}${prompt?`<p class="ending-check">${esc(prompt)}</p>`:''}${copy(row)}${embedded?'':questionHtml(questionKey(row))}</div></article>`;
  }).join('');
  const endingsHtml=endings.length?`<section class="delivery" data-card="endings"><h2>片尾</h2>${!embedded&&sharedCrop?'<aside class="questions"><p>两个达人结尾使用同一张原图与同一裁切。请分别核对合作条件与开拍参考是否已经体现。</p></aside>':''}<div class="ending-grid">${endingCards}</div></section>`:'';
  const durationSummary=lint.durations.map((d,i)=>`${audiences.get(d.variant)??endingLabel('',i)}约${d.estimated_total_seconds===null?'未知':Math.round(d.estimated_total_seconds)+'秒'}`).join('；');
@@ -279,5 +290,22 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
 .replay-navigation button{border:1px solid #c8c1b4;background:white;color:#302719;border-radius:6px;padding:6px 9px;font:inherit;font-size:13px;cursor:pointer}
 .replay-navigation button[aria-pressed="true"]{background:#faefd0;border-color:#846a35;font-weight:650}
 @media(max-width:600px){.focused-explanation{grid-template-columns:minmax(0,1fr)}.focused-explanation>h3{grid-column:auto}}
+${embedded?`
+body{background:#fdfaf5;color:#1f1c17;font:15px/1.65 system-ui,"PingFang SC",sans-serif}
+header,main,footer{max-width:900px;padding:0 12px}header{padding-top:10px}
+h1{font-size:20px;margin:0 0 4px}.overview{margin:0 0 14px;color:#7a746a}
+.group,.delivery{border:1px solid #e8e2d6;border-radius:16px;padding:18px;margin:0 0 18px}
+h2{font-size:20px;margin-bottom:8px}h2>span{font-size:12px;color:#7a746a;margin:0}
+.gain,.ending-check{display:inline-block;border-radius:8px;padding:3px 12px;background:#fff4d2;color:#5a4a1f;font-size:14px}
+.source-block{display:block;padding:0;border:0;margin:0 0 14px}.source-block h3,.focused-explanation>h3,.explanation h3{display:table;margin:0 0 6px;border-radius:999px;padding:3px 12px;font-size:12px;background:#e6c46f;color:#2f261a}
+.source-block h3{background:#0d5ea6;color:white}
+.source-rail{padding:0 0 6px}.source-rail .source-strip{display:flex;gap:10px;max-width:none;padding:0;background:none}.source-strip figure{flex:0 0 107px}.source-strip .image-button,.source-strip img{border-radius:10px}
+.focused-explanation,.explanation{grid-template-columns:minmax(0,245px) minmax(0,1fr);gap:12px 16px;margin-bottom:12px}.explanation-strip{max-width:300px;margin:0}.explanation-strip .image-button{border-radius:8px;overflow:hidden}
+.focused-copy,.explanation-copy{background:#fdfaf5;border:1px solid #e8e2d6;border-radius:12px;padding:12px 14px}
+.meaning,.focused-copy .meaning{font-size:15px;font-weight:600;margin:0 0 4px}.narration,.focused-copy .narration{font-size:14px;color:#3a342a;margin:0 0 8px}
+.provided{border-radius:10px;background:#f5f0e6;padding:6px}.provided .image-button img{max-height:430px}
+.group-opinion{border:1px solid #e8e2d6;border-radius:12px;margin-top:14px;padding:9px 14px;font-size:13px}
+@media(max-width:600px){.group,.delivery{padding:14px}.focused-explanation,.explanation{grid-template-columns:minmax(0,1fr)}.ending-grid{gap:12px}.ending+.ending{padding-left:0;border:0}}
+`:''}
 </style></head><body><header>${embedded?'':'<p class="kicker">剪辑蓝图 · 人审版</p>'}<h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解${!embedded&&durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main>${embedded?'':'<footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer>'}<dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded,true)}${sourceLinksScript}${replayScript}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
 }

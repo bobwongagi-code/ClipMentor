@@ -33,6 +33,7 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
     await mkdir(proof, { recursive: true })
     let child: ChildProcess | undefined, origin = '', logs = ''
     const gate = deferred(), entered = deferred()
+    const released=Promise.withResolvers<number>()
     const downloads: string[] = [], blocked: string[] = [], posts: unknown[] = []
     try {
       let serverPath = join(source, 'server/clipmentor/production-web-loop.test-server.ts')
@@ -98,16 +99,14 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
         const req = route.request()
         if (req.method() !== 'POST' || req.postDataJSON().action !== action || req.postDataJSON().renderId !== old.renderId || posts.length) { await route.continue(); return }
         posts.push(req.postDataJSON())
-        if (timing === 'request') {
-          entered.release(); await gate.promise
-          const response = await route.fetch()
-          await route.fulfill({ response })
-        } else {
-          const response = await route.fetch()
-          expect(response.status()).toBe(200)
-          entered.release(); await gate.promise
-          await route.fulfill({ response })
-        }
+        if (timing === 'request') { entered.release(); await gate.promise }
+        const response = await route.fetch()
+        if (timing === 'response') { entered.release(); await gate.promise }
+        try { await route.fulfill({ response }) }
+        catch (error) { if (replacement !== 'parent') throw error }
+        // The old browser request may already be cancelled after a parent
+        // replacement. The independent fixture audit still checks its HTTP result.
+        released.resolve(response.status())
       })
       if (action === 'accept') {
         await checkFinalReview(partner(page))
@@ -133,11 +132,10 @@ for (const timing of ['request', 'response'] as const) for (const replacement of
       if (replacement === 'render') expect(fresh.taskId).toBe(old.taskId)
       else expect(fresh.taskId).not.toBe(old.taskId)
       await checkpoint('02-replacement-persisted')
-      const releasedResponse = page.waitForResponse(r => r.request().method() === 'POST' && r.request().postDataJSON()?.action === action && r.request().postDataJSON()?.renderId === old.renderId && r.url().includes('audience=existing_partner'), { timeout: 10_000 })
       gate.release()
-      await releasedResponse
+      expect(await bounded(released.promise, 'old handler response')).toBe(timing==='request'?409:200)
       if (replacement === 'render' && timing === 'request') {
-        await expect(partner(page).getByText('请刷新后查看当前版本。')).toBeVisible()
+        await expect(partner(page).getByText('请刷新页面，查看最新版本。')).toBeVisible()
       } else {
         await expect(partner(page).locator('video')).toHaveAttribute('src', new RegExp(encodeURIComponent(fresh.renderId)), { timeout: 18_000 })
       }

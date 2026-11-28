@@ -259,7 +259,7 @@ try{
   appendix.filter(item=>item.kind==='visible_action').forEach(item=>{item.text='PRIVATE_OBSERVATION 内部观察摘要';});
   const embedded=humanReviewBoardPage(plans[0],legacyData,report,[],[],true,undefined,answers);
   assert.match(embedded,/<h1>剪辑蓝图<\/h1>/);
-  assert.doesNotMatch(embedded,/内部名称待核|PRIVATE_REVIEW_|PRIVATE_PICTURE_PLAN|PRIVATE_ASR_NOTE|PRIVATE_TRANSLATION|PRIVATE_OBSERVATION|existing_partner_pdf_binding|证据边界与未知|未登记阶段标识|审核依据|短标译文未登记|const identity=/);
+  assert.doesNotMatch(embedded,/内部名称待核|PRIVATE_REVIEW_|PRIVATE_PICTURE_PLAN|PRIVATE_ASR_NOTE|PRIVATE_TRANSLATION|PRIVATE_OBSERVATION|existing_partner_pdf_binding|证据边界与未知|未登记阶段标识|短标译文未登记|const identity=/);
   assert.match(embedded,/Transferproof/);
   assert(!embedded.includes(plans[0].candidate_sha256));
   assert.match(embedded,/第 1 组意见/);

@@ -1,15 +1,17 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { preview } from 'vite'
 
 const endpoints = '/workspace-api'
-const a='board-a', b='board-b', exportsId='outputs'
+const a='board-a', b='board-b', exportsId='outputs', pausedId='paused', activeId='running'
 const outputs=[{audience:'existing_partner'},{audience:'new_contact'}]
 const boardTasks=[
+  {id:pausedId,name:'暂停示例',status:'paused',stage:'edit',updatedAt:5,outputs:[{audience:'existing_partner',status:'completed',stage:'self_check'},{audience:'new_contact',status:'paused',stage:'edit'}]},
+  {id:activeId,name:'制作示例',status:'running',stage:'edit',updatedAt:6,outputs:[]},
   {id:a,name:'短片甲',status:'blueprint',updatedAt:4,stage:'copy_review',outputs:[]},
   {id:b,name:'短片乙',status:'blueprint',updatedAt:3,stage:'copy_review',outputs:[]},
   {id:exportsId,name:'成片示例',status:'preview',updatedAt:2,stage:'self_check',outputs:[
@@ -26,9 +28,22 @@ const image={name:'test.png',mimeType:'image/png',
 const source=fileURLToPath(new URL('../fixtures/preflight.webm',import.meta.url))
 let path:string, origin:string
 let server:Awaited<ReturnType<typeof preview>>
+const videoBytes=await readFile(source)
 let running=5, held=false, clientFailed=false, staleBoard=false
 let partnerHeld=false, partnerFailed=false
 const created=new Map<string,string>()
+const flows=new Map<string,{phase:'blueprint'|'preview'|'completed';revision:number;feedback:boolean;pending:boolean}>()
+const flowPosts=new Map<string,Array<Record<string,unknown>>>()
+const flowTasks=()=>Array.from(created,([id,name])=>{
+  const flow=flows.get(id)
+  const status=flow?.phase??'materials'
+  return {id,name,status,stage:status==='blueprint'?'copy_review':status==='materials'?undefined:'self_check',updatedAt:1,outputs:[]}
+})
+async function readBody(req:AsyncIterable<Buffer>){
+  const parts:Buffer[]=[]
+  for await(const part of req)parts.push(part)
+  return JSON.parse(Buffer.concat(parts).toString())
+}
 const uploaded=new Set<string>()
 const calls:Array<{route:string;projectId:string|null}> = []
 
@@ -49,15 +64,13 @@ test.beforeAll(async ()=>{
         calls.push({route:`${req.method} ${url.pathname} ${view}`,projectId:id})
         if(url.pathname==='/tasks'){
           if(req.method==='POST'){
-            const parts:Buffer[]=[]
-            for await(const part of req)parts.push(part)
-            const {id,name}=JSON.parse(Buffer.concat(parts).toString())
+            const {id,name}=await readBody(req)
             created.set(id,name)
             send(201,{id,name});return
           }
-          send(200,{running,limit:5,tasks:[...boardTasks,...Array.from(created,([id,name])=>({id,name,status:'materials',updatedAt:1,outputs:[]}))]});return
+          send(200,{running,limit:5,tasks:[...boardTasks,...flowTasks()]});return
         }
-        if(id!==a&&id!==b&&id!==exportsId&&(!id||!created.has(id))){send(404,{});return}
+        if(id!==a&&id!==b&&id!==exportsId&&id!==pausedId&&id!==activeId&&(!id||!created.has(id))){send(404,{});return}
         if(url.pathname==='/intake'){
           if(req.method==='POST'){
             for await(const _chunk of req){ /* Drain the fixture request. */ }
@@ -67,7 +80,23 @@ test.beforeAll(async ()=>{
           send(200,uploaded.has(id)||!created.has(id)?{receipt:{projectId:id,assets}}:{});return
         }
         if(url.pathname!=='/production'){send(404,{});return}
-        if(req.method==='POST'){send(409,{reason:'capacity'});return}
+        if(req.method==='POST'){
+          const name=id&&created.get(id)
+          const flow=id&&flows.get(id)
+          if(!id||typeof name!=='string'||!name.startsWith('流程验收')){send(409,{reason:'capacity'});return}
+          const body=await readBody(req)
+          const previous=flowPosts.get(id)??[]
+          flowPosts.set(id,[...previous,body])
+          if(body.action==='start'&&uploaded.has(id))flows.set(id,{phase:'blueprint',revision:1,feedback:false,pending:false})
+          else if(flow&&flow.phase==='blueprint'&&body.action==='approve_blueprint'&&body.boardIdentity===id){
+            flow.phase='preview';flow.pending=name.includes('复核暂停')
+          }else if(flow?.phase==='preview'&&!flow.pending&&body.action==='revise_preview'&&body.renderId===`cut-${flow.revision}`&&!flow.feedback){
+            flow.feedback=true;flow.revision++
+          }else if(flow?.phase==='preview'&&!flow.pending&&body.action==='accept'&&body.renderId===`cut-${flow.revision}`&&body.previewWatched&&body.languageConfirmed){
+            flow.phase='completed'
+          }else{send(409,{reason:'fixture_transition'});return}
+          send(200,{accepted:true});return
+        }
         if(view==='panel_board'){
           const identity=staleBoard&&id===a?'changed-a':id
           res.writeHead(200,{'Content-Type':'text/html','X-ClipMentor-Board-Identity':identity}).end(
@@ -83,26 +112,53 @@ test.beforeAll(async ()=>{
             </script>`,
           );return
         }
+        const flow=id&&flows.get(id)
+        if(flow&&view==='panel_download'&&flow.phase==='completed'&&url.searchParams.get('renderId')===`cut-${flow.revision}`){
+          res.writeHead(200,{'Content-Type':'video/mp4','Content-Disposition':'attachment; filename="reviewed.mp4"'}).end('fixture');return
+        }
+        if(flow&&view==='panel_draft_download'&&flow.phase==='preview'&&flow.pending&&url.searchParams.get('renderId')===`cut-${flow.revision}`){
+          res.writeHead(200,{'Content-Type':'video/mp4','Content-Disposition':"attachment; filename*=UTF-8''%E6%9C%AA%E5%A4%8D%E6%A0%B8_cut.mp4"}).end('fixture');return
+        }
         if(view==='panel_draft_download'||view==='panel_download'){
           const expected=view==='panel_draft_download'?'draft-contact':'ready-partner'
           if(url.searchParams.get('renderId')!==expected||view==='panel_draft_download'&&held){send(409,{});return}
           res.writeHead(200,{'Content-Type':'video/mp4','Content-Disposition':`attachment; filename="${expected}.mp4"`}).end('fixture');return
         }
+        if(view==='panel_video'){
+          const start=Number(/^bytes=(\d+)-/.exec(req.headers.range??'')?.[1]??0)
+          res.writeHead(206,{'Content-Type':'video/webm','Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${videoBytes.length-1}/${videoBytes.length}`}).end(videoBytes.subarray(start));return
+        }
         if(view==='panel_poster'){
           res.writeHead(200,{'Content-Type':'image/png'}).end(image.buffer);return
+        }
+        if(flow){
+          const blueprint=flow.phase==='blueprint'
+          send(200,{task:{...baseTask,taskId:id,sequence:flow.revision,
+            status:blueprint?'awaiting_blueprint':flow.pending?'blocked':flow.phase==='completed'?'completed':'awaiting_review',
+            stage:blueprint?'copy_review':'self_check',feedbackUsed:flow.feedback,
+            reviewGroups:[{id:'group-1',label:'第 1 组'}],
+            ...(blueprint?{blueprintRevision:id,boardIdentity:id,canApproveBlueprint:true}:
+              {blueprintConfirmed:true,renderId:`cut-${flow.revision}`,previewPending:flow.pending,previewReviewed:!flow.pending,
+                canAcceptPreview:!flow.pending,previewDuration:1,downloadName:'reviewed.mp4',
+                previewChapters:[{id:'opening',label:'片头',seconds:0},{id:'group-1',label:'第 1 组',seconds:0.25}]})}})
+          return
         }
         if(id===a||id===b){
           const identity=staleBoard&&id===a?'changed-a':id
           send(200,{task:{...baseTask,taskId:id,status:'awaiting_blueprint',stage:'copy_review',blueprintRevision:identity,
             boardIdentity:identity,dualBlueprint:true,canConfirmBlueprint:true,reviewGroups:[{id:'group-1',label:'第 1 组'}]}});return
         }
-        if(id===exportsId){
+        if(id===exportsId||id===pausedId){
           if(!audience){send(200,{task:null,outputs,outputOwner:{taskId:id,sequence:1}});return}
+          if(id===pausedId&&audience==='new_contact'){
+            send(200,{task:{...baseTask,taskId:`${id}-${audience}`,sourceTaskId:id,audience,status:'blocked',stage:'edit',stopReason:'limit',blueprintConfirmed:true}});return
+          }
           if(audience==='new_contact'&&clientFailed){send(503,{});return}
           if(audience==='existing_partner'&&partnerFailed){send(503,{});return}
           send(200,{task:{...baseTask,taskId:`${id}-${audience}`,sourceTaskId:id,audience,stage:'self_check',blueprintConfirmed:true,previewDuration:28,
+            previewChapters:[{id:'opening',label:'片头',seconds:0},{id:'group-1',label:'第 1 组',seconds:0.25},{id:'ending',label:'片尾',seconds:0.5}],
             ...(audience==='new_contact'?{status:'blocked',previewPending:true,deliveryHeld:held,renderId:'draft-contact',
-              materialAttachment:{assetId:'cta',label:'CTA 海报'}}:
+              materialAttachment:{assetId:'cta',label:'合作海报'}}:
               {status:'completed',previewReviewed:true,deliveryHeld:partnerHeld,renderId:'ready-partner',confirmedAt:1770000000000,downloadName:'saved.mp4',
                 attachments:[{assetId:'board-pdf',fileName:'board.pdf'}]})}});return
         }
@@ -121,8 +177,9 @@ test.afterAll(async()=>{
 
 test('homepage and upload disclose a lost slot and retain the four saved assets',async({page})=>{
   await page.goto(origin)
-  await expect(page.getByText('5 / 5')).toBeVisible()
-  await page.getByRole('link',{name:'新建任务'}).click()
+  await expect(page.getByText('5/5',{exact:true})).toBeVisible()
+  await expect(page.getByRole('button',{name:'新建任务'})).toBeDisabled()
+  await page.getByRole('link',{name:'先选素材'}).click()
   await expect(page.getByText('名额已满，可以先选好素材。')).toBeVisible()
   await page.getByLabel('任务名称（选填）').fill('上传竞争')
   await page.getByLabel('爆款原片',{exact:true}).setInputFiles(source)
@@ -131,14 +188,14 @@ test('homepage and upload disclose a lost slot and retain the four saved assets'
   }
   await expect(page.getByText(/四份素材已就绪/)).toBeVisible()
   await expect(page.locator('.cm-upload[data-state="ready"]')).toHaveCount(4)
-  await expect(page.getByRole('button',{name:'等待运行名额'})).toBeDisabled()
+  await expect(page.getByRole('button',{name:'等待空位'})).toBeDisabled()
   expect(calls.filter(call=>call.route.startsWith('POST'))).toHaveLength(0)
   running=4
   const start=page.getByRole('button',{name:'开始制作'})
   await expect(start).toBeEnabled({timeout:8000})
   await start.click()
-  await expect(page.getByText('素材已保存。名额空出后，点「开始制作」。')).toBeVisible()
-  await expect(page.getByText('四份素材均已保存到当前工程。')).toBeVisible()
+  await expect(page.getByText('素材已保存。有空位后，点「开始制作」。')).toBeVisible()
+  await expect(page.getByText('四份素材都已保存。')).toBeVisible()
   expect(calls.filter(call=>call.route.startsWith('POST')).map(call=>call.route)).toEqual([
     'POST /tasks panel','POST /intake panel','POST /production panel',
   ])
@@ -147,7 +204,8 @@ test('homepage and upload disclose a lost slot and retain the four saved assets'
 test('task switching isolates local opinions and a superseded board cannot inherit them',async({page})=>{
   await page.setViewportSize({width:360,height:780})
   await page.goto(`${origin}/?task=${a}`)
-  const overall=page.getByRole('textbox',{name:'整体意见'})
+  const overall=page.getByLabel('整体意见',{exact:true})
+  await page.getByText('整体意见',{selector:'summary',exact:true}).click()
   await overall.fill('只留在短片甲')
   const group=page.frameLocator('iframe[title="人审版蓝图"]')
   await group.getByText('第 1 组意见').click()
@@ -166,54 +224,60 @@ test('task switching isolates local opinions and a superseded board cannot inher
   await page.reload()
   await expect(overall).toHaveValue('')
   await page.goto(`${origin}/?task=does-not-exist`)
-  await expect(page.getByRole('heading',{name:'找不到这个任务'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:/找不到这个任务/})).toBeVisible()
   expect(calls.some(call=>call.projectId==='does-not-exist')).toBe(false)
 })
 
-test('download eligibility is isolated by version and the pending card links to its own preview',async({page})=>{
+function version(page:Page,audience:'existing_partner'|'new_contact'){
+  const title=audience==='existing_partner'?'已合作达人版':'新建联达人版'
+  return {
+    tab:page.getByRole('tab',{name:new RegExp(title)}),
+    panel:page.getByRole('tabpanel',{name:title,exact:true}),
+  }
+}
+
+test('legacy download links use the film tab and isolate audience eligibility',async({page})=>{
   const route=`${origin}/?task=${exportsId}&view=downloads`
+  const partner=version(page,'existing_partner'), contact=version(page,'new_contact')
   await page.goto(route)
-  const clip=(title:string)=>page.getByRole('article').filter({has:page.getByRole('heading',{name:title})})
-  const partner=clip('已合作达人版'), contact=clip('新建联达人版')
-  await expect(partner.getByRole('link',{name:'下载成片'})).toHaveAttribute('href',/renderId=ready-partner.*audience=existing_partner.*projectId=outputs/)
-  await expect(partner.locator('img')).toHaveAttribute('src',/view=panel_poster.*renderId=ready-partner/)
-  await expect(contact.locator('img')).toHaveAttribute('src',/view=panel_poster.*renderId=draft-contact/)
-  await expect(contact.getByRole('link',{name:'下载成片'})).toHaveCount(0)
-  await expect(contact.getByRole('link',{name:'去看片'})).toHaveAttribute('href',/task=outputs&audience=new_contact/)
-  await contact.getByText('需要先下载一份？').click()
-  await expect(contact.getByRole('link',{name:'下载未复核版本'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
-  await contact.getByRole('link',{name:'去看片'}).click()
-  await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
-  const preview=page.getByRole('tabpanel',{name:'新建联达人版'})
-  await expect(preview.getByRole('link',{name:'下载未复核版本'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
-  await expect(preview.getByRole('link',{name:'下载成片'})).toHaveCount(0)
+  await expect(page.getByRole('button',{name:'成片',exact:true})).toHaveAttribute('aria-current','page')
+  await partner.tab.click()
+  await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toHaveAttribute('href',/renderId=ready-partner.*audience=existing_partner.*projectId=outputs/)
+  await expect(partner.panel.getByRole('link',{name:'下载原片分镜（PDF）'})).toBeVisible()
+  await contact.tab.click()
+  await expect(contact.panel.getByRole('link',{name:'先下未复核版'})).toHaveAttribute('href',/view=panel_draft_download.*renderId=draft-contact/)
+  await expect(contact.panel.getByRole('link',{name:'下载合作海报'})).toHaveAttribute('href',/view=panel_material.*renderId=draft-contact.*assetId=cta/)
+  await expect(contact.panel.getByRole('button',{name:'确认成片',exact:true})).toBeDisabled()
+  await expect(page.locator('video')).toHaveCount(1)
   held=true
-  await page.goto(route)
-  await expect(contact.getByText(/可看片，需修改/)).toBeVisible()
-  await expect(contact.getByRole('link',{name:'去看片'})).toBeVisible()
-  await expect(contact.getByText('需要先下载一份？')).toHaveCount(0)
-  clientFailed=true
-  await page.reload()
-  await expect(contact.getByText('暂不可下载')).toBeVisible()
-  await expect(partner.getByRole('link',{name:'下载成片'})).toBeVisible()
+  try{
+    await page.reload()
+    await expect(contact.panel.getByText('成片需要修改。')).toBeVisible()
+    await expect(contact.panel.getByRole('link',{name:'先下未复核版'})).toHaveCount(0)
+    clientFailed=true
+    await page.reload()
+    await expect(contact.tab).toContainText('读取状态失败')
+    await partner.tab.click()
+    await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
+  }finally{held=false;clientFailed=false}
 })
 
-test('home opens the outstanding version and the two page links retain an explicit version',async({page})=>{
-  clientFailed=false
-  held=false
+test('home opens the outstanding version and the three task tabs preserve it',async({page})=>{
   await page.goto(origin)
-  await page.getByRole('link',{name:'查看预览 · 成片示例 · 新建联达人版'}).click()
-  await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
+  await page.getByRole('link',{name:'去看片 · 成片示例 · 新建联达人版'}).click()
+  const partner=version(page,'existing_partner'), contact=version(page,'new_contact')
+  await expect(contact.tab).toHaveAttribute('aria-selected','true')
   await expect(page.getByRole('heading',{level:1})).toHaveCount(1)
-  await page.getByRole('tab',{name:/已合作达人版/}).click()
-  await page.getByRole('link',{name:'下载',exact:true}).click()
-  await expect(page.locator('article[data-current="true"]').getByRole('heading')).toHaveText('已合作达人版')
-  await page.getByRole('link',{name:'任务进度'}).click()
-  await expect(page.getByRole('tab',{name:/已合作达人版/})).toHaveAttribute('aria-selected','true')
-  await page.goto(`${origin}/?task=${b}`)
-  await expect(page.getByRole('link',{name:'下载',exact:true})).toHaveCount(0)
+  await partner.tab.click()
+  await page.getByRole('button',{name:'素材',exact:true}).click()
+  await expect(page.getByRole('region',{name:'制作素材'}).getByText('product.png')).toBeVisible()
+  await page.getByRole('button',{name:'蓝图',exact:true}).click()
+  await expect(page.getByText(/蓝图已进入制作/)).toBeVisible()
+  await page.getByRole('button',{name:'成片',exact:true}).click()
+  await expect(partner.tab).toHaveAttribute('aria-selected','true')
+  await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
   await page.goto(`${origin}/?task=${b}&view=downloads`)
-  await expect(page.getByText('还没有可下载的版本。预览生成后可在这里查看。')).toBeVisible()
+  await expect(page.getByText('蓝图确认并生成预览后，可在这里看片。')).toBeVisible()
 })
 
 for(const scenario of ['delayed-read','switched','delayed-ack'])test(`confirmation follows the saved version (${scenario})`,async({page})=>{
@@ -235,72 +299,60 @@ for(const scenario of ['delayed-read','switched','delayed-ack'])test(`confirmati
   await page.clock.install()
   await page.setViewportSize({width:320,height:640})
   await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
-  await page.getByLabel('看过成片').check()
-  await page.getByLabel('核过马来语').check()
+  await page.getByLabel('我已看过成片').check()
+  await page.getByLabel('我已核对口播和字幕').check()
   await page.getByRole('button',{name:'确认成片',exact:true}).click()
   try{
     await expect.poll(()=>accepted).toBe(true)
-    if(scenario!=='delayed-ack')await expect(page.getByText('操作已收到，正在核对最新状态。')).toBeVisible()
+    if(scenario!=='delayed-ack')await expect(page.getByText('已收到，正在更新状态。')).toBeVisible()
     if(scenario==='switched')await page.getByRole('tab',{name:/已合作达人版/}).click()
     await page.clock.fastForward(9000)
     if(scenario==='switched'){
       await expect(page.getByRole('tab',{name:/新建联达人版/})).toContainText('可下载')
       await expect(page).toHaveURL(/task=outputs&audience=existing_partner$/)
     }else{
-      await expect(page).toHaveURL(/task=outputs&view=downloads&audience=new_contact$/)
-      await expect(page.locator('article[data-current="true"]').getByRole('link',{name:/下载成片/})).toBeVisible()
-      await expect(page.getByRole('article').first().getByRole('heading')).toHaveText('新建联达人版')
+      await expect(page).toHaveURL(/task=outputs&audience=new_contact$/)
+      await expect(version(page,'new_contact').panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
     }
   }finally{release()}
 })
 
 test('one pending audience request does not delay a second version or change its download authority',async({page})=>{
-  const partner=page.getByRole('article').filter({has:page.getByRole('heading',{name:'已合作达人版'})})
-  const contact=page.getByRole('article').filter({has:page.getByRole('heading',{name:'新建联达人版'})})
+  const partner=version(page,'existing_partner'), contact=version(page,'new_contact')
   let release!:()=>void
   const paused=new Promise<void>(resolve=>{release=resolve})
   const gate=versionRead('new_contact')
   await page.route(gate,async route=>{await paused;await route.continue().catch(()=>{})})
   try{
-    await page.goto(`${origin}/?task=${exportsId}&view=downloads`)
-    await expect(contact.getByText('正在读取下载状态…')).toBeVisible()
-    await expect(partner.getByRole('link',{name:'下载成片'})).toBeVisible()
+    await page.goto(`${origin}/?task=${exportsId}&view=film&audience=existing_partner`)
+    await expect(contact.tab).toContainText('正在读取')
+    await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
   }finally{release()}
   await page.unroute(gate)
   partnerHeld=true
-  clientFailed=false
   try{
     await page.reload()
-    await expect(partner.getByRole('link',{name:'下载成片'})).toHaveCount(0)
-    await expect(partner.getByRole('link',{name:'去看片'})).toBeVisible()
+    await expect(partner.tab).toContainText('需修改')
+    await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toHaveCount(0)
     partnerFailed=true
-    await contact.getByRole('link',{name:'去看片'}).click()
-    await expect(page.getByRole('tab',{name:/新建联达人版/})).toHaveAttribute('aria-selected','true')
-    await expect(page.getByRole('tab',{name:/已合作达人版/})).toContainText('读取状态失败')
-    await expect(page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video')).toHaveCount(1)
-  }finally{partnerHeld=false;partnerFailed=false;held=false}
+    await page.reload()
+    await contact.tab.click()
+    await expect(partner.tab).toContainText('读取状态失败')
+    await expect(contact.panel.locator('video')).toBeVisible()
+  }finally{partnerHeld=false;partnerFailed=false}
 })
 
-test('an explicit mismatched response cannot offer another ending’s download',async({page})=>{
+for(const mismatch of ['audience','source'])test(`a ${mismatch} mismatch cannot offer another ending’s download`,async({page})=>{
   await page.route(versionRead('new_contact'),route=>route.fulfill({json:{task:{...baseTask,
-    taskId:'wrong-audience',status:'completed',stage:'self_check',renderId:'ready-partner',audience:'existing_partner',
+    taskId:'wrong-output',sourceTaskId:mismatch==='source'?'other-source':exportsId,
+    audience:mismatch==='audience'?'existing_partner':'new_contact',status:'completed',stage:'self_check',renderId:'wrong',
   }}}))
   await page.goto(`${origin}/?task=${exportsId}&view=downloads&audience=new_contact`)
-  const target=page.locator('article[data-current="true"]')
-  await expect(target.getByText('暂不可下载')).toBeVisible()
-  await expect(target.getByRole('link',{name:/下载成片/})).toHaveCount(0)
-  await expect(page.getByRole('link',{name:'下载成片 · 已合作达人版'})).toBeVisible()
-})
-
-test('a download response for the right audience but a different source task is discarded',async({page})=>{
-  await page.route(versionRead('new_contact'),route=>route.fulfill({json:{task:{...baseTask,
-    taskId:'other-contact',sourceTaskId:'other-source',audience:'new_contact',status:'completed',stage:'self_check',renderId:'other-export',
-  }}}))
-  await page.goto(`${origin}/?task=${exportsId}&view=downloads&audience=new_contact`)
-  const target=page.locator('article[data-current="true"]')
-  await expect(target.getByText('暂不可下载')).toBeVisible()
-  await expect(target.getByRole('link',{name:/下载成片/})).toHaveCount(0)
-  await expect(page.getByRole('link',{name:'下载成片 · 已合作达人版'})).toBeVisible()
+  const contact=version(page,'new_contact'), partner=version(page,'existing_partner')
+  await expect(contact.tab).toContainText('读取状态失败')
+  await expect(contact.panel.getByRole('link',{name:'下载成片',exact:true})).toHaveCount(0)
+  await partner.tab.click()
+  await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
 })
 
 test('an explicitly unavailable version loses stale actions without hiding the other preview',async({page})=>{
@@ -332,8 +384,8 @@ test('a disabled revision can keep its draft and submit only after readback reco
   const panel=page.getByRole('tabpanel',{name:'新建联达人版'})
   const opinion=panel.getByRole('textbox',{name:'修改意见'})
   await opinion.fill('缩短片尾留白')
-  await panel.getByLabel('反馈位置').selectOption('whole')
-  await panel.getByLabel('确认这条意见作用于整体').check()
+  await panel.getByLabel('意见针对哪里').selectOption('whole')
+  await panel.getByLabel('这条意见针对整支视频').check()
   const submit=panel.getByRole('button',{name:'提交修改'})
   await expect(submit).toBeDisabled()
   unavailable=false
@@ -345,11 +397,11 @@ test('a disabled revision can keep its draft and submit only after readback reco
 test('a session rejection removes the previously authorized task workspace',async({page})=>{
   await page.clock.install()
   await page.goto(origin)
-  const oldTask=page.getByRole('link',{name:'打开 短片甲'})
+  const oldTask=page.getByRole('link',{name:'去审蓝图 · 短片甲'})
   await expect(oldTask).toBeVisible()
   await page.route(`**${endpoints}/tasks`,route=>route.fulfill({status:401,json:{error:'signed-out'}}))
   await page.clock.fastForward(6000)
-  await expect(page.getByText('任务列表访问已失效，请刷新页面。')).toBeVisible()
+  await expect(page.getByText('登录已失效，请刷新页面。')).toBeVisible()
   await expect(oldTask).toHaveCount(0)
 })
 
@@ -365,15 +417,272 @@ test('a playable version stays selected when its slower sibling becomes availabl
     await route.continue().catch(()=>{})
   })
   try{
-    await page.goto(`${origin}/?task=${exportsId}`)
+    await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
     const contact=page.getByRole('tab',{name:/新建联达人版/})
     const partner=page.getByRole('tab',{name:/已合作达人版/})
     await expect(contact).toHaveAttribute('aria-selected','true')
     expect(waiting).toBe(true)
     const player=await page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video').boundingBox()
-    expect(player!.y+player!.height).toBeLessThanOrEqual(640)
+    const bar=await page.locator('.cm-action-bar:visible').boundingBox()
+    expect(bar!.y+bar!.height).toBeLessThanOrEqual(640)
+    expect(player!.width).toBeLessThanOrEqual(320)
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(320)
     release()
     await expect(partner).toContainText('可下载')
     await expect(contact).toHaveAttribute('aria-selected','true')
   }finally{release()}
 })
+
+
+const rawScreens=process.env.CLIPMENTOR_V2_RAW_DIR
+async function capture(page:Page,name:string,size:string){
+  if(!rawScreens)return
+  await mkdir(rawScreens,{recursive:true})
+  await page.evaluate(()=>document.fonts.ready.then(()=>undefined))
+  await page.screenshot({path:join(rawScreens,`${name}-${size}.png`),animations:'disabled'})
+}
+
+test.describe('首页 · 三轮',()=>{
+  test('桌面待办优先，制作中不重复，暂停默认折叠',async({page})=>{
+    running=3
+    await page.setViewportSize({width:1280,height:900})
+    await page.goto(origin)
+    const main=page.getByRole('main')
+    await expect(main.getByRole('heading',{level:2}).first()).toHaveText(/^待你处理/)
+    await expect(main.getByRole('link',{name:/去看片/})).toHaveCount(1)
+    await expect(main.getByLabel('制作阶段')).toHaveCount(1)
+    await expect(main.getByText('无需操作')).toBeVisible()
+    await expect(main.getByText('暂停示例')).toBeHidden()
+    await capture(page,'home','desktop')
+  })
+  test('手机名额满了仍可选料，回收后新建恢复',async({page})=>{
+    running=5
+    await page.setViewportSize({width:390,height:844})
+    await page.clock.install()
+    await page.goto(origin)
+    await expect(page.getByRole('button',{name:'新建任务'})).toBeDisabled()
+    await expect(page.getByRole('link',{name:'先选素材'})).toBeVisible()
+    running=3
+    await page.clock.fastForward(6000)
+    await expect(page.getByRole('link',{name:'新建任务'})).toBeVisible()
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(390)
+    await capture(page,'home','mobile')
+  })
+  test('空列表与读取失败有明确状态',async({page})=>{
+    let fail=true
+    await page.clock.install()
+    await page.route(`**${endpoints}/tasks`,route=>fail
+      ?route.fulfill({status:503,json:{}}):route.fulfill({json:{tasks:[],running:0,limit:5}}))
+    await page.goto(origin)
+    await expect(page.getByRole('alert')).toContainText('列表暂时没更新')
+    fail=false
+    await page.clock.fastForward(6000)
+    await expect(page.getByRole('heading',{name:'还没有任务'})).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+  })
+})
+
+test.describe('蓝图 · 三轮',()=>{
+  test('整体和分组入口默认收起，零意见可确认',async({page})=>{
+    staleBoard=false
+    await page.goto(`${origin}/?task=${a}`)
+    await expect(page.getByRole('button',{name:'确认蓝图，开始制作'})).toBeEnabled()
+    await expect(page.getByLabel('整体意见',{exact:true})).toBeHidden()
+    await expect(page.frameLocator('iframe').getByRole('textbox',{name:'第 1 组意见'})).toBeHidden()
+    await expect(page.getByRole('button',{name:'提交意见',exact:true})).toBeDisabled()
+  })
+  test('只提交填写过的组，整体清空仍能继续输入',async({page})=>{
+    let sent:Record<string,unknown>|undefined
+    await page.route(`**${endpoints}/production?projectId=${a}`,route=>{
+      if(route.request().method()!=='POST')return route.continue()
+      sent=route.request().postDataJSON()
+      return route.fulfill({json:{accepted:true,notesSaved:true}})
+    })
+    await page.goto(`${origin}/?task=${a}`)
+    await page.getByText('整体意见',{selector:'summary',exact:true}).click()
+    const overall=page.getByLabel('整体意见',{exact:true})
+    await overall.fill('临时文字')
+    await overall.clear()
+    await expect(overall).toBeVisible()
+    const frame=page.frameLocator('iframe')
+    await frame.getByText('第 1 组意见').click()
+    await frame.getByRole('textbox',{name:'第 1 组意见'}).fill('只改这一组')
+    await expect(page.getByRole('navigation',{name:'蓝图意见'}).getByRole('button',{name:'第 1 组'})).toBeVisible()
+    await page.getByRole('button',{name:'提交意见',exact:true}).click()
+    await expect.poll(()=>sent).toMatchObject({action:'revise_blueprint',blueprintOpinions:[{unitId:'group-1',text:'只改这一组'}]})
+  })
+  test('另一版已完成时，二次待审仍直达正确蓝图和步骤',async({page})=>{
+    const task={...boardTasks.find(task=>task.id===exportsId)!,status:'blueprint',stage:'copy_review',
+      outputs:[{audience:'existing_partner',status:'completed',stage:'self_check'},{audience:'new_contact',status:'blueprint',stage:'copy_review'}]}
+    await page.route(`**${endpoints}/tasks`,route=>route.fulfill({json:{tasks:[task],running:0,limit:5}}))
+    await page.route(versionRead('new_contact'),route=>route.fulfill({json:{task:{...baseTask,
+      taskId:'reopened-board',sourceTaskId:exportsId,audience:'new_contact',status:'awaiting_blueprint',stage:'copy_review',
+      blueprintRevision:exportsId,boardIdentity:exportsId,canApproveBlueprint:true,blueprintConfirmed:true,feedbackUsed:true,
+    }}}))
+    await page.goto(origin)
+    await page.getByRole('link',{name:/去审蓝图 · 成片示例/}).click()
+    await expect(page.getByRole('button',{name:'蓝图',exact:true})).toHaveAttribute('aria-current','page')
+    await expect(page.getByRole('list',{name:'制作步骤'}).locator('[aria-current=step] span')).toHaveText('审蓝图')
+    await expect(page.frameLocator('iframe').getByText('蓝图示例')).toBeVisible()
+    await expect(page.getByRole('button',{name:'确认蓝图，开始制作'})).toBeEnabled()
+  })
+})
+
+test.describe('任务详情 · 三轮',()=>{
+  test('桌面四步骤与三标签，成片仅加载所选版本',async({page})=>{
+    await page.setViewportSize({width:1280,height:900})
+    await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
+    await expect(page.getByRole('list',{name:'制作步骤'}).locator('li span')).toHaveText(['交素材','审蓝图','看片提意见','拿成片'])
+    await expect(page.getByRole('navigation',{name:'任务详情'}).getByRole('button')).toHaveText(['素材','蓝图','成片'])
+    await expect(page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video')).toBeVisible()
+    await expect(page.locator('video')).toHaveCount(1)
+    await capture(page,'detail','desktop')
+  })
+  test('已暂停和已确认的入口分别打开各自版本',async({page})=>{
+    await page.goto(origin)
+    const inactive=page.locator('.cm-task-inactive')
+    await inactive.locator('summary').click()
+    await expect(inactive.getByText('停在「剪辑」',{exact:false})).toBeVisible()
+    await inactive.getByRole('link',{name:'查看原因',exact:true}).click()
+    await expect(version(page,'new_contact').tab).toHaveAttribute('aria-selected','true')
+    await expect(version(page,'new_contact').panel.getByText('查看原因')).toBeVisible()
+    await expect(version(page,'new_contact').panel.getByRole('button',{name:/继续/})).toHaveCount(0)
+    await version(page,'existing_partner').tab.click()
+    await expect(version(page,'existing_partner').panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
+  })
+  test('手机切标签及版本保留本版意见',async({page})=>{
+    await page.setViewportSize({width:390,height:844})
+    await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
+    const contact=version(page,'new_contact')
+    const opinion=contact.panel.getByRole('textbox',{name:'修改意见'})
+    await expect(opinion).toBeVisible()
+    await capture(page,'detail','mobile')
+    await opinion.fill('只留给新建联版')
+    await page.getByRole('button',{name:'素材',exact:true}).click()
+    await expect(page.getByRole('region',{name:'制作素材'}).locator('li')).toHaveCount(4)
+    await page.getByRole('button',{name:'成片',exact:true}).click()
+    await expect(opinion).toHaveValue('只留给新建联版')
+    await version(page,'existing_partner').tab.click()
+    await expect(version(page,'existing_partner').panel.getByRole('textbox',{name:'修改意见'})).toHaveCount(0)
+    await contact.tab.click()
+    await expect(opinion).toHaveValue('只留给新建联版')
+  })
+})
+
+test.describe('预览 · 三轮',()=>{
+  test('复核暂停仍从可以看片说起，提前下载为次要动作',async({page})=>{
+    await page.setViewportSize({width:1280,height:900})
+    await page.goto(`${origin}/?task=${exportsId}&view=film&audience=new_contact`)
+    const contact=version(page,'new_contact')
+    await expect(contact.panel.locator('.cm-review-summary p').first()).toHaveText(/^可以看片/)
+    await expect(contact.panel.getByRole('button',{name:'确认成片',exact:true})).toBeDisabled()
+    await expect(contact.panel.getByRole('link',{name:'先下未复核版'})).toHaveClass(/secondary/)
+    await expect(contact.panel.getByRole('link',{name:'下载成片',exact:true})).toHaveCount(0)
+    await capture(page,'preview','desktop')
+  })
+  test('窄屏和横向平板的播放器与底部操作条不重叠',async({page})=>{
+    for(const [width,height] of [[320,640],[390,844],[768,900]]){
+      await page.setViewportSize({width,height})
+      await page.goto(`${origin}/?task=${exportsId}&view=film&audience=new_contact`)
+      const contact=version(page,'new_contact')
+      const player=contact.panel.locator('video')
+      const bar=contact.panel.locator('.cm-action-bar')
+      await expect(player).toBeVisible()
+      await expect(bar.getByRole('button',{name:'确认成片',exact:true})).toBeInViewport()
+      const videoBox=await player.boundingBox(),barBox=await bar.boundingBox()
+      expect(videoBox!.y+videoBox!.height).toBeLessThanOrEqual(barBox!.y)
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width)
+      if(width===390)await capture(page,'preview','mobile')
+    }
+  })
+  test('当前时间只填开始，失败读回不开放确认',async({page})=>{
+    await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)
+    const contact=version(page,'new_contact')
+    const start=contact.panel.getByRole('button',{name:'在这里提意见'})
+    await expect(start).toBeEnabled()
+    await start.click()
+    await expect(contact.panel.getByLabel('开始（秒）')).toHaveValue('0')
+    await expect(contact.panel.getByLabel('结束（秒）')).toHaveValue('')
+    await expect(contact.panel.getByRole('button',{name:'提交修改'})).toBeDisabled()
+    await expect(contact.panel.getByRole('button',{name:'确认成片',exact:true})).toBeDisabled()
+  })
+})
+
+// Each run starts at Home and ends with a bound download in the same task.
+for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,844],['跨任务草稿',320,640]] as const){
+  test(`完整任务流程 · ${scenario}`,async({page})=>{
+    running=3
+    await page.setViewportSize({width,height})
+    await page.goto(origin)
+    await page.getByRole('link',{name:'新建任务'}).click()
+    const name='流程验收 '+scenario
+    await page.getByLabel('任务名称（选填）').fill(name)
+    await page.getByLabel('爆款原片',{exact:true}).setInputFiles(source)
+    for(const label of ['商品图','销量截图','合作海报'])await page.getByLabel(label,{exact:true}).setInputFiles({...image,name:label+'.png'})
+    await page.getByRole('button',{name:'开始制作',exact:true}).click()
+    await expect(page.getByRole('heading',{level:1,name})).toBeVisible()
+    const id=new URL(page.url()).searchParams.get('task')!
+    await expect(page.getByRole('list',{name:'制作步骤'}).locator('li span')).toHaveText(['交素材','审蓝图','看片提意见','拿成片'])
+    const approve=page.getByRole('button',{name:'确认蓝图，开始制作'})
+    await expect(approve).toBeEnabled()
+    await page.getByRole('button',{name:'素材',exact:true}).click()
+    await expect(page.getByRole('region',{name:'制作素材'}).locator('li')).toHaveCount(4)
+    // Reload the task without a pinned tab before continuing its normal phase progression.
+    await page.goto(`${origin}/?task=${id}`)
+    await expect(approve).toBeEnabled()
+    await approve.click()
+    await expect(page.getByRole('button',{name:'成片',exact:true})).toHaveAttribute('aria-current','page')
+    const summary=page.locator('.cm-review-summary')
+    await expect(summary.locator('p').first()).toContainText(/^可以看片/)
+    const confirm=page.getByRole('button',{name:'确认成片',exact:true})
+    await expect(confirm).toBeDisabled()
+    const feedback=page.getByRole('textbox',{name:'修改意见'})
+    const submit=page.getByRole('button',{name:'提交修改'})
+    await feedback.fill('只调整选中的画面')
+    if(scenario==='复核暂停'){
+      await expect(summary).toContainText('复核已暂停')
+      const download=page.waitForEvent('download')
+      await page.getByRole('link',{name:'先下未复核版'}).click()
+      expect((await download).suggestedFilename()).toMatch(/^未复核_/u)
+      await page.getByRole('button',{name:'在这里提意见'}).click()
+      await expect(page.getByLabel('开始（秒）')).toHaveValue(/^[0-9.]+$/)
+      await expect(page.getByLabel('结束（秒）')).toHaveValue('')
+      await page.getByLabel('结束（秒）').fill('2')
+      await expect(page.getByText('时间段不能超出视频时长。')).toBeVisible()
+      await expect(submit).toBeDisabled()
+      flows.get(id)!.pending=false
+      await page.reload()
+      await expect(feedback).toHaveValue('只调整选中的画面')
+      await page.getByLabel('结束（秒）').fill('0.5')
+    }else{
+      await page.getByLabel('意见针对哪里').selectOption('group:group-1')
+      if(scenario==='跨任务草稿'){
+        const switchTasks=page.getByRole('combobox',{name:'切换任务'})
+        const open=page.getByRole('button',{name:'打开所选任务'})
+        await switchTasks.selectOption(a);await open.click()
+        await expect(page.getByRole('button',{name:'确认蓝图，开始制作'})).toBeEnabled()
+        await switchTasks.selectOption(id);await open.click()
+        await expect(feedback).toHaveValue('只调整选中的画面')
+        await expect(page.getByLabel('意见针对哪里')).toHaveValue('group:group-1')
+      }
+    }
+    await expect(submit).toBeEnabled()
+    await submit.click()
+    await expect(page.getByRole('region',{name:'本版对照与当前状态'})).toContainText('改后的预览已生成')
+    await expect(confirm).toBeDisabled()
+    await page.getByLabel('我已看过成片').check()
+    await page.getByLabel('我已核对口播和字幕').check()
+    const url=page.url()
+    await confirm.click()
+    const ready=page.getByRole('link',{name:'下载成片',exact:true})
+    await expect(ready).toHaveAttribute('href',/view=panel_download.*renderId=cut-2/)
+    await expect(page).toHaveURL(url)
+    const download=page.waitForEvent('download')
+    await ready.click()
+    expect((await download).suggestedFilename()).toBe('reviewed.mp4')
+    const writes=flowPosts.get(id)!
+    expect(writes.map(write=>write.action)).toEqual(['start','approve_blueprint','revise_preview','accept'])
+    expect(writes[2].feedbackTarget).toEqual(scenario==='复核暂停'?{scope:'range',start:0,end:0.5}:{scope:'group',unitId:'group-1',kind:'content'})
+    expect(writes[3].renderId).toBe('cut-2')
+  })
+}

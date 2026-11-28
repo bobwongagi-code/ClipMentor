@@ -8,7 +8,9 @@ export function projectResource(url: string, projectId?: string) {
   return `${path}?${params}`
 }
 
-export function taskPage(id?: string, view?: 'new' | 'downloads', audience?: 'new_contact' | 'existing_partner') {
+export type TaskView = 'materials' | 'blueprint' | 'film'
+
+export function taskPage(id?: string, view?: 'new' | TaskView, audience?: 'new_contact' | 'existing_partner') {
   const query = new URLSearchParams()
   if (id) query.set('task', id)
   if (view) query.set('view', view)

@@ -70,6 +70,15 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const firstRevision = (await state()).task.blueprintRevision
     // Two tabs can render the same draft revision against different requirements.
     // The first tab's confirmation must never bind to the second tab's newer cache.
+    const rawScreens=process.env.CLIPMENTOR_V2_RAW_DIR
+    if(rawScreens){
+      await mkdir(rawScreens,{recursive:true})
+      await page.setViewportSize({width:1280,height:900})
+      await page.screenshot({path:join(rawScreens,'blueprint-desktop.png'),animations:'disabled'})
+      await page.setViewportSize({width:390,height:844})
+      await page.screenshot({path:join(rawScreens,'blueprint-mobile.png'),animations:'disabled'})
+      await page.setViewportSize({width:1200,height:900})
+    }
     const firstBoard=(await state()).task
     expect(firstBoard.boardIdentity).toMatch(/^[a-f0-9]{64}$/)
     // The task and its review board must survive loss of an exact upload.
@@ -88,11 +97,11 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const ctaCopy = join(uploadDir, registeredCopies[0])
     await rm(ctaCopy)
     await page.reload()
-    await expect(page.getByRole('heading', { name: '补传缺失素材' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '补传缺少的素材' })).toBeVisible()
     await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
     await page.getByLabel('合作海报', { exact: true }).setInputFiles(inputs.cta)
     await page.getByRole('button', { name: '补传素材' }).click()
-    await expect(page.getByRole('heading', { name: '补传缺失素材' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '补传缺少的素材' })).toHaveCount(0)
     await expect(page.frameLocator('iframe').locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
     expect(await readFile(ctaCopy)).toEqual(ctaBytes)
     expect((await readIntake()).receipt).toEqual(savedIntake)
@@ -133,7 +142,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await expect(groupOpinion).toBeFocused()
     await expect(groupOpinion).toHaveValue('补'.repeat(4000))
     await page.getByRole('button', { name:'提交意见' }).click()
-    await expect(page.getByText('意见总字数太多，请缩短后再提交。')).toBeVisible()
+    await expect(page.getByText('意见太长，请删减后再提交。')).toBeVisible()
     expect((await audit()).workerEvents).toHaveLength(0)
     const longOverall='改'.repeat(3000)
     const longMisplaced='整体'+'补'.repeat(3000)
@@ -177,8 +186,8 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await expect(page.getByRole('button', { name:'确认蓝图，开始制作' })).toBeDisabled()
     expect((await audit()).workerEvents).toHaveLength(0)
     await groupOpinion.clear()
-    await page.getByRole('textbox', { name: '整体意见' }).fill('把标题改成修订后测试')
-    await expect(page.getByLabel('反馈位置')).toHaveCount(0)
+    await overallOpinion.fill('把标题改成修订后测试')
+    await expect(page.getByLabel('意见针对哪里')).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: '整体意见' })).toBeVisible()
     await page.getByRole('button', { name: '提交意见' }).click()
     await expect.poll(async () => { const task=(await state()).task; return task?.status==='awaiting_blueprint'&&typeof task.blueprintRevision==='string'&&task.blueprintRevision!==firstRevision }, { timeout:30000 }).toBe(true)
@@ -215,7 +224,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await page.getByRole('tab',{name:/已合作达人版/}).click()
     await page.screenshot({ path: join(proof, '02-two-synthetic-previews.png'), fullPage: true })
     const old = await (await fetch(origin + '/api/clipmentor/production?audience=existing_partner')).json()
-    await partner.getByLabel('看过成片',{exact:true}).check()
+    await partner.getByLabel('我已看过成片',{exact:true}).check()
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
     const previewEndpoint=origin+'/api/clipmentor/production?audience=existing_partner'
     for(const [previewWatched,languageConfirmed] of [[true,false],[false,true]]){
@@ -225,17 +234,22 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
       expect((await response.json()).issue.kind).toBe('content')
     }
     expect((await fetch(previewEndpoint+'&view=panel_download&renderId='+encodeURIComponent(old.task.renderId))).status).toBe(409)
+    const noEnd=await fetch(previewEndpoint,{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({action:'revise_preview',renderId:old.task.renderId,text:'只调整这个时间段',feedbackTarget:{scope:'range',start:0}})})
+    expect(noEnd.status).toBe(409)
+    expect((await noEnd.json()).issue).toEqual({kind:'binding',message:'请选择意见针对的片段、讲解组或整部成片。'})
+    expect((await (await fetch(previewEndpoint)).json()).task.sequence).toBe(old.task.sequence)
     await checkFinalReview(partner)
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeEnabled()
     await partner.getByRole('textbox', { name: '修改意见' }).fill('调整本组短标')
-    await partner.getByLabel('反馈位置').selectOption({label:'第 1 组'})
-    await partner.getByLabel('修改内容').selectOption('execution')
+    await partner.getByLabel('意见针对哪里').selectOption({label:'第 1 组'})
+    await partner.getByLabel('改什么').selectOption('execution')
     await partner.getByRole('button', { name: '提交修改' }).click()
     await expect.poll(async () => { const task=(await (await fetch(origin + '/api/clipmentor/production?audience=existing_partner')).json()).task; return task?.status==='awaiting_review'&&typeof task.renderId==='string'&&task.renderId!==old.task.renderId }).toBe(true)
     // Stay in the same page: a prior checkbox must not approve a new render.
-    await expect(partner.getByLabel('看过成片',{exact:true})).not.toBeChecked()
+    await expect(partner.getByLabel('我已看过成片',{exact:true})).not.toBeChecked()
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeDisabled()
-    await expect(partner.getByText('本版修改机会已用完。', {exact:true})).toBeVisible()
+    await expect(partner.getByText('这一版的修改次数已用完，可联系维护人员。', {exact:true})).toBeVisible()
     const staleRender = await page.evaluate(async renderId => (await fetch('/api/clipmentor/production?audience=existing_partner', { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'accept',renderId,languageConfirmed:true}) })).status, old.task.renderId)
     expect(staleRender).toBe(409)
     for (const [region,audience] of [[partner,'existing_partner'],[prospect,'new_contact']] as const) {
@@ -257,12 +271,12 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     expect(result.cancelledState).toBe('cancelled')
     expect(result.recoveredEffects).toBe(1)
     expect(forwarded.filter(route => route === 'POST /api/clipmentor/intake')).toHaveLength(2)
-    expect(result.actions.map((action:{status:number}) => action.status)).toEqual([409,200,200,200,200,200,409,409,200,409,409,200,409,200,200])
+    expect(result.actions.map((action:{status:number}) => action.status)).toEqual([409,200,200,200,200,200,409,409,200,409,409,409,200,409,200,200])
     expect(result.actions.every((action:{project:string,taskId:string}) => action.project.startsWith('web-loop-fixture')&&!!action.taskId)).toBe(true)
     expect(result.workerEvents.every((event: {project:string}) => event.project.startsWith('web-loop-fixture'))).toBe(true)
     expect(result.actions.filter((action:{action:string,status:number}) => action.action === 'revise_blueprint' && action.status===200)).toHaveLength(5)
     expect(result.workerEvents.filter((event:{stage:string})=>event.stage==='blueprint')).toHaveLength(1)
-    expect(result.actions.filter((action:{action:string}) => action.action === 'revise_preview')).toHaveLength(1)
+    expect(result.actions.filter((action:{action:string}) => action.action === 'revise_preview')).toHaveLength(2)
     expect(blocked).toEqual([])
     await page.screenshot({ path: join(proof, '03-confirmed-downloads.png'), fullPage: true })
     await writeFile(join(proof, 'audit.json'), JSON.stringify({ ...result, forwarded, blocked, firstRevision, revisedRevision: revised.blueprintRevision, scope: 'real HTTP handler and store, synthetic worker/reviewer/media; not live Agent production or semantic quality' }, null, 2))
