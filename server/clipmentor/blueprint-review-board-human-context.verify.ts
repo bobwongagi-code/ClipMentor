@@ -223,6 +223,24 @@ try{
  for(const u of data.clipMentorAnalysis.blueprint){const ir=u.internal_review;for(const l of ir[ir.current_script_candidate].lines)add(l);for(const l of ir[ir.current_picture_plan].selected_narration??[])add(l);}
  for(const l of [data.delivery_sections.opening,...Object.values(data.delivery_sections.creator_endings)])add(l);
  const p=prepare(data),board=p.plans[0],page=humanReviewBoardPage(board,p.data,p.lint,materials);
+ await test('Human headings use the current source teaching brief for the same group ID',()=>{
+  const group=board.rows.find(row=>row.stage==='original')!;
+  const legacyIntent=p.data.selectedPlans.find(plan=>plan.unit.unit_id===group.unit_id)!.unit.intent_zh;
+  assert.equal(typeof legacyIntent,'string');
+  const heading=(html:string)=>html.match(/<h2><span>第1组 · 教什么<\/span>(.*?)<\/h2>/u)?.[1];
+  const original=heading(page);
+  assert(original);
+  const updated={...p.data,analysis:{...p.data.analysis,source_breakdown:{units:[
+   {unit_id:'other-group',teaching_selection:{first_glance:'另一组选题'}},
+   {unit_id:group.unit_id,teaching_selection:{first_glance:' 先看上脸首笔，再看 <同框参照>。 '}},
+  ]}}};
+  for(const embedded of [false,true]){
+   const html=humanReviewBoardPage(board,updated,p.lint,materials,[],embedded);
+   assert.equal(heading(html),'先看上脸首笔，再看 &lt;同框参照&gt;。');
+  }
+  updated.analysis.source_breakdown.units[1].teaching_selection.first_glance=' ';
+  assert.equal(heading(humanReviewBoardPage(board,updated,p.lint,materials,[],true)),original);
+ });
  await test('Audience CTA routes are concise and both endings share the teaching body',()=>{
   const merged={...board,rows:[...board.rows.filter(r=>r.stage!=='closing'),...p.plans.flatMap(plan=>plan.rows.filter(r=>r.stage==='closing').map(r=>({...r,ending_variant:plan.variant})))]};
   const legacy=humanReviewBoardPage(merged,p.data,p.lint,materials);

@@ -5,11 +5,12 @@ import { createServer as createViteServer } from 'vite'
 
 test('the local dev proxy preserves the board identity in both directions', async ({ page }) => {
   const identity = 'a'.repeat(64)
+  const presentation = 'current-headings'
   const upstream = createServer((req,res) => {
     const url = new URL(req.url!, 'http://localhost')
     switch (url.searchParams.get('view')) {
       case 'panel_board':
-        if (url.searchParams.get('boardIdentity') !== identity) {
+        if (url.searchParams.get('boardIdentity') !== identity || url.searchParams.get('boardPresentation') !== presentation) {
           res.writeHead(409).end('wrong board identity')
           return
         }
@@ -17,7 +18,7 @@ test('the local dev proxy preserves the board identity in both directions', asyn
         return
       case 'panel':
         res.writeHead(200, { 'content-type':'application/json' }).end(JSON.stringify({task:{
-          ...approvedFixtureReview,taskId:'current', status:'awaiting_blueprint', stage:'copy_review', blueprintRevision:'r1', boardIdentity:identity, active:false, sequence:1,
+          ...approvedFixtureReview,taskId:'current', status:'awaiting_blueprint', stage:'copy_review', blueprintRevision:'r1', boardIdentity:identity, boardPresentation:presentation, active:false, sequence:1,
         }}))
         return
     }

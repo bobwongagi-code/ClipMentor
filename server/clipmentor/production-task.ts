@@ -116,6 +116,7 @@ export interface ProductionTask {
  blueprintFeedbackRepair?:number;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
  previousBlueprintTeaching?:{revision:string;selection?:string;narration?:string};
+ productionQueuedAt?:number;
  visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
  createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;sourceObservationUnavailableOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
  completed:Partial<Record<ProductionStage,{at:number;artifact:Record<string,unknown>}>>;

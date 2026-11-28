@@ -9,6 +9,8 @@ import {tmpdir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 const uiPort=Number(process.env.CLIPMENTOR_WEB_TEST_UI_PORT);
+const holdPreviews=process.env.CLIPMENTOR_WEB_TEST_HOLD_PREVIEWS==='1';
+const previewsReleased=Promise.withResolvers<void>();
 if(!Number.isInteger(uiPort)||uiPort<1||uiPort>65535)throw Error('Explicit CLIPMENTOR_WEB_TEST_UI_PORT is required');
 const root=process.env.CLIPMENTOR_WEB_TEST_DATA;
 if(!root||dirname(resolve(root))!==resolve(tmpdir())||!basename(root).startsWith('cm-web-loop-')||(await readdir(root)).length)throw Error('Explicit empty temporary CLIPMENTOR_WEB_TEST_DATA is required');
@@ -144,7 +146,8 @@ function launch(task:any){activeIds.add(task.taskId);void(async()=>{
    workerEvents.push({task:child.taskId,project:child.projectId,stage:'edit',fixtureWorker:true});
   }
   task.productionChildren=children;task.status='awaiting_review';await productionTaskStore.save(task);
-  await new Promise(resolve=>setTimeout(resolve,800));
+  if(holdPreviews)await previewsReleased.promise;
+  else await new Promise(resolve=>setTimeout(resolve,800));
   for(const entry of children){const child=await productionTaskStore.load(entry.projectId,entry.taskId);await readyPreview(child);activeIds.delete(child.taskId);}
  }else{
   assert(['只调整片尾留白','调整本组短标'].includes(task.feedback));
@@ -177,6 +180,11 @@ const server=createServer(async(req,res)=>{try{
     budget:{maxModelTurns:0,maxToolCalls:0,maxElapsedMs:10000,paidToolCalls:{}}}});
   }else{const {withSerializedProjectStore}=await import('../plugins/project-store');await withSerializedProjectStore(store=>store.removeEntry(handoffKey(project)));}
   res.setHeader('content-type','application/json');res.end(JSON.stringify({fixtureOnly:true}));return;
+ }
+ if(url.pathname==='/api/clipmentor/fixture-release-previews'&&holdPreviews){
+  assert.equal(req.method,'POST');
+  previewsReleased.resolve();
+  res.writeHead(204).end();return;
  }
  if(url.pathname==='/audit'){res.setHeader('content-type','application/json');res.end(JSON.stringify({project,root,inputs,providerCalls,fakeReviewerCalls,actions,workerEvents,cancelledState,recoveredEffects}));return;}
  if(url.pathname==='/api/clipmentor/intake'){

@@ -6,7 +6,7 @@ import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repaira
 import {openingUnderlayShortfall,pictureRepairWriteError} from './production-capacity-repair';
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
 import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
-import {firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
+import {comparisonSelectionReview,firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {productionTeachingPresentation} from './production-teaching-presentation';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
@@ -1200,7 +1200,7 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'&&['analysis','blueprint'].includes(task.stage)?{
    teachingSelection:task.input.panelDelivery.selectionPolicy==='v1'
     ?task.stage==='analysis'
-     ?'用 planning.md 的选题方法对比候选，用 source_breakdown 回读盘点提示 teaching_selection_gaps。本阶段登记选题基线。'
+     ?'用 planning.md 的选题方法对比候选，用 source_breakdown 回读盘点提示 teaching_selection_gaps。本阶段登记选题基线。'+comparisonSelectionReview
      :'沿核验过的决定及各自源窗写句。用 current_copy 回读 teaching_replay_risks，明确需要实测或补参照的地方。'
     :task.stage==='analysis'
     ?'先按证据盘点完整原片的表达选择和对应的买家顾虑，再从有出处的卖点里选值得达人学的单元。比较最强的另一个讲法：如果选它，达人会少学或多学哪个决定？选中这条主线后，他拍同类内容时具体会改哪一步？各组怎样一起解释这个决定，哪些只作支持？根据选中的单元概括本片可学的价值，把决定、可回读的取舍及放弃备选的损失写进现有主讲点 coverage.reason，买家多得到的具体判断依据写进 teaching_basis.connection。区分创作者给出结论和让买家根据演示判断；按 sourceClosing 处理收尾。动作观察只为判定证据能否成立；本阶段只存选题基线，不写口播、字幕或逐句选材。'

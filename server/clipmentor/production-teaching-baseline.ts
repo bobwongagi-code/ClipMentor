@@ -4,7 +4,7 @@ import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
 import { breakdownPointEvidence,contiguousPlaybackRuns,originalPlaybackRanges } from '../../src/clipmentor/source-breakdown';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-sections';
 import { readBlueprint, teachingReplayRisks } from '../../src/clipmentor/blueprint-lint';
-import { firstGlanceWritingUnits, teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
+import { comparisonSelectionReview, firstGlanceWritingUnits, teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
 import {reviewReferenceResolver} from './review-references';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 import { currentAgentSessionGeneration } from '../../src/persist/agentSessionGeneration';
@@ -13,6 +13,7 @@ import { createRun, flushRunPersistence } from '../agent-runs/store';
 import { executeRun } from '../agent-runs/executor';
 import { digestValue } from '../agent-runs/store-values';
 import { authorSelfCheckReceiptText, authorSelfCheckText, selectAuthorSelfCheckReceipt } from './production-author-self-check';
+import {failedFirstGlanceReceipt} from './production-decisions';
 import type { ProductionTask, StageContext } from './production-task';
 
 import {frozenTeachingTopics,sourceClosingPolicy} from './production-source-policy';
@@ -886,7 +887,9 @@ const reviewInstructions = (opening:string,feedbackInstructions:string,feedbackO
 
 const pointInstructions=' 每组再填 point_checks，每个 point_id 恰好一条 {point_id,status,learner_takeaway,connection,question_quote,source_evidence_id,source_quote}。question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作，缺可靠证据时标 unresolved。用本点原片证据核对作者的卖点、买家顾虑和拍法。按 purpose 作答。learner_takeaway 写达人拍同类内容时会改的具体决定，connection 写原作者的这个选择让观众多得到哪一项判断依据。只说能看到、能比较、能认出，没说明具体依据时同样判 fix。选题或答案只复述动作时，即使换了词或问题带「为什么」，也判 fix。只列功能、混淆原片促单与达人CTA、照搬别片形式同样判 fix。机器听写按来源核，只支持原作者说法，画面独立判断。若 visual_only，另填 visual_check、omission_loss 并引用可见动作，解释画面怎样承载及撤掉讲解会损失什么。';
 const wholeFilmInstructions=' 在逐组判断前，从全片原话候选和画面证据独立找最有解释力的教学主线及一个合理备选。比较两条主线各自会让达人改哪个决定，说明为何选这条、放弃备选会少教什么，以及前后各组怎样服务主线。核对有无漏掉会改变买家判断的内容。不要把多段相似演示当多个购买理由，也不要因为强证据更容易截图就让辅助点变主线。另在同一 JSON 增加 whole_film:{status,main_point_id,focus,alternative,reason,evidence_id,source_quote,affected_unit_ids}。各项简洁具体。ok 时 main_point_id 是实际承载主线的主讲重点，evidence_id 属于该点，affected_unit_ids 为空。整片重点选错、排序影响理解或有重要遗漏，即使各组单独成立也标 fix，引用能说明问题的全片原证据，可来自未选中的段落。证据决定当前关键结论却无法核清，标 unresolved；仅当无可引用证据时 evidence_id 和 source_quote 均填 null。fix 或 unresolved 要列出受影响的现行组 ID，主线未成立时 main_point_id 可为 null。';
-function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireNarrationCriterion=true,selection=false){
+export function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireNarrationCriterion=true,selection=false){
+ const firstGlanceReceipt=selection&&source.narrationTargets?.some(target=>target.first_glance!==undefined)
+  ? ',first_glance_checks:{explanation,hook?,hook_line_id?}' : '';
  const pointOutput=selection?pointInstructions.replace('question_quote,source_evidence_id,source_quote','source_evidence_id')
   .replace('question_quote 逐字引本点问题；source_quote 逐字引本点登记的原话或可见动作','source_evidence_id 选择本点登记的原话或可见动作证据编号'):pointInstructions;
  const wholeFilm=source.confirmedGroups
@@ -900,7 +903,10 @@ function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireN
  const feedbackOutput=legacyReceipt?'feedback_scope:"none"|"copy"|"baseline",':source.feedback?'feedback_requires_baseline:true|false,':'';
  const opening=source.narrationTargets?.length
   ?'先独立阅读输入首部的 narrationTargets，判断实际口播能教达人改变哪个拍摄决定。再核对选题与原片依据。'
-  :'只读核验教学选题，不审稿。';
+  :'只读核验教学选题，不审稿。'
+   +(selection&&source.selection&&source.pointReview&&!source.narrationTargets&&!source.confirmedGroups
+    ?comparisonSelectionReview+'在同一份 whole_film 回执集中列出会改变买家判断的遗漏，标出受影响组和最关键的原片证据。单个选点的证据纠正写入对应 point_checks。单纯可补充的角度按备选处理。'
+    :'');
 
  return reviewInstructions(opening,feedbackInstructions,feedbackOutput)+(source.pointReview?wholeFilmOutput+(source.sourceClosing.factOnly?'':'收尾处置与 sourceClosing 不一致判 fix，证据决定结论且无法核清则判 unresolved。')+pointOutput:'')
 
@@ -914,7 +920,7 @@ function baselineInstructions(source:BaselineSource,legacyReceipt=false,requireN
    ?'first_glance 是整组的写作目标。对每条 narration_checks，只按当前点承担的部分检查它的口播，不要求一句或一点重复整组。另填 first_glance_checks:{explanation:"ok"|"fix"|"unresolved"}。目标有 hook_curiosity 时另填 hook，同样三档，单独检查具体好奇及其原片依据。hook 为 ok 时在 first_glance_checks 内选择本点的 hook_line_id。它可与讲解的 line_id 不同。当前点只承担钩子时，讲解核对这个开场安排怎样让人想继续看。逐个报部位或动作却漏掉效果时，指出这个点少了的结论。画面能交代的细节留给画面。已兑现的选择只按有证据的事实边界退回。'
    :'核对 firstGlanceWriting 是否按本组原片证据说明她怎么拍、达人当场明白什么。若教原片钩子，另核它引起的具体好奇。只按已有证据和教学问题裁决。'
   :'')
- +(source.narrationTargets?.length?` 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?${selection?'':',quote?'}}。先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并${selection?'选择能让他领会该决定的现行句子编号':'逐字引用能让他领会该决定的某句'}。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id${selection?'':' 和逐字 quote'}。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。`
+ +(source.narrationTargets?.length?` 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?${selection?'':',quote?'}${firstGlanceReceipt}}。${firstGlanceReceipt?' 每个带 first_glance 的目标都必须返回嵌套的 first_glance_checks.explanation，fix 或 unresolved 也不能省略。只有该目标带 hook_curiosity 才填 hook；仅 hook=ok 时填该点真实的 hook_line_id。输出前核对 narration_checks 的每一条，不要把这些状态只写进 reason。':''}先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并${selection?'选择能让他领会该决定的现行句子编号':'逐字引用能让他领会该决定的某句'}。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id${selection?'':' 和逐字 quote'}。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。`
   +(requireNarrationCriterion?` 每条 fix 或 unresolved 必须另填 baseline_criterion:{field:"method"|"connection"|"claim_limit"${selection?'':',quote:当前组当前点 teaching_basis 对应字段的完整原文'}}。reason 写明引用的判据和现行口播在哪一点不符。只按已经核定的判断和边界裁决。想加的细节或新标准仅作审阅建议，不能用来退回。必须拍到的内容不因此变成必须逐项念到的内容。引用 claim_limit 时，还须给出现行口播中受该边界影响的 line_id${selection?'':' 和逐字 quote'}。实质漏讲而没有可引句子时，说明缺失的内容。逐组基线退回须有对应的 point_checks 问题，口播问题留在 narration_checks。`:''):'');
 }
 
@@ -927,7 +933,9 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
  const reviewDigest=(baselineDigest:string)=>narrationSubject?digestValue({baselineDigest,narrationSubject}):baselineDigest;
  const currentDigest=reviewDigest(teachingBaselineDigest(source));
  const priorReviews=Object.entries(task.effects).filter(([id,effect])=>effect.kind==='model'&&id.includes(':teaching-baseline:'));
- const effectsFor=(digest:string)=>priorReviews.filter(([id])=>id.endsWith(':teaching-baseline:'+digest));
+ const receiptRetry=task.stage==='copy_review'&&task.technicalRecoveryEpochs?.includes(task.repairs)
+  ? failedFirstGlanceReceipt(task,task.repairs-1)?.[0] : undefined;
+ const effectsFor=(digest:string)=>priorReviews.filter(([id])=>id!==receiptRetry&&id.endsWith(':teaching-baseline:'+digest));
  const current={digest:currentDigest,requireCriterion:true,effects:effectsFor(currentDigest)};
  // Keep each previously submitted review on its original digest and response contract.
  const legacy=priorReviews.length?[false,true].flatMap(feedbackScope=>{
@@ -935,6 +943,8 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
   return digest===currentDigest?[]:[{digest,requireCriterion:false,effects:effectsFor(digest)}];
  }):[];
  const versions=[current,...legacy];
+ if(receiptRetry&&!versions.some(version=>receiptRetry.endsWith(':teaching-baseline:'+version.digest)))
+  throw Error('teaching_baseline_recovery_subject_changed');
  const {digest,requireCriterion,effects}=versions.find(version=>version.effects.some(([,effect])=>effect.status==='completed'))
   ??versions.find(version=>version.effects.length)??current;
  const qualification=task.stage==='blueprint'&&qualifiedSelection&&!narrationSubject?digestValue({

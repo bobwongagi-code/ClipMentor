@@ -51,7 +51,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
           const params = new URLSearchParams(workspace ? {} : { projectId: id })
           if (!intake && !workspace) {
             params.set('view', view)
-            for (const key of ['revision', 'boardIdentity', 'renderId', 'criterion', 'audience', 'assetId', 'excerpt']) {
+            for (const key of ['revision', 'boardIdentity', 'boardPresentation', 'renderId', 'criterion', 'audience', 'assetId', 'excerpt']) {
               const value = url.searchParams.get(key)
               if (value) params.set(key, value)
             }

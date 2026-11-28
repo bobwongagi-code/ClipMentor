@@ -5,7 +5,9 @@ import { checkSourceBreakdown, copyLineSourceBinding, isSourceBreakdown, type So
 import { teachingReplayRisks } from '../../src/clipmentor/blueprint-lint';
 import { validatePicturePlanProjection } from '../../src/clipmentor/production-gate';
 import { teachingSelectionGaps } from '../../src/clipmentor/teaching-selection';
-import { confirmedTeachingDigest, qualifiedTeachingDigest, teachingBaselineSource, teachingPointGaps, validateTeachingBaselineReview } from './production-teaching-baseline';
+import { baselineInstructions, confirmedTeachingDigest, qualifiedTeachingDigest, teachingBaselineSource, teachingPointGaps, validateTeachingBaselineReview } from './production-teaching-baseline';
+import { blockedProductionDecision, firstGlanceReceiptError } from './production-decisions';
+import { canResumeFirstGlanceReview } from './production-blueprint-recovery';
 import type { ProductionTask } from './production-task';
 import fixture from './fixtures/judydoll-teaching-selection.json';
 
@@ -181,6 +183,30 @@ export function verifyTeachingSelections(template: ProjectDoc, templateTask: Pro
  assert(!teachingPointGaps(checkedSource,withBrief).some(issue=>issue.includes('缺一眼效果')));
  const withoutChecks=receipt(checkedSource,false);
  assert.throws(()=>validateTeachingBaselineReview(withoutChecks,checkedSource),/teaching_first_glance_checks_invalid/);
+ const instructions=baselineInstructions(checkedSource,false,true,true);
+ assert.match(instructions, /narration_checks，每个 narrationTargets 项恰好一条 \{[^}]*line_id\?,first_glance_checks:\{explanation,hook\?,hook_line_id\?\}\}/);
+ assert.match(instructions, /fix 或 unresolved 也不能省略/);
+ const selectionSource=teachingBaselineSource(withBrief,{...writingTask,stage:'blueprint'},[]);
+ const preCopyInstructions=baselineInstructions(selectionSource,false,true,true);
+ assert.match(preCopyInstructions,/比较对象如何建立.*可比参照.*首次应用.*后续结果/u);
+ assert.match(preCopyInstructions,/在同一份 whole_film 回执集中列出/u);
+ assert.doesNotMatch(instructions,/在同一份 whole_film 回执集中列出/u);
+ assert.doesNotMatch(baselineInstructions(selectionSource),/在同一份 whole_film 回执集中列出/u,
+  'the early selection prompt does not change stored review digests');
+ const interrupted:ProductionTask={...writingTask,stage:'copy_review',status:'blocked',error:firstGlanceReceiptError,
+  projectRevision:'revision-with-candidate',repairs:1,createdAt:Date.now(),
+  completed:{blueprint:{artifact:{revision:'revision-with-candidate'},at:Date.now()}},
+  effects:{['copy_review:initial:1:teaching-baseline:'+'a'.repeat(64)]:{kind:'model',operationId:'receipt',status:'failed',error:firstGlanceReceiptError}},
+  feedbackUsed:false};
+ assert(canResumeFirstGlanceReview(interrupted));
+ assert.deepEqual(blockedProductionDecision(interrupted,1).routes,[],'the worker needs an explicit retry request');
+ assert(!canResumeFirstGlanceReview({...interrupted,createdAt:Date.now()-interrupted.input.budget.maxElapsedMs}));
+ assert(!canResumeFirstGlanceReview({...interrupted,repairs:4,technicalRecoveryEpochs:[1,2,3],
+  effects:{['copy_review:initial:4:teaching-baseline:'+'a'.repeat(64)]:{kind:'model',operationId:'receipt',status:'failed',error:firstGlanceReceiptError}}}));
+ assert(!canResumeFirstGlanceReview({...interrupted,projectRevision:'other-revision'}));
+ assert(!canResumeFirstGlanceReview({...interrupted,error:'Error: upstream outcome unknown'}));
+ assert(!canResumeFirstGlanceReview({...interrupted,repairs:2,effects:{...interrupted.effects,
+  ['copy_review:initial:2:teaching-baseline:'+'a'.repeat(64)]:{kind:'model',operationId:'second',status:'failed',error:firstGlanceReceiptError}}}));
  const reviewed={...withoutChecks,narration_checks:withoutChecks.narration_checks.map(entry=>({...entry,
   first_glance_checks:entry.point_id==='hook'?{hook:'ok',hook_line_id:'hook',explanation:'ok'}:{explanation:'ok'},
  }))};

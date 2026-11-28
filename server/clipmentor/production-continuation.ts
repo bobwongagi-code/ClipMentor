@@ -349,6 +349,10 @@ async function queueConfirmedOutputs(parent:ProductionTask){
  for(const [index,child] of children.entries())if(child.status==='awaiting_blueprint'&&child.stage==='copy_review'&&!child.completed.copy_review){
   if(deleted.has(child.projectId))continue;
   const queued={...structuredClone(child),status:'queued' as const};
+  // The producer may have been created before a failed parent publication.
+  if(child.input.panelDelivery?.audience==='existing_partner'&&child.productionQueuedAt===undefined
+   &&Object.values(child.attempts).every(count=>count===0)&&!Object.keys(child.effects).length)
+   queued.productionQueuedAt=Date.now();
   try{
    await saveProductionControl(child,queued,productionTaskStore);
    children[index]=queued;

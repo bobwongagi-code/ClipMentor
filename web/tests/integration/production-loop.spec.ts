@@ -34,7 +34,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
   const blocked: string[] = [], forwarded: string[] = []
   try {
     child = spawn(process.execPath, ['--import', 'tsx', join(sourceRoot, 'server/clipmentor/production-web-loop.test-server.ts')], {
-      cwd: sourceRoot, env: { ...process.env, CLIPMENTOR_WEB_TEST_DATA: root }, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: sourceRoot, env: { ...process.env, CLIPMENTOR_WEB_TEST_DATA: root, CLIPMENTOR_WEB_TEST_HOLD_PREVIEWS:'1' }, stdio: ['ignore', 'pipe', 'pipe'],
     })
     child.stdout!.on('data', bytes => { logs += String(bytes) })
     child.stderr!.on('data', bytes => { logs += String(bytes) })
@@ -206,8 +206,9 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const prospect = page.getByRole('tabpanel', { name: '新建联达人版', exact: true })
     await expect(page.getByRole('region', { name: '已合作达人版', exact: true }).getByLabel('制作阶段')).toBeVisible()
     await expect(page.getByRole('region', { name: '新建联达人版', exact: true }).getByLabel('制作阶段')).toBeVisible()
-    await page.getByRole('tab',{name:/已合作达人版/}).click()
     await page.screenshot({ path: join(proof, '02-two-output-progress.png'), fullPage: true })
+    expect((await fetch(origin+'/api/clipmentor/fixture-release-previews',{method:'POST'})).status).toBe(204)
+    await page.getByRole('tab',{name:/已合作达人版/}).click()
     await expect(partner.locator('video')).toBeVisible()
     await page.getByRole('tab',{name:/新建联达人版/}).click()
     await expect(prospect.locator('video')).toBeVisible()

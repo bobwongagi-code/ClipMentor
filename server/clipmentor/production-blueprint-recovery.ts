@@ -1,4 +1,5 @@
-import {blockedProductionDecision,productionRecoveryProgress,repairableBlueprintIssue,type AuthorCheckpointFailure,type RecoveryRoute} from './production-decisions';
+import {blockedProductionDecision,failedFirstGlanceReceipt,firstGlanceReceiptError,productionRecoveryProgress,repairableBlueprintIssue,type AuthorCheckpointFailure,type RecoveryRoute} from './production-decisions';
+import {authorSelfCheckReceiptText,selectAuthorSelfCheckReceipt} from './production-author-self-check';
 import {productionCapacityFacts} from './production-capacity-repair';
 import {currentReviewRepair,needsVisualReviewCompletion} from './execution-view';
 import {digestValue} from '../agent-runs/store-values';
@@ -14,8 +15,35 @@ import {loadOfflineStoredProject} from '../external-agent/offline-project-store'
 import type {ProjectDoc} from '../../src/editor/types';
 import {upgradeContinuationBrief} from './production-continuation';
 import {recoverApprovedOutputSourceRead} from './production-approved-source';
+import {productionWorkDeadline} from './production-shared-clock';
 import {PRODUCTION_STAGES,recordProductionDecision,recordTechnicalRecovery,reconcileLegacyTechnicalRecoveries,remainingContentRepairs,productionRepairContext,structuralRepairPause,
- grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,type ProductionTask} from './production-task';
+ canRecordTechnicalRecovery,grantFocusedBlueprintRepair,grantFocusedAuthorRepair,grantFocusedIndependentRepair,invalidateReconciledProductionStages,type ProductionTask} from './production-task';
+
+export function canResumeFirstGlanceReview(task:ProductionTask){
+ if(task.stage!=='copy_review'||task.status!=='blocked'||task.error!==firstGlanceReceiptError
+  ||!task.input.humanBlueprintReview||!task.input.panelDelivery?.firstGlanceWriting||task.blueprintApproval
+  ||task.input.panelDelivery.audience||!task.projectRevision
+  ||task.completed.blueprint?.artifact.revision!==task.projectRevision||task.completed.copy_review
+  ||task.attempts.model>=task.input.budget.model||!canRecordTechnicalRecovery(task)||Date.now()>=productionWorkDeadline(task))return false;
+ return failedFirstGlanceReceipt(task,task.repairs)!==undefined;
+}
+
+/** Format failures stay inspectable until the operator explicitly retries. */
+export async function resumeFirstGlanceReview(task:ProductionTask){
+ await reconcileLegacyTechnicalRecoveries(task);
+ if(!canResumeFirstGlanceReview(task))return false;
+ const [id,effect]=failedFirstGlanceReceipt(task,task.repairs)!;
+ const digest=id.split(':').at(-1)!;
+ const [saved,sidecar]=await Promise.all([loadOfflineStoredProject(task.projectId),loadAgentRuntimeSidecar(task.projectId)]);
+ const receipt=selectAuthorSelfCheckReceipt(sidecar.runs,task,effect.operationId,digest,task.completed.blueprint!.at,false)?.run;
+ if(!saved||saved.revision!==task.projectRevision||saved.doc.clipMentorAnalysis?.source.asset_id!==task.input.sourceAssetId
+  ||!receipt||!authorSelfCheckReceiptText(receipt).verified||!canResumeFirstGlanceReview(task))return false;
+ const before={stage:task.stage,repairs:task.repairs};
+ recordTechnicalRecovery(task);
+ invalidateReconciledProductionStages(task,before);
+ await recordProductionDecision(task,{scope:'recovery',action:'resume',reason:'first_glance_receipt',fromStage:before.stage,fromEpoch:before.repairs});
+ return true;
+}
 
 export async function reconcileBlockedBlueprint(task:ProductionTask){
  const before={stage:task.stage,repairs:task.repairs};let route:RecoveryRoute|'no_matching_route'='no_matching_route';

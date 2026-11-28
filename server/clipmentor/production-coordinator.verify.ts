@@ -4,6 +4,7 @@ import {mkdtemp,rm,realpath,mkdir,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
+import {once} from 'node:events';
 import {randomUUID} from 'node:crypto';
 import saved from '../../src/clipmentor/fixtures/production-saved-projects-20261028.json';
 import type {ProjectDoc} from '../../src/editor/types';
@@ -33,6 +34,8 @@ try{
   return previousFetch(input,init);
  };
  const {setStoredEntry,getStoredEntry}=await import('../plugins/project-store');
+ const {activateOfflineAgentRuntimeBackend}=await import('../external-agent/agent-runtime-persistence');
+ activateOfflineAgentRuntimeBackend();
  const {loadOfflineStoredProject}=await import('../external-agent/offline-project-store');
  const {createAgentRun,appendAgentRunEvents,loadAgentRuntimeSidecar}=await import('../../src/persist/agentRuntimeStore');
  const {productionBlueprintReadiness}=await import('./production-readiness');
@@ -72,6 +75,69 @@ try{
   assert(persisted.createdAt>=task.completed.analysis!.at&&persisted.updatedAt<=task.updatedAt,'matching author time window');
  }
  const authority=(t:ProductionTask)=>structuredClone({attempts:t.attempts,budget:t.input.budget,effects:t.effects,completed:t.completed});
+ {
+  const {createProductionTask,productionTaskStore}=await import('./production-task');
+  const {firstGlanceReceiptError}=await import('./production-decisions');
+  const {createProductionPanel}=await import('./production-panel');
+  const {digestValue}=await import('../agent-runs/store-values');
+  const id='coordinator-explicit-first-glance';
+  await setStoredEntry('project:'+id,fixture);
+  const snapshot=(await loadOfflineStoredProject(id))!;
+  const task=await createProductionTask({...input(id),panelDelivery:{productAssetId:'product',productAssetHash:'a'.repeat(64),
+   salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'b'.repeat(64),editorialPolicy:'exemplar-v1',selectionPolicy:'v1',firstGlanceWriting:true}});
+  const operationId=randomUUID(),digest='d'.repeat(64),key='copy_review:initial:0:teaching-baseline:'+digest;
+  task.status='blocked';task.stage='copy_review';task.projectRevision=snapshot.revision;task.error=firstGlanceReceiptError;
+  task.completed.blueprint={at:task.createdAt,artifact:{revision:snapshot.revision}};
+  task.attempts.model=1;task.effects[key]={kind:'model',status:'failed',operationId,error:firstGlanceReceiptError};
+  await productionTaskStore.save(task);
+  const text='{"narration_checks":[]}';
+  await createAgentRun({version:1,runId:operationId,projectId:id,status:'completed',askOnly:true,backend:'api',
+   modelId:task.input.author.model,userInputDigest:digest,userInputPreview:'fixture',createdAt:Date.now(),updatedAt:Date.now(),
+   context:{transportStatus:'completed'},artifactIds:[],checkpointIds:[],proposalIds:[],events:[]});
+  await appendAgentRunEvents(id,operationId,[
+   {type:'final',summary:JSON.stringify({serverEvent:{id:1,type:'text-delta',data:{text},rawTextDigest:digestValue(text)}})},
+   {type:'final',summary:JSON.stringify({serverEvent:{id:2,type:'done',data:{status:'completed'}}})},
+  ]);
+  const before=structuredClone(task);
+  await reconcileBlockedBlueprint(task);
+  assert.deepEqual(task,before,'automatic recovery leaves the malformed receipt and its spent call alone');
+  const launches:ProductionTask[]=[];
+  const handle=createProductionPanel(next=>launches.push(next),()=>false);
+  const panel=createServer(async(req,res)=>{
+   const endpoint=new URL(req.url!,panelOrigin);
+   try{await handle(id,panelOrigin,endpoint.searchParams,req,res,async()=>{
+    const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
+    return JSON.parse(Buffer.concat(chunks).toString());
+   });}
+   catch(error){res.writeHead(409).end(String(error));}
+  });
+  panel.listen(0,'127.0.0.1');await once(panel,'listening');
+  const panelOrigin='http://127.0.0.1:'+(panel.address() as {port:number}).port;
+  const url=panelOrigin+'/?view=panel';
+  const request=(sequence:number)=>previousFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({action:'continue_blueprint_review',taskId:task.taskId,sequence})});
+  try{
+   const view=(await (await previousFetch(url)).json()).task;
+   assert.equal(view.canContinueBlueprintReview,true);
+   const stale=await request(view.sequence-1);
+   assert.equal(stale.status,409);
+   assert.equal((await stale.json()).reason,'review_board_changed');
+   assert.equal(launches.length,0);
+   const accepted=await request(view.sequence);
+   assert.equal(accepted.status,200,await accepted.text());
+   assert.equal(launches.length,1);
+   const resumed=launches[0];
+   assert.equal(resumed.input.author.origin,panelOrigin);
+   assert.equal(resumed.input.reviewer.origin,panelOrigin);
+   assert.deepEqual(resumed.technicalRecoveryEpochs,[1]);
+   assert.deepEqual(resumed.attempts,before.attempts);
+   assert.deepEqual(resumed.effects,before.effects);
+   assert.equal((await request(view.sequence)).status,409);
+   assert.equal(launches.length,1);
+   assert.equal(requests,0);
+   console.log('PASS explicit first-glance retry binds the visible checkpoint, verified receipt and current service without duplicate dispatch');
+  }finally{await new Promise<void>(resolve=>panel.close(()=>resolve()));}
+ }
  for(const mode of ['matching','wrong-write-revision','multiple-authors','model-budget-exhausted'] as const){
   const id='coordinator-'+mode;
   await setStoredEntry(`project:${id}`,structuredClone(fixture));

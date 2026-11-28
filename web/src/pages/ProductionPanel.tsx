@@ -16,7 +16,7 @@ export type Task = {
   stopReason?: 'materials' | 'limit' | 'service' | 'maintenance'; feedbackUsed: boolean; renderId?: string; hasBlueprintFeedback?:boolean; dualBlueprint?: boolean
   visualCriteria?: { digest: string }; downloadName?:string
   attachments?: {assetId:string;fileName:string}[]; deliveryUnavailable?:boolean
-  boardIdentity?:string; blueprintRevision?: string; canApproveBlueprint?: boolean; blueprintMessage?: string
+  boardIdentity?:string; boardPresentation?:string; blueprintRevision?: string; canApproveBlueprint?: boolean; blueprintMessage?: string
   blueprintOpinionDifferences?:{overall?:BlueprintOpinionDifference;groups:BlueprintOpinionDifference[]}
   productionDifferences?:Task['blueprintOpinionDifferences']
   reviewGroups?:Array<{id:string;label:string}>
@@ -25,7 +25,7 @@ export type Task = {
   canAcceptPreview?:boolean; previewPending?:boolean; previewNeedsChanges?:boolean; previewFeedbackUnavailable?:boolean; deliveryHeld?:boolean; reviewIssue?:ReviewIssue
   canConfirmBlueprint?: boolean; audience?: 'new_contact' | 'existing_partner';blueprintConfirmed?:boolean
   confirmedAt?: number; materialAttachment?: {assetId:string;label:string}; materialAttachmentUnavailable?:boolean
-  canContinueAnalysis?: boolean
+  canContinueAnalysis?: boolean; canContinueBlueprintReview?: boolean
 }
 export type Audience = 'new_contact' | 'existing_partner'
 export const audienceTitleFor=(audience:Audience)=>audience==='new_contact'?'新建联达人版':'已合作达人版'
@@ -142,7 +142,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   const [readError, setReadError] = useState('')
   const [actionIssue,setActionIssue]=useState<{key:string;issue:ReviewIssue}>()
   const [pendingAction, setPendingAction] = useState<{key:string;controller:AbortController}>()
-  const [board, setBoard] = useState<{ key:string; revision: string; identity?:string; html: string }>()
+  const [board, setBoard] = useState<{ key:string; revision: string; identity?:string; presentation?:string; html: string }>()
   const [boardError, setBoardError] = useState('')
   const [boardReload, setBoardReload] = useState(0)
   const [opinionReview,setOpinionReview]=useState<{key:string;draft?:OpinionDraft;entries:BlueprintOpinion[];confirmation?:BlueprintOpinionConfirmation;placement?:BlueprintOpinionPlacement}>()
@@ -211,11 +211,13 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   const pollingActive = task?.active === true
   const boardRevision = reviewableBlueprintRevision(task)
   const boardIdentity=task?.boardIdentity
+  const boardPresentation=task?.boardPresentation
   const boardKey=JSON.stringify([endpoint,task?.taskId,boardRevision,boardIdentity])
   const boardUrl=useCallback((revision:string,identity?:string)=>projectResource(resourceUrl('panel_board','revision',revision,outputAudience),projectId)
-    +(identity?`&${new URLSearchParams({boardIdentity:identity})}`:''),[outputAudience,projectId])
-  const currentBoard=board?.key===boardKey?board:undefined
-  const actionKey=JSON.stringify([boardKey,task?.renderId,visual?.digest,state?.outputOwner?.taskId])
+    +(identity?`&${new URLSearchParams({boardIdentity:identity})}`:'')
+    +(boardPresentation?`&${new URLSearchParams({boardPresentation})}`:''),[outputAudience,projectId,boardPresentation])
+  const currentBoard=board?.key===boardKey&&board.presentation===boardPresentation?board:undefined
+  const actionKey=JSON.stringify([boardKey,boardPresentation,task?.renderId,visual?.digest,state?.outputOwner?.taskId])
   const feedbackKey=JSON.stringify([endpoint,task?.taskId,task?.renderId])
   const videoKey=JSON.stringify([feedbackKey,videoReload])
   const draftProject=reviewProjectId??task?.taskId
@@ -373,7 +375,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       try {
         const response = await requestApi(boardUrl(revision,boardIdentity), { signal: controller.signal })
         const page = await readBoardPage(response, boardIdentity)
-        if (!controller.signal.aborted) setBoard({ key:boardKey, revision, ...page })
+        if (!controller.signal.aborted) setBoard({ key:boardKey, revision, presentation:boardPresentation, ...page })
       } catch {
         if (controller.signal.aborted) return
         if (attempt < 2) timer = setTimeout(() => void readBoard(revision, attempt + 1), 2000)
@@ -382,7 +384,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     }
     void readBoard(revision, 0)
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [boardKey, boardRevision, boardIdentity, boardUrl, requestApi, boardReload, mediaRefresh, showPreview])
+  }, [boardKey, boardRevision, boardIdentity, boardPresentation, boardUrl, requestApi, boardReload, mediaRefresh, showPreview])
 
   useEffect(() => {
     if (!currentBoard?.identity) return
@@ -456,7 +458,8 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       const subjectKey=boardKey
       const submit = () => requestApi(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-        body: JSON.stringify({action:name,revision,boardIdentity:identity,renderId:task?.renderId,
+        body: JSON.stringify({action:name,revision,boardIdentity:identity,boardPresentation:currentBoard?.presentation,renderId:task?.renderId,
+          ...(name==='continue_blueprint_review'?{taskId:task?.taskId,sequence:task?.sequence}:{}),
           ...(name==='accept'?{previewWatched,languageConfirmed,visualCriteriaDigest:visual?.digest}:{}),
           ...(['approve_blueprint','produce_versions'].includes(name)?{blueprintReview:{scope:'whole_blueprint'}}:{}),
           ...(name==='revise_preview'?{text:feedback,feedbackTarget}:{}),
@@ -474,7 +477,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         if (refreshed.ok) {
           const page = await readBoardPage(refreshed, identity)
           if(!stillCurrent())return
-          setBoard({ key:subjectKey, revision, ...page })
+          setBoard({ key:subjectKey, revision, presentation:boardPresentation, ...page })
           if(!draftIsCurrent())return
           response = await submit()
           result = await readApiJson<ActionReceipt>(response)
@@ -829,6 +832,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
           {productionProgress(task,sharedTask).map(({label,state})=><ProgressNode key={label} label={label} state={state} />)}
         </div>
         {task.canContinueAnalysis&&<div className="cm-footer"><button className="cm-button" disabled={pending||slotsFull} onClick={()=>void action('continue_analysis')}>{slotsFull?'等待名额':'继续分析'}</button></div>}
+        {task.canContinueBlueprintReview&&<div className="cm-footer"><button className="cm-button" disabled={pending||slotsFull} onClick={()=>void action('continue_blueprint_review')}>{slotsFull?'等待名额':'继续检查蓝图'}</button></div>}
         {task.feedbackUsed&&<p className="cm-caption">修改意见已提交。</p>}
         {task.productionDifferences&&<ProductionChanges differences={task.productionDifferences} />}
       </section>

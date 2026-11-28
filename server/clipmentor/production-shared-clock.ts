@@ -14,5 +14,5 @@ export function canLaunchSharedFollower(task:ProductionTask){
 
 export function productionWorkDeadline(task:ProductionTask,now=Date.now()){
  const startedAt=task.sharedProduction?.prepared?task.sharedProduction.workStartedAt:undefined;
- return (startedAt??(unstartedSharedFollower(task)?now:task.createdAt))+task.input.budget.maxElapsedMs;
+ return (startedAt??task.productionQueuedAt??(unstartedSharedFollower(task)?now:task.createdAt))+task.input.budget.maxElapsedMs;
 }

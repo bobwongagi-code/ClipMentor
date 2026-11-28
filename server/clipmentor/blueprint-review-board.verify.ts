@@ -557,6 +557,10 @@ try{
   const {createProductionTask,productionTaskStore,requeuePanelAuthorCheck}=await import('./production-task');
   const {digestValue}=await import('../agent-runs/store-values');
   const projectId='checked-panel-board',doc=clone(bindings[0]);
+  doc.clipMentorAnalysis!.source_breakdown!.units[0].teaching_selection={
+   decision:'按当前原片决定拍法。',omission_loss:'略去会少了解第一个拍摄选择。',
+   buyer_roles:['interest'],basis:'observed',first_glance:'当前组的拍摄选择和作用。',
+  };
   const planOf=(value:ProjectDoc)=>{
    const ir=value.clipMentorAnalysis!.blueprint[0].internal_review as Record<string,any>;
    return ir[ir.current_picture_plan];
@@ -579,8 +583,8 @@ try{
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const origin='http://127.0.0.1:'+(server.address() as {port:number}).port;
   let launched=0;
-  const dispatched=Promise.withResolvers<void>();
-  (clipMentorProductionPlugin(async()=>{launched++;dispatched.resolve();throw Error('Fixture stops before review');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
+  const dispatched=Promise.withResolvers<[string,string]>();
+  (clipMentorProductionPlugin(async task=>{launched++;dispatched.resolve([task.input.author.origin,task.input.reviewer.origin]);throw Error('Fixture stops before review');}).configureServer as any)({httpServer:server,config:{server:{}},middlewares:{use:(route:string,fn:any)=>app.use(route,fn)}});
   const api={provider:'openai' as const,model:'fixture',apiMode:'responses' as const,origin};
   try{
    const task=await createProductionTask({projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:{name:'Fixture',category:'test'},
@@ -596,8 +600,10 @@ try{
    const status=async()=>(await (await realFetch(panel,{headers})).json()).task;
    const board=(identity?:string)=>realFetch(origin+'/api/clipmentor/production-task?'+new URLSearchParams({
     view:'panel_board',projectId,revision:snapshot.revision,...(identity?{boardIdentity:identity}:{})}),{headers});
-   const action=(action:string,boardIdentity:string,text='核对本组卖点',blueprintReview?:unknown)=>realFetch(panel,{method:'POST',headers,body:JSON.stringify({
-    action,revision:snapshot.revision,boardIdentity,text,feedbackTarget:{scope:'whole',confirmed:true},blueprintReview})});
+   let boardPresentation:string|undefined;
+   const action=(action:string,boardIdentity:string,text='核对本组卖点',blueprintReview?:unknown,presentation=boardPresentation)=>
+    realFetch(panel,{method:'POST',headers,body:JSON.stringify({
+     action,revision:snapshot.revision,boardIdentity,boardPresentation:presentation,text,feedbackTarget:{scope:'whole',confirmed:true},blueprintReview})});
    await productionTaskStore.save(task);
    assert.equal((await status()).blueprintRevision,undefined,'legacy structure-only checkpoint is not presented for review');
    assert.equal((await board()).status,409,'direct HTML access cannot bypass the check');
@@ -613,13 +619,42 @@ try{
    Object.assign(task.completed.blueprint.artifact,{authorSelfCheck:'passed',author_self_check_source_digest:'c'.repeat(64),teaching_baseline_digest:'d'.repeat(64),requirementsDigest:digestValue({objective:null,doneCriteria:[]})});
    await productionTaskStore.save(task);
    const checked=await status();
+   boardPresentation=checked.boardPresentation;
+   assert(boardPresentation);
    assert.equal(checked.blueprintRevision,snapshot.revision);
    assert.equal(checked.canConfirmBlueprint,true);
    assert.equal(checked.canApproveBlueprint,false,'an author check cannot count as independent approval');
+   const publishedAt=task.completed.blueprint.at;
+   task.createdAt=Date.now()-task.input.budget.maxElapsedMs-60_000;
+   task.completed.blueprint.at=task.createdAt+1_000;
+   await productionTaskStore.save(task);
+   const overnight=await status();
+   assert.equal(overnight.boardIdentity,checked.boardIdentity);
+   assert.equal(overnight.canConfirmBlueprint,true,'waiting for a human does not expire a checked dual blueprint');
+   const checkedArtifact=task.completed.blueprint.artifact;
+   task.completed.blueprint.artifact={...checkedArtifact,authorSelfCheck:'pending',
+    authorSelfCheckReferenceIssues:[{field:'S7.reference_ids[0]',material:'current_author_check_source'}]};
+   await productionTaskStore.save(task);
+   assert.equal((await status()).canConfirmBlueprint,true,'a draft already eligible for human review keeps that eligibility overnight');
+   task.completed.blueprint.artifact=checkedArtifact;
+   task.attempts.model=task.input.budget.model;
+   await productionTaskStore.save(task);
+   assert.equal((await status()).canConfirmBlueprint,false,'a checked blueprint does not renew exhausted model calls');
+   task.attempts=structuredClone(originalAttempts);
+   task.completed.blueprint.at=Date.now();
+   await productionTaskStore.save(task);
+   assert.equal((await status()).canConfirmBlueprint,false,'a late blueprint is not an on-time saved checkpoint');
+   task.createdAt=originalCreatedAt;
+   task.completed.blueprint.at=publishedAt;
+   await productionTaskStore.save(task);
    const opened=await board(checked.boardIdentity);
    assert.equal(opened.status,200,await (opened.ok?Promise.resolve(''):opened.text()));
    const page=await opened.text();
    assert.match(page,/data-card="group-1"/);
+   assert.match(page,/当前组的拍摄选择和作用。/u);
+   const oldPresentation=await action('produce_versions',checked.boardIdentity,undefined,{scope:'whole_blueprint'},'older-presentation');
+   assert.equal(oldPresentation.status,409);
+   assert.equal((await oldPresentation.json()).reason,'review_board_changed','an obsolete heading cannot be silently confirmed or retried');
    assert.match(page,/<h3>新建联达人<\/h3>/);
    assert.match(page,/<h3>已合作达人<\/h3>/);
    assert.equal(checked.reviewEndings,undefined,'ending assets are displayed, not submitted as choices');
@@ -716,10 +751,18 @@ try{
    assert.equal(legacyWrite.status,409);
    assert.equal((await productionTaskStore.load(projectId,task.taskId)).blueprintReview?.groups[0]?.stance,'changes');
    assert.equal(launched,0);
+   const {createBlueprintContinuation}=await import('./production-continuation');
+   const {productionWorkDeadline}=await import('./production-shared-clock');
+   const orphan=await createBlueprintContinuation(savedFeedback,snapshot,'existing_partner',null,'http://127.0.0.1:1');
+   orphan.createdAt=Date.now()-orphan.input.budget.maxElapsedMs-60_000;
+   await productionTaskStore.save(orphan);
+   assert.equal(orphan.status,'awaiting_blueprint');
+   assert(productionWorkDeadline(orphan)<Date.now());
    const approved=await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'});
    assert.equal(approved.status,200,await approved.clone().text());
    const {setTimeout:timeout}=await import('node:timers/promises');
-   assert.equal(await Promise.race([dispatched.promise.then(()=>true),timeout(5000,false,{ref:false})]),true,'the approved batch reaches the worker');
+   assert.deepEqual(await Promise.race([dispatched.promise,timeout(5000,null,{ref:false})]),[origin,origin],
+    'the previously staged producer reaches the worker through the current service');
    const published=await productionTaskStore.load(projectId,task.taskId);
    assert.equal(published.blueprintReview?.scope,'whole_blueprint');
    assert.deepEqual(published.completed.blueprint?.artifact.authorSelfCheckReferenceIssues,referenceIssues);
@@ -728,6 +771,9 @@ try{
    const {blueprintReviewEndings}=await import('./production-panel-review');
    assert.deepEqual(published.blueprintReview?.endings,blueprintReviewEndings(doc),'the host binds both actual endings');
    assert.deepEqual(published.productionChildren?.map(child=>child.audience),['existing_partner','new_contact']);
+   const producer=await productionTaskStore.load(orphan.projectId,orphan.taskId);
+   assert.equal(producer.createdAt,orphan.createdAt,'confirmation reuses the original producer checkpoint');
+   assert(productionWorkDeadline(producer)>Date.now(),'first admission gives the recovered producer a usable work window');
    assert.equal((await action('produce_versions','stale',undefined,{scope:'whole_blueprint'})).status,409);
    assert.equal((await action('produce_versions',ready.boardIdentity,undefined,suppliedReview)).status,409);
    assert.equal((await action('produce_versions',ready.boardIdentity,undefined,{scope:'whole_blueprint'})).status,200);

@@ -1176,6 +1176,15 @@ try{
  const authorData=await productionAuthorTaskData(missingBrief,withBrief,{policy:null,references:[]});
  assert(authorData.narrationBrief?.groups.every(group=>group.first_glance));
  assert.match(authorData.narrationBrief!.instruction,/先替换弱句/);
+ const selectionAuthor=await productionAuthorTaskData({...missingBrief,stage:'analysis'},withBrief,{policy:null,references:[]});
+ assert.match(selectionAuthor.teachingSelection??'',/比较对象如何建立.*可比参照.*首次应用.*后续结果/u);
+ assert.doesNotMatch(authorData.teachingSelection??'',/比较对象如何建立/u);
+ const changedSubject:ProductionTask={...missingBrief,stage:'copy_review',repairs:1,technicalRecoveryEpochs:[1],
+  effects:{['copy_review:initial:0:teaching-baseline:'+'d'.repeat(64)]:{
+   kind:'model',status:'failed',operationId:'original-review',error:'Error: teaching_first_glance_checks_invalid',
+  }}};
+ await assert.rejects(()=>checkTeachingBaseline(changedSubject,noEffect,teachingBaselineSource(withBrief,changedSubject,[])),
+  /teaching_baseline_recovery_subject_changed/,'a changed subject cannot consume the original review retry');
  const missingRole=await selectionWorkerTask('teaching-selection-missing-role',selectionFixtures.missingRole);
  const overrun=await selectionWorkerTask('teaching-selection-overrun',selectionFixtures.reassurance);
  const repaired=await selectionWorkerTask('teaching-selection-recorded',selectionFixtures.doc);

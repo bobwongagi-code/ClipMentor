@@ -4,7 +4,18 @@ import {createHash} from 'node:crypto';
 /** Decisions over existing facts only. These routes are candidates, never permissions:
  * the worker must still verify current source, receipts, ownership and budgets. */
 export type RecoveryRoute='picture_capacity'|'review_source_observation'|'visual_review_contract'|'continuation_brief'
- |'source_evidence_import'|'focused_author'|'focused_independent'|'focused_structure'|'author_checkpoint'|'approved_source_receipt';
+ |'source_evidence_import'|'focused_author'|'focused_independent'|'focused_structure'|'author_checkpoint'|'approved_source_receipt'|'first_glance_receipt';
+
+export const firstGlanceReceiptError='Error: teaching_first_glance_checks_invalid';
+
+export function failedFirstGlanceReceipt(task:ProductionTask,epoch:number){
+ const prefix=`copy_review:${task.feedbackUsed?'feedback':'initial'}:`;
+ const failed=Object.entries(task.effects).filter(([id,effect])=>id.startsWith(prefix)&&id.includes(':teaching-baseline:')
+  &&effect.kind==='model'&&effect.status==='failed'&&effect.error===firstGlanceReceiptError);
+ const expected=`${prefix}${epoch}:teaching-baseline:`;
+ const id=failed[0]?.[0];
+ return failed.length===1&&id?.startsWith(expected)&&/^[a-f0-9]{64}$/u.test(id.slice(expected.length))?failed[0]:undefined;
+}
 
 export const savedSourceReceiptUnavailable='Saved source receipt unavailable or not bound to this project; no model request sent';
 export type AuthorMode='ordinary'|'canvas_reflow'|'picture_capacity'|'independent_review'|'author_self_check'|'operator_revision';

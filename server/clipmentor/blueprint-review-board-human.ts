@@ -42,9 +42,14 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const title=embedded||!productName||/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(productName)?'剪辑蓝图':productName;
  const version=board.candidate_id.match(/(?:^|[-_])v(\d+)/iu)?.[1];
  const revision=version?`第${version}版候选`:'现行保存候选';
- const teaching=(id:string)=>{const u=data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit;const intent=text(u?.intent_zh).trim();
+ const breakdown=obj(data.analysis.source_breakdown);
+ const teaching=(id:string)=>{
+  const group=arr(breakdown.units).map(obj).find(unit=>unit.unit_id===id);
+  const brief=text(obj(group?.teaching_selection).first_glance).trim();
+  if(brief)return brief;
+  const u=data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit;const intent=text(u?.intent_zh).trim();
   if(embedded||intent)return intent;
-  return arr(obj(data.analysis.source_breakdown).points).map(obj).filter(p=>arr(u?.point_ids).includes(p.point_id)).map(p=>text(p.teaching_question)).filter(Boolean).join('；')||'本组教学点尚未登记';};
+  return arr(breakdown.points).map(obj).filter(p=>arr(u?.point_ids).includes(p.point_id)).map(p=>text(p.teaching_question)).filter(Boolean).join('；')||'本组教学点尚未登记';};
  const originalDescription=(id:string)=>{const breakdown=obj(data.analysis.source_breakdown),unit=arr(breakdown.units).map(obj).find(u=>u.unit_id===id),segments=arr(breakdown.segments).map(obj).filter(s=>arr(unit?.original_segment_ids).includes(s.segment_id)),evidenceIds=segments.flatMap(s=>arr(s.visible_evidence_ids));const evidence=arr(data.analysis.evidence).map(obj).find(e=>evidenceIds.includes(e.evidence_id)&&e.kind==='visible_action'),range=evidence?.source_range_seconds;if(!text(evidence?.text)||!Array.isArray(range)||range.length!==2||!range.every(v=>typeof v==='number'&&Number.isFinite(v))||range[0]<0||range[1]<range[0])return null;return{text:text(evidence?.text),range:range as [number,number]};};
  const frameLabel=(r:ReviewBoardRow,i:number)=>`${r.stage==='original'?'原片':'讲解'}画面${i+1}`;
  const image=(r:ReviewBoardRow,i:number,detail?:string)=>{const f=r.frames[i],label=detail??frameLabel(r,i);return `<button class="image-button" data-zoom="${board.rows.indexOf(r)}"${detail?` data-zoom-frame="${i}"`:''} aria-label="放大${esc(label)}"><img src="data:image/jpeg;base64,${f.jpeg}" alt="${esc(label)}" decoding="async"></button>`;};

@@ -393,21 +393,29 @@ test('the business board confirms saved feedback without printing an author summ
 test('board identity refreshes a changed sibling or requirement at the same draft revision', async ({ page }) => {
   await page.clock.install()
   await page.route('**/api/clipmentor/intake', route => route.fulfill({json:{receipt:{projectId:'fixture',assets:['source.mp4','product.png','sales.png','cta.png'].map((name,id)=>({id:String(id),name}))}}}))
-  let identity='board-one', reads=0
+  let identity='board-one', presentation='headings-old', reads=0
   await page.route('**/api/clipmentor/production*', async route => {
     const request=route.request(), url=new URL(request.url())
     if(url.searchParams.get('view')==='panel_board'){
-      await route.fulfill({contentType:'text/html',headers:{'X-ClipMentor-Board-Identity':identity},body:`<h2>${identity}</h2>`});return
+      expect(url.searchParams.get('boardPresentation')).toBe(presentation)
+      await route.fulfill({contentType:'text/html',headers:{'X-ClipMentor-Board-Identity':identity},body:`<h2>${identity} ${presentation}</h2>`});return
     }
     reads++
-    await route.fulfill({json:{task:{taskId:'same-task',status:'awaiting_blueprint',stage:'copy_review',revision:'same-revision',active:false,sequence:1,boardIdentity:identity}}})
+    await route.fulfill({json:{task:{taskId:'same-task',status:'awaiting_blueprint',stage:'copy_review',revision:'same-revision',active:false,sequence:1,boardIdentity:identity,boardPresentation:presentation}}})
   })
   await page.goto('/')
-  await expect(page.frameLocator('iframe').getByText('board-one')).toBeVisible()
+  await expect(page.frameLocator('iframe').getByText('board-one headings-old')).toBeVisible()
+  const feedback=page.getByRole('textbox',{name:'整体意见'})
+  await feedback.fill('保留同一蓝图的意见')
+  presentation='headings-current'
+  await page.clock.fastForward(8000)
+  await expect(page.frameLocator('iframe').getByText('board-one headings-current')).toBeVisible()
+  await expect(feedback).toHaveValue('保留同一蓝图的意见')
   identity='board-two'
   await page.clock.fastForward(8000)
   await expect.poll(()=>reads).toBeGreaterThan(1)
-  await expect(page.frameLocator('iframe').getByText('board-two')).toBeVisible()
+  await expect(page.frameLocator('iframe').getByText('board-two headings-current')).toBeVisible()
+  await expect(feedback).toHaveValue('')
 })
 
 test('a late cache reload cannot replace a newer board', async ({ page }) => {

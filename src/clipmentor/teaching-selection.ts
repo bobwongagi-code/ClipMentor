@@ -3,6 +3,8 @@ import type { SourceBreakdown } from './source-breakdown';
 export const buyerRoles = ['reassurance', 'interest'] as const;
 export type BuyerRole = typeof buyerRoles[number];
 
+export const comparisonSelectionReview = '当主线是比较，先顺原片核对整条关系：比较对象如何建立、各对象有哪些可比参照、首次应用和后续结果分别让买家判断什么，以及原作者个人判断的适用范围。跨组有递进时，把前段参照、后段观察及各自证据一起看。实际条件或证据不同，就写清比较能支持的范围。';
+
 export interface SourceInventory {
   function: string;
   tracks: Record<'picture' | 'speech' | 'captions' | 'sound', string>;
