@@ -9,10 +9,10 @@ import {readPanelSourceRegistration} from './production-panel-source-requirement
 import {runtimeProfile} from '../runtime-profile';
 import {relative,isAbsolute} from 'node:path';
 import type {ProjectDoc} from '../../src/editor/types';
-import {sourcePerformanceCriterion,sourceTeachingCriterion} from '../../shared/clipmentor-handoff';
+import {parseProductionSourceCriteria,sourcePerformanceCriterion,sourceTeachingCriterion} from '../../shared/clipmentor-handoff';
 import {planReviewBoards,requiredReviewViewIssues} from './blueprint-review-board';
 import {blueprintRepairStopped} from './production-decisions';
-import {captureCreatorReference,creatorBlueprintFacts,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,
+import {captureCreatorReference,creatorBlueprintFacts,creatorNarrationRelationships,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,
  creatorReviewWorksheet,creatorWorksheetGaps,readCreatorChecks,type CreatorConfirmedReference} from './production-creator-quality';
 import {teachingSourceEvidence} from './production-teaching-baseline';
 
@@ -41,6 +41,27 @@ assert.equal(creatorRegressionGaps(creatorBlueprintFacts(strictDoc)).length,0);
 const before=captureCreatorReference(strictDoc,'v3-00000000','a'.repeat(64),{[unit.unit_id]:'fixture-decision'});
 const hostedFacts=creatorBlueprintFacts(strictDoc).map(group=>({...group,decision:'fixture-decision'}));
 assert.equal(creatorRegressionGaps(hostedFacts,before).length,0);
+const relationship={category:'teaching_decision',text:'Show both objects',source:{who:'Editor',reference:'Confirmed selection'},
+ rationale:'The objects share a useful reference',reconsiderWhen:'Evidence changes',confirmedDecisionId:'fixture-decision',
+ narrationRelationship:'Explain which judgment the shared reference supports'};
+const criterion={kind:'source_teaching',source:{assetId:'source',sha256:'0'.repeat(64)},quote:'Confirmed selection',
+ closing:{status:'none',note:'No source closing',evidenceRange:[0,1]},guidance:[relationship]};
+assert.deepEqual(parseProductionSourceCriteria([criterion]),[criterion]);
+for(const guidance of [{...relationship,narrationRelationship:' '},{...relationship,confirmedDecisionId:undefined},
+ {...relationship,category:'fact_boundary'}])
+ assert.throws(()=>parseProductionSourceCriteria([{...criterion,guidance:[guidance]}]),/source_criteria_invalid/);
+const required=creatorNarrationRelationships(parseProductionSourceCriteria([criterion]).flatMap(entry=>'guidance' in entry?entry.guidance:[]));
+assert.deepEqual(creatorRegressionGaps(hostedFacts,before,required),[]);
+assert.deepEqual(creatorRegressionGaps(hostedFacts.map(group=>({...group,narrated:false,conclusion:undefined})),before,required),
+ [{code:'creator_narration_relationship_missing',id:unit.unit_id}]);
+assert.deepEqual(creatorRegressionGaps(creatorBlueprintFacts(strictDoc),undefined,required),
+ [{code:'creator_narration_relationship_missing',id:'fixture-decision'}]);
+const duplicateLine=structuredClone(strictDoc);
+const duplicate=current(duplicateLine,unit.unit_id);
+duplicate.candidate.lines.push(structuredClone(duplicate.candidate.lines.find((line:Row)=>line.id===plan.creator_conclusion_line_id)));
+assert.deepEqual(creatorRegressionGaps(creatorBlueprintFacts(duplicateLine)),[],'existing declarations keep their earlier conclusion rules');
+assert.deepEqual(creatorRegressionGaps(creatorBlueprintFacts(duplicateLine).map(group=>({...group,decision:'fixture-decision'})),undefined,required),
+ [{code:'creator_narration_relationship_missing',id:unit.unit_id}]);
 assert(creatorRegressionGaps([...hostedFacts,{...hostedFacts[0],unit_id:'extra',decision:undefined}],before)
  .some(issue=>issue.code==='creator_confirmed_group_order_changed'));
 assert(creatorRegressionGaps(hostedFacts.map(group=>({...group,originalSeconds:group.originalSeconds*2})),before)

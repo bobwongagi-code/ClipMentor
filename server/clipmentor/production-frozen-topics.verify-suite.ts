@@ -11,7 +11,7 @@ import {revisionOf} from '../../src/agent/external-edit-session';
 import {recordEditorApprovedGateProbe,firstSuspectedGateDefect} from './production-gate-probes';
 import {sourceClosingDecision} from './production-source-policy';
 import {repeatedPictureRepair} from './production-decisions';
-import {readPanelSourceCriteria,registerPanelSourceCriteria} from './production-panel-source-requirements';
+import {readPanelSourceCriteria,readPanelSourceRegistration,registerPanelSourceCriteria} from './production-panel-source-requirements';
 
 type Source=ReturnType<typeof teachingBaselineSource>;
 type Review=ReturnType<typeof validateTeachingBaselineReview>;
@@ -92,6 +92,20 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  assert.deepEqual(await readPanelSourceCriteria('new-editor-replay',incomingSource,incomingSales),
   [{...declaration,source:{...source,assetId:incomingSource.id}}],'an explicit project choice takes precedence');
  assert.equal((await readPanelSourceCriteria('another-editor-replay',incomingSource,incomingSales))?.length,2);
+ const confirmedAdvice={...advice,confirmedDecisionId:'fixture-decision'};
+ const confirmedDeclaration={...proposal,guidance:[confirmedAdvice]};
+ const creatorReference={revision:'v3-00000000',originalSha256:frozenHash,salesSha256:salesHash,
+  groups:[{id:confirmedAdvice.confirmedDecisionId,originalSeconds:2,sentences:1,longestSentence:5}]};
+ const reusable={reuseSameMaterials:true};
+ await registerPanelSourceCriteria('registered-editor-replay',[confirmedDeclaration,performance],incomingSource,incomingSales,{...reusable,creatorReference});
+ const relationship={...confirmedAdvice,narrationRelationship:'把两处可见对象和可以做的判断说清。'};
+ await registerPanelSourceCriteria('registered-editor-replay',[{...confirmedDeclaration,guidance:[relationship]},performance],incomingSource,incomingSales,reusable);
+ const withRelationship=await readPanelSourceRegistration('another-editor-replay',incomingSource,incomingSales);
+ assert.deepEqual(withRelationship?.creatorReference,creatorReference,'a relationship-only update keeps the approved same-source comparison');
+ assert.deepEqual(withRelationship?.doneCriteria[0],{...confirmedDeclaration,source:{...source,assetId:incomingSource.id},guidance:[relationship]});
+ await registerPanelSourceCriteria('registered-editor-replay',[{...confirmedDeclaration,guidance:[{...relationship,text:'另一个拍摄决定。'}]},performance],incomingSource,incomingSales,reusable);
+ assert.equal((await readPanelSourceRegistration('another-editor-replay',incomingSource,incomingSales))?.creatorReference,undefined,
+  'a teaching change must not reuse an earlier approved comparison');
  const sale=panelSalesEvidence(sourceId,saleId,performance.results);
  const boundDoc=structuredClone(frozenDoc);
  boundDoc.assets.push({...boundDoc.assets[0],id:saleId,kind:'image',sourceContentHash:salesHash});

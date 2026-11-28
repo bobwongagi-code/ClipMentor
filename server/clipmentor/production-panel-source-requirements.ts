@@ -60,6 +60,12 @@ function validateReference(value:unknown,criteria:ReturnType<typeof bindPanelSou
  return value;
 }
 
+function comparableCreatorCriteria(criteria:ReturnType<typeof bindPanelSourceCriteria>){
+ return criteria.map(entry=>entry.kind==='source_teaching'&&'guidance' in entry
+  ?{...entry,guidance:entry.guidance.map(({narrationRelationship:_relationship,...guidance})=>guidance)}
+  :entry);
+}
+
 export async function registerPanelSourceCriteria(projectId:string,value:unknown,source:MaterialBinding,sales:MaterialBinding,options:{reuseSameMaterials?:boolean;creatorReference?:CreatorConfirmedReference}={}){
  const doneCriteria=bindPanelSourceCriteria(value,source,sales);
  const file=declarationPath(projectId);
@@ -71,7 +77,8 @@ export async function registerPanelSourceCriteria(projectId:string,value:unknown
   if(!reference){
    const previous=await readDeclaration(reusableFile);
    if(previous?.creatorReference!==undefined&&previous.version===1&&previous.originalSha256===source.sourceContentHash
-    &&previous.salesSha256===sales.sourceContentHash&&digestValue(bindPanelSourceCriteria(previous.doneCriteria,source,sales))===digestValue(doneCriteria))
+    &&previous.salesSha256===sales.sourceContentHash
+    &&digestValue(comparableCreatorCriteria(bindPanelSourceCriteria(previous.doneCriteria,source,sales)))===digestValue(comparableCreatorCriteria(doneCriteria)))
     reference=validateReference(previous.creatorReference,doneCriteria,source,sales);
   }
   await mkdir(dirname(reusableFile),{recursive:true,mode:0o700});

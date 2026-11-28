@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 export interface ProductionGeneration {
  qualityRules:'v1';
  referenceRules?:'registered-v1';
- creatorRules?:'creator-teaching-v1';
+ creatorRules?:'creator-teaching-v1'|'creator-teaching-v2';
  commit?:string;
  trackedChanges?:boolean;
 }
@@ -14,7 +14,7 @@ declare const __CLIPMENTOR_PRODUCTION_BUILD__: ProductionGeneration | undefined;
 
 /** Capture the service's source/build identity once, when this module loads. */
 export const loadedProductionGeneration:Promise<ProductionGeneration>=(async()=>{
- const rules={qualityRules:'v1',referenceRules:'registered-v1',creatorRules:'creator-teaching-v1'} as const;
+ const rules={qualityRules:'v1',referenceRules:'registered-v1',creatorRules:'creator-teaching-v2'} as const;
  if(typeof __CLIPMENTOR_PRODUCTION_BUILD__!=='undefined')return {...__CLIPMENTOR_PRODUCTION_BUILD__,...rules};
  const built=process.env.OPENCHATCUT_BUILD_COMMIT;
  if(built&&/^[a-f0-9]{40}$/u.test(built))return {...rules,commit:built};

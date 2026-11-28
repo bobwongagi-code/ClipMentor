@@ -1,4 +1,4 @@
-import {creatorAuthorInstruction,creatorBlueprintFacts,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,creatorSharedTeaching,creatorWorksheetGaps} from './production-creator-quality';
+import {creatorAuthorInstruction,creatorBlueprintFacts,creatorNarrationRelationships,creatorOpeningMetricsValid,creatorRegressionGaps,creatorReviewIssues,creatorSharedTeaching,creatorWorksheetGaps} from './production-creator-quality';
 import {productionWorkDeadline} from './production-shared-clock';
 import {recoveredAnalysisWrite,sourceBreakdownFailures} from './production-analysis-recovery';
 import {productionReferenceSelection,productionReferenceTool,productionReferenceKinds} from './production-references';
@@ -142,13 +142,14 @@ function writingSelectionDigest(doc:ProjectDoc,creatorQuality:boolean){
 }
 
 function creatorQualityRepair(task:ProductionTask,doc:ProjectDoc,revision:string,gate:string,repair:'analysis'|'blueprint'|'copy_review',
- findings:{key:string;reason:string}[],pause?:string):StageResult{
+ findings:{key:string;reason:string;repeatKey?:string}[],pause?:string):StageResult{
  const scope=digestValue({gate,source:doc.clipMentorAnalysis?.source.sourceContentHash,criteria:task.input.doneCriteria,feedback:task.blueprintFeedback,feedbackEpoch:task.blueprintFeedbackEpoch,feedbackRevision:task.blueprintFeedbackRevision});
- const keys=findings.map(finding=>digestValue([finding.key,finding.reason.normalize('NFKC').replace(/\s+/gu,' ').trim().replace(/[。.!！]+$/u,'')]));
+ const keys=findings.map(finding=>digestValue(finding.repeatKey??[finding.key,finding.reason.normalize('NFKC').replace(/\s+/gu,' ').trim().replace(/[。.!！]+$/u,'')]));
  const previous=task.repairContext?.creator_quality_seen as Record<string,string[]>|undefined;
  const seen=previous?.[scope]??[];
  const repeated=keys.findIndex(key=>seen.includes(key));
- const artifact={revision,creator_quality_seen:{...previous,[scope]:[...new Set([...seen,...keys])]},creator_quality_findings:findings};
+ const artifact={revision,creator_quality_seen:{...previous,[scope]:[...new Set([...seen,...keys])]},
+  creator_quality_findings:findings.map(({key,reason})=>({key,reason}))};
  if(pause||repeated>=0)return {artifact,pause:pause??'creator_quality_repair_no_progress 待维护侧核对 '+findings[repeated].key};
  return {artifact,repair};
 }
@@ -196,14 +197,15 @@ export async function prepareProductionCopyReview(
      add('opening_performance_card_requires_three_readable_metrics','delivery',expected);
    }
   }
+  const topics=task.input.panelDelivery?.blueprintQuality==='v1'?frozenTeachingTopics(doc,task):undefined;
   if(task.input.panelDelivery?.creatorQuality==='v1'){
    if(!creatorOpeningMetricsValid(openingComparison?.results))add('creator_opening_metrics_unconfirmed');
    const reference=task.input.panelDelivery.creatorReference;
    if(reference&&reference.originalSha256!==doc.clipMentorAnalysis?.source.sourceContentHash)
     throw Error('creator_confirmed_reference_source_changed');
-   for(const gap of creatorRegressionGaps(creatorBlueprintFacts(doc),reference))add(gap.code,gap.id);
+   const relationships=creatorNarrationRelationships(topics&&'guidance' in topics?topics.guidance:undefined);
+   for(const gap of creatorRegressionGaps(creatorBlueprintFacts(doc),reference,relationships))add(gap.code,gap.id);
   }
-  const topics=task.input.panelDelivery?.blueprintQuality==='v1'?frozenTeachingTopics(doc,task):undefined;
   if(prepared&&topics&&'reviewViews' in topics&&topics.reviewViews?.length){
    try{
     const input={value:doc,sha256:digestValue(doc),hashMode:'project' as const,assertUnchanged:async()=>{},
@@ -779,6 +781,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(rebuild?.wholeFilm&&unchangedWholeFilmTeaching(source,rebuild))
     throw Error('teaching_baseline_repair_no_progress: 整片选题 '+rebuild.wholeFilm.reason);
    type NarrationReview=Awaited<ReturnType<typeof checkTeachingBaseline>>['review']['narration_checks'];
+   const relationshipGroups=new Map(source.creatorWorksheet?.copy?.flatMap(group=>
+    group.required_relationship?[[group.unit_id,group] as const]:[])??[]);
+   const normalizeCopy=(line:string)=>line.normalize('NFKC').trim().replace(/\s+/gu,' ');
    const rejectedNarrationDigest=(findings:NarrationReview)=>findings?.length&&source.narrationTargets
     ?digestValue({requirements:baselinePolicyDigest,criteria:task.input.doneCriteria,feedback:task.blueprintFeedback,
      ...(source.selection?.timingRisks?{replay:source.selection.timingRisks.filter(risk=>findings.some(finding=>
@@ -788,13 +793,21 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
       if(!finding)return [];
       const lines=finding.baseline_criterion?.field==='claim_limit'
        ?target.lines.filter(line=>line.line_id===finding.line_id):target.lines;
-      return [[target.unit_id,target.point_id,lines.map(line=>line.narration.normalize('NFKC').trim().replace(/\s+/gu,' '))]];
+      const group=finding.baseline_criterion?.field==='connection'?relationshipGroups.get(target.unit_id):undefined;
+      const conclusion=group?.lines.find(line=>line.id===group.conclusion)?.narration;
+      return [[target.unit_id,target.point_id,lines.map(line=>normalizeCopy(line.narration)),
+       ...(group?[normalizeCopy(conclusion??'')]:[])]];
      })})
     :undefined;
    const priorNarration=task.repairContext?.narration_repair_findings as NarrationReview;
    const priorNarrationDigest=rejectedNarrationDigest(priorNarration);
    const narrationScope=digestValue({purpose:source.purpose,evidence:source.evidenceBinding,requirements:baselinePolicyDigest,
     criteria:task.input.doneCriteria,brief:source.task,feedback:source.feedback});
+   const narrationRepairArtifact=(findings:NonNullable<NarrationReview>)=>({
+    revision:editor.revision,narration_repair_digest:rejectedNarrationDigest(findings),narration_repair_scope:narrationScope,
+    narration_repair_findings:findings,teaching_baseline_issue:findings.map(answer=>answer.unit_id+' '+answer.reason).join('；'),
+    instruction:'保留已成立的选题。按独立核验逐条把具体拍摄决定和买家多得到的判断依据写进现行口播，核对字幕和回看。',
+   });
    const sameNarrationScope=task.repairContext?.narration_repair_scope===narrationScope;
    if(priorNarrationDigest&&task.repairContext?.narration_repair_digest===priorNarrationDigest
     &&(sameNarrationScope||!task.repairContext.narration_repair_scope))
@@ -804,7 +817,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     if(!('prepared' in copyInput)){
      if(creatorDecisions){
       const gaps=blueprintFindings(copyInput.artifact.blueprint_structure_issue).filter(finding=>finding.code.startsWith('creator_'));
-      if(gaps.length)return creatorQualityRepair(task,doc,editor.revision,'regression','blueprint',gaps.map(gap=>({key:gap.id+':'+gap.code,reason:gap.code})),
+      if(gaps.length)return creatorQualityRepair(task,doc,editor.revision,'regression','blueprint',gaps.map(gap=>({key:gap.id+':'+gap.code,
+       reason:gap.code==='creator_narration_relationship_missing'
+        ?'把已确认的关系写进现行马来语正文，并选择本组承载这层关系的主讲句编号':gap.code})),
        gaps.some(gap=>gap.code==='creator_opening_metrics_unconfirmed')?'creator_opening_metrics_unconfirmed: 待维护侧核实并登记本片三项成绩':undefined);
      }
      return copyInput;
@@ -834,13 +849,23 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     .filter(issue=>!!issue).map(issue=>'整片选题 '+issue);
    const issues=[...topicIssues,...unitIssues];
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
+   const narrationIssues=checked.review.narration_checks?.filter(answer=>answer.status!=='ok')??[];
    if(creatorDecisions){
-    const creatorIssues=creatorReviewIssues(checked.review.creator_checks);
+    const relationshipKeys=new Map([...relationshipGroups.keys()].flatMap(unitId=>{
+     const decision=a.source_breakdown?.units.find(unit=>unit.unit_id===unitId)?.teaching_selection?.creator_quality?.confirmed_decision_id;
+     return decision?[[unitId+':narration_why','narration-relationship:'+decision] as const]:[];
+    }));
+    const creatorIssues=creatorReviewIssues(checked.review.creator_checks).map(issue=>({...issue,repeatKey:relationshipKeys.get(issue.key)}));
     const incorrectBindings=checked.review.confirmed_teaching_checks?.filter(check=>check.status==='covered'
      &&a.source_breakdown?.units.find(unit=>unit.unit_id===check.unit_id)?.teaching_selection?.creator_quality?.confirmed_decision_id!==check.id)??[];
-    for(const check of incorrectBindings)creatorIssues.push({key:'film:confirmed_decision:'+check.id,reason:'已确认的教学决定与独立审核定位到的实际组不一致'});
-    if(creatorIssues.length)return creatorQualityRepair(task,doc,editor.revision,task.stage,
-     incorrectBindings.length||task.stage==='blueprint'||creatorIssues.some(issue=>issue.key.endsWith(':analogy'))?'analysis':'blueprint',creatorIssues);
+    for(const check of incorrectBindings)creatorIssues.push({key:'film:confirmed_decision:'+check.id,reason:'已确认的教学决定与独立审核定位到的实际组不一致',repeatKey:undefined});
+    if(creatorIssues.length){
+     const result=creatorQualityRepair(task,doc,editor.revision,task.stage,
+      incorrectBindings.length||task.stage==='blueprint'||creatorIssues.some(issue=>issue.key.endsWith(':analogy'))?'analysis':'blueprint',creatorIssues);
+     if(creatorIssues.some(issue=>issue.repeatKey)&&narrationIssues.length&&narrationIssues.every(answer=>answer.baseline_criterion))
+      Object.assign(result.artifact,narrationRepairArtifact(narrationIssues));
+     return result;
+    }
    }
    if(copyInput&&'prepared' in copyInput&&copyInput.requiredGallery){
     const gallery=copyInput.requiredGallery;
@@ -850,18 +875,14 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:'+JSON.stringify([finding])},repair:'blueprint'};
     }
    }
-   const narrationIssues=checked.review.narration_checks?.filter(answer=>answer.status!=='ok');
-   if(narrationIssues?.length){
+   if(narrationIssues.length){
     if(narrationIssues.some(answer=>!answer.baseline_criterion))
      throw Error('teaching_final_narration_baseline_criterion_missing_in_saved_review');
     const normalizedReason=(reason:string)=>reason.normalize('NFKC').replace(/\s+/gu,' ').trim().replace(/[。.!！]+$/u,'');
     const repeated=sameNarrationScope&&narrationIssues.find(answer=>priorNarration?.some(old=>
      old.unit_id===answer.unit_id&&old.point_id===answer.point_id&&old.status===answer.status
      &&normalizedReason(old.reason)===normalizedReason(answer.reason)));
-    const artifact={revision:editor.revision,narration_repair_digest:rejectedNarrationDigest(narrationIssues),
-     narration_repair_scope:narrationScope,narration_repair_findings:narrationIssues,
-     teaching_baseline_issue:narrationIssues.map(answer=>answer.unit_id+' '+answer.reason).join('；'),
-     instruction:'保留已成立的选题。按独立核验逐条把具体拍摄决定和买家多得到的判断依据写进现行口播，核对字幕和回看。'};
+    const artifact=narrationRepairArtifact(narrationIssues);
     if(repeated){
      task.repairContext=productionRepairContext(task.repairContext,artifact);
      throw Error('teaching_final_narration_repair_no_progress: 同一讲解缺口重复出现，已保留候选和回执，待维护侧核对。'+repeated.unit_id+' '+repeated.reason);
@@ -1299,7 +1320,9 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    ?'证据窗保留为事实记录。需要压缩示范时用 original_playback:{mode:"selected_cuts",ranges,purpose} 登记实际原声选段，和 original 阶段保持一致。选能讲清关系的展示顺序和大小：若细节看不清，先放大；若比较依赖同屏，先保留共同参照。读图停留交代看哪里、读出什么，按需要选择近景、标注或压缩口播。用 viewer_stage_cues.layout 交接本片已认可的样式；选用贯通顶栏时填 placement:"top_strip"、可选 height_fraction。没指定颜色时用 teachingPhasePalette。'
    :'按已审原声选段和回看顺序执行。用近景、随口播出现的提示或局部放大交代读图重点。若口播逐处点名，切到被点名的部位或突出对应的格；只总结共同拍法时，用清楚的各处画面和短标举例，给总览单独的读图任务。大图与总览复用同一短标，标题、字幕和提示留出位置，保证画面主体不被盖住。仅在 viewer_stage_cues.layout 选 top_strip 时宿主应用贴顶通栏；其他版式照本片的配色和位置。用 view_timeline_frames 抽查原声切讲解、一个关键局部及总览或对照的进出点，在手机大小看字幕、焦点和留白，随后连实际配音听一次，逐词对位和听感未验时标明。'}:{}),
   ...(task.input.panelDelivery?.creatorQuality==='v1'&&['analysis','blueprint'].includes(task.stage)?{
-   creatorQuality:creatorAuthorInstruction(doc,creatorConfirmedDecisions(doc,task)),creatorQualityFindings:task.repairContext?.creator_quality_findings,
+   creatorQuality:creatorAuthorInstruction(doc,creatorConfirmedDecisions(doc,task),task.stage==='blueprint'
+    ?creatorNarrationRelationships(frozenTopics&&'guidance' in frozenTopics?frozenTopics.guidance:undefined):undefined),
+   creatorQualityFindings:task.repairContext?.creator_quality_findings,
   }:{}),
   ...(task.stage==='blueprint'&&task.repairContext?.narration_repair_findings?{narrationRepair:{
    findings:task.repairContext.narration_repair_findings,

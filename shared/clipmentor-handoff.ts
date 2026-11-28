@@ -23,6 +23,7 @@ export interface SourceTeachingGuidance {
  category:'teaching_decision'|'fact_boundary'|'material_suggestion'|'temporarily_unused';
  text:string;source:{who:string;reference:string};rationale:string;reconsiderWhen:string;
  confirmedDecisionId?:string;
+ narrationRelationship?:string;
 }
 interface SourceTeachingDeclaration {
  kind:'source_teaching';source:SourceAssetBinding;quote:string;
@@ -84,8 +85,10 @@ const sourceWindow=(v:unknown):v is SourceWindow=>Array.isArray(v)&&v.length===2
 const sourceWindows=(v:unknown):v is SourceWindow[]=>Array.isArray(v)&&v.length<=12&&v.every(sourceWindow);
 const sourceTeachingGuidance=(v:unknown):v is SourceTeachingGuidance=>handoffRecord(v)
  &&(keys(v,['category','text','source','rationale','reconsiderWhen'])
-  ||keys(v,['category','text','source','rationale','reconsiderWhen','confirmedDecisionId'])&&v.category==='teaching_decision'
-   &&typeof v.confirmedDecisionId==='string'&&ID.test(v.confirmedDecisionId))
+  ||keys(v,['category','text','source','rationale','reconsiderWhen','confirmedDecisionId',
+    ...(Object.hasOwn(v,'narrationRelationship')?['narrationRelationship']:[])])&&v.category==='teaching_decision'
+   &&typeof v.confirmedDecisionId==='string'&&ID.test(v.confirmedDecisionId)
+   &&(!Object.hasOwn(v,'narrationRelationship')||boundedText(v.narrationRelationship,500)))
  &&typeof v.category==='string'&&['teaching_decision','fact_boundary','material_suggestion','temporarily_unused'].includes(v.category)
  &&handoffRecord(v.source)&&keys(v.source,['who','reference'])
  &&boundedText(v.source.who,160)&&boundedText(v.source.reference,1000)

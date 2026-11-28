@@ -1,4 +1,4 @@
-import type {OpeningComparisonCriterion} from '../../shared/clipmentor-handoff';
+import type {OpeningComparisonCriterion,SourceTeachingGuidance} from '../../shared/clipmentor-handoff';
 import { deliverySectionsFromDoc } from '../../src/clipmentor/delivery-bindings';
 import { creatorAnswer, creatorFilmQuestions, creatorGroupQuestions, creatorQuestions } from '../../src/clipmentor/creator-teaching-quality';
 import { readBlueprint } from '../../src/clipmentor/blueprint-lint';
@@ -17,6 +17,11 @@ const cardsByEntry = new Map(creatorExemplarCards.flatMap(card => card.entries.m
 const selected = (doc: ProjectDoc) => new Map(readBlueprint(doc).selectedPlans.map(plan => [plan.unit.unit_id, plan]));
 const text = (value: unknown) => typeof value === 'string' ? value : undefined;
 
+export function creatorNarrationRelationships(guidance: readonly SourceTeachingGuidance[] = []) {
+  return new Map(guidance.flatMap(({confirmedDecisionId,narrationRelationship}) =>
+    confirmedDecisionId && narrationRelationship ? [[confirmedDecisionId,narrationRelationship] as const] : []));
+}
+
 export function creatorOpeningMetricsValid(results: OpeningComparisonCriterion['results']) {
   if (!results) return false;
   const number = /^(?:[0-9]+(?:[., ][0-9]+)*)(?:\s*(?:[kmb]|ribu|juta|bilion|万|亿))?$/iu;
@@ -26,11 +31,15 @@ export function creatorOpeningMetricsValid(results: OpeningComparisonCriterion['
     && number.test(readable(results.revenue).replace(currency,''));
 }
 
-export function creatorAuthorInstruction(doc: ProjectDoc, decisions: readonly string[] = []) {
+export function creatorAuthorInstruction(doc: ProjectDoc, decisions: readonly string[] = [], relationships: ReadonlyMap<string,string> = new Map()) {
   const baseline = doc.clipMentorAnalysis?.source_breakdown;
   return {
     version: creatorQualityVersion, judgment: creatorJudgment, questions: creatorQuestions, cards: creatorExemplarCards.map(({title,file,use})=>({title,file,use})),
     ...(decisions.length ? { confirmed_decision_ids: decisions } : {}),
+    ...(relationships.size ? { narration_relationships: {
+      by_confirmed_decision_id: Object.fromEntries(relationships),
+      instruction: '只按本组绑定的 confirmed_decision_id 使用具体要求。在马来语正文直接讲清对应的拍法与观众据此能判断什么，并用 plan.creator_conclusion_line_id 指向本组承载该关系的现行主讲句。句式自定。中文回译、标题、画面备注和作者问卷不能代替口播原句。',
+    }} : {}),
     worksheet: baseline?.creator_quality,
     groups: baseline?.units.map(unit => ({ unit_id: unit.unit_id, ...unit.teaching_selection })),
     instruction: '分析阶段保留 decision、first_glance、omission_loss。各组 teaching_selection.creator_quality 写 next_decision、narration_why、still_focus 及 analogy:{entry,evidence_ids,application,difference}。先看共同判断，再用 load_skill 按 file 读取最接近的一至两张卡，借其中对本片有用的判断。只能用本任务该组已选证据编号。application 说清这项判断如何改变本组，difference 写本片成立条件和边界。如有已确认决定，选择它的 confirmed_decision_id。全片 source_breakdown.creator_quality 写 opening、balance，各用一句白话。写蓝图时按已核定的表编排实际原声、画面和马来语口播。每个讲解组在当前画面 plan.creator_conclusion_line_id 选择一个真正讲出取舍和作用的本组主讲句。只需要看图的细节作为组内画面或辅助点，写清读图任务。意外发现登记为建议。',
@@ -102,8 +111,11 @@ export function creatorBlueprintFacts(doc: ProjectDoc) {
       || JSON.stringify(currentLines) === JSON.stringify(plan.plan.selected_narration));
     const conclusion = text(plan?.plan.creator_conclusion_line_id);
     const original = originalPlaybackRanges(baseline, unit);
+    const matches = currentLines.filter(line => row(line) && line.id === conclusion);
     return [{ unit_id: unit.unit_id, decision: unit.teaching_selection?.creator_quality?.confirmed_decision_id,
-      narrated: explained.size > 0 || lines.length > 0, conclusion: bound && lines.some(line => line.id === conclusion && line.primary) ? conclusion : undefined,
+      narrated: explained.size > 0 || lines.length > 0,
+      conclusion: bound && lines.some(line => line.id === conclusion && line.primary) ? conclusion : undefined,
+      unambiguousConclusion: matches.length === 1,
       lines, original, originalSeconds: original.reduce((duration, [from, to]) => duration + to - from, 0),
       phases: plan?.resolved?.phases ?? [] }];
   });
@@ -160,9 +172,19 @@ export function captureCreatorReference(doc: ProjectDoc, revision: string, sales
   return reference;
 }
 
-export function creatorRegressionGaps(facts: ReturnType<typeof creatorBlueprintFacts>, reference?: CreatorConfirmedReference) {
-  const gaps = facts.flatMap(group => group.narrated && !group.conclusion
+export function creatorRelationshipGaps(facts: ReturnType<typeof creatorBlueprintFacts>, relationships: ReadonlyMap<string,string>) {
+  return [...relationships.keys()].flatMap(decision => {
+    const groups = facts.filter(group => group.decision === decision);
+    return groups.length === 1 && groups[0].conclusion && groups[0].unambiguousConclusion ? []
+      : [{ code: 'creator_narration_relationship_missing', id: groups.length === 1 ? groups[0].unit_id : decision }];
+  });
+}
+
+export function creatorRegressionGaps(facts: ReturnType<typeof creatorBlueprintFacts>, reference?: CreatorConfirmedReference,
+  relationships: ReadonlyMap<string,string> = new Map()) {
+  const missing = facts.flatMap(group => group.narrated && !group.conclusion && !(group.decision && relationships.has(group.decision))
     ? [{ code: 'creator_conclusion_missing', id: group.unit_id }] : []);
+  const gaps = [...missing,...creatorRelationshipGaps(facts,relationships)];
   if (!reference) return gaps;
   const previous = new Map(reference.groups.map(group => [group.id, group]));
   const order = facts.flatMap(group => group.decision && previous.has(group.decision) ? [group.decision] : []);
@@ -182,7 +204,8 @@ export function creatorRegressionGaps(facts: ReturnType<typeof creatorBlueprintF
   return gaps;
 }
 
-export function creatorReviewWorksheet(doc: ProjectDoc, copy: boolean, evidence: ReadonlySet<string>, performance?: OpeningComparisonCriterion['results']) {
+export function creatorReviewWorksheet(doc: ProjectDoc, copy: boolean, evidence: ReadonlySet<string>,
+  performance?: OpeningComparisonCriterion['results'], relationships: ReadonlyMap<string,string> = new Map()) {
   const baseline = doc.clipMentorAnalysis?.source_breakdown;
   if (!baseline) throw Error('creator_worksheet_missing');
   const facts = copy ? creatorBlueprintFacts(doc) : [];
@@ -203,7 +226,11 @@ export function creatorReviewWorksheet(doc: ProjectDoc, copy: boolean, evidence:
         analogy: analogy && { ...neutral, evidence_ids: analogy.evidence_ids.filter(id => evidence.has(id)), application: analogy.application, difference: analogy.difference },
       };
     }),
-    ...(copy ? { copy: facts.map(({unit_id,narrated,conclusion,lines,original,phases}) => ({unit_id,narrated,conclusion,lines,original,phases})) } : {}),
+    ...(copy ? { copy: facts.map(({unit_id,decision,narrated,conclusion,unambiguousConclusion,lines,original,phases}) => {
+      const relationship = decision && relationships.get(decision);
+      return {unit_id,narrated,conclusion:relationship&&!unambiguousConclusion?undefined:conclusion,lines,original,phases,
+        ...(relationship ? {required_relationship:relationship} : {})};
+    }) } : {}),
   };
 }
 

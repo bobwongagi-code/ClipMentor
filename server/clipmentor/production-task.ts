@@ -518,7 +518,7 @@ export function validateProductionInput(v:ProductionInput){
   const generation=v.blueprintGeneration;
   if(!generation||v.panelDelivery?.blueprintQuality!=='v1'||generation.qualityRules!=='v1'
    ||generation.referenceRules!==undefined&&generation.referenceRules!=='registered-v1'
-   ||generation.creatorRules!==undefined&&generation.creatorRules!=='creator-teaching-v1'
+   ||generation.creatorRules!==undefined&&generation.creatorRules!=='creator-teaching-v1'&&generation.creatorRules!=='creator-teaching-v2'
    ||generation.commit!==undefined&&(typeof generation.commit!=='string'||! /^[a-f0-9]{40}$/u.test(generation.commit))
    ||generation.trackedChanges!==undefined&&(!generation.commit||typeof generation.trackedChanges!=='boolean'))
    throw Error('Invalid blueprint generation metadata');

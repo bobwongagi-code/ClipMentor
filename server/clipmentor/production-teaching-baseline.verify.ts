@@ -29,6 +29,7 @@ let rejectSupplement:false|'small'|'archived'=false;
 let supplementArchiveId:string|undefined;
 let reviewAction:'repeat'|'reject-paraphrase'|undefined;
 let narrationAction:'missing'|'wrong-quote'|'missing-basis'|'same-finding'|'missing-criterion'|'new-criterion'|'partial-criterion'|'no-claim-quote'|'bare-unit'|'cited-fact'|'cited-teaching'|undefined;
+let relationshipMiss:{reason:string;paired:boolean}|undefined;
 let wholeFilmAction:'missing'|'omission'|'selection-omission'|undefined;
 let unexpectedInitialFeedbackScope=false;
 let panelRequest:RequestListener|undefined;
@@ -162,10 +163,16 @@ const host=createServer(async(req,res)=>{
  const verdict={
   ...(data.creatorWorksheet?{creator_checks:{
    film:creatorFilmQuestions.map(criterion),
-   groups:data.creatorWorksheet.groups.map((group:any)=>({unit_id:group.unit_id,checks:creatorGroupQuestions.map(criterion),
+   groups:data.creatorWorksheet.groups.map((group:any)=>({unit_id:group.unit_id,checks:creatorGroupQuestions.map(question=>
+    question==='narration_why'&&relationshipMiss?{question,status:'fix',answer:relationshipMiss.reason}:criterion(question)),
     analogy:{status:'ok',answer:'同框给出当前落点的参照。',evidence_id:group.analogy.evidence_ids[0]},
     ...(data.creatorWorksheet.copy?.length?{conclusion_line_id:data.creatorWorksheet.copy.find((copy:any)=>copy.unit_id===group.unit_id)?.conclusion}:{})})),
   }}:{}),
+  ...(data.confirmedDecisions?{confirmed_teaching_checks:data.confirmedDecisions.map((decision:any)=>({
+   id:decision.confirmedDecisionId,status:'covered',reason:'选题仍由原片证据支持。',
+   unit_id:data.units.find((unit:any)=>unit.points.some((point:any)=>point.point_id===mainPoint.point_id)).unit_id,
+   point_id:mainPoint.point_id,evidence_id:mainEvidence.id,
+  }))}:{}),
   ...(unexpectedInitialFeedbackScope?{feedback_scope:'baseline'}:data.feedback?{feedback_requires_baseline:fail}:{}),summary:'ok',
   ...(data.pointReview&&wholeFilmAction!=='missing'?{whole_film:{
    status:missingEvidenceId?'fix':'ok',main_point_id:mainPoint.point_id,
@@ -175,11 +182,14 @@ const host=createServer(async(req,res)=>{
    affected_unit_ids:missingEvidenceId?[data.units[0].unit_id]:[],
   }}:{}),
   ...(data.narrationTargets?.length&&narrationAction!=='missing'?{narration_checks:data.narrationTargets.map((target:any)=>{
-   const line=target.lines[0];
+   const chosen=data.creatorWorksheet?.copy?.find((group:any)=>group.unit_id===target.unit_id&&group.required_relationship)?.conclusion;
+   const line=target.lines.find((item:any)=>item.line_id===chosen)??target.lines[0];
    const point=data.units.find((unit:any)=>unit.unit_id===target.unit_id).points.find((item:any)=>item.point_id===target.point_id);
    const criterion=(field:'connection'|'claim_limit')=>narrationAction==='missing-criterion'?{}:{baseline_criterion:{
     field,quote:narrationAction==='new-criterion'?'必须在开场报出鼻侧颜色。':
      narrationAction==='partial-criterion'?point.teaching_basis[field].slice(0,5):point.teaching_basis[field]}};
+   if(chosen&&relationshipMiss?.paired)return {unit_id:target.unit_id,point_id:target.point_id,status:'fix',
+    reason:relationshipMiss.reason,...criterion('connection')};
    if(data.selection&&line?.narration===selectionFixture.inferenceDraft)return {unit_id:target.unit_id,point_id:target.point_id,
     status:'fix',line_id:line.line_id,quote:line.narration,reason:'把吸引观众的剪辑动机写成了已观察的事实。',...criterion('claim_limit')};
    if(narrationAction==='no-claim-quote')return {unit_id:target.unit_id,point_id:target.point_id,
@@ -241,7 +251,7 @@ try{
  const {advanceProductionTask,createProductionTask,queueDraftBlueprintFeedback,productionTaskStore,panelBlueprintRequirementsDigest}=await import('./production-task');
  const {revisionOf}=await import('../../src/agent/external-edit-session');
  const {digestValue}=await import('../agent-runs/store-values');
- const {checkTeachingBaseline,teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
+ const {checkTeachingBaseline,panelNarrationPublication,teachingBaselineSource,validateTeachingBaselineReview,teachingRebuild,staleRebuiltTeaching,
   unchangedRejectedTeaching,unchangedWholeFilmTeaching,teachingDraftPointersDigest,teachingBaselineDigest,retireTeachingDrafts,newlyChangedTeaching,teachingPointGaps,
   confirmedTeachingDigest,teachingDefinitionDigest,qualifiedTeachingDigest,rejectsTeachingDirection}=await import('./production-teaching-baseline');
  const {copyPreparationReady,checkSourceBreakdown,breakdownPointEvidence}=await import('../../src/clipmentor/source-breakdown');
@@ -668,6 +678,45 @@ try{
   why.status='fix';why.answer='现行句只报刷子动了。';
   assert.throws(()=>validateTeachingBaselineReview(partial,teachingBaselineSource(doc,task,[])),/creator_incomplete_review_with_rejection/);
   console.log('PASS independent final read binds both decisions to the same current line and preserves a valid negative when the added worksheet is incomplete');
+  const decision='fixture-nose-result';
+  ledger.units[0].teaching_selection.creator_quality!.confirmed_decision_id=decision;
+  task.input.panelDelivery!.blueprintQuality='v1';
+  task.input.doneCriteria=[{
+   kind:'source_teaching',source:{assetId:task.input.sourceAssetId,sha256:sourceHash},
+   quote:'已确认同一组选题。',guidance:[{category:'teaching_decision',text:'保留无遮挡时的鼻侧近景。',
+    source:{who:'editor',reference:'confirmed test control'},rationale:'近景保留肉眼参照。',
+    reconsiderWhen:'原片证据改变。',confirmedDecisionId:decision,narrationRelationship:'说明刷头离开后，观众据近景能判断鼻侧色痕。'}],
+   closing:{status:'weak_candidate',note:'无已确认促单组。',evidenceRange:[3.5,4.5]},
+  }];
+  // The two registered lines have their own picture rows, including the action-only control.
+  const picture=plan.phases.find((phase:any)=>phase.line_id===goodId);
+  plan.phases.push({...picture,line_id:wrongId});
+  plan.viewer_stage_cues.revisit[0].line_ids.push(wrongId);
+  const requirements=panelBlueprintRequirementsDigest(null);
+  const reviewed=async(operationId:string)=>checkTeachingBaseline(task,{
+   signal:new AbortController().signal,
+   async effect<T>(kind:import('./production-task').EffectKind,key:string,work:(id:string)=>Promise<T>){
+    const result=await work(operationId);
+    task.effects[`copy_review:initial:${task.repairs}:${key}`]={kind,status:'completed',operationId,result};
+    return result;
+   },
+  },teachingBaselineSource(doc,task,[]),requirements);
+  plan.creator_conclusion_line_id=goodId;
+  const positive=await reviewed('creator-relationship-bound-pass');
+  assert.match(independentPrompts.at(-1)!,/required_relationship/);
+  const published=panelNarrationPublication(doc,task,positive.digest,requirements);
+  assert.equal(published.independentNarrationAnswers[0].quote,actionable);
+  plan.creator_conclusion_line_id=wrongId;
+  assert.throws(()=>panelNarrationPublication(doc,task,positive.digest,requirements),/human_blueprint_narration_receipt_missing/,
+   'an earlier positive receipt cannot authorize an altered conclusion, even if the spoken rows remain unchanged');
+  task.repairs++;
+  relationshipMiss={reason:'选中的马来语句只报动作。',paired:true};
+  const negative=await reviewed('creator-relationship-bound-reject');
+  relationshipMiss=undefined;
+  assert.equal(negative.review.creator_checks?.groups[0].checks.find(check=>check.question==='narration_why')?.status,'fix');
+  assert.equal(negative.review.narration_checks?.[0].status,'fix');
+  assert.throws(()=>panelNarrationPublication(doc,task,negative.digest,requirements),/human_blueprint_narration_not_passed/);
+  console.log('PASS source-specific relation traverses actual combined copy review and bound publication; changed pointer and paired rejection refuse publication');
  }
  const {registerHandoff,readHandoffPolicy,handoffKey}=await import('./handoff');
  let reviewBoardTask:ProductionTask|undefined;
