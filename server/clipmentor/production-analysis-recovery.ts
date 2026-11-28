@@ -27,10 +27,11 @@ export function recoveredAnalysisWrite(doc: ProjectDoc, events: readonly Event[]
     const data = record(event.data);
     if (typeof data.toolCallId !== 'string' || typeof data.name !== 'string') return;
     if (event.type === 'server-tool-result') {
-      if (data.success === true) unresolved.delete(data.name);
-      else unresolved.add(data.name);
+      const key=typeof data.referenceOperation==='string'?data.name+'\0'+data.referenceOperation:data.name;
+      if (data.success === true) unresolved.delete(key);
+      else unresolved.add(key);
     }
-    if (['read_clipmentor_analysis', 'read_agent_artifact', 'read_project', 'load_skill'].includes(String(data.name))) continue;
+    if (['read_clipmentor_analysis', 'read_clipmentor_references', 'read_agent_artifact', 'read_project', 'load_skill'].includes(String(data.name))) continue;
     if (event.type === 'server-tool-request') {
       if (pending.size) return; // Overlapping writes have no unambiguous publication order.
       pending.set(data.toolCallId, data);

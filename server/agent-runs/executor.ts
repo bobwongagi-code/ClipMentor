@@ -152,7 +152,8 @@ async function runServerTurnOnce(
   hitMaxTokens: boolean;
 }> {
   const schemas = input.activation.current.schemas();
-  const prepared = await prepareServerContext({ ...input, schemas,beforeRequest:input.activation.host?.beforeRequest,
+  const modelSchemas=schemas.map(schema=>input.activation.host?.modelSchema?.(schema)??schema);
+  const prepared = await prepareServerContext({ ...input, schemas:modelSchemas,beforeRequest:input.activation.host?.beforeRequest,
     beforeSummaryRequest:request=>recordHandoffDispatch(input.run,'summary',request,input.signal) });
   const tools = createServerTools(
     input.run,
@@ -162,7 +163,7 @@ async function runServerTurnOnce(
   pushRunEvent(input.run, 'text-start', {});
   const options = serverProviderOptions(input.provider, input.apiMode, input.cacheMode);
   await input.activation.host?.beforeRequest();
-  const assertDispatch=await recordHandoffDispatch(input.run,'author',{backend:'api',model:input.run.model,instructions:input.instructions,messages:prepared.messages,schemas},input.signal);
+  const assertDispatch=await recordHandoffDispatch(input.run,'author',{backend:'api',model:input.run.model,instructions:input.instructions,messages:prepared.messages,schemas:modelSchemas},input.signal);
   input.signal.throwIfAborted();
   assertDispatch?.();
   const result = streamText({
@@ -185,8 +186,8 @@ async function runServerTurnOnce(
   recordServerContextUsage(
     input.run,
     measuredContextUsage(prepared, totalUsage, text, input.requestIndex),
-    schemas.length,
-    JSON.stringify(schemas).length,
+    modelSchemas.length,
+    JSON.stringify(modelSchemas).length,
   );
   const continued = !input.activation.repeatGuardNote && (
     toolCalls.length > 0 || responseMessages.some((message) => message.role === 'tool')

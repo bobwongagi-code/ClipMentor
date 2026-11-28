@@ -9,6 +9,7 @@ export interface ToolExecutionOutcome {
 export interface PersistedToolFailure {
   readonly name: string;
   readonly reason: string;
+  readonly operation?: string;
 }
 
 function recordResult(result: unknown): Record<string, unknown> | null {
@@ -110,13 +111,14 @@ export function toolFailureReason(result: unknown): string {
 
 /** A successful retry of the same tool resolves its latest failure. */
 export class ToolFailureTracker {
-  readonly #unresolved = new Map<string, string>();
+  readonly #unresolved = new Map<string, PersistedToolFailure>();
 
-  record(name: string, outcome: ToolExecutionOutcome): void {
+  record(name: string, outcome: ToolExecutionOutcome, operation?: string): void {
     const result = recordResult(outcome.result);
     if (outcome.success && result?.denied === true) return;
-    if (outcome.success) this.#unresolved.delete(name);
-    else this.#unresolved.set(name, toolFailureReason(outcome.result));
+    const key = operation ? name + '\0' + operation : name;
+    if (outcome.success) this.#unresolved.delete(key);
+    else this.#unresolved.set(key, {name, reason:toolFailureReason(outcome.result), ...(operation ? {operation} : {})});
   }
 
   get hasUnresolved(): boolean {
@@ -128,7 +130,7 @@ export class ToolFailureTracker {
   }
 
   snapshot(): PersistedToolFailure[] {
-    return [...this.#unresolved].map(([name, reason]) => ({ name, reason }));
+    return [...this.#unresolved.values()];
   }
 
   restore(value: unknown): void {
@@ -136,16 +138,17 @@ export class ToolFailureTracker {
     if (!Array.isArray(value)) return;
     for (const entry of value.slice(0, 64)) {
       if (!entry || typeof entry !== 'object') continue;
-      const { name, reason } = entry as { name?: unknown; reason?: unknown };
+      const { name, reason, operation } = entry as { name?: unknown; reason?: unknown; operation?: unknown };
       if (typeof name !== 'string' || !name.trim() || name.length > 256) continue;
       if (typeof reason !== 'string' || !reason.trim()) continue;
-      this.#unresolved.set(name, reason.slice(0, 4_096));
+      if (operation !== undefined && (typeof operation !== 'string' || !operation || operation.length > 256)) continue;
+      this.record(name, {success:false,result:reason.slice(0, 4_096)},operation);
     }
   }
 
   report(): string {
-    const details = [...this.#unresolved]
-      .map(([name, reason]) => `${name}: ${reason}`)
+    const details = this.snapshot()
+      .map(({name,reason}) => `${name}: ${reason}`)
       .join('; ');
     const locale = getLocale();
     if (locale === 'zh') {

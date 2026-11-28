@@ -21,7 +21,7 @@ export type ToolInvocationValidation =
   | { readonly ok: false; readonly error: string; readonly issues: readonly string[] };
 
 const READ_TOOLS = new Set([
-  'read_agent_artifact', 'ToolSearch', 'track_progress', 'track_export',
+  'read_agent_artifact', 'read_clipmentor_references', 'ToolSearch', 'track_progress', 'track_export',
   'inspect_color', 'analyze_music', 'inspect_music', 'music_edit_plan', 'music_image_plan', 'probe_media',
   'analyze_scene_quality', 'report_user_friction', 'get_editor_url',
 ]);

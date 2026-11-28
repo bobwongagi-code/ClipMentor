@@ -1256,4 +1256,22 @@ The teaching rewrite stopped at checkpoint 16 on the same task. The author sent 
 
 Use the checkout that holds local `main` to start ClipMentor. Confirm the service process uses that checkout and verify the GitHub branch SHA after synchronizing. A checkout name can outlive the branch it originally held.
 
+Resolve dependency links to their actual installation. A chain through a retired checkout can break a cold start even while an existing process still serves requests.
+
 Before archiving a superseded checkout, check for active tasks, unmerged commits, and local files. A pending blueprint can move to the main service with its existing profile and URL. Read back the same revision, review identity, and eligibility, then open the board. Allow time for a cold presentation cache to rebuild. Remove a local branch only after its tip is reachable from main and no checkout or open review uses it.
+
+### 2026-11-28 · Select production references from the current task
+
+Give the production author numbered choices for registered materials, evidence, and frames. Resolve the numbers on the server and use the full identifiers in the underlying tools. Register new evidence IDs on the server. Return exact material text when the author selects a self-check reference. Keep the earlier receipt format readable for existing tasks.
+
+The saved JUDYDOLL frame request sent a shortened asset ID. The old host found one matching original and returned an error. Complete a unique prefix within the requested project's eligible assets and record the actual full ID. A rejected selection returns its valid options and a ticket for one correction. Link the correction to the failed operation and retain both receipts. A second unchanged failure leaves the saved task at its current checkpoint.
+
+Keep the intake stamp and append the service's loaded commit and rules to each execution start or continuation. A build without a Git checkout can supply its commit in build metadata. Report unknown provenance if neither source exists. Verify additions to the execution history without rewriting the intake stamp.
+
+In the preserved JUDYDOLL replay, the proposed repair moved hand swatches into group 3's filming decision. Keep the last saved three decisions and group order. Record the hand swatches as a group 1 reference suggestion, with shade identity unconfirmed. Replay the frame read and analysis save against a separate copy. Preserve the original paused task and receipts.
+
+A reference correction keeps the original field paths, array lengths, valid selections, and non-reference arguments. Changing from a placed item to the entire source changes the inspected interval and requires a separate request. Keep raw-prefix repair in the compatibility tool. The hosted author selects a registered number and the executor records the original and corrected calls.
+
+A numbered self-check correction fills the invalid rows. Retain all valid first-pass judgments. Order quote choices by their canonical path so the same source digest also implies the same numbers. A format change alone does not qualify an unchanged blueprint for another check.
+
+On a technical continuation with a fully declared, published teaching baseline, check that baseline before checkpoint publication. The JUDYDOLL replay now submits the captured swatch rewrite as a negative case and verifies that the save is refused. The desktop build embeds the checkout's build stamp so packaged execution can report its loaded commit even outside a Git checkout.

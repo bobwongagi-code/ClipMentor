@@ -19,6 +19,10 @@ export function panelReviewIssue(error:unknown){
  if(error instanceof PanelReviewIssue)return readReviewIssue(error);
  if(typeof error!=='string'&&!(error instanceof Error))return;
  const message=typeof error==='string'?error:error.message;
+ if(/^(?:Error: )?production_reference_retry_no_progress$/.test(message))
+  return {kind:'binding',message:'同一处引用补调后仍未通过。已保留回执，待维护侧核对。'} as const;
+ if(/^(?:Error: )?production_reference_repair_confirmed_teaching_changed$/.test(message))
+  return {kind:'binding',message:copy.choicesRetained} as const;
  if(/^(?:Error: )?production_source_breakdown_no_progress$/.test(message))
   return {kind:'binding',message:copy.analysisPaused} as const;
  const opinionIssue=message.match(/^(?:Error: )?(blueprint_repair_no_progress )?blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\r\n]+)$/u);

@@ -34,6 +34,7 @@ import {copyReviewDependencies,reviewClipMentorCopy} from './copy-review';
 import {exportJobResultName} from '../plugins/export-runtime';
 import {readStoryboardSnapshot,storyboardReadError} from './storyboard-api';
 import {apiCopyReviewDependencies,type ReviewApiConfig} from './copy-review-api';
+import {resolveRegisteredId} from './production-references';
 
 export interface HeadlessOptions {
  projectId:string;runId:string;origin:string;review:ReviewApiConfig;
@@ -285,24 +286,25 @@ export async function openHeadlessEditor(options:HeadlessOptions) {
    if(name==='view_asset_frames'){
     const timeline=args.timelineId?before.timelines.find(t=>t.id===args.timelineId):ctx.getState();
     if(!timeline)throw new Error('Timeline not found');
-    const item=args.itemId?timeline.items.find(i=>i.id===args.itemId):undefined;
-    if(args.itemId&&!item)return {error:'Exact timeline item ID required'};
-    const assetId=item?.sourceAssetId??args.assetId;
-    if(item&&args.assetId&&args.assetId!==assetId)return {error:'Asset ID does not match the timeline item'};
-    const asset=before.assets.find(a=>a.id===assetId);
-    if(!asset||!['video','image'].includes(asset.kind)){
-     const candidates=typeof assetId==='string'&&assetId.length>=8?before.assets.filter(a=>
-      ['video','image'].includes(a.kind)&&a.id.startsWith(assetId)).slice(0,4):[];
-     return {error:'Exact video/image asset or item ID required',
-      ...(candidates.length?{candidates:candidates.map(({id,name})=>({assetId:id,name}))}:{}),
-      next_step:'Call read_project or use the full assetId from the matching candidate; IDs in shortened summaries are not accepted.'};
-    }
+    const eligible=before.assets.filter(a=>['video','image'].includes(a.kind));
+    const target=args.itemId===undefined?undefined:resolveRegisteredId(args.itemId,
+     timeline.items.filter(i=>eligible.some(a=>a.id===i.sourceAssetId)));
+    if(target&&!target.entry)return {error:target.code,field:'itemId',
+     candidates:target.candidates.map(i=>({itemId:i.id,assetId:i.sourceAssetId})),next_step:'Select a registered item in the requested timeline.'};
+    const item=target?.entry;
+    const registered=resolveRegisteredId(args.assetId??item?.sourceAssetId,eligible.filter(a=>!item||a.id===item.sourceAssetId));
+    if(!registered.entry)return {error:registered.code,field:'assetId',
+     candidates:registered.candidates.map(({id,name,kind})=>({assetId:id,name,kind})),
+     next_step:'Select a registered video or image for this frame request.'};
+    const asset=registered.entry;
     const sampling=item?constrainSourceFrameArgs(args,sourceWindowForTimelineRange(item,0,item.durationInFrames),timeline.fps):args;
     const times=asset.kind==='image'?[0]:pickFrames(sampling,asset.durationInFrames,timeline.fps,6).map(f=>f/timeline.fps*1000);
     const res=await local('/api/extract-frames',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({src:asset.src,output:'frames',sourceTimesMs:times})});
     if(!res.ok)throw new Error('Source frame extraction failed');const data=await res.json();
     if(!Array.isArray(data.frames)||!data.frames.length)throw new Error('Source frame extraction returned no images');
-    return {...data,__images:data.frames.map((f:{sourceTimeMs:number;base64:string})=>({frame:Math.round(f.sourceTimeMs*timeline.fps/1000),base64:f.base64}))};
+    return {...data,assetId:asset.id,...(item?{itemId:item.id}:{}),
+     ...(registered.completedPrefix||target?.completedPrefix?{referenceResolution:'unique_prefix'}:{}),
+     __images:data.frames.map((f:{sourceTimeMs:number;base64:string})=>({frame:Math.round(f.sourceTimeMs*timeline.fps/1000),base64:f.base64}))};
    }
    if(name==='view_timeline_frames'){
     const project=options.projectForTimelinePreview?.(before)??before;

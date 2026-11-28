@@ -319,8 +319,10 @@ try {
   try{
     const preview=await editor.execute('view_asset_frames',{assetId:saved.doc.assets[1]?.id,count:1},'image') as {__images:unknown[]};
     assert.equal(preview.__images.length,1);
-    const missing=await editor.execute('view_asset_frames',{assetId:'unknown'},'missing') as {error:string};
-    assert.match(missing.error,/Exact video\/image/);assert.equal(frameRequests,1);
+    const missing=await editor.execute('view_asset_frames',{assetId:'unknown'},'missing') as {error:string;candidates:Array<{assetId:string}>};
+    assert.equal(missing.error,'reference_not_registered');
+    assert(missing.candidates.some(candidate=>candidate.assetId===saved.doc.assets[1]?.id));
+    assert.equal(frameRequests,1);
     assert.equal((await loadOfflineStoredProject(id))?.revision,backfillReceipt.revision);
   }finally{await editor.close();}
   // Exercise the real stage entry on a persisted legacy landscape project:

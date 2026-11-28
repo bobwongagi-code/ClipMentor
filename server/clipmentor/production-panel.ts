@@ -1,4 +1,5 @@
 import {productionWorkDeadline} from './production-shared-clock';
+import {loadedProductionGeneration} from './production-generation';
 import {failedInitialBreakdownWrite} from './production-analysis-recovery';
 import {panelProductionBudget} from './production-budget';
 import { open, readFile, stat } from 'node:fs/promises';
@@ -65,18 +66,6 @@ type PanelSettings = { unavailable: string } | { provider:'openai'; model:string
 
 export const panelServiceUnavailable = '制作服务暂时不可用。';
 const boardPresentationVersion='panel-opinions-v11';
-async function blueprintGeneration():Promise<NonNullable<ProductionTask['input']['blueprintGeneration']>>{
- const git=promisify(execFile);
- try{
-  const [revision,changes]=await Promise.all([
-   git('git',['rev-parse','HEAD'],{timeout:2000}),
-   git('git',['--no-optional-locks','status','--porcelain','--untracked-files=no'],{timeout:2000}),
-  ]);
-  const commit=revision.stdout.trim();
-  if(/^[a-f0-9]{40}$/u.test(commit))return {qualityRules:'v1',commit,trackedChanges:!!changes.stdout.trim()};
- }catch{/* Packaged installs can lack Git metadata. */}
- return {qualityRules:'v1'};
-}
 function boardPresentation(doc:import('../../src/editor/types').ProjectDoc){
   return doc.clipMentorAnalysis?.source_breakdown?.units?.some(unit=>unit.teaching_selection?.first_glance?.trim())
     ?boardPresentationVersion:undefined;
@@ -788,7 +777,7 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
          .some(line=>Array.from(line).length>openingMaxLineCharacters||/[\p{Cc}\p{Cf}]/u.test(line)))
          throw new PanelReviewIssue('content',reviewMessages.openingPerformanceDeclaration);
         const salesFact=panelSalesEvidence(source.id,sales.id,openingComparison.results);
-        const generation=await blueprintGeneration();
+        const generation=await loadedProductionGeneration;
         releaseSlot=reserveSlot(projectId);
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},

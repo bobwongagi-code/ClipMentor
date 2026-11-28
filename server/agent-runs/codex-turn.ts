@@ -155,7 +155,8 @@ export async function executeServerCodexTurn(
 }> {
   input.signal.throwIfAborted();
   const schemas = input.activation.current.allSchemas();
-  const prepared = await prepareCodexContext({ ...input, schemas });
+  const modelSchemas = schemas.map(schema=>input.activation.host?.modelSchema?.(schema)??schema);
+  const prepared = await prepareCodexContext({ ...input, schemas:modelSchemas });
   const requestId = `run-${input.run.id}-${input.requestIndex}`;
   pushRunEvent(input.run, 'text-start', {});
   let text = '';
@@ -264,8 +265,8 @@ export async function executeServerCodexTurn(
         recordServerContextUsage(
           input.run,
           usageFromCodexEvent(event, prepared, input.requestIndex),
-          schemas.length,
-          JSON.stringify(schemas).length,
+          modelSchemas.length,
+          JSON.stringify(modelSchemas).length,
         );
         break;
       case 'error':
@@ -284,7 +285,7 @@ export async function executeServerCodexTurn(
   try {
     input.signal.throwIfAborted();
     await input.activation.host?.beforeRequest();
-    const assertDispatch=await recordHandoffDispatch(input.run,'author',{backend:'codex',model:input.model,system:input.instructions,prompt:serializeMessagesForPrompt([...prepared.messages]),tools:codexToolSpecs(schemas)},input.signal);
+    const assertDispatch=await recordHandoffDispatch(input.run,'author',{backend:'codex',model:input.model,system:input.instructions,prompt:serializeMessagesForPrompt([...prepared.messages]),tools:codexToolSpecs(modelSchemas)},input.signal);
     input.signal.throwIfAborted();
     assertDispatch?.();
     arm();
@@ -297,7 +298,7 @@ export async function executeServerCodexTurn(
         projectId: input.projectId,
         askOnly: input.askOnly,
         model: input.model,
-        tools: codexToolSpecs(schemas),
+        tools: codexToolSpecs(modelSchemas),
       },
       emit,
       controller.signal,

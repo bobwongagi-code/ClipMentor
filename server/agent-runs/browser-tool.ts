@@ -24,6 +24,10 @@ import {
 } from './store';
 
 export interface ServerToolHost {
+  modelSchema?(schema:AgentToolSchema):AgentToolSchema;
+  resolveReferences?(name:string,args:Record<string,unknown>,callId:string):{
+    args:Record<string,unknown>; operation?:string; failure?:Record<string,unknown>; stop?:()=>void;
+  };
   normalizeArgs?(name:string,args:Record<string,unknown>):Record<string,unknown>;
   afterFailure?(name:string,args:Record<string,unknown>,result:unknown):void;
   execute(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;
@@ -62,7 +66,7 @@ export async function executeBrowserTool(
   toolCallId: string,
   activation: ActivationState,
 ): Promise<unknown> {
-  const parallel = toolExecutionMode(schema.name) === 'parallel';
+  const parallel = !activation.host?.resolveReferences && toolExecutionMode(schema.name) === 'parallel';
   let release: (() => void) | undefined;
   if (!parallel) {
     const previous = activation.tail;
@@ -71,12 +75,15 @@ export async function executeBrowserTool(
     release = resolve;
     await previous;
   }
-  let hostRequested=false,hostOutcomeRecorded=false;
+  let hostRequested=false,hostOutcomeRecorded=false,operation:string|undefined;
   try {
     activation.host?.signal?.throwIfAborted();
     activation.current = activation.current.admit(schema.name);
     args=activation.host?.normalizeArgs?.(schema.name,args)??args;
-    assertCanonicalToolInvocation(schema, args, activation.current.schemas());
+    const references=activation.host?.resolveReferences?.(schema.name,args,toolCallId);
+    operation=references?.operation;
+    args=references?.args??args;
+    if(!references?.failure)assertCanonicalToolInvocation(schema, args, activation.current.schemas());
     const signal = activation.host?.signal ?? run.abort?.signal;
     const assertDispatch = await reserveHandoff(run, 'tool', toolCallId, schema.name, args, signal);
     signal?.throwIfAborted();
@@ -94,10 +101,11 @@ export async function executeBrowserTool(
     }
     activation.repeatGuardNote = undefined;
     activation.lastSuccessfulPureTool = undefined;
-    pushRunEvent(run, activation.host ? 'server-tool-request' : 'tool-request', { toolCallId, name: schema.name, args, argsDigest });
+    pushRunEvent(run, activation.host ? 'server-tool-request' : 'tool-request', { toolCallId, name: schema.name, args, argsDigest,
+      ...(operation?{referenceOperation:operation}:{}) });
     hostRequested=!!activation.host;
     const delivered = activation.host
-      ? await activation.host.execute(schema.name,args,toolCallId)
+      ? references?.failure??await activation.host.execute(schema.name,args,toolCallId)
       : await waitForToolResult(run, toolCallId, schema.name, argsDigest);
     let artifactRef:AgentArtifactRef|null=null;
     if(activation.host){
@@ -105,6 +113,7 @@ export async function executeBrowserTool(
         ?Object.fromEntries(Object.entries(delivered).filter(([key])=>key!=='__images')):delivered;
       artifactRef=await archiveAgentToolResult(run.projectId,run.id,{toolCallId,toolName:schema.name,result:receipt});
       pushRunEvent(run,'server-tool-result',{toolCallId,name:schema.name,argsDigest,success:!isFailedToolResult(delivered),
+        ...(operation?{referenceOperation:operation}:{}),
         result:artifactRef?artifactPlaceholder(artifactRef,receipt):compactToolResultForModel(projectToolResultForPersistence(receipt))});
       hostOutcomeRecorded=true;
     }
@@ -118,13 +127,14 @@ export async function executeBrowserTool(
     activation.current = shaped.activation;
     if (isFailedToolResult(shaped.result)) {
       if(!activation.host)throw new Error(toolFailureReason(shaped.result));
-      activation.toolFailures.record(schema.name,{success:false,result:shaped.result});
+      activation.toolFailures.record(schema.name,{success:false,result:shaped.result},operation);
       const r=shaped.result as Record<string,unknown>;
       pushRunEvent(run,'server-tool-diagnostic',{toolCallId,name:schema.name,...(structuredToolFailure(r)??{error:toolFailureReason(r),production_gate:r.production_gate,issues:r.issues,breakdown_check:r.breakdown_check})});
       activation.host.afterFailure?.(schema.name, args, delivered);
+      references?.stop?.();
       return shaped.result;
     }
-    activation.toolFailures.record(schema.name, { success: true, result: shaped.result });
+    activation.toolFailures.record(schema.name, { success: true, result: shaped.result },operation);
     if (!followup) recordTool(activation, schema, args);
     if (cacheablePureTool(schema.name)) {
       activation.lastSuccessfulPureTool = { name: schema.name, argsDigest, result: shaped.result };
@@ -133,10 +143,11 @@ export async function executeBrowserTool(
   } catch (error) {
     if(hostRequested&&!hostOutcomeRecorded)pushRunEvent(run,'server-tool-result',{
       toolCallId,name:schema.name,argsDigest:digestToolArgs(args),success:false,
+      ...(operation?{referenceOperation:operation}:{}),
       outcome:{kind:'outcome_unknown',operationId:toolCallId},
       error:projectToolResultForPersistence(error instanceof Error?error.message:String(error)),
     });
-    activation.toolFailures.record(schema.name, { success: false, result: error });
+    activation.toolFailures.record(schema.name, { success: false, result: error },operation);
     throw error;
   } finally {
     release?.();
@@ -151,7 +162,7 @@ export function createServerTools(
   return Object.fromEntries(schemas.map((schema) => [schema.name, tool({
     description: schema.description,
     inputSchema: jsonSchema<Record<string, unknown>>(
-      schema.input_schema as Parameters<typeof jsonSchema<Record<string, unknown>>>[0],
+      (activation.host?.modelSchema?.(schema)??schema).input_schema as Parameters<typeof jsonSchema<Record<string, unknown>>>[0],
     ),
     execute: (args: Record<string, unknown>, options: { toolCallId: string }) => (
       executeBrowserTool(run, schema, args, options.toolCallId, activation)

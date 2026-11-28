@@ -152,6 +152,8 @@ export const CLIPMENTOR_ANALYSIS_TOOL_NAMES = new Set(CLIPMENTOR_ANALYSIS_TOOL_S
 
 /** Internal host tools must never be activated in a browser session. */
 export const CLIPMENTOR_SERVER_TOOL_SCHEMAS: AgentToolSchema[] = [
+  {name:'read_clipmentor_references',description:'Read numbered choices for the current production project. Select the number, not the identifier. Page with nextOffset. Reads no media bytes.',
+   input_schema:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['asset','evidence','frame','observation','source','item']},offset:{type:'integer',minimum:0},timelineId:{type:'string'},referenceRetry:{type:'integer',minimum:1}},required:['kind']}},
   {name:'save_clipmentor_source_frame',description:'Save a hash-bound source-video frame as a reusable image asset with source provenance. Local extraction only, no model call. Available in server-owned production.',
    input_schema:{type:'object',additionalProperties:false,properties:{assetId:{type:'string'},seconds:{type:'number',minimum:0}},required:['assetId','seconds']}},
 ];

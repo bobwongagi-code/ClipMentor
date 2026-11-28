@@ -1,6 +1,7 @@
 import {productionWorkDeadline} from './production-shared-clock';
 import {recoveredAnalysisWrite,sourceBreakdownFailures} from './production-analysis-recovery';
-import {frozenTeachingTopics,sourceClosingPolicy,sourceTeachingAdvice} from './production-source-policy';
+import {productionReferenceSelection,productionReferenceTool,productionReferenceKinds} from './production-references';
+import {assertReferenceRepairTeaching,frozenTeachingTopics,retainedReferenceRepairTeaching,sourceClosingPolicy,sourceTeachingAdvice} from './production-source-policy';
 import {compactProductionTaskHistory,findArchivedProductionGatewayDecision} from './production-task-history';
 import {blueprintFindings,pictureRepairFindings,productionAuthorDecision,repairableBlueprintIssue} from './production-decisions';
 import {openingUnderlayShortfall,pictureRepairWriteError} from './production-capacity-repair';
@@ -496,6 +497,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  const analysisAuthority=(policy:Awaited<ReturnType<typeof productionReviewRequirements>>)=>digestValue({brief:task.input.brief,
   feedback:task.blueprintFeedback,feedbackRevision:task.blueprintFeedbackRevision,policy:panelBlueprintRequirementsDigest(policy)});
  let analysisCopyDigest:string|undefined;
+ let retainedReferenceTeaching:ReturnType<typeof retainedReferenceRepairTeaching>;
  let assertQualifiedWrite:((doc:ProjectDoc)=>void)|undefined;
  const opinions=task.repairContext?.pending_blueprint_feedback?undefined:task.blueprintOpinions;
  let opinionStop:Error|undefined;
@@ -508,6 +510,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(task.input.panelDelivery)assertProductionCanvas(next);
    if(reflowBaseline)assertCanvasReflowPreservation(reflowBaseline,next);
    assertConfirmedTeaching(next);
+   assertReferenceRepairTeaching(retainedReferenceTeaching,next);
    if(opinionStop)throw opinionStop;
    if(opinions){
     try{guardBlueprintOpinionWrite(opinions,next);}
@@ -542,6 +545,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
  };
  const operation=(scope:string)=>{const h=createHash('sha256').update(`${task.taskId}:${task.stage}:${task.repairs}:${task.feedbackUsed}:${scope}`).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-8${h.slice(17,20)}-${h.slice(20,32)}`;};
  try{
+  if(teachingAnalysis)retainedReferenceTeaching=retainedReferenceRepairTeaching(editor.getDoc(),task);
   assertConfirmedTeaching(editor.getDoc());
   const teachingPublication=teachingAnalysis?task.teachingAnalysisPublication:undefined;
   if(teachingPublication){
@@ -999,6 +1003,8 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     instruction:'意见指向由入口绑定。整体意见只改整体内容和片头片尾，组内意见只改对应组。句子按现行口播顺序，确认保留的句子原样收录。用户没有指定的组和整体信息原样保留。'} }:{}),
    ...(panelDraft?{objective:policy?.brief.objective??null,doneCriteria:baselineRequirements}:{}),
    ...(panelDraft&&task.stage==='analysis'?{teachingFeedback:task.blueprintFeedback??null,
+    ...(retainedReferenceTeaching?{editorDecisionsRetained:retainedReferenceTeaching.units.map(({unit_id,teaching_selection})=>({unit_id,decision:teaching_selection?.decision})),
+     technicalContinuation:'保留编辑已确认的全部组、顺序和决定句。新发现作为原片补证或选题建议，不改已登记选材和口播。'}:{}),
     ...(rebuild?{teachingFindings:rebuild.rejected.map(({unitId,reason})=>({unitId,reason})),
      ...(rebuild.wholeFilm?{wholeFilmFinding:{reason:rebuild.wholeFilm.reason,evidenceId:rebuild.wholeFilm.evidenceId,unitIds:rebuild.wholeFilm.unitIds}}:{}),
      beforeCopy:'分析只改基线；先证明整片主线和每组的证据能回答任务，再写稿。'}:{})}:{}),
@@ -1022,19 +1028,28 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(file===exemplarReference)exemplarRead={file,sha256:createHash('sha256').update(body).digest('hex')};
   });
   const feedbackSource=task.stage==='blueprint'?task.blueprintFeedback:undefined;
+  const breakdownStop=new AbortController();
+  const referenceSelection=task.input.panelDelivery?.blueprintQuality==='v1'
+   ?productionReferenceSelection(editor.getDoc,task.input.sourceAssetId,breakdownStop):undefined;
   const run=createRun({projectId:task.projectId,sessionGeneration:await currentAgentSessionGeneration(task.projectId),backend:task.input.authorBackend??'api',provider:task.input.author.provider,model:task.input.author.model,context:{productionTaskId:task.taskId,stage:task.stage}});
   await flushRunPersistence(run);
   const sourceObservationAllowed=!approvedOutput&&!panelDraft&&productionSourceObservationAllowed(task,recoveredSourceOperation);
-  const tools=canonicalServerRunToolCatalog(false,true).filter(s=>(hostNames.has(s.name)||isExternalServerDirectTool(s.name))&&productionStageToolAllowed(task.stage,s.name)
+  const tools=canonicalServerRunToolCatalog(false,true).filter(s=>s.name===productionReferenceTool?!!referenceSelection:
+   (hostNames.has(s.name)||isExternalServerDirectTool(s.name))&&productionStageToolAllowed(task.stage,s.name)
    &&(sourceObservationAllowed||s.name!=='observe_clipmentor_source_video'));
-  const breakdownStop=new AbortController();
+  const executeTool=productionAuthorToolExecutor({task,editor,panelDraft,panelScope,pictureOnlyRepair,sourceObservationAllowed,
+   source:a.source,hasQualifiedTeaching:()=>qualifiedTeachingDigest(editor.getDoc())===teachingDefinition,
+   executeWithRecovery,requestObservation,preparePanelAssets});
   await executeRun(run,{backend:task.input.authorBackend??'api',provider:task.input.author.provider,model:task.input.author.model,openAiApiMode:task.input.author.apiMode,cacheMode:'short',maxOutputTokens:8192,
    autonomousAcceptance:false,maxAcceptanceIterations:1,origin:task.input.author.origin,tools,
-   messages:[{role:'user',content:JSON.stringify(taskData)}],
+   messages:[{role:'user',content:JSON.stringify(referenceSelection?{...taskData,
+    assetChoices:referenceSelection.assetChoices(),
+    referenceInstructions:'引用素材、证据、帧、观察和来源时，只选当前登记清单的数字 selection。用 read_clipmentor_references 按 kind 查询或翻页。此规则覆盖技能示例中的字符串 ID。布局、拆解、逐句画面等嵌套字段也传编号，代码会写回完整 ID。visible_action 的 supporting_evidence_ids 和 Storyboard 的 source_frames 选择 frame，其他支持证据选 evidence。新证据省略 evidence_id，由工具登记；登记后再选择引用。收到 referenceRetry 时保留同一操作的其余参数，按候选补调一次。'}:taskData)}],
    instructions:`${guidance}\n服务端制作任务；只使用可用工具。临时网关故障由系统在额度内处理；不要自行换服务或重提同一技术故障。不要等待逐阶段人工指令，不能调用本机Codex、文件脚本或自签审核。先读当前工程与现行稿，不读旧稿替代当前指针。阶段目标：${goal}${recoveredSourceOperation?' 本轮已经完成连续观察，直接使用任务所附的只读回执。':''}${feedbackSource?' 完成本轮后，在最终回复末尾附 <feedback_summary>["位置：用户希望的效果", "另一位置：另一项要求"]</feedback_summary>。用中文归并本次意见的独立修改目标，通常2至5点，每点短句；保留范围、否定和条件，不逐句照抄口语，不添加要求或声称已解决。只用于页面显示，原始意见始终是修改与审核依据。不要为摘要追加模型调用或工具。':''}`,
    ...(task.input.humanBlueprintReview&&task.input.authorBackend==='codex'?{localProductionCodex:true as const}:{}),
-   host:{signal:teachingAnalysis?AbortSignal.any([stage.signal,breakdownStop.signal]):stage.signal,
+   host:{signal:teachingAnalysis||referenceSelection?AbortSignal.any([stage.signal,breakdownStop.signal]):stage.signal,
     ...(teachingAnalysis?{afterFailure:sourceBreakdownFailures(breakdownStop)}:{}),
+    ...(referenceSelection?{modelSchema:referenceSelection.modelSchema,resolveReferences:referenceSelection.resolveReferences}:{}),
     maxTurns:Math.max(1,task.input.budget.model-task.attempts.model),deadlineAt:productionWorkDeadline(task),
     normalizeArgs:(name,args)=>name==='load_skill'&&typeof args.limit==='number'&&Number.isSafeInteger(args.limit)&&args.limit>48000
      ?{...args,limit:48000}:args,
@@ -1042,9 +1057,9 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
      if(opinionStop)throw opinionStop;
      return stage.effect('model',`author-${task.attempts.model}`,async()=>null).then(()=>undefined);
     },
-    execute:productionAuthorToolExecutor({task,editor,panelDraft,panelScope,pictureOnlyRepair,sourceObservationAllowed,
-     source:a.source,hasQualifiedTeaching:()=>qualifiedTeachingDigest(editor.getDoc())===teachingDefinition,
-     executeWithRecovery,requestObservation,preparePanelAssets})}});
+    execute:async(name,args,id)=>name===productionReferenceTool&&referenceSelection
+     ?referenceSelection.list(args.kind as typeof productionReferenceKinds[number],Number(args.offset??0),args.timelineId as string|undefined,
+      args.referenceRetry as number|undefined):executeTool(name,args,id)}});
   breakdownStop.signal.throwIfAborted();
   if(opinionStop)throw opinionStop;
   if(panelDraft&&task.stage==='blueprint'&&qualifiedTeachingDigest(editor.getDoc())!==teachingDefinition){
@@ -1100,6 +1115,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   if(task.stage==='audio')await verifyProductionNarrationFiles(next,task.input.voice);
   if(teachingAnalysis){
    if(teachingDraftPointersDigest(next)!==analysisCopyDigest)throw Error('teaching_baseline_analysis_cannot_write_copy');
+   assertReferenceRepairTeaching(retainedReferenceTeaching,next);
    next=retireTeachingDrafts(next);
    editor.context.commands.applyDoc(next);
    analysisCopyDigest=teachingDraftPointersDigest(next);

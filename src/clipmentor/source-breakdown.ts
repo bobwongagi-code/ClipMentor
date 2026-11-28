@@ -7,6 +7,11 @@ import {trackKind} from '../editor/timelineTypes';
 import {isSourceInventory, isTeachingSelection, isUnselectedBuyerRoles, type BuyerRole, type SourceInventory, type TeachingSelection} from './teaching-selection';
 
 export const teachingPrinciples=['buyer-first','complete-demo','same-frame','purchase-invitation'] as const;
+export const segmentEvidenceKinds={
+ visible_evidence_ids:['visible_action','source_frame'],
+ claim_evidence_ids:['original_claim'],
+ interpretation_evidence_ids:['expression_analysis_not_verified_causal_effect','operator_supplied'],
+} as const;
 
 /** One source-bound ledger, shared by analysis, copy review and execution. Not a model verdict. */
 export interface SourceBreakdown {
@@ -767,11 +772,8 @@ export function checkSourceBreakdown(doc: ProjectDoc, checkTimeline = false, che
   ]);
   for (const s of b.segments) {
     if (s.source_range_seconds[1] > a.source.duration_seconds) issue('segment_time_out_of_bounds', s.segment_id);
-    const groups = [
-      [s.visible_evidence_ids, ['visible_action', 'source_frame']],
-      [s.claim_evidence_ids, ['original_claim']],
-      [s.interpretation_evidence_ids, ['expression_analysis_not_verified_causal_effect', 'operator_supplied']],
-    ] as const;
+    const groups=Object.entries(segmentEvidenceKinds).map(([field,kinds])=>
+      [s[field as keyof typeof segmentEvidenceKinds],kinds] as const);
     if (!groups.some(([ids]) => ids.length) && (!s.inventory || selectedSegments.has(s.segment_id)))
       issue('segment_without_evidence', s.segment_id);
     for (const [ids, kinds] of groups) for (const id of ids) {

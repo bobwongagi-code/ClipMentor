@@ -1,5 +1,7 @@
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProductionTask} from './production-task';
+import type {SourceBreakdown} from '../../src/clipmentor/source-breakdown';
+import {digestValue} from '../agent-runs/store-values';
 
 import {parseProductionSourceCriteria,sourceTeachingCriterion,type SourceAssetBinding,type SourceClosingStatus} from '../../shared/clipmentor-handoff';
 
@@ -52,6 +54,26 @@ export function sourceTeachingAdvice(topics:NonNullable<ReturnType<typeof frozen
   recordedRequest:topics.quote,previousPlan:topics.main,previousBackground:topics.background,
   suggestedWindows:topics.mainRanges,previouslyUnusedWindows:topics.backgroundRanges,
  };
+}
+
+/** A technical continuation may fill evidence without reselecting a fully
+ * declared editorial baseline. A fresh task or an editor-requested rewrite
+ * follows the normal selection and review path. */
+export function retainedReferenceRepairTeaching(doc:ProjectDoc,task:ProductionTask){
+ if(task.stage!=='analysis'||task.input.panelDelivery?.blueprintQuality!=='v1'||!task.technicalRecoveryEpochs?.length
+  ||task.blueprintFeedback||task.blueprintOpinions)return;
+ const baseline=doc.clipMentorAnalysis?.source_breakdown;
+ if(!baseline||baseline.review_scope?.kind!=='full_source'||!baseline.units.length
+  ||baseline.units.some(unit=>!unit.teaching_selection?.decision.trim()))return;
+ const topics=frozenTeachingTopics(doc,task);
+ if(!topics||!('guidance' in topics)||topics.reviewGroupCount!==baseline.units.length
+  ||topics.guidance?.filter(entry=>entry.confirmedDecisionId).length!==baseline.units.length)return;
+ return structuredClone(baseline);
+}
+
+export function assertReferenceRepairTeaching(retained:SourceBreakdown|undefined,doc:ProjectDoc){
+ if(retained&&digestValue(retained)!==digestValue(doc.clipMentorAnalysis?.source_breakdown))
+  throw Error('production_reference_repair_confirmed_teaching_changed');
 }
 
 export function sourceClosingDecision(topics:ReturnType<typeof frozenTeachingTopics>,doc?:ProjectDoc):SourceClosingStatus|null{

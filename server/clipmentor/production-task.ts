@@ -1,6 +1,7 @@
 import type {BlueprintReviewRecord} from './production-panel-review';
 import {compactProductionTaskHistory,newestProductionCheckpoints,orderedProductionCheckpointRecords,decodePublishedProductionCheckpoint,loadPublishedProductionCheckpoint} from './production-task-history';
 import {blueprintFindingKeys,blueprintFindings,pictureRepairCoverage,pictureRepairFindings,blueprintRepairStopped,repeatedPictureRepair,productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
+import {loadedProductionGeneration,type ProductionGeneration} from './production-generation';
 import type {ProjectDoc} from '../../src/editor/types';
 import type {ProjectStoreRequest} from '../../shared/project-store-transport';
 import {getStoredEntry,isStoredProjectDeleted} from '../plugins/project-store';
@@ -91,7 +92,7 @@ export interface ProductionInput {
  voice?:{provider:string;voiceId:string};
  humanBlueprintReview?:true;
  gatewayRecovery?:'bounded'|'none';
- blueprintGeneration?:{qualityRules:'v1';commit?:string;trackedChanges?:boolean};
+ blueprintGeneration?:ProductionGeneration;
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
   bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';firstGlanceWriting?:true;blueprintQuality?:'v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
@@ -117,6 +118,7 @@ export interface ProductionTask {
  blueprintFeedbackRepair?:number;
  blueprintFeedbackSummary?:{sourceDigest:string;points:string[]};
  previousBlueprintTeaching?:{revision:string;selection?:string;narration?:string};
+ executionGenerations?:Array<ProductionGeneration&{checkpoint:number;repairEpoch:number;stage:ProductionStage;kind:'start'|'resume'}>;
  productionQueuedAt?:number;
  visualAcceptance?:{criteriaDigest:string;renderId:string;confirmedIds:string[];scope?:'whole_preview'};
  createdAt:number;updatedAt:number;sequence:number;feedback?:string;feedbackUsed:boolean;repairs:number;technicalRecoveryEpochs?:number[];focusedBlueprintIssues?:string[];deliveryDraftRecoveryUsed?:true;sourceEvidenceRecoveryOperation?:string;sourceObservationUnavailableOperation?:string;focusedAuthorChecks?:string[];authorCheckContractRevision?:number;focusedIndependentUnits?:string[];
@@ -511,6 +513,7 @@ export function validateProductionInput(v:ProductionInput){
  if(v.blueprintGeneration!==undefined){
   const generation=v.blueprintGeneration;
   if(!generation||v.panelDelivery?.blueprintQuality!=='v1'||generation.qualityRules!=='v1'
+   ||generation.referenceRules!==undefined&&generation.referenceRules!=='registered-v1'
    ||generation.commit!==undefined&&(typeof generation.commit!=='string'||! /^[a-f0-9]{40}$/u.test(generation.commit))
    ||generation.trackedChanges!==undefined&&(!generation.commit||typeof generation.trackedChanges!=='boolean'))
    throw Error('Invalid blueprint generation metadata');
@@ -722,7 +725,16 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
  };
  try{
   if(task.stage==='export'||task.stage==='self_check'){check();await notifySavedExport();}
-  check();task.status='running';delete task.error;await save();
+  check();
+  if(task.input.panelDelivery?.blueprintQuality==='v1'){
+   const generation=await loadedProductionGeneration;
+   check();await published();check();
+   const history=task.executionGenerations??[];
+   const started=history.length||task.attempts.model>0||task.repairs>0||task.status!=='queued';
+   task.executionGenerations=[...history,{...generation,checkpoint:task.sequence+1,repairEpoch:task.repairs,
+    stage:task.stage,kind:started?'resume':'start'}];
+  }
+  task.status='running';delete task.error;await save();
   for(let index=PRODUCTION_STAGES.indexOf(task.stage);index<PRODUCTION_STAGES.length;){
    check();await published();check();task.stage=PRODUCTION_STAGES[index]!;
    if(task.completed[task.stage]){index++;continue;}

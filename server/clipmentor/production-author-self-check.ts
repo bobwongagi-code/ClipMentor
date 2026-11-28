@@ -13,6 +13,7 @@ import type { HandoffBrief } from '../../shared/clipmentor-handoff';
 import type { TeachingPacket } from '../../src/clipmentor/production-gate';
 import type { AnalysisEvidence } from '../../src/clipmentor/analysis';
 import {reviewRecord,reviewReferenceResolver,type ReviewReferenceIssue} from './review-references';
+import {productionReferenceStop} from './production-references';
 import teachingPurpose from '../../src/agent/skills/clipmentor/references/teaching-purpose.json';
 
 const questions = ['S1','S2','S3','S4','S5','S6','S7'];
@@ -145,9 +146,14 @@ export function authorReferenceChoices(source:unknown) {
  return choices;
 }
 
-function selectedAuthorReferences(value:unknown,source:unknown) {
+function numberedAuthorChoices(source:unknown) {
+ return [...authorReferenceChoices(source)].sort(([a],[b])=>a<b?-1:a>b?1:0)
+  .map(([path,text],index)=>({choice:index+1,path,text}));
+}
+function selectedAuthorReferences(value:unknown,source:unknown,numbered=false) {
  const resolver=reviewReferenceResolver();
  const choices=authorReferenceChoices(source);
+ const numbers=numberedAuthorChoices(source);
  const data=source as {blueprint?:TeachingPacket;repairReview?:RepairTarget[];sourceEvidence?:RepairEvidence[]};
  const quote=(row:Record<string,unknown>,path:string,available:ReadonlyMap<string,string>)=>{
   const ids=row.reference_ids;
@@ -155,7 +161,13 @@ function selectedAuthorReferences(value:unknown,source:unknown) {
    resolver.missing(path+'.reference_ids','current_author_check_source',row.reference);
    return [];
   }
-  return ids.map((id,index)=>resolver.text(path+'.reference_ids['+index+']','current_author_check_source',id,available));
+  return ids.map((id,index)=>{
+   const field=path+'.reference_ids['+index+']';
+   if(!numbered)return resolver.text(field,'current_author_check_source',id,available);
+   const selectedPath=Number.isSafeInteger(id)?numbers[Number(id)-1]?.path:undefined;
+   if(selectedPath&&available.has(selectedPath))return available.get(selectedPath);
+   resolver.missing(field,'current_author_check_source',id);
+  });
  };
  const rows=Array.isArray(value)?value.map((row:unknown)=>{
   if(!reviewRecord(row))return row;
@@ -171,22 +183,38 @@ function selectedAuthorReferences(value:unknown,source:unknown) {
    return {...resolution,reference:quote(resolution,path+'.repair_resolutions.'+String(resolution.finding_id),permitted)};
   }):row.repair_resolutions;
   const teaching_units=Array.isArray(row.teaching_units)?row.teaching_units.map((unit:unknown)=>{
-   if(!reviewRecord(unit)||!reviewRecord(unit.delivered)||!Object.hasOwn(unit.delivered,'line_id'))return unit;
-   const {line_id,quote}=unit.delivered;
-   const line=data.blueprint?.units.find(entry=>entry.unit_id===unit.unit_id)?.lines.find(entry=>entry.line_id===line_id);
+   if(!reviewRecord(unit))return unit;
+   const current=data.blueprint?.units.find(entry=>entry.unit_id===unit.unit_id);
+   const narrowEvidence=(id:unknown,field:string)=>{
+    const evidence=Number.isSafeInteger(id)?data.blueprint?.source_evidence[Number(id)-1]:undefined;
+    if(!evidence||!current?.source_context?.evidence_ids.includes(evidence.evidence_id)){
+     resolver.missing(path+'.teaching_units.'+String(unit.unit_id)+'.'+field,'current_unit_source_evidence',id);
+     return;
+    }
+    return evidence.evidence_id;
+   };
+   const linked=numbered&&Array.isArray(unit.source_evidence_ids)
+    ?{...unit,source_evidence_ids:unit.source_evidence_ids.map(id=>narrowEvidence(id,'source_evidence_ids'))}:unit;
+   if(!reviewRecord(unit.delivered))return linked;
+   const {line_id,quote,evidence_id}=unit.delivered;
+   if(numbered&&Object.hasOwn(unit.delivered,'evidence_id'))
+    return {...linked,delivered:{...unit.delivered,evidence_id:narrowEvidence(evidence_id,'delivered.evidence_id')}};
+   if(!Object.hasOwn(unit.delivered,'line_id'))return linked;
+   const line=numbered?(Number.isSafeInteger(line_id)?current?.lines[Number(line_id)-1]:undefined)
+    :current?.lines.find(entry=>entry.line_id===line_id);
    if(quote!==undefined||!line)
     resolver.missing(path+'.teaching_units.'+String(unit.unit_id)+'.delivered.line_id','current_unit_narration',line_id);
-   return {...unit,delivered:{...unit.delivered,quote:line?.narration_ms}};
+   return {...linked,delivered:{...unit.delivered,line_id:line?.line_id,quote:line?.narration_ms}};
   }):row.teaching_units;
   return {...row,reference:quote(row,path,choices),repair_resolutions,teaching_units};
  }):value;
  return {rows,issues:resolver.issues};
 }
 
-function parseAuthorSelfCheck(text:string, source:unknown, useSelections:boolean) {
+function parseAuthorSelfCheck(text:string, source:unknown, useSelections:boolean|'numbered') {
   let rows:unknown;
   try{rows=JSON.parse(text.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/,'$1'));}catch{throw new InvalidAuthorCheckResponse('blueprint_author_self_check_invalid_json');}
-  const resolved=useSelections?selectedAuthorReferences(rows,source):undefined;
+  const resolved=useSelections?selectedAuthorReferences(rows,source,useSelections==='numbered'):undefined;
   if(resolved)rows=resolved.rows;
   const panelSource=source as {panelTeachingReview?:true;editorialPolicy?:string;blueprint?:TeachingPacket}|undefined;
   const teachingAppendix=panelSource?.panelTeachingReview===true&&panelSource.editorialPolicy==='exemplar-v1';
@@ -277,7 +305,7 @@ export function validateAuthorSelfCheck(text:string,source:unknown) {
  return parseAuthorSelfCheck(text,source,false);
 }
 
-export function readAuthorCheckAttachment(text:string,source:unknown,useSelections=false):Pick<AuthorCheckResult,'checks'|'referenceIssues'>{
+export function readAuthorCheckAttachment(text:string,source:unknown,useSelections:boolean|'numbered'=false):Pick<AuthorCheckResult,'checks'|'referenceIssues'>{
  try{return {checks:parseAuthorSelfCheck(text,source,useSelections)};}
  catch(error){
   if(!(error instanceof InvalidAuthorCheckResponse))throw error;
@@ -416,13 +444,24 @@ export async function checkProductionAuthorBlueprint(
   repairReview:productionRepairTargets(task,prepared.rawPacket),
   unchangedReviewedDelivery:unchangedReviewedDelivery(task,prepared.rawPacket)};
  const advisoryReceipt=panelDraft&&exemplarPolicy;
- const referenceChoices=advisoryReceipt?[...authorReferenceChoices(source).keys()]:undefined;
- const referenceField=advisoryReceipt?'reference_ids':'reference';
- const referenceRule=advisoryReceipt?'reference_ids 是包含 1–24 个编号的数组，只选输入 referenceChoices 中的编号（路径下标从 0 起），不输出逐字引文。':'reference 可填一个逐字引文字符串，或由多个逐字引文组成的数组（最多24条）；每条必须能单独在收到的当前材料中找回。';
- const sourceDigest=digestValue({source,guide});
  const legacyName='blueprint-author-self-check';
- const currentName=legacyName+':'+sourceDigest;
  const effectKey=(name:string)=>`copy_review:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:${name}`;
+ const legacyDigest=digestValue({source,guide});
+ const legacyCurrentName=legacyName+':'+legacyDigest;
+ const numbered=advisoryReceipt&&task.input.panelDelivery?.blueprintQuality==='v1'
+  &&!task.effects?.[effectKey(legacyCurrentName)]&&!task.effects?.[effectKey(legacyCurrentName+':format-retry')];
+ const referenceChoices=numbered?numberedAuthorChoices(source).map(({choice,path,text})=>({choice,path,preview:text.slice(0,80)}))
+  :advisoryReceipt?[...authorReferenceChoices(source).keys()]:undefined;
+ const referenceField=advisoryReceipt?'reference_ids':'reference';
+ const referenceRule=numbered
+  ?'reference_ids 只能填 referenceChoices 的整数 choice（1–24 个选项），由宿主取原文。S1 的 source_evidence_ids 和 delivered.evidence_id 只填 evidenceChoices 的整数 choice；delivered.line_id 只填该组 lineChoices 的整数 choice。各字段禁止填标识字符串或自行引文。'
+  :advisoryReceipt?'reference_ids 是包含 1–24 个编号的数组，只选输入 referenceChoices 中的编号（路径下标从 0 起），不输出逐字引文。':'reference 可填一个逐字引文字符串，或由多个逐字引文组成的数组（最多24条）；每条必须能单独在收到的当前材料中找回。';
+ const sourceDigest=numbered?digestValue({source,guide,referenceProtocol:'numbered-v1'}):legacyDigest;
+ const currentName=legacyName+':'+sourceDigest;
+ const selectionInput=numbered?{
+  evidenceChoices:source.blueprint.source_evidence.map(({evidence_id},index)=>({choice:index+1,evidence_id})),
+  lineChoices:source.blueprint.units.map(({unit_id,lines})=>({unit_id,choices:lines.map(({line_id},index)=>({choice:index+1,line_id}))})),
+ }:{};
  const first=task.effects?.[effectKey(currentName)];
  const formatRetry=task.effects?.[effectKey(currentName+':format-retry')];
  if(formatRetry&&(first?.kind!=='model'||formatRetry.kind!=='model'))
@@ -449,7 +488,7 @@ export async function checkProductionAuthorBlueprint(
   if(!entry?.exact)throw Error('blueprint_author_self_check_recovery_run_unverified');
   const {text,verified}=authorSelfCheckReceiptText(entry.run);
   if(!verified)throw Error('blueprint_author_self_check_recovery_text_unverified');
-  const result=readAuthorCheckAttachment(text,source,/"reference_ids"\s*:/u.test(text));
+  const result=readAuthorCheckAttachment(text,source,numbered?'numbered':/"reference_ids"\s*:/u.test(text));
   return {...result,runId:entry.run.runId,
    referenceIssues:result.referenceIssues?.map(issue=>({...issue,receipt:entry.run.runId}))??[]};
  };
@@ -473,7 +512,7 @@ export async function checkProductionAuthorBlueprint(
    referenceIssues:referenceIssues.length?referenceIssues:[{field:'receipt',material:'original_author_check',value:'saved_author_format_status_conflict'}]};
  }
  if(!task.repairContext?.review_contract_recheck&&task.repairContext?.blueprint_digest===reviewed.subject.digest
-  &&task.repairContext?.author_self_check_source_digest===sourceDigest
+  &&[sourceDigest,legacyDigest].includes(String(task.repairContext?.author_self_check_source_digest))
   &&!stage.hasEffect?.('model',effectBase)&&!stage.hasEffect?.('model',currentName+':format-retry'))
   throw new Error('蓝图返修未改变送审内容');
  const attempt=async(formatError?:string,resumeRetry=false)=>{
@@ -492,7 +531,7 @@ export async function checkProductionAuthorBlueprint(
    maxOutputTokens:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
    ...(backend==='codex'?{localProductionCodex:true as const}:{}),
    instructions:`${guide}\n本次只执行只读作者自检。输出 JSON 数组，按 S1–S7 各一条 {id,status,${referenceField},reason}。status 只能是 ok、fix、unresolved。${referenceRule}reason 写具体判断或最小修法。S6 的版本绑定由服务端核验：用 reportBinding 核本次单元覆盖和报告未读项，不要求你复算摘要，不要求配音、成片或人审板。后续阶段才能检查的事项，标清归属即可，不作为本阶段未通过。S2 只检查现行稿实际说出的断言能否回源，候选引语可以作为有明确边界的原作者转述证据；整句听审、精确同步和已明示未确认的边界属于后续检查，不能单独判未通过。S5 逐句对照已声明的实际子窗和字幕分卡，组级回看外窗可比子窗宽。若输入有 hostDeliveryEvidence，用其像素矩形核裁窗。引用裁切证据时，${advisoryReceipt?'只选 referenceText 的编号':'只逐字引用 referenceText 的文字'}，不引用 JSON 结构；left/top/right/bottom 是各边去掉的比例，不是坐标端点。已合作版的 attachment 可能是绑定原片文档的索引，不能只按索引后缀判断独立附件格式。若宿主已读到独立 PDF 字节，下载入口放行和最终接收仍属交付阶段。S6 非阻断拼写或标点提示引用报告原文即可；未显示的历史字段不能据此判现行报告漏读。S7 审现行计划要上屏的文字，不要求已经制卡、渲染或完成终审。正常且说明了未知边界的缺失可以保留。如有unchangedReviewedDelivery，它仅指与原审核逐字段相同的片头片尾计划：复用其原判，不因本次输入未重复图片文字转录而要求重审；不代表成片批准，现行可见文字与事实有实际冲突仍须列出。如输入有repairReview，S2必须增加repair_resolutions数组，逐条按finding_id给出{finding_id,status:"resolved"或"unresolved",${referenceField}:[${advisoryReceipt?'本组现行材料编号':'现行材料逐字引文'}],reason}。对照原问题，核当前口播、教学重点、实际画面计划和证据边界是否一起修正；只改备注、换版本或收窄正文但重点仍保留旧断言，不算解决。${referenceField} 只指向本组口播、字幕、短标、画面描述，或时间记录完整落在本组原片及逐句选段内的原话或动作原文。全片上下文、标识符、策划译文和历史判词不能单独结案。补证解决时说明新证据的支持关系。仍不确定就unresolved，不能为进入审核而填resolved。禁止改稿、调用工具或给出生产批准。${panelDraft?` 网页蓝图交审前，在 S1 增加 teaching_units 数组，现行每组恰好一条 {unit_id,status,source_role,source_evidence_ids,takeaway,reason,delivered?}。先用 source_evidence 中原片原话、带时间的听写或具体可见动作和全片顺序写 source_role，说明这一段怎样把观看带到下一步。WHY、只记录已提取的帧、作者点评都不是来源。${exemplarPolicy?'按 teachingPurpose 先只读现行马来语口播，再核本组原片依据。':'再看口播、字幕、短标和计划画面。'}takeaway 写拿掉本组讲解后达人会少学的具体拍法。只复述动作、只在备注解释，或遗漏原片承担的主要作用，判 fix。ok 必须引用本组原片范围里的证据并附 delivered：实际马来语口播${exemplarPolicy?'':'、字幕或短标'}用 ${advisoryReceipt?'{line_id} 选择句子':'{line_id,quote} 逐字引用'}；纯画面用现行 visual_only 绑定的 {evidence_id,source_seconds}。证据不足写 unresolved，可省 delivered 或暂留空 source_evidence_ids。画面或听写仅支持各自能确认的含义，不需要虚构原话，也不把抽帧当整段听审。`:''}${task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?' 严格网页稿的 S1 只作作者自评。口播主讲定位现行马来语句子，答达人会改哪个拍摄决定、观众多能判断什么。用同组已登记的原片依据核对，纯画面沿用已绑定的可见证据。机器听写候选须标明未听审；缺少中文译文时仍读马来语原话和可见动作。若只能从作者备注读出作用，判 fix。S6 已可见的选材或对象缺项现在修；实测声长留到配音。':''}`,
-   messages:[{role:'user',content:JSON.stringify(referenceChoices?{...source,referenceChoices}:source)},...(formatError?[{role:'user' as const,content:`上次返回未满足自检回执格式（${formatError}）。请基于同一材料重新完成七项，按 ${referenceField} 的格式引用材料，并按实际判断填写状态。`}]:[])],
+   messages:[{role:'user',content:JSON.stringify(referenceChoices?{...source,referenceChoices,...selectionInput}:source)},...(formatError?[{role:'user' as const,content:`上次返回未满足自检回执格式（${formatError}）。请基于同一材料重新完成七项，按 ${referenceField} 的格式引用材料，并按实际判断填写状态。`}]:[])],
    host:{signal:stage.signal,maxTurns:1,deadlineAt:productionWorkDeadline(task),
     async beforeRequest(){if(requests++!==0)throw new Error('作者自检单轮额度已用完');},
     async execute(){throw new Error('作者自检只读，不允许调用工具');}},
@@ -500,7 +539,7 @@ export async function checkProductionAuthorBlueprint(
   if(run.status!=='completed')throw new Error(run.error??'blueprint_author_self_check_failed');
   const text=authorSelfCheckText(run.events);
   return {digest:reviewed.subject.digest,sourceDigest,runId:run.id,...(advisoryReceipt
-    ?readAuthorCheckAttachment(text,source,true):{checks:validateAuthorSelfCheck(text,source)})};
+    ?readAuthorCheckAttachment(text,source,numbered?'numbered':true):{checks:validateAuthorSelfCheck(text,source)})};
  },async operationId=>{
   const old=task.effects[effectKey(effectName)];
   const blueprint=task.completed.blueprint;
@@ -519,7 +558,7 @@ export async function checkProductionAuthorBlueprint(
   if(advisoryReceipt&&exact&&verified){
    // Historical raw responses still use quotes. Re-read them without changing their decision or bytes.
    const selected=/["']reference_ids["']\s*:/u.test(text);
-   return {digest:reviewed.subject.digest,sourceDigest,runId:run.runId,...readAuthorCheckAttachment(text,source,selected)};
+   return {digest:reviewed.subject.digest,sourceDigest,runId:run.runId,...readAuthorCheckAttachment(text,source,numbered?'numbered':selected)};
   }
   let checks:Check[];
   try{checks=validateAuthorSelfCheck(text,source);}
@@ -548,6 +587,22 @@ export async function checkProductionAuthorBlueprint(
  }
  return result;
  };
+ if(numbered){
+  const original=await attempt();
+  if(!original.referenceIssues?.length)return original;
+  if(!formatRetry&&((stage.remaining?.('model')??(task.input.budget.model-task.attempts.model))<=0
+   ||Date.now()>=productionWorkDeadline(task)))return original;
+  const retry=formatRetry?await attempt(undefined,true):await attempt(JSON.stringify(original.referenceIssues).slice(0,1600));
+  const validated=new Map(original.checks.map(check=>[check.id,check]));
+  const remainingIssues=retry.referenceIssues?.filter(issue=>!validated.has(issue.field.split('.')[0]));
+  if(remainingIssues?.some(issue=>original.referenceIssues!.some(prior=>
+   issue.field===prior.field&&issue.material===prior.material&&issue.value===prior.value)))
+   throw new Error(productionReferenceStop);
+  const corrected=new Map(retry.checks.map(check=>[check.id,check]));
+  const checks=questions.flatMap(id=>{const row=validated.get(id)??corrected.get(id);return row?[row]:[];});
+  const {referenceIssues:_,...attachment}=retry;
+  return {...attachment,checks,...(remainingIssues?.length?{referenceIssues:remainingIssues}:{})};
+ }
  // A retry can be reserved after a cold format failure while the primary is
  // still reserved. The already-counted slot can recover without the first run.
  if(formatRetry&&(first?.status==='reserved'||recordedFormatFailure(first))){

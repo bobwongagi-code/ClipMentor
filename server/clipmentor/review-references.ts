@@ -16,7 +16,7 @@ export class ReviewReferenceIssues extends Error {
 export function reviewReferenceResolver() {
  const issues:ReviewReferenceIssue[]=[];
  const missing=(field:string,material:string,value:unknown)=>{
-  issues.push({field,material,...(typeof value==='string'?{value:value.slice(0,500)}:{})});
+  issues.push({field,material,...(typeof value==='string'||typeof value==='number'?{value:String(value).slice(0,500)}:{})});
  };
  return {
   issues,missing,
