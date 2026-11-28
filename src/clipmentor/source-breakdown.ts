@@ -1,3 +1,4 @@
+import {isCreatorFilmWorksheet, type CreatorFilmWorksheet} from './creator-teaching-quality';
 import {deliverySectionsFromDoc,deliveryTimeline,deliveryAudio} from './delivery-sections';
 import { isSourceReviewScope, type SourceReviewScope } from './source-alignment';
 import type { SourceClosingStatus } from '../../shared/clipmentor-handoff';
@@ -16,6 +17,7 @@ export const segmentEvidenceKinds={
 /** One source-bound ledger, shared by analysis, copy review and execution. Not a model verdict. */
 export interface SourceBreakdown {
   version: 1;
+  creator_quality?: CreatorFilmWorksheet;
   /** Frozen task scope, never inferred from the clips selected for playback. Missing on legacy drafts. */
   review_scope?: SourceReviewScope;
   source_closing?: {status:SourceClosingStatus;segment_id:string;note:string};
@@ -143,7 +145,7 @@ export function prepareSourceBreakdownWrite(value: unknown) {
 export function isSourceBreakdown(v: unknown): v is SourceBreakdown {
   if (!row(v)) return false;
   const closing=v.source_closing;
-  if (v.version !== 1 || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
+  if (v.version !== 1 || (v.creator_quality !== undefined && !isCreatorFilmWorksheet(v.creator_quality)) || (v.review_scope !== undefined && !isSourceReviewScope(v.review_scope))
     || v.unselected_buyer_roles !== undefined && !isUnselectedBuyerRoles(v.unselected_buyer_roles)
     || closing!==undefined&&(!row(closing)
       || !['confirmed','weak_candidate','none'].some(status=>status===closing.status)

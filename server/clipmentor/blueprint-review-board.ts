@@ -1,3 +1,4 @@
+import type {ProductionGeneration} from './production-generation';
 /** Internal, read-only review artifact. Phases remain the saved plan, never a timeline. */
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
@@ -63,6 +64,7 @@ export interface BoardInput {
  qualityRules?:'v1';
  generationCommit?:string;
  generationTrackedChanges?:boolean;
+ executionGeneration?:ProductionGeneration;
 }
 export async function loadReviewBoardInput(input:string,options:{bindings?:string[];mediaDir?:string}={}):Promise<BoardInput>{
  let value:unknown,sha256:string,hashMode:'file'|'project',assertUnchanged:()=>Promise<void>;

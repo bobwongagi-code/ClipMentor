@@ -1,3 +1,4 @@
+import {isCreatorConfirmedReference,type CreatorConfirmedReference} from './production-creator-quality';
 import type {BlueprintReviewRecord} from './production-panel-review';
 import {compactProductionTaskHistory,newestProductionCheckpoints,orderedProductionCheckpointRecords,decodePublishedProductionCheckpoint,loadPublishedProductionCheckpoint} from './production-task-history';
 import {blueprintFindingKeys,blueprintFindings,pictureRepairCoverage,pictureRepairFindings,blueprintRepairStopped,repeatedPictureRepair,productionDecisionEvent,productionEffectDecision,productionRecoveryProgress,type ProductionDecisionDetails} from './production-decisions';
@@ -40,7 +41,10 @@ export function productionRepairContext(previous:Record<string,unknown>|undefine
  const pictureIssue=pictureRepairFindings(artifact.blueprint_structure_issue).length?artifact.blueprint_structure_issue:previous?.last_picture_repair_issue;
  const previewFindings=previewAlignmentFindingKeys(artifact.receipt);
  const priorPreviewFindings=previewFindings.length?previewFindings:previous?.preview_alignment_findings;
- return {...artifact,...(priorPreviewFindings?{preview_alignment_findings:priorPreviewFindings}:{}),...(coverage.length?{picture_repair_coverage:coverage}:{}),...(pictureIssue?{last_picture_repair_issue:pictureIssue}:{}),...(previous?.audio_picture_repair?{audio_picture_repair:previous.audio_picture_repair}:{}),...(pending?{pending_review_repair:pending}:{}),
+ return {...artifact,...(artifact.creator_quality_seen??previous?.creator_quality_seen?{
+  creator_quality_seen:artifact.creator_quality_seen??previous?.creator_quality_seen,
+  creator_quality_findings:artifact.creator_quality_findings??previous?.creator_quality_findings,
+ }:{}),...(priorPreviewFindings?{preview_alignment_findings:priorPreviewFindings}:{}),...(coverage.length?{picture_repair_coverage:coverage}:{}),...(pictureIssue?{last_picture_repair_issue:pictureIssue}:{}),...(previous?.audio_picture_repair?{audio_picture_repair:previous.audio_picture_repair}:{}),...(pending?{pending_review_repair:pending}:{}),
   ...(artifact.teaching_rebuild??previous?.teaching_rebuild?{teaching_rebuild:artifact.teaching_rebuild??previous?.teaching_rebuild}:{}),
   ...(artifact.narration_repair_digest??previous?.narration_repair_digest?{
    narration_repair_digest:artifact.narration_repair_digest??previous?.narration_repair_digest,
@@ -94,7 +98,7 @@ export interface ProductionInput {
  gatewayRecovery?:'bounded'|'none';
  blueprintGeneration?:ProductionGeneration;
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
-  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';firstGlanceWriting?:true;blueprintQuality?:'v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
+  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';firstGlanceWriting?:true;blueprintQuality?:'v1';creatorQuality?:'v1';creatorReference?:CreatorConfirmedReference;salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
  reviewerBackend?:'codex';
  budget:EffectCounts&{maxElapsedMs:number;maxRepairs:number;routine?:EffectCounts};
@@ -514,6 +518,7 @@ export function validateProductionInput(v:ProductionInput){
   const generation=v.blueprintGeneration;
   if(!generation||v.panelDelivery?.blueprintQuality!=='v1'||generation.qualityRules!=='v1'
    ||generation.referenceRules!==undefined&&generation.referenceRules!=='registered-v1'
+   ||generation.creatorRules!==undefined&&generation.creatorRules!=='creator-teaching-v1'
    ||generation.commit!==undefined&&(typeof generation.commit!=='string'||! /^[a-f0-9]{40}$/u.test(generation.commit))
    ||generation.trackedChanges!==undefined&&(!generation.commit||typeof generation.trackedChanges!=='boolean'))
    throw Error('Invalid blueprint generation metadata');
@@ -530,6 +535,9 @@ export function validateProductionInput(v:ProductionInput){
    ||(v.panelDelivery.selectionPolicy!==undefined&&(v.panelDelivery.selectionPolicy!=='v1'||v.panelDelivery.editorialPolicy!=='exemplar-v1'))
    ||(v.panelDelivery.firstGlanceWriting!==undefined&&(v.panelDelivery.firstGlanceWriting!==true||v.panelDelivery.selectionPolicy!=='v1'))
    ||(v.panelDelivery.blueprintQuality!==undefined&&(v.panelDelivery.blueprintQuality!=='v1'||v.panelDelivery.firstGlanceWriting!==true))
+   ||(v.panelDelivery.creatorQuality!==undefined&&(v.panelDelivery.creatorQuality!=='v1'||v.panelDelivery.blueprintQuality!=='v1'))
+   ||(v.panelDelivery.creatorReference!==undefined&&(v.panelDelivery.creatorQuality!=='v1'||!isCreatorConfirmedReference(v.panelDelivery.creatorReference)
+    ||v.panelDelivery.creatorReference.salesSha256!==v.panelDelivery.salesAssetHash))
    ||(v.panelDelivery.partnerEnding!==undefined&&v.panelDelivery.partnerEnding!=='product_storyboard_pdf')
    ||((v.panelDelivery.salesEvidenceId!==undefined||v.panelDelivery.salesEvidenceSha256!==undefined)
     &&(v.panelDelivery.bookends!=='layered-v1'||typeof v.panelDelivery.salesEvidenceId!=='string'||!v.panelDelivery.salesEvidenceId.trim()
@@ -727,11 +735,11 @@ async function advanceWithinExecution(task:ProductionTask,worker:StageWorker,sto
   if(task.stage==='export'||task.stage==='self_check'){check();await notifySavedExport();}
   check();
   if(task.input.panelDelivery?.blueprintQuality==='v1'){
-   const generation=await loadedProductionGeneration;
+   const {creatorRules,...generation}=await loadedProductionGeneration;
    check();await published();check();
    const history=task.executionGenerations??[];
    const started=history.length||task.attempts.model>0||task.repairs>0||task.status!=='queued';
-   task.executionGenerations=[...history,{...generation,checkpoint:task.sequence+1,repairEpoch:task.repairs,
+   task.executionGenerations=[...history,{...generation,...(task.input.panelDelivery.creatorQuality==='v1'?{creatorRules}:{}),checkpoint:task.sequence+1,repairEpoch:task.repairs,
     stage:task.stage,kind:started?'resume':'start'}];
   }
   task.status='running';delete task.error;await save();

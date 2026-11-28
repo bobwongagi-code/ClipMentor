@@ -1,3 +1,4 @@
+import {creatorReviewWorksheet,readCreatorChecks,creatorReviewIssues,hasBoundCreatorRejection,type CreatorChecks} from './production-creator-quality';
 import {productionWorkDeadline} from './production-shared-clock';
 import type { ProjectDoc } from '../../src/editor/types';
 import type { SourceBreakdown } from '../../src/clipmentor/source-breakdown';
@@ -154,10 +155,7 @@ const teachingFeedback=(task:ProductionTask)=>task.blueprintFeedback?{text:task.
  ...(task.blueprintFeedbackUnitIds?{rejectedUnitIds:task.blueprintFeedbackUnitIds}:{})}:null;
 const teachingReviewContext=(task:ProductionTask)=>({purpose:teachingPurpose,task:task.input.brief,feedback:teachingFeedback(task)});
 
-export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, requirements:readonly unknown[], objective?:string,referenceBinding?:string) {
- const analysis = doc.clipMentorAnalysis, baseline = analysis?.source_breakdown;
- if (!analysis?.source.sourceContentHash || !baseline?.units.length || baseline.review_scope?.kind !== 'full_source')
-  throw Error('teaching_baseline_not_ready');
+export function teachingSourceEvidence(analysis:NonNullable<ProjectDoc['clipMentorAnalysis']>){
  const observations=new Map(analysis.observations?.map(observation=>[observation.observation_id,observation]));
  const byId=new Map(analysis.evidence.map(entry=>[entry.evidence_id,entry]));
  const transcriptIds=new Set(analysis.transcripts.filter(entry=>entry.words.length).map(entry=>entry.source_id));
@@ -178,6 +176,14 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   if (!range || range[0] < 0 || range[1] > analysis.source.duration_seconds || range[0] > range[1]) return [];
   return [{ id:entry.evidence_id, kind:entry.kind, range, text:entry.text, status:entry.status }];
  }).sort((a,b)=>a.range[0]-b.range[0]);
+ return evidence;
+}
+
+export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, requirements:readonly unknown[], objective?:string,referenceBinding?:string) {
+ const analysis = doc.clipMentorAnalysis, baseline = analysis?.source_breakdown;
+ if (!analysis?.source.sourceContentHash || !baseline?.units.length || baseline.review_scope?.kind !== 'full_source')
+  throw Error('teaching_baseline_not_ready');
+ const evidence=teachingSourceEvidence(analysis);
  // Use the complete source evidence, even if the proposed selection overlooked it.
  const transcripts = analysis.transcripts.filter(entry => entry.words.length).map(({source_id,status,words}) => ({source_id,status,words}));
  const topics=frozenTeachingTopics(doc,task);
@@ -210,6 +216,7 @@ export function teachingBaselineSource(doc: ProjectDoc, task: ProductionTask, re
   ...(task.input.panelDelivery?.editorialPolicy==='exemplar-v1'?{pointReview:true as const,evidenceBinding:confirmedTeachingDigest(doc)}:{}),
   ...(requireFirstGlance?{firstGlanceWriting:firstGlanceWritingUnits(baseline,strictQuality)}:{}),
   ...(strictQuality?{strictQuality:true as const}:{}),
+  ...(task.input.panelDelivery?.creatorQuality==='v1'?{creatorWorksheet:creatorReviewWorksheet(doc,reviewNarration,new Set(evidence.map(item=>item.id)),task.input.openingComparison?.results)}:{}),
   ...(reviewNarration?{narrationTargets:finalNarrationTargets(doc,baseline,requireFirstGlance,strictQuality),...(selectionRationale.length?{selectionRationale}:{})}:{}),
   ...(task.input.panelDelivery?.selectionPolicy==='v1'?{selection:{
    inventory:baseline.segments.filter(segment=>segment.inventory),
@@ -304,9 +311,10 @@ export function checkedNarration(value:unknown,targets:NonNullable<BaselineSourc
 }
 
 function narrationReviewSubject(task:ProductionTask,targets:NonNullable<BaselineSource['narrationTargets']>,teaching:string|undefined,
- requirementsDigest:string|undefined,{purpose,task:brief,feedback}=teachingReviewContext(task),timingRisks?:ReturnType<typeof teachingReplayRisks>){
+ requirementsDigest:string|undefined,{purpose,task:brief,feedback}=teachingReviewContext(task),timingRisks?:ReturnType<typeof teachingReplayRisks>,
+ creatorWorksheet?:ReturnType<typeof creatorReviewWorksheet>){
  return digestValue({targets,teaching,requirementsDigest,purpose,brief,feedback,sourceCriteria:task.input.doneCriteria,
-  ...(timingRisks?{timingRisks}:{})});
+  ...(timingRisks?{timingRisks}:{}),...(creatorWorksheet?{creatorWorksheet}:{})});
 }
 
 export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,digest:unknown,requirementsDigest:string){
@@ -315,12 +323,15 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
  const targets=finalNarrationTargets(doc,baseline,task.input.panelDelivery?.firstGlanceWriting===true,
   task.input.panelDelivery?.blueprintQuality==='v1');
  const timingRisks=task.input.panelDelivery?.selectionPolicy==='v1'?teachingReplayRisks(doc):undefined;
- const narrationSubject=narrationReviewSubject(task,targets,confirmedTeachingDigest(doc),requirementsDigest,undefined,timingRisks);
+ const worksheet=task.input.panelDelivery?.creatorQuality==='v1'
+  ?creatorReviewWorksheet(doc,true,new Set(teachingSourceEvidence(doc.clipMentorAnalysis!).map(item=>item.id)),task.input.openingComparison?.results):undefined;
+ const narrationSubject=narrationReviewSubject(task,targets,confirmedTeachingDigest(doc),requirementsDigest,undefined,timingRisks,worksheet);
  const receipt=Object.entries(task.effects).find(([key,effect])=>
   key.startsWith('copy_review:')&&key.endsWith(':teaching-baseline:'+digest)&&effect.kind==='model'&&effect.status==='completed'
   &&row(effect.result)&&effect.result.digest===digest&&effect.result.runId===effect.operationId
   &&effect.result.narrationSubject===narrationSubject)?.[1].result;
  if(!row(receipt)||!row(receipt.review))throw Error('human_blueprint_narration_receipt_missing');
+ const creatorChecks=worksheet?readCreatorChecks(receipt.review.creator_checks,worksheet):undefined;
  const reviewedUnits=receipt.review.units;
  const source=teachingBaselineSource(doc,task,[]);
  const confirmed=readConfirmedTeachingChecks(receipt.review.confirmed_teaching_checks,source);
@@ -331,6 +342,10 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
   throw Error('human_blueprint_teaching_not_passed');
  const answers=checkedNarration(targets.length?receipt.review.narration_checks:receipt.review.narration_checks??[],targets);
  if(answers.some(answer=>answer.status!=='ok'))throw Error('human_blueprint_narration_not_passed');
+ if(creatorChecks){
+  corroborateCreatorConclusion(creatorChecks,answers);
+  if(creatorReviewIssues(creatorChecks).length)throw Error('human_blueprint_creator_teaching_not_passed');
+ }
  const publishedAnswers:PublishedNarrationDecision[]=answers.map(answer=>{
   const unit=reviewedUnits.find((entry:unknown)=>row(entry)&&entry.unit_id===answer.unit_id);
   const point=Array.isArray(unit?.point_checks)?unit.point_checks.find((entry:unknown)=>row(entry)&&entry.point_id===answer.point_id):undefined;
@@ -347,6 +362,8 @@ export function panelNarrationPublication(doc:ProjectDoc,task:ProductionTask,dig
   }),
  }));
  return {independentNarrationAnswers:publishedAnswers,teachingSelectionDigest:digestValue(selection),
+  ...(creatorChecks?{creatorTeachingReviewDigest:digestValue(creatorChecks),
+   ...(row(receipt.executionGeneration)?{executionGeneration:receipt.executionGeneration}:{})}:{}),
   teachingNarrationDigest:digestValue(targets.map(target=>[target.unit_id,target.point_id,target.lines.map(line=>line.narration)]))};
 }
 type PointDecision={point_id:string;status:'ok'|'fix'|'unresolved';learner_takeaway:string;connection:string;question_quote:string;
@@ -364,7 +381,7 @@ type WholeFilmDecision = {
 };
 type ConfirmedDecisionCheck={id:string;status:'covered'|'missing';unit_id?:string;point_id?:string;evidence_id?:string;reason:string};
 type BaselineReview = {feedback_scope:'none'|'copy'|'baseline';units:Decision[];whole_film?:WholeFilmDecision;narration_checks?:NarrationDecision[];
- confirmed_teaching_checks?:ConfirmedDecisionCheck[]};
+ confirmed_teaching_checks?:ConfirmedDecisionCheck[];creator_checks?:CreatorChecks};
 
 export function confirmedTeachingIssue(review:Pick<BaselineReview,'confirmed_teaching_checks'>) {
  return review.confirmed_teaching_checks?.filter(check=>check.status==='missing')
@@ -527,10 +544,14 @@ function pointForIndependentReview(point:BaselineSource['units'][number]['points
  return {...point,teaching_basis:basis};
 }
 
-function baselineReviewInput(source:BaselineSource){
+export function baselineReviewInput(source:BaselineSource){
  const {referenceBinding:_reference,evidenceBinding:_evidence,narrationTargets,frozenTopics:_advice,...input}=source;
  const material=narrationTargets?.length?{narrationTargets,...input}:input;
- return input.pointReview?{...material,units:input.units.map(unit=>({...unit,points:unit.points.map(pointForIndependentReview)}))}:material;
+ return input.pointReview?{...material,units:input.units.map(unit=>{
+  const selection=unit.teaching_selection;
+  const {creator_quality:_worksheet,...teachingSelection}=selection??{};
+  return {...unit,...(selection?{teaching_selection:teachingSelection}:{}),points:unit.points.map(pointForIndependentReview)};
+ })}:material;
 }
 
 function readFrozenTopicChecks(value:unknown,reviewClosing:boolean):FrozenTopicChecks|undefined {
@@ -674,6 +695,18 @@ function readConfirmedTeachingChecks(raw:unknown,source:BaselineSource):Confirme
  });
 }
 
+function corroborateCreatorConclusion(checks:CreatorChecks,answers:NarrationDecision[]|undefined){
+ if(!answers)return;
+ for(const group of checks.groups){
+  if(!group.conclusion_line_id||group.analogy.status!=='ok'||group.checks.some(check=>check.status!=='ok'))continue;
+  if(!answers.some(answer=>answer.unit_id===group.unit_id&&answer.line_id===group.conclusion_line_id&&answer.status==='ok')){
+   const criterion=group.checks.find(check=>check.question==='narration_why')!;
+   criterion.status='fix';
+   criterion.answer='当前标为结论的句子没有通过对应口播的独立核对。请选出实际讲清取舍与作用的句子。';
+  }
+ }
+}
+
 export function validateTeachingBaselineReview(input: unknown, source: BaselineSource, requireNarrationCriterion=true): BaselineReview {
  const value=selectedTeachingReferences(input,source);
  const invalid = () => Error('teaching_baseline_review_invalid');
@@ -693,7 +726,7 @@ export function validateTeachingBaselineReview(input: unknown, source: BaselineS
  const decisions = value.units;
  const confirmed=readConfirmedTeachingChecks(value.confirmed_teaching_checks,source);
  const whole_film=source.pointReview?readWholeFilmDecision(value.whole_film,source):undefined;
- const wholeFilmResult={...(whole_film?{whole_film}:{}),...(confirmed?{confirmed_teaching_checks:confirmed}:{}),...(source.narrationTargets?.length
+ const legacyChecks={...(whole_film?{whole_film}:{}),...(confirmed?{confirmed_teaching_checks:confirmed}:{}),...(source.narrationTargets?.length
   ?{narration_checks:checkedNarration(value.narration_checks,source.narrationTargets,requireNarrationCriterion?source.units:undefined)}:{})};
  const units = source.units.map(unit => {
   const matches = decisions.filter(entry => row(entry) && entry.unit_id === unit.unit_id);
@@ -726,6 +759,23 @@ export function validateTeachingBaselineReview(input: unknown, source: BaselineS
    reason:issue?`${issue.point_id} ${issue.connection}`:reason,
    ...(points?{point_checks:points}:{})} as Decision;
  });
+ const hasBaselineIssue=wholeFilmIssue(whole_film)||confirmedTeachingIssue(legacyChecks)
+  ||units.some(unit=>unit.status!=='ok');
+ const hasNarrationIssue=legacyChecks.narration_checks?.some(check=>check.status!=='ok');
+ let creatorChecks:CreatorChecks|undefined;
+ if(source.creatorWorksheet){
+  try{
+   creatorChecks=readCreatorChecks(value.creator_checks,source.creatorWorksheet);
+   corroborateCreatorConclusion(creatorChecks,legacyChecks.narration_checks);
+  }catch(error){
+   // A malformed supplemental worksheet must never replace a usable rejection.
+   if(!hasBaselineIssue&&!hasNarrationIssue){
+    if(hasBoundCreatorRejection(value.creator_checks,source.creatorWorksheet))throw Error('creator_incomplete_review_with_rejection');
+    throw error;
+   }
+  }
+ }
+ const wholeFilmResult={...legacyChecks,...(creatorChecks?{creator_checks:creatorChecks}:{})};
  if(source.pointReview&&!source.rebuilding){
   const groups=teachingDirectionGroups(source.feedback?.text);
   if(groups.length){
@@ -739,10 +789,8 @@ export function validateTeachingBaselineReview(input: unknown, source: BaselineS
    return {feedback_scope:'baseline',units:rejected,...wholeFilmResult};
   }
  }
- const hasBaselineIssue=wholeFilmIssue(whole_film)||confirmedTeachingIssue(wholeFilmResult)
-  ||units.some(unit=>unit.status!=='ok');
  if (requiresBaseline && !source.rebuilding && !hasBaselineIssue){
-  if(wholeFilmResult.narration_checks?.some(check=>check.status!=='ok'))
+  if(wholeFilmResult.narration_checks?.some(check=>check.status!=='ok')||creatorReviewIssues(creatorChecks).length)
    return {feedback_scope:'copy',units,...wholeFilmResult};
   throw invalid();
  }
@@ -937,7 +985,7 @@ export function baselineInstructions(source:BaselineSource,legacyReceipt=false,r
   :'')
  +(source.strictQuality&&source.narrationTargets?.length?
   ' 合起来读同组实际稿件，包括辅助点的口播。先用 filming_choice 和 first_glance 核对这一组实际教到什么，再核辅助句有无抢走主线、复述画面或把同一意义说多遍。只在回执中引用实际稿件和本片证据。':'')
- +(source.narrationTargets?.length?` 按同一个 purpose 审现行口播。顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?${selection?'':',quote?'}${firstGlanceReceipt}}。${firstGlanceReceipt?' 每个带 first_glance 的目标都必须返回嵌套的 first_glance_checks.explanation，fix 或 unresolved 也不能省略。只有该目标带 hook_curiosity 才填 hook；仅 hook=ok 时填该点真实的 hook_line_id。输出前核对 narration_checks 的每一条，不要把这些状态只写进 reason。':''}先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并${selection?'选择能让他领会该决定的现行句子编号':'逐字引用能让他领会该决定的某句'}。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id${selection?'':' 和逐字 quote'}。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。`
+ +(source.narrationTargets?.length?` 按同一个 purpose 审现行口播。${source.creatorWorksheet?'先核对同组标为结论的句子。实际成立时，两份检查引用同一句。':''}顶层另填 narration_checks，每个 narrationTargets 项恰好一条 {unit_id,point_id,status,reason,decision?,viewer_basis?,line_id?${selection?'':',quote?'}${firstGlanceReceipt}}。${firstGlanceReceipt?' 每个带 first_glance 的目标都必须返回嵌套的 first_glance_checks.explanation，fix 或 unresolved 也不能省略。只有该目标带 hook_curiosity 才填 hook；仅 hook=ok 时填该点真实的 hook_line_id。输出前核对 narration_checks 的每一条，不要把这些状态只写进 reason。':''}先只读马来语实际口播，答达人下条片能改变哪个具体拍摄决定，并${selection?'选择能让他领会该决定的现行句子编号':'逐字引用能让他领会该决定的某句'}。再对照原片依据、本点选题和已登记的选题取舍 selectionRationale（如有），看口播是否传递了为什么这样拍、买家因此多了什么判断依据。证据准确但只能复述画面、能看到或能比较，仍判 fix；基线里有取舍而口播没交代时，理由写明“基线有、口播没有”及丢失的内容。该缺口只登记在 narration_checks。标题、字幕、画面说明、基线本身和作者自答不能补分。status=ok 必须给具体 decision、viewer_basis（观众多得到的判断依据）、真实 line_id${selection?'':' 和逐字 quote'}。引文要实际支撑决定和判断依据。缺口写 fix，无法判断写 unresolved，均不得依赖总评通过。`
   +(requireNarrationCriterion?` 每条 fix 或 unresolved 必须另填 baseline_criterion:{field:"method"|"connection"|"claim_limit"${selection?'':',quote:当前组当前点 teaching_basis 对应字段的完整原文'}}。reason 写明引用的判据和现行口播在哪一点不符。只按已经核定的判断和边界裁决。想加的细节或新标准仅作审阅建议，不能用来退回。必须拍到的内容不因此变成必须逐项念到的内容。引用 claim_limit 时，还须给出现行口播中受该边界影响的 line_id${selection?'':' 和逐字 quote'}。实质漏讲而没有可引句子时，说明缺失的内容。逐组基线退回须有对应的 point_checks 问题，口播问题留在 narration_checks。`:''):'');
 }
 
@@ -946,13 +994,17 @@ export function teachingBaselineDigest(source:BaselineSource,legacyReceipt=false
 }
 
 export async function checkTeachingBaseline(task:ProductionTask,stage:StageContext,source:BaselineSource,requirementsDigest?:string,qualifiedSelection?:string) {
- const narrationSubject=source.narrationTargets?narrationReviewSubject(task,source.narrationTargets,source.evidenceBinding,requirementsDigest,source,source.selection?.timingRisks):undefined;
+ const narrationSubject=source.narrationTargets?narrationReviewSubject(task,source.narrationTargets,source.evidenceBinding,requirementsDigest,source,source.selection?.timingRisks,source.creatorWorksheet):undefined;
  const reviewDigest=(baselineDigest:string)=>narrationSubject?digestValue({baselineDigest,narrationSubject}):baselineDigest;
  const currentDigest=reviewDigest(teachingBaselineDigest(source));
  const priorReviews=Object.entries(task.effects).filter(([id,effect])=>effect.kind==='model'&&id.includes(':teaching-baseline:'));
  const receiptRetry=task.stage==='copy_review'&&task.technicalRecoveryEpochs?.includes(task.repairs)
   ? failedFirstGlanceReceipt(task,task.repairs-1)?.[0] : undefined;
- const effectsFor=(digest:string)=>priorReviews.filter(([id])=>id!==receiptRetry&&id.endsWith(':teaching-baseline:'+digest));
+ const creatorRetry=task.repairContext?.creator_receipt_retry as {effect?:string;revision?:string;epoch?:number}|undefined;
+ const skipCreator=creatorRetry&&creatorRetry.revision===task.projectRevision&&creatorRetry.epoch===task.repairs-1
+  &&creatorRetry.effect?.startsWith(`${task.stage}:`)?creatorRetry.effect:undefined;
+ const effectsFor=(digest:string)=>priorReviews.filter(([id,effect])=>id!==receiptRetry
+  &&!(id===skipCreator&&effect.status==='failed'&&effect.error==='Error: creator_review_criteria_invalid')&&id.endsWith(':teaching-baseline:'+digest));
  const current={digest:currentDigest,requireCriterion:true,effects:effectsFor(currentDigest)};
  // Keep each previously submitted review on its original digest and response contract.
  const legacy=priorReviews.length?[false,true].flatMap(feedbackScope=>{
@@ -965,7 +1017,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
  const {digest,requireCriterion,effects}=versions.find(version=>version.effects.some(([,effect])=>effect.status==='completed'))
   ??versions.find(version=>version.effects.length)??current;
  const qualification=task.stage==='blueprint'&&qualifiedSelection&&!narrationSubject?digestValue({
-  selection:qualifiedSelection,requirementsDigest,requirements:source.requirements,reference:source.referenceBinding,
+  selection:qualifiedSelection,...(source.creatorWorksheet?{creatorWorksheet:source.creatorWorksheet}:{}),requirementsDigest,requirements:source.requirements,reference:source.referenceBinding,
   task:source.task,objective:source.objective,purpose:source.purpose,feedback:source.feedback,closing:source.sourceClosing,
  }):undefined;
  if(qualification&&!effects.length){
@@ -974,7 +1026,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
     &&typeof effect.result.digest==='string'&&key.endsWith(':teaching-baseline:'+effect.result.digest))?.[1].result;
   if(row(prior)&&typeof prior.digest==='string'){
    const review=validateTeachingBaselineReview(prior.review,source);
-   if(!wholeFilmIssue(review.whole_film)&&!confirmedTeachingIssue(review)&&review.units.every(unit=>unit.status==='ok'))return {digest:prior.digest,review};
+   if(!wholeFilmIssue(review.whole_film)&&!confirmedTeachingIssue(review)&&!creatorReviewIssues(review.creator_checks).length&&review.units.every(unit=>unit.status==='ok'))return {digest:prior.digest,review};
   }
  }
  // A saved review of the same stage and repair epoch may have used the
@@ -982,7 +1034,7 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
  const epoch=`${task.stage}:${task.feedbackUsed?'feedback':'initial'}:${task.repairs}:teaching-baseline:`;
  if(source.frozenTopics&&!effects.length&&priorReviews.some(([id])=>id.startsWith(epoch)))
   throw Error('teaching_selection_review_contract_changed');
- const bind=(runId:string,review:BaselineReview)=>({digest,runId,review,...(qualification?{qualification}:{}),...(narrationSubject?{narrationSubject}:{})});
+ const bind=(runId:string,review:BaselineReview,executionGeneration?:NonNullable<ProductionTask['executionGenerations']>[number])=>({digest,runId,review,...(executionGeneration?{executionGeneration}:{}),...(qualification?{qualification}:{}),...(narrationSubject?{narrationSubject}:{})});
  const key = 'teaching-baseline:'+digest;
  const saved = effects.find(([,effect])=>effect.status==='completed')?.[1];
  const read = (value:unknown,operationId:string) => {
@@ -1024,8 +1076,9 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
   await flushRunPersistence(run);
   let attempts=0;
   await executeRun(run,{backend,provider:author.provider,model:author.model,origin:author.origin,openAiApiMode:author.apiMode,
-   cacheMode:'short',maxOutputTokens:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
+   cacheMode:'short',maxOutputTokens:source.creatorWorksheet?6500:4096,autonomousAcceptance:false,maxAcceptanceIterations:1,tools:[],
    ...(backend==='codex'?{localProductionCodex:true as const}:{}),instructions:baselineInstructions(source,false,true,true)
+    +(source.creatorWorksheet?' creatorWorksheet 是作者计划和匿名范例判断，二者均非证据。独立以达人视角答同一份问题。顶层 creator_checks={film:[{question,status,answer}],groups:[{unit_id,checks:[{question,status,answer}],analogy:{status,answer,evidence_id?},conclusion_line_id?}],suggestions?:string[]}。film 答 opening、balance。逐组答 decision、first_glance、omission_loss、next_decision、narration_why、still_focus。每题恰好一次，status 为 ok/fix/unresolved，answer 写当前材料中实际能学到什么或该题具体落空处，简短，不复述作者表。先看实际马来语及画面，报动作或缺可用取舍判 fix。六题与类比均通过的口播组须选 creatorWorksheet.copy 的 conclusion 所对应的主讲句；只有该句真的解释拍法与作用才给通过。类比通过须选本组 worksheet.analogy.evidence_ids 里的编号，用本片证据独立核对迁移与差异。分析预审还没有 copy，按本片证据检验选题与类比应用、按已登记成绩核对片头计划，实际分行和口播留到成稿阶段。现行路线之外的新方向只放 suggestions，最多三条。已有确认范围另填原有字段。':'')
     +(source.confirmedDecisions?' confirmedDecisions 是本次编辑确认的教学决定。顶层 confirmed_teaching_checks 每项返回 {id:confirmedDecisionId,status:covered/missing,reason,unit_id?,point_id?,evidence_id?}。covered 要选择实际讲到该决定的现行点和本点的原片证据。只出现相关画面、属于同一商品，或者藏在备注中时标 missing。missing 说明切实漏掉的教学决定，不要求特定用词或旧窗口。':'')
     +' 引用协议 selection-v1：输出 reference_protocol:"selection-v1"。选已有 point_id、source_evidence_id、evidence_id、line_id 和 baseline_criterion.field。不要输出 question_quote、source_quote、quote 或 baseline_criterion.quote，宿主从本版材料按编号还原。判断和理由仍按以上要求。没有可引落点的实质遗漏仍可只说明缺失和相应判据。' ,
    messages:[{role:'user',content:JSON.stringify(baselineReviewInput(source))}],
@@ -1034,7 +1087,8 @@ export async function checkTeachingBaseline(task:ProductionTask,stage:StageConte
     async execute(){throw Error('teaching_baseline_read_only');}}});
   if(run.status!=='completed')throw Error(run.error??'teaching_baseline_check_failed');
   const value=parseTeachingBaselineText(authorSelfCheckText(run.events));
-  return bind(operationId,validateTeachingBaselineReview(value,source,requireCriterion));
+  return bind(operationId,validateTeachingBaselineReview(value,source,requireCriterion),
+   source.creatorWorksheet?task.executionGenerations?.at(-1):undefined);
  },async operationId => {
   runId=operationId;
   return bind(operationId,await readOriginal(operationId));

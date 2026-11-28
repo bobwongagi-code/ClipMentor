@@ -16,6 +16,7 @@ export type Task = {
   stopReason?: 'materials' | 'limit' | 'service' | 'maintenance'; feedbackUsed: boolean; renderId?: string; hasBlueprintFeedback?:boolean; dualBlueprint?: boolean
   visualCriteria?: { digest: string }; downloadName?:string
   attachments?: {assetId:string;fileName:string}[]; deliveryUnavailable?:boolean
+  inheritedBlueprintRevision?:string
   boardIdentity?:string; boardPresentation?:string; blueprintRevision?: string; canApproveBlueprint?: boolean; blueprintMessage?: string
   blueprintOpinionDifferences?:{overall?:BlueprintOpinionDifference;groups:BlueprintOpinionDifference[]}
   productionDifferences?:Task['blueprintOpinionDifferences']
@@ -780,6 +781,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         <header className="cm-blueprint-heading">
           <Title>审蓝图</Title>
           <p>给想拍同类产品的达人看的拆解。有意见就写，没意见可不填。</p>
+          {task?.inheritedBlueprintRevision&&<p>沿用 {task.inheritedBlueprintRevision} 确认，可提交修改意见。</p>}
           <div className="cm-blueprint-legend"><span>蓝条 原片</span><span>金条 讲解</span></div>
         </header>
         <nav className="cm-blueprint-opinion-nav" aria-label="蓝图意见">

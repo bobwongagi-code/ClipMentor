@@ -1,3 +1,4 @@
+import {creatorFilmQuestions,creatorGroupQuestions} from '../../src/clipmentor/creator-teaching-quality';
 import assert from 'node:assert/strict';
 import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -47,6 +48,7 @@ const firstDraft={source_candidate_id:null,candidate_id:'script_candidate_first'
   selected_narration:[draftLine],
  }};
 let draftAttempt:{
+ creator?:boolean;
  change?:Record<string,unknown>;
  receipts:Array<{ok?:boolean;revision?:number;error?:string}>;
  skillText?:string;
@@ -75,7 +77,19 @@ const host=createServer(async(req,res)=>{
    const previous=returned.at(-1);
    const write={action:'set_copy_candidate',id:'fixture-group',record:firstDraft};
    let tool:{name:string;args:Record<string,unknown>}|undefined;
-   if(!previous){
+   if(draftAttempt.creator){
+    assert(data.creatorQuality);
+    if(!previous)tool={name:'load_skill',args:{name:'clipmentor',file:'references/creator-teashell.json'}};
+    else if(returned.length===1){
+     draftAttempt.skillText=previous.content;
+     tool={name:'read_clipmentor_references',args:{kind:'evidence'}};
+    }else if(returned.length===2){
+     const selection=JSON.parse(previous.content).choices.find((item:{id:string})=>item.id==='fixture-visual').selection;
+     tool={name:'revise_clipmentor_analysis',args:{...write,actor:data.actor,expectedRevision:data.revision,reason:'验证计划与首稿绑定',
+      record:{...firstDraft,plan:{...firstDraft.plan,creator_conclusion_line_id:draftLine.id,
+       phases:firstDraft.plan.phases.map(phase=>({...phase,evidence_ids:[selection]}))}}}};
+    }else draftAttempt.receipts.push(JSON.parse(previous.content));
+   }else if(!previous){
     tool={name:'load_skill',args:{name:'clipmentor',file:'references/pre-edit-analysis.md',limit:48001}};
    }else{
     if(returned.length===1)draftAttempt.skillText=previous.content;
@@ -144,7 +158,14 @@ const host=createServer(async(req,res)=>{
  const mainEvidence=data.evidence.find((entry:any)=>mainPoint?.teaching_basis?.evidence_ids.includes(entry.id));
  const missingEvidenceId=wholeFilmAction==='omission'?'fixture-unselected-result':wholeFilmAction==='selection-omission'?'V-hook':undefined;
  const wholeEvidence=missingEvidenceId?data.evidence.find((entry:any)=>entry.id===missingEvidenceId):mainEvidence;
+ const criterion=(question:string)=>({question,status:'ok',answer:'用同框关系说明刷子落点。'});
  const verdict={
+  ...(data.creatorWorksheet?{creator_checks:{
+   film:creatorFilmQuestions.map(criterion),
+   groups:data.creatorWorksheet.groups.map((group:any)=>({unit_id:group.unit_id,checks:creatorGroupQuestions.map(criterion),
+    analogy:{status:'ok',answer:'同框给出当前落点的参照。',evidence_id:group.analogy.evidence_ids[0]},
+    ...(data.creatorWorksheet.copy?.length?{conclusion_line_id:data.creatorWorksheet.copy.find((copy:any)=>copy.unit_id===group.unit_id)?.conclusion}:{})})),
+  }}:{}),
   ...(unexpectedInitialFeedbackScope?{feedback_scope:'baseline'}:data.feedback?{feedback_requires_baseline:fail}:{}),summary:'ok',
   ...(data.pointReview&&wholeFilmAction!=='missing'?{whole_film:{
    status:missingEvidenceId?'fix':'ok',main_point_id:mainPoint.point_id,
@@ -251,13 +272,13 @@ try{
  assert.throws(()=>validateAuthorSelfCheck(answerWith(firstGroupQuote),repairSource),/repair_reference/,
   'a G1 observation supplied as full context cannot resolve G2');
  console.log('PASS JUDYDOLL G2 can cite its original observation, but shared full-source context cannot close a finding with G1 evidence');
- const taskFor=async(projectId:string,doc:ProjectDoc,maxRepairs=0,editorialPolicy?:'exemplar-v1')=>{
+ const taskFor=async(projectId:string,doc:ProjectDoc,maxRepairs=0,editorialPolicy?:'exemplar-v1',creator=false)=>{
   await setStoredEntry('project:'+projectId,doc);
   const saved=(await loadOfflineStoredProject(projectId))!;
   const input:ProductionInput={projectId,sourceAssetId:doc.clipMentorAnalysis!.source.asset_id,product:doc.clipMentorAnalysis!.product,
    brief:doc.clipMentorAnalysis!.source_breakdown!.review_scope!.instruction!,author:{provider:'openai',model:'baseline-fixture',origin,apiMode:'chat'},
    reviewer:{provider:'openai',model:'independent-must-not-run',origin,apiMode:'chat'},humanBlueprintReview:true,
-   panelDelivery:{productAssetId:'product',productAssetHash:'b'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'c'.repeat(64),editorialPolicy},
+   panelDelivery:{productAssetId:'product',productAssetHash:'b'.repeat(64),salesAssetId:'sales',ctaAssetId:'cta',ctaAssetHash:'c'.repeat(64),editorialPolicy,...(creator?{selectionPolicy:'v1',firstGlanceWriting:true,blueprintQuality:'v1',creatorQuality:'v1'}:{})},
    budget:{model:6,review:0,observation:0,tts:0,render:0,preview_review:0,maxRepairs,maxElapsedMs:120_000}};
   const task=await createProductionTask(input);
   task.projectRevision=saved.revision;task.stage='blueprint';
@@ -350,6 +371,33 @@ try{
    teachingBaselineSource(after.doc,next,[]),panelBlueprintRequirementsDigest(null),qualifiedTeachingDigest(after.doc));
    assert.equal(sameApproval.review.whole_film?.status,'ok');
   }
+ }
+ {
+  const creatorDoc=structuredClone(firstCopyDoc);
+  const ledger=creatorDoc.clipMentorAnalysis!.source_breakdown!;
+  ledger.creator_quality={opening:'从可核成绩提出问题，带达人看实际拍法。',balance:'保留同框示范，讲清为什么要给落点参照。'};
+  ledger.segments[0].inventory={function:'给落点参照',tracks:{picture:'刷子和面部同框',speech:'unknown',captions:'unknown',sound:'unknown'},emphasis:['同框']};
+  ledger.units[0].teaching_selection={
+   decision:'刷头和鼻侧同框',first_glance:'一眼认清刷头落在哪里',omission_loss:'无法跟拍同一个部位',
+   basis:'observed',buyer_roles:['reassurance','interest'],creator_quality:{
+    next_decision:'下条片会把刷头和辨认落点的鼻侧留在同一镜。',narration_why:'共同参照帮助买家在脸上找准位置。',
+    still_focus:'停下时看刷头与鼻尖的相对位置。',analogy:{entry:'TS-05',evidence_ids:[visible.evidence_id],
+     application:'借用同画面参照把落点变得可定位。',difference:'这里只给同一张脸的位置，不能推出两次效果差。'}}};
+  const task=await taskFor('creator-first-copy',creatorDoc,0,'exemplar-v1',true);
+  draftAttempt={creator:true,receipts:[]};calls=[];
+  await advanceProductionTask(task,productionStageWorker);
+  const attempt=draftAttempt;
+  draftAttempt=undefined;
+  assert.deepEqual(calls,['baseline','draft','draft','draft','draft']);
+  assert.match(attempt.skillText??'',/TS-05/);
+  assert.equal(attempt.receipts[0]?.ok,true,JSON.stringify(attempt.receipts));
+  const saved=await loadOfflineStoredProject(task.projectId);
+  const unit=saved?.doc.clipMentorAnalysis?.blueprint[0] as {internal_review?:Record<string,unknown>};
+  assert.equal(unit.internal_review?.current_script_candidate,firstDraft.candidate_id);
+  assert.equal((unit.internal_review?.[firstDraft.plan_id] as {creator_conclusion_line_id?:string}).creator_conclusion_line_id,draftLine.id);
+  assert.match(independentPrompts.at(-1)??'',/creatorWorksheet/);
+  assert.doesNotMatch(independentPrompts.at(-1)??'',/TS-05|creator-teashell/);
+  console.log('PASS creator worksheet author projection, bounded evidence selection and first-copy write/readback on the actual production worker');
  }
  console.log('PASS qualified first copy saves on the unchanged project and rejects real definition or same-ID evidence changes');
  for(const [feedback,rewind] of [
@@ -574,6 +622,52 @@ try{
   task.stage='copy_review';
   const accepted=await checkTeachingBaseline(task,runNarration('fixture-human-narration-yes-'+id),teachingBaselineSource(doc,task,[]));
   assert.equal(accepted.review.narration_checks?.[0].quote,quote);
+ }
+ {
+  const doc=structuredClone(correctedNarration);
+  const ledger=doc.clipMentorAnalysis!.source_breakdown!;
+  ledger.creator_quality={opening:'成绩先提问，再带入原片拍法。',balance:'把实际回看与拍摄取舍配对。'};
+  const keptEvidence=ledger.points[0].teaching_basis!.evidence_ids[0];
+  ledger.units[0].teaching_selection={
+   decision:'刷头离开后保留鼻侧',first_glance:'看得到无遮挡时色痕有多明显',omission_loss:'看不清真实颜色',
+   basis:'observed',buyer_roles:['reassurance'],creator_quality:{next_decision:'刷头离开后再切画面。',
+    narration_why:'笔触不遮住结果才能看清颜色。',still_focus:'停留看鼻侧色痕。',
+    analogy:{entry:'TS-05',evidence_ids:[keptEvidence],application:'让参照与颜色同屏。',difference:'这里看的是一个部位。'}}};
+  const unit=doc.clipMentorAnalysis!.blueprint[0] as {internal_review:Record<string,any>};
+  const internal=unit.internal_review, candidate=internal[internal.current_script_candidate], plan=internal[internal.current_picture_plan];
+  const goodId=candidate.lines[0].id, wrongId='action-only-line';
+  const action={...candidate.lines[0],id:wrongId,narration_ms:'Dia gerakkan berus.',caption_lines:['Dia gerakkan berus.']};
+  candidate.lines.push(action);
+  plan.selected_narration=structuredClone(candidate.lines);
+  const task=await taskFor('creator-conclusion-publication',doc,0,'exemplar-v1');
+  task.stage='copy_review';
+  task.input.panelDelivery!.creatorQuality='v1';
+  const base=acceptedNarration.review;
+  const receipt=(lineId:string)=>({...base,creator_checks:{
+   film:creatorFilmQuestions.map(question=>({question,status:'ok',answer:'先提问题，再用实际原片解释。'})),
+   groups:[{unit_id:ledger.units[0].unit_id,conclusion_line_id:lineId,checks:creatorGroupQuestions.map(question=>
+    ({question,status:'ok',answer:'让观众看到刷头离开后的真实结果。'})),
+    analogy:{status:'ok',answer:'参照物能让可见结果更好定位。',evidence_id:keptEvidence}}],
+  }});
+  const creatorValidation=(lineId:string)=>{plan.creator_conclusion_line_id=lineId;
+   return validateTeachingBaselineReview(receipt(lineId),teachingBaselineSource(doc,task,[]));};
+  const ok=creatorValidation(goodId);
+  assert.equal(ok.creator_checks?.groups[0].checks.find(check=>check.question==='narration_why')?.status,'ok');
+  const wrong=creatorValidation(wrongId);
+  assert.equal(wrong.creator_checks?.groups[0].checks.find(check=>check.question==='narration_why')?.status,'fix');
+  const rejected=structuredClone(receipt(wrongId));
+  rejected.creator_checks.film.pop();
+  rejected.narration_checks![0]={...rejected.narration_checks![0],status:'fix',reason:'现行句只报动作。',
+   baseline_criterion:{field:'connection',quote:ledger.points[0].teaching_basis!.connection}};
+  const preserved=validateTeachingBaselineReview(rejected,teachingBaselineSource(doc,task,[]));
+  assert.equal(preserved.narration_checks?.[0].status,'fix');
+  assert.equal(preserved.creator_checks,undefined);
+  const partial=structuredClone(receipt(wrongId));
+  partial.creator_checks.film.pop();
+  const why=partial.creator_checks.groups[0].checks.find(check=>check.question==='narration_why')!;
+  why.status='fix';why.answer='现行句只报刷子动了。';
+  assert.throws(()=>validateTeachingBaselineReview(partial,teachingBaselineSource(doc,task,[])),/creator_incomplete_review_with_rejection/);
+  console.log('PASS independent final read binds both decisions to the same current line and preserves a valid negative when the added worksheet is incomplete');
  }
  const {registerHandoff,readHandoffPolicy,handoffKey}=await import('./handoff');
  let reviewBoardTask:ProductionTask|undefined;

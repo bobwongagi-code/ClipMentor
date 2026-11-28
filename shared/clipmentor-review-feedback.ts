@@ -13,6 +13,7 @@ export const reviewMessages={
   refreshBoard:'请刷新蓝图后重新确认。',
   emptyBoard:'当前蓝图暂无讲解可供审核。',
   feedbackTarget:'请选择意见针对的片段、讲解组或整部成片。',
+  openingPerformanceMissing:'请联系维护人员核实并登记成绩图中的播放量、销量和成交额。素材已保存。',
   openingPerformanceDeclaration:'成绩数字格式无法放入片头，请联系维护人员核对原片成绩声明。',
   feedbackRangeEmpty:'这段时间没有包含完整片段，请扩大时间段，或改选一组。',
   endingMissing:'片尾素材暂时无法显示。',

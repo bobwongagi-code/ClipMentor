@@ -1,3 +1,4 @@
+import {isCreatorGroupWorksheet, type CreatorGroupWorksheet} from './creator-teaching-quality';
 import type { SourceBreakdown } from './source-breakdown';
 
 export const buyerRoles = ['reassurance', 'interest'] as const;
@@ -16,6 +17,7 @@ export const hasConciseFilmingChoice = (value: string | undefined) =>
   !!value?.trim() && Array.from(value.trim()).length <= filmingChoiceLimit;
 
 export interface TeachingSelection {
+  creator_quality?: CreatorGroupWorksheet;
   decision: string;
   omission_loss: string;
   /** Plain-language synthesis of the filming choice and its immediate teaching payoff. */
@@ -42,6 +44,7 @@ export function isSourceInventory(value: unknown): value is SourceInventory {
 
 export function isTeachingSelection(value: unknown): value is TeachingSelection {
   return row(value) && note(value.decision) && note(value.omission_loss)
+    && (value.creator_quality === undefined || isCreatorGroupWorksheet(value.creator_quality))
     && (value.first_glance === undefined || note(value.first_glance))
     && (value.hook_curiosity === undefined || note(value.first_glance) && row(value.hook_curiosity)
       && note(value.hook_curiosity.point_id) && note(value.hook_curiosity.question))

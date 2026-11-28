@@ -25,6 +25,10 @@ export function panelReviewIssue(error:unknown){
   return {kind:'binding',message:copy.choicesRetained} as const;
  if(/^(?:Error: )?production_source_breakdown_no_progress$/.test(message))
   return {kind:'binding',message:copy.analysisPaused} as const;
+ if(/^(?:Error: )?creator_opening_metrics_unconfirmed\b/u.test(message))
+  return {kind:'content',message:copy.openingPerformanceMissing} as const;
+ if(/^(?:Error: )?(?:creator_quality_repair_no_progress|creator_incomplete_review_with_rejection)\b/u.test(message))
+  return {kind:'content',message:copy.sameIssue} as const;
  const opinionIssue=message.match(/^(?:Error: )?(blueprint_repair_no_progress )?blueprint_opinion_scope_(?:locked|groups|group|overall): ([^\r\n]+)$/u);
  if(opinionIssue&&opinionScopeText.test(opinionIssue[2]))return {kind:'content',message:opinionIssue[2]+(opinionIssue[1]?' 同一问题再次出现，修改已暂停。':'')} as const;
  if(/suspected_gate_defect|门禁问题|teaching_confirmed_scope_requires_maintenance|teaching_whole_film_confirmed_criterion_invalid|production_confirmed_groups_(missing|changed)|confirmed_copy_review_reference_binding_invalid/.test(message))

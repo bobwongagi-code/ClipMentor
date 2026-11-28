@@ -165,8 +165,11 @@ export function productionReferenceSelection(getDoc:()=>ProjectDoc,sourceId:stri
    const record={type:'object',properties:references};
    const recordArray={type:'array',items:record};
    const point={type:'object',properties:{...references,teaching_basis:record}};
+   const unit={type:'object',properties:{teaching_selection:{type:'object',properties:{
+    creator_quality:{type:'object',properties:{analogy:{type:'object',properties:{evidence_ids:references.evidence_ids}}}},
+   }}}};
    const {properties:recordsProperties,...records}=properties.records as {properties:Row}&Row;
-   properties.record={...properties.record as Row,properties:{...references,segments:recordArray,points:{type:'array',items:point},
+   properties.record={...properties.record as Row,properties:{...references,segments:recordArray,points:{type:'array',items:point},units:{type:'array',items:unit},
     plan:{type:'object',properties:{...references,phases:recordArray,delivery_sections:{type:'array',items:{
      type:'object',properties:{...references,picture:record}}}}}}};
    properties.records={...records,properties:{...recordsProperties,

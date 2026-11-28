@@ -60,7 +60,7 @@ export function sourceTeachingAdvice(topics:NonNullable<ReturnType<typeof frozen
  * declared editorial baseline. A fresh task or an editor-requested rewrite
  * follows the normal selection and review path. */
 export function retainedReferenceRepairTeaching(doc:ProjectDoc,task:ProductionTask){
- if(task.stage!=='analysis'||task.input.panelDelivery?.blueprintQuality!=='v1'||!task.technicalRecoveryEpochs?.length
+ if(task.stage!=='analysis'||task.input.panelDelivery?.blueprintQuality!=='v1'||!task.technicalRecoveryEpochs?.includes(task.repairs)
   ||task.blueprintFeedback||task.blueprintOpinions)return;
  const baseline=doc.clipMentorAnalysis?.source_breakdown;
  if(!baseline||baseline.review_scope?.kind!=='full_source'||!baseline.units.length

@@ -106,10 +106,15 @@ const narrationRepairStopped=(task:Pick<ProductionTask,'status'|'error'>)=>
 const sourceAnalysisStopped=(task:Pick<ProductionTask,'status'|'error'>)=>
  task.status==='blocked'&&(task.error==='Error: production_source_breakdown_no_progress'||task.error==='Error: '+productionReferenceStop);
 
+const creatorQualityStopped=(task:Pick<ProductionTask,'status'|'error'>)=>
+ task.status==='blocked'&&/^Error: (?:creator_quality_repair_no_progress |creator_opening_metrics_unconfirmed:|creator_incomplete_review_with_rejection$)/u.test(task.error??'');
+
 export function blueprintRepairStopped(task:Pick<ProductionTask,'status'|'error'>){
- return pictureRepairStopped(task)||narrationRepairStopped(task)||sourceAnalysisStopped(task);
+ return pictureRepairStopped(task)||narrationRepairStopped(task)||sourceAnalysisStopped(task)||creatorQualityStopped(task);
 }
 export function blueprintRepairNotice(task:Pick<ProductionTask,'status'|'error'|'repairContext'>){
+ if(creatorQualityStopped(task))return task.error?.includes('creator_opening_metrics_unconfirmed')
+  ?'片头成绩待维护侧核实。进度已保存。':'同一教学缺口再次出现。已保留候选和审核记录，待维护侧核对。';
  if(sourceAnalysisStopped(task))return '制作已暂停，同一个引用或填写问题再次出现。已保留素材和回执，待维护侧核对。';
  return narrationRepairStopped(task)?'讲解返修已暂停。候选与审核记录已保存，待核对同一缺口。':pictureRepairNotice(task);
 }
