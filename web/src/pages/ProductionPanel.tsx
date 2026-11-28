@@ -300,20 +300,25 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     if(!showPreview||!task?.renderId||!column)return
     function fit(){
       if(!column)return
-      const top=column.getBoundingClientRect().top+window.scrollY
-      // Measure the active shell, including wrapped steps and tabs on small screens.
+      const bounds=column.getBoundingClientRect()
+      const top=bounds.top+window.scrollY
       const bar=previewBar.current
-      const clearance=bar&&getComputedStyle(bar).position==='fixed'?bar.offsetHeight:0
-      const height=Math.max(136,window.innerHeight-top-clearance-8)
-      column.style.setProperty('--cm-fit-width',`${height*9/16}px`)
+      const footerHeight=bar&&getComputedStyle(bar).position==='fixed'?bar.getBoundingClientRect().height:0
+      // The standalone preview keeps its chapters and opinion entry above the fixed bar.
+      const player=video.current
+      const clearance=!projectId&&player?bounds.bottom-player.getBoundingClientRect().bottom+6:8
+      const height=Math.max(136,window.innerHeight-top-footerHeight-clearance)
+      const width=`${height*9/16}px`
+      if(column.style.getPropertyValue('--cm-fit-width')!==width)column.style.setProperty('--cm-fit-width',width)
     }
     fit()
     const observer=new ResizeObserver(fit)
     observer.observe(document.body)
+    if(!projectId)observer.observe(column)
     if(previewBar.current)observer.observe(previewBar.current)
     window.addEventListener('resize',fit)
     return ()=>{observer.disconnect();window.removeEventListener('resize',fit)}
-  },[showPreview,task?.renderId,boardRevision,workspaceView])
+  },[showPreview,task?.renderId,boardRevision,workspaceView,projectId])
 
   const writeOpinion=useCallback((unitId:string|null,text:string)=>{
     setOpinionDraft(current=>{
@@ -939,7 +944,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
           </section>}
         </div>
       </div>
-      <div className="cm-footer cm-action-bar" ref={previewBar}>
+      <div className="cm-footer cm-action-bar cm-preview-action-bar" ref={previewBar}>
         <p>{pendingPreview?'复核未完成，暂不能确认':summary.wait}{hasPreviewDraft&&<> · 已填意见：<strong>{
           draft.target==='whole'?'整体':draft.target==='range'?'时间段':groups.find(group=>`group:${group.id}`===draft.target)?.label??'草稿'
         }</strong></>}</p>

@@ -202,12 +202,10 @@ test.beforeAll(async ()=>{
   build(workspace,true)
   server=await start(workspace)
   origin=address(server)
-  if(rawScreens){
-    const direct=join(path,'direct')
-    build(direct,false)
-    standalone=await start(direct)
-    standaloneOrigin=address(standalone)
-  }
+  const direct=join(path,'direct')
+  build(direct,false)
+  standalone=await start(direct)
+  standaloneOrigin=address(standalone)
 })
 test.afterAll(async()=>{
   for(const site of [server,standalone])if(site){
@@ -635,6 +633,41 @@ test.describe('预览 · 三轮',()=>{
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width)
 
     }
+  })
+  test('独立手机预览的底栏符合稿件高度，完整显示提意见入口',async({page})=>{
+    visualCase=true
+    try{
+      for(const [width,height] of [[390,844],[360,780],[320,640]]){
+        await page.setViewportSize({width,height})
+        await page.goto(standaloneOrigin)
+        const bar=page.locator('.cm-action-bar:visible')
+        const entry=page.getByRole('button',{name:'在这里提意见'})
+        await expect(entry).toBeEnabled()
+        const confirm=bar.getByRole('button',{name:'确认并下载成片',exact:true})
+        await expect(confirm).toBeDisabled()
+        const barBox=(await bar.boundingBox())!
+        expect(barBox.y+barBox.height).toBeCloseTo(height,1)
+        if(width===390)expect(barBox.height).toBeCloseTo(122.58,1)
+        for(const button of await bar.getByRole('button').all()){
+          expect(await button.evaluate(element=>{
+            const range=document.createRange()
+            range.selectNodeContents(element)
+            return range.getClientRects().length
+          })).toBe(1)
+        }
+        await expect.poll(async()=>{
+          const [playerBox,entryBox,footerBox]=await Promise.all([
+            page.locator('video').boundingBox(),entry.boundingBox(),bar.boundingBox(),
+          ])
+          return !!playerBox&&!!entryBox&&!!footerBox&&playerBox.y+playerBox.height<=entryBox.y
+            &&entryBox.y+entryBox.height<=footerBox.y
+        }).toBe(true)
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width)
+        await entry.click()
+        await expect(page.getByLabel('开始（秒）')).toHaveValue('0')
+        await expect(page.getByLabel('结束（秒）')).toHaveValue('')
+      }
+    }finally{visualCase=false}
   })
   test('当前时间只填开始，失败读回不开放确认',async({page})=>{
     await page.goto(`${origin}/?task=${exportsId}&audience=new_contact`)

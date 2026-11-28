@@ -395,6 +395,14 @@
   .cm-workspace-detail .cm-slot-dots { display: none; }
 }
 
+@media (max-width: 600px) {
+  /* Match the two-row mobile preview bar without wrapping action labels. */
+  .cm-direct-review .cm-preview-action-bar:has(.cm-draft-download) {
+    min-height: calc(122.6px + max(0px, env(safe-area-inset-bottom) - 12px));
+    align-content: space-between;
+  }
+}
+
 .cm-main:has(.cm-action-bar) { padding-bottom: 150px; }
 
 @media (max-width: 350px) {
