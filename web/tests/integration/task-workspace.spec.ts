@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test, type Page } from '@playwright/test'
-import { preview } from 'vite'
+import { preview, type Plugin } from 'vite'
 
 const endpoints = '/workspace-api'
 const a='board-a', b='board-b', exportsId='outputs', pausedId='paused', activeId='running'
@@ -26,7 +26,12 @@ const versionRead=(audience:string)=>(url:URL)=>url.pathname===`${endpoints}/pro
 const image={name:'test.png',mimeType:'image/png',
   buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jH1sAAAAASUVORK5CYII=','base64')}
 const source=fileURLToPath(new URL('../fixtures/preflight.webm',import.meta.url))
-let path:string, origin:string
+const rawScreens=process.env.CLIPMENTOR_V2_RAW_DIR
+const visualMedia=process.env.CLIPMENTOR_V2_VISUAL_MEDIA
+const visualVideo=visualMedia?await readFile(visualMedia):undefined
+let path:string, origin:string, standaloneOrigin:string
+let standalone:Awaited<ReturnType<typeof preview>>|undefined
+let visualCase=false
 let server:Awaited<ReturnType<typeof preview>>
 const videoBytes=await readFile(source)
 let running=5, held=false, clientFailed=false, staleBoard=false
@@ -49,16 +54,16 @@ const calls:Array<{route:string;projectId:string|null}> = []
 
 test.beforeAll(async ()=>{
   path=await mkdtemp(join(tmpdir(),'clipmentor-workspace-web-'))
-  execFileSync(process.execPath,['node_modules/vite/bin/vite.js','build','--outDir',path,'--emptyOutDir'],{
-    env:{...process.env,NODE_ENV:'production',CLIPMENTOR_PUBLIC_WORKSPACE:'1',CLIPMENTOR_PUBLIC_API_BASE_PATH:endpoints},stdio:'pipe',
+  const build=(outDir:string,workspace:boolean)=>execFileSync(process.execPath,['node_modules/vite/bin/vite.js','build','--outDir',outDir,'--emptyOutDir'],{
+    env:{...process.env,NODE_ENV:'production',CLIPMENTOR_PUBLIC_WORKSPACE:workspace?'1':'0',CLIPMENTOR_PUBLIC_API_BASE_PATH:endpoints},stdio:'pipe',
   })
-  server=await preview({configFile:false,build:{outDir:path},preview:{host:'127.0.0.1',port:0},plugins:[{
+  const fixtures:Plugin={
     name:'clip-workspace-fixture',
     configurePreviewServer(vite){
       vite.middlewares.use(endpoints,async(req,res)=>{
         const url=new URL(req.url??'/', 'http://localhost')
         const view=url.searchParams.get('view')??'panel'
-        const id=url.searchParams.get('projectId')
+        const id=url.searchParams.get('projectId')??(visualCase?exportsId:null)
         const audience=url.searchParams.get('audience')
         const send=(status:number,body:unknown)=>res.writeHead(status,{'Content-Type':'application/json'}).end(JSON.stringify(body))
         calls.push({route:`${req.method} ${url.pathname} ${view}`,projectId:id})
@@ -68,7 +73,18 @@ test.beforeAll(async ()=>{
             created.set(id,name)
             send(201,{id,name});return
           }
-          send(200,{running,limit:5,tasks:[...boardTasks,...flowTasks()]});return
+          const tasks=visualCase?[
+            {...boardTasks[4],name:'JUDYDOLL 修容盘',updatedAt:Date.now()-120_000,outputs:[
+              {audience:'existing_partner',status:'preview',stage:'self_check'},
+              {audience:'new_contact',status:'paused',stage:'edit'},
+            ]},
+            {...boardTasks[2],name:'Dr. Lan 眼影盘',updatedAt:Date.now()-900_000},
+            {...boardTasks[1],name:'SugarBomb 唇釉',updatedAt:Date.now()-180_000},
+            {...boardTasks[1],id:'running-analysis',name:'Barely There 粉底',stage:'analysis',updatedAt:Date.now()-300_000},
+            {...boardTasks[0],name:'NIUMO 洗面奶',updatedAt:Date.now()-500_000},
+            {...boardTasks[0],id:'completed',name:'TeaShell 面膜',status:'completed',updatedAt:Date.now()-86_400_000},
+          ]:[...boardTasks,...flowTasks()]
+          send(200,{running,limit:5,tasks});return
         }
         if(id!==a&&id!==b&&id!==exportsId&&id!==pausedId&&id!==activeId&&(!id||!created.has(id))){send(404,{});return}
         if(url.pathname==='/intake'){
@@ -125,8 +141,9 @@ test.beforeAll(async ()=>{
           res.writeHead(200,{'Content-Type':'video/mp4','Content-Disposition':`attachment; filename="${expected}.mp4"`}).end('fixture');return
         }
         if(view==='panel_video'){
+          const media=visualCase&&visualVideo?visualVideo:videoBytes
           const start=Number(/^bytes=(\d+)-/.exec(req.headers.range??'')?.[1]??0)
-          res.writeHead(206,{'Content-Type':'video/webm','Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${videoBytes.length-1}/${videoBytes.length}`}).end(videoBytes.subarray(start));return
+          res.writeHead(206,{'Content-Type':'video/webm','Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${media.length-1}/${media.length}`}).end(media.subarray(start));return
         }
         if(view==='panel_poster'){
           res.writeHead(200,{'Content-Type':'image/png'}).end(image.buffer);return
@@ -150,7 +167,16 @@ test.beforeAll(async ()=>{
         }
         if(id===exportsId||id===pausedId){
           if(!audience){send(200,{task:null,outputs,outputOwner:{taskId:id,sequence:1}});return}
-          if(id===pausedId&&audience==='new_contact'){
+          if(visualCase&&id===exportsId&&audience==='existing_partner'){
+            const reviewGroups=Array.from({length:3},(_,i)=>({id:'group-'+(i+1),label:'第 '+(i+1)+' 组'}))
+            send(200,{task:{...baseTask,taskId:`${id}-${audience}`,sourceTaskId:id,audience,stage:'self_check',
+              status:'blocked',stopReason:'limit',previewDuration:111,renderId:'draft-partner',previewPending:true,
+              reviewGroups,previewChapters:[{id:'opening',label:'片头',seconds:0},
+                ...reviewGroups.map(({id,label},i)=>({id,label,seconds:12+i*22})),
+                {id:'ending',label:'片尾',seconds:97}],
+            }});return
+          }
+          if((id===pausedId||visualCase)&&audience==='new_contact'){
             send(200,{task:{...baseTask,taskId:`${id}-${audience}`,sourceTaskId:id,audience,status:'blocked',stage:'edit',stopReason:'limit',blueprintConfirmed:true}});return
           }
           if(audience==='new_contact'&&clientFailed){send(503,{});return}
@@ -165,13 +191,29 @@ test.beforeAll(async ()=>{
         send(200,{task:null})
       })
     },
-  }]})
-  const address=server.httpServer.address()
-  if(!address||typeof address==='string')throw Error('Fixture port unavailable')
-  origin=`http://127.0.0.1:${address.port}`
+  }
+  const start=async(outDir:string)=>preview({configFile:false,build:{outDir},preview:{host:'127.0.0.1',port:0},plugins:[fixtures]})
+  const address=(site:Awaited<ReturnType<typeof preview>>)=>{
+    const bound=site.httpServer.address()
+    if(!bound||typeof bound==='string')throw Error('Fixture port unavailable')
+    return `http://127.0.0.1:${bound.port}`
+  }
+  const workspace=join(path,'workspace')
+  build(workspace,true)
+  server=await start(workspace)
+  origin=address(server)
+  if(rawScreens){
+    const direct=join(path,'direct')
+    build(direct,false)
+    standalone=await start(direct)
+    standaloneOrigin=address(standalone)
+  }
 })
 test.afterAll(async()=>{
-  await new Promise<void>(resolve=>server?server.httpServer.close(()=>resolve()):resolve())
+  for(const site of [server,standalone])if(site){
+    site.httpServer.closeAllConnections()
+    await new Promise<void>(resolve=>site.httpServer.close(()=>resolve()))
+  }
   if(path)await rm(path,{recursive:true,force:true})
 })
 
@@ -363,7 +405,7 @@ test('an explicitly unavailable version loses stale actions without hiding the o
   const partner=page.getByRole('tab',{name:/已合作达人版/})
   const contact=page.getByRole('tab',{name:/新建联达人版/})
   await expect(partner).toContainText('可下载')
-  await expect(contact).toContainText('复核已暂停')
+  await expect(contact).toContainText('可以看片')
   await page.route(versionRead('existing_partner'),route=>route.fulfill({status:409,json:{reason:'output_unavailable'}}))
   await page.clock.fastForward(9000)
   await expect(partner).toContainText('读取状态失败')
@@ -384,7 +426,7 @@ test('a disabled revision can keep its draft and submit only after readback reco
   const panel=page.getByRole('tabpanel',{name:'新建联达人版'})
   const opinion=panel.getByRole('textbox',{name:'修改意见'})
   await opinion.fill('缩短片尾留白')
-  await panel.getByLabel('意见针对哪里').selectOption('whole')
+  await panel.getByRole('radio',{name:'整体',exact:true}).check()
   await panel.getByLabel('这条意见针对整支视频').check()
   const submit=panel.getByRole('button',{name:'提交修改'})
   await expect(submit).toBeDisabled()
@@ -434,7 +476,6 @@ test('a playable version stays selected when its slower sibling becomes availabl
 })
 
 
-const rawScreens=process.env.CLIPMENTOR_V2_RAW_DIR
 async function capture(page:Page,name:string,size:string){
   if(!rawScreens)return
   await mkdir(rawScreens,{recursive:true})
@@ -453,7 +494,7 @@ test.describe('首页 · 三轮',()=>{
     await expect(main.getByLabel('制作阶段')).toHaveCount(1)
     await expect(main.getByText('无需操作')).toBeVisible()
     await expect(main.getByText('暂停示例')).toBeHidden()
-    await capture(page,'home','desktop')
+
   })
   test('手机名额满了仍可选料，回收后新建恢复',async({page})=>{
     running=5
@@ -466,7 +507,7 @@ test.describe('首页 · 三轮',()=>{
     await page.clock.fastForward(6000)
     await expect(page.getByRole('link',{name:'新建任务'})).toBeVisible()
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(390)
-    await capture(page,'home','mobile')
+
   })
   test('空列表与读取失败有明确状态',async({page})=>{
     let fail=true
@@ -536,7 +577,7 @@ test.describe('任务详情 · 三轮',()=>{
     await expect(page.getByRole('navigation',{name:'任务详情'}).getByRole('button')).toHaveText(['素材','蓝图','成片'])
     await expect(page.getByRole('tabpanel',{name:'新建联达人版'}).locator('video')).toBeVisible()
     await expect(page.locator('video')).toHaveCount(1)
-    await capture(page,'detail','desktop')
+
   })
   test('已暂停和已确认的入口分别打开各自版本',async({page})=>{
     await page.goto(origin)
@@ -556,7 +597,7 @@ test.describe('任务详情 · 三轮',()=>{
     const contact=version(page,'new_contact')
     const opinion=contact.panel.getByRole('textbox',{name:'修改意见'})
     await expect(opinion).toBeVisible()
-    await capture(page,'detail','mobile')
+
     await opinion.fill('只留给新建联版')
     await page.getByRole('button',{name:'素材',exact:true}).click()
     await expect(page.getByRole('region',{name:'制作素材'}).locator('li')).toHaveCount(4)
@@ -578,7 +619,7 @@ test.describe('预览 · 三轮',()=>{
     await expect(contact.panel.getByRole('button',{name:'确认成片',exact:true})).toBeDisabled()
     await expect(contact.panel.getByRole('link',{name:'先下未复核版'})).toHaveClass(/secondary/)
     await expect(contact.panel.getByRole('link',{name:'下载成片',exact:true})).toHaveCount(0)
-    await capture(page,'preview','desktop')
+
   })
   test('窄屏和横向平板的播放器与底部操作条不重叠',async({page})=>{
     for(const [width,height] of [[320,640],[390,844],[768,900]]){
@@ -592,7 +633,7 @@ test.describe('预览 · 三轮',()=>{
       const videoBox=await player.boundingBox(),barBox=await bar.boundingBox()
       expect(videoBox!.y+videoBox!.height).toBeLessThanOrEqual(barBox!.y)
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width)
-      if(width===390)await capture(page,'preview','mobile')
+
     }
   })
   test('当前时间只填开始，失败读回不开放确认',async({page})=>{
@@ -642,7 +683,7 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
     if(scenario==='复核暂停'){
       await expect(summary).toContainText('复核已暂停')
       const download=page.waitForEvent('download')
-      await page.getByRole('link',{name:'先下未复核版'}).click()
+      await page.getByRole('link',{name:/先下未复核版/}).click()
       expect((await download).suggestedFilename()).toMatch(/^未复核_/u)
       await page.getByRole('button',{name:'在这里提意见'}).click()
       await expect(page.getByLabel('开始（秒）')).toHaveValue(/^[0-9.]+$/)
@@ -655,7 +696,7 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
       await expect(feedback).toHaveValue('只调整选中的画面')
       await page.getByLabel('结束（秒）').fill('0.5')
     }else{
-      await page.getByLabel('意见针对哪里').selectOption('group:group-1')
+      await page.getByRole('radio',{name:'第 1 组',exact:true}).check()
       if(scenario==='跨任务草稿'){
         const switchTasks=page.getByRole('combobox',{name:'切换任务'})
         const open=page.getByRole('button',{name:'打开所选任务'})
@@ -663,7 +704,7 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
         await expect(page.getByRole('button',{name:'确认蓝图，开始制作'})).toBeEnabled()
         await switchTasks.selectOption(id);await open.click()
         await expect(feedback).toHaveValue('只调整选中的画面')
-        await expect(page.getByLabel('意见针对哪里')).toHaveValue('group:group-1')
+        await expect(page.getByRole('radio',{name:'第 1 组',exact:true})).toBeChecked()
       }
     }
     await expect(submit).toBeEnabled()
@@ -686,3 +727,48 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
     expect(writes[3].renderId).toBe('cut-2')
   })
 }
+
+
+// Capture equivalent data and the two actual entry surfaces for the design review.
+if(rawScreens)test('captures matched workspace and direct preview viewports',async({page})=>{
+  visualCase=true
+  running=3
+  try{
+    for(const [size,width,height] of [['desktop',1280,900],['mobile',390,844]] as const){
+      await page.setViewportSize({width,height})
+      for(const [name,url] of [
+        ['home',origin],['detail',`${origin}/?task=${exportsId}&audience=existing_partner`],['preview',standaloneOrigin],
+      ]){
+        await page.goto(url)
+        if(name==='home')await expect(page.getByRole('heading',{name:'任务',exact:true})).toBeVisible()
+        else{
+          const surface=name==='detail'?version(page,'existing_partner').panel:page
+          await expect(surface.locator('video')).toBeVisible()
+          await expect(surface.getByRole('button',{name:'在这里提意见'})).toBeEnabled()
+          await surface.getByRole('radio',{name:'第 2 组',exact:true}).check()
+          await surface.getByRole('textbox',{name:'修改意见'}).fill('缩短这一组的原片等候。')
+          if(visualVideo){
+            await surface.locator('video').evaluate((video:HTMLVideoElement)=>{video.currentTime=34})
+            await expect(surface.getByRole('button',{name:'在这里提意见'})).toContainText('0:34')
+          }
+          await page.evaluate(()=>{
+            if(document.activeElement instanceof HTMLElement)document.activeElement.blur()
+            window.scrollTo(0,0)
+          })
+          await expect(surface.getByRole('button',{name:/^确认(?:并下载)?成片$/})).toBeDisabled()
+          if(name==='detail')await expect(page.getByRole('heading',{name:'新建联达人版 · 已暂停'})).toBeVisible()
+          else await expect(page.getByRole('heading',{name:'看片并确认'})).toBeVisible()
+        }
+        await capture(page,name,size)
+        const geometry=await page.evaluate(selectors=>Object.fromEntries(selectors.map(selector=>{
+          const elements=[...document.querySelectorAll(selector)]
+          const visible=elements.find(element=>element.getBoundingClientRect().width>0)
+          if(!visible)return [selector,null]
+          const {x,y,width,height}=visible.getBoundingClientRect()
+          return [selector,{x,y,width,height}]
+        })),['h1','.cm-task-sidebar','.cm-task-attention ul','.cm-task-detail-nav','.cm-preview-tabs','.cm-preview-media video','.cm-review-summary','.cm-action-bar'])
+        await writeFile(join(rawScreens,`${name}-${size}-geometry.json`),JSON.stringify(geometry))
+      }
+    }
+  }finally{visualCase=false}
+})

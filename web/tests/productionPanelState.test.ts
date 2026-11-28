@@ -52,16 +52,16 @@ test('shared waiting text uses the same approved production activity',()=>{
  assert.equal(productionActivity({stage:'blueprint',status:'running',active:true}),'正在生成蓝图')
 })
 
-import {hasPlayablePreview,previewProgress,previewStatus} from '../src/pages/productionPanelState.js'
+import {hasPlayablePreview,previewActions,previewStatus} from '../src/pages/productionPanelState.js'
 test('playable, reviewed and downloadable are separate preview states',()=>{
  const paused={status:'blocked',stage:'self_check',active:false,renderId:'the-movie',previewPending:true}
  assert.equal(hasPlayablePreview(paused),true)
  assert.equal(previewStatus(paused),'复核已暂停')
- assert.equal(previewProgress(paused).filter(step=>step.current)[0].label,'看片提意见')
- assert.equal(previewProgress(paused)[2].done,false)
+ assert.equal(previewActions(paused).canConfirm,false)
+ assert.equal(previewActions(paused).canDownloadDraft,true)
  const held={...paused,status:'completed',previewPending:false,previewReviewed:true,deliveryHeld:true}
  assert.equal(previewStatus(held),'需修改')
- assert.equal(previewProgress(held)[3].current,false)
+ assert.equal(previewActions(held).canDownload,false)
  assert.equal(previewStatus({...held,deliveryHeld:false}),'可下载')
  assert.equal(previewStatus({...held,deliveryHeld:false,renderId:undefined}),'预览暂不可用')
  const awaiting={...paused,status:'awaiting_review',previewPending:false}

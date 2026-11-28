@@ -2,7 +2,7 @@ import type { Locator, Page } from '@playwright/test'
 
 type Surface = Page | Locator
 export async function acknowledgeOverallFeedback(surface:Surface){
-  await surface.getByLabel('意见针对哪里').selectOption('whole')
+  await surface.getByRole('radio',{name:'整体',exact:true}).check()
   await surface.getByLabel('这条意见针对整支视频').check()
 }
 

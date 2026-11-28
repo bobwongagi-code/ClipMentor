@@ -73,10 +73,23 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     const rawScreens=process.env.CLIPMENTOR_V2_RAW_DIR
     if(rawScreens){
       await mkdir(rawScreens,{recursive:true})
-      await page.setViewportSize({width:1280,height:900})
-      await page.screenshot({path:join(rawScreens,'blueprint-desktop.png'),animations:'disabled'})
-      await page.setViewportSize({width:390,height:844})
-      await page.screenshot({path:join(rawScreens,'blueprint-mobile.png'),animations:'disabled'})
+      const frame=page.frameLocator('iframe')
+      for(const [size,width,height] of [['desktop',1280,900],['mobile',390,844]] as const){
+        await page.setViewportSize({width,height})
+        await page.screenshot({path:join(rawScreens,`blueprint-${size}.png`),animations:'disabled'})
+        const geometry=await page.evaluate(selectors=>Object.fromEntries(selectors.map(selector=>{
+          const {x,y,width,height}=document.querySelector(selector)!.getBoundingClientRect()
+          return [selector,{x,y,width,height}]
+        })),['h1','.cm-blueprint-opinion-nav','.cm-action-bar'])
+        await writeFile(join(rawScreens,`blueprint-${size}-geometry.json`),JSON.stringify(geometry))
+      }
+      const img=frame.locator('.source-strip button').first()
+      await img.click()
+      const zoom=frame.getByRole('dialog')
+      await expect(zoom).toBeInViewport()
+      await zoom.getByRole('button',{name:'关闭'}).click()
+      await expect(zoom).toBeHidden()
+      await page.evaluate(()=>window.scrollTo(0,0))
       await page.setViewportSize({width:1200,height:900})
     }
     const firstBoard=(await state()).task
@@ -126,6 +139,11 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await page.reload()
     const blueprint=page.frameLocator('iframe')
     await expect(blueprint.locator('body')).toContainText('剪辑蓝图', { timeout: 30_000 })
+    await expect.poll(async()=>{
+      const outer=await page.locator('iframe').evaluate(node=>node.clientHeight)
+      const content=await blueprint.locator('main').evaluate(node=>Math.ceil(node.getBoundingClientRect().height))
+      return outer-content
+    }).toBe(0)
     const groupOpinion=blueprint.getByRole('textbox', { name:'第 1 组意见' })
     const overallOpinion=page.getByRole('textbox', { name:'整体意见' })
     const opinionNav=page.getByRole('navigation',{name:'蓝图意见'})
@@ -242,7 +260,7 @@ test('web feedback, new board, guarded confirmation, two outputs and bound downl
     await checkFinalReview(partner)
     await expect(partner.getByRole('button', { name: '确认并下载成片' })).toBeEnabled()
     await partner.getByRole('textbox', { name: '修改意见' }).fill('调整本组短标')
-    await partner.getByLabel('意见针对哪里').selectOption({label:'第 1 组'})
+    await partner.getByRole('radio',{name:'第 1 组',exact:true}).check()
     await partner.getByLabel('改什么').selectOption('execution')
     await partner.getByRole('button', { name: '提交修改' }).click()
     await expect.poll(async () => { const task=(await (await fetch(origin + '/api/clipmentor/production?audience=existing_partner')).json()).task; return task?.status==='awaiting_review'&&typeof task.renderId==='string'&&task.renderId!==old.task.renderId }).toBe(true)

@@ -38,8 +38,8 @@ function Slots({ workspace }: { workspace?: ClipMentorWorkspace }) {
   </div>
 }
 
-function WorkspaceBrand(){
-  return <a className="cm-brand cm-workspace-brand" href={taskPage()}><img src="/clipmentor-mark.svg" alt=""/><strong>ClipMentor</strong></a>
+function WorkspaceBrand({withMark=false}:{withMark?:boolean}){
+  return <a className="cm-brand cm-workspace-brand" href={taskPage()}>{withMark&&<img src="/clipmentor-mark.svg" alt=""/>}<strong>ClipMentor</strong></a>
 }
 
 function NewTask({workspace,secondary=false}:{workspace?:ClipMentorWorkspace;secondary?:boolean}){
@@ -80,11 +80,11 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
     <aside className="cm-task-sidebar">
       <WorkspaceBrand/>
       <a className="cm-task-back" href={taskPage()} aria-current="page">全部任务</a>
-      <TaskLinks tasks={tasks}/>
+      <TaskLinks tasks={[...needsReview,...running,...saved,...inactive]}/>
     </aside>
     <main className="cm-task-main">
       <div className="cm-task-title">
-        <h1>任务</h1>
+        <div><h1>任务</h1><p className="cm-home-intro">待你处理的排在最前，点一下直接进入。</p></div>
         <div className="cm-task-actions"><Slots workspace={workspace}/><NewTask workspace={workspace}/></div>
       </div>
       {full&&<p className="cm-capacity-notice" role="status">同时制作已满 {workspace.limit} 个。可以<a href={taskPage(undefined,'new')}>先选素材</a>，有空位后再开始制作。</p>}
@@ -154,7 +154,7 @@ function TaskSteps({ task,preview }: { task:{status:WorkspaceStatus;stage?:strin
   const status=preview?.status??task.status
   const current=actions.canDownload||status==='completed'?3:actions.watchable||status==='preview'?2
     :status==='materials'?0:!stage?-1:isBlueprintStage(stage)?1:2
-  const paused=status==='paused'||status==='blocked'
+  const paused=(status==='paused'||status==='blocked')&&!actions.watchable
   return <ol className="cm-task-steps" aria-label="制作步骤">{steps.map((step,index)=><li
     key={step} data-done={index<current||undefined} data-paused={paused&&current===index||undefined}
     aria-current={current===index?'step':undefined}><i aria-hidden="true">{index<current?<Check size={13}/>:index+1}</i><span>{step}</span></li>)}</ol>
@@ -211,8 +211,10 @@ function TaskDetails({ workspace, task, initialView }: { workspace:ClipMentorWor
     </aside>
     <main className="cm-task-detail">
       <div className="cm-task-title">
-        <div><h1>{task.name}</h1>{activeView!=='film'&&<Status status={task.status}/>}</div>
-        <Slots workspace={workspace}/>
+        <div><h1>{task.name}</h1>{activeView==='film'
+          ?<p className="cm-detail-intro">复核由系统完成，进度在「成片」里查看。</p>
+          :<Status status={task.status}/>}</div>
+        {activeView!=='film'&&<Slots workspace={workspace}/>}
       </div>
       <TaskSteps task={stepTask} preview={currentPreview}/>
       <nav className="cm-task-detail-nav" aria-label="任务详情">
@@ -260,7 +262,7 @@ export default function TaskWorkspace() {
   },[])
   const task=workspace?.tasks.find(item=>item.id===projectId)
   return <div className={`cm-shell cm-workspace-v2${projectId?' cm-workspace-detail':''}`}>
-    {view==='new'&&<header className="cm-header"><WorkspaceBrand/></header>}
+    {view==='new'&&<header className="cm-header"><WorkspaceBrand withMark/></header>}
     {error&&<p className="cm-workspace-error" role="alert">{error}</p>}
     {!accessLost&&(view==='new'?<main className="cm-task-main">
       <div className="cm-task-actions cm-task-new-top"><a className="cm-task-back" href={taskPage()}><ArrowLeft size={16}/> 全部任务</a><Slots workspace={workspace}/></div>

@@ -99,7 +99,7 @@ test('preview feedback requires an explicit choice before final confirmation',as
   const opinion=page.getByRole('textbox',{name:'修改意见'})
   const approve=page.getByRole('button',{name:'确认并下载成片',exact:true})
   await opinion.fill('我打算修改这一版')
-  await page.getByLabel('意见针对哪里').selectOption('range')
+  await page.getByRole('radio',{name:'时间段',exact:true}).check()
   await page.getByLabel('开始（秒）').fill('40.93')
   await page.getByLabel('结束（秒）').fill('15')
   await expect(page.getByText('结束时间要晚于开始时间。')).toBeVisible()

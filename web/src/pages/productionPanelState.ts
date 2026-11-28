@@ -65,14 +65,6 @@ export function previewStatus(task?:PreviewTask,readFailed=false){
  return '制作中'
 }
 
-export function previewProgress(task?:PreviewTask){
- const actions=previewActions(task)
- const current=actions.canDownload?3:2
- return ['交素材','审蓝图','看片提意见','拿成片'].map((label,index)=>({
-  label, done:index<current, current:index===current,
- }))
-}
-
 export function previewSummary(task:PreviewTask, playbackFailed:boolean, canWriteOpinion:boolean){
  const actions=previewActions(task)
  const status=playbackFailed||!actions.watchable?'视频暂时播不了':actions.canDownload?'成片可以下载':'可以看片'

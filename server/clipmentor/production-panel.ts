@@ -64,7 +64,7 @@ function needsSourceRequirementsMaintenance(task:ProductionTask){
 type PanelSettings = { unavailable: string } | { provider:'openai'; model:string; apiMode:'chat'|'responses'; backend:'api'|'codex' };
 
 export const panelServiceUnavailable = '制作服务暂时不可用。';
-const boardPresentationVersion='panel-opinions-v9';
+const boardPresentationVersion='panel-opinions-v10';
 function boardPresentation(doc:import('../../src/editor/types').ProjectDoc){
   return doc.clipMentorAnalysis?.source_breakdown?.units?.some(unit=>unit.teaching_selection?.first_glance?.trim())
     ?boardPresentationVersion:undefined;

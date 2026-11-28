@@ -53,8 +53,8 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   return arr(breakdown.points).map(obj).filter(p=>arr(u?.point_ids).includes(p.point_id)).map(p=>text(p.teaching_question)).filter(Boolean).join('；')||'本组教学点尚未登记';};
  const originalDescription=(id:string)=>{const breakdown=obj(data.analysis.source_breakdown),unit=arr(breakdown.units).map(obj).find(u=>u.unit_id===id),segments=arr(breakdown.segments).map(obj).filter(s=>arr(unit?.original_segment_ids).includes(s.segment_id)),evidenceIds=segments.flatMap(s=>arr(s.visible_evidence_ids));const evidence=arr(data.analysis.evidence).map(obj).find(e=>evidenceIds.includes(e.evidence_id)&&e.kind==='visible_action'),range=evidence?.source_range_seconds;if(!text(evidence?.text)||!Array.isArray(range)||range.length!==2||!range.every(v=>typeof v==='number'&&Number.isFinite(v))||range[0]<0||range[1]<range[0])return null;return{text:text(evidence?.text),range:range as [number,number]};};
  const frameLabel=(r:ReviewBoardRow,i:number)=>`${r.stage==='original'?'原片':'讲解'}画面${i+1}`;
- const image=(r:ReviewBoardRow,i:number,detail?:string)=>{const f=r.frames[i],label=detail??frameLabel(r,i);return `<button class="image-button" data-zoom="${board.rows.indexOf(r)}"${detail?` data-zoom-frame="${i}"`:''} aria-label="放大${esc(label)}"><img src="data:image/jpeg;base64,${f.jpeg}" alt="${esc(label)}" decoding="async"></button>`;};
- const strip=(r:ReviewBoardRow,kind:string)=>`<div class="thumb-strip ${kind}">${r.frames.map((f,i)=>(r.stage==='original'||r.replayFrames)?`<figure>${image(r,i)}<figcaption>原片 ${n(f.seconds)}秒</figcaption></figure>`:image(r,i)).join('')}</div>`;
+ const image=(r:ReviewBoardRow,i:number,detail?:string,stage=false)=>{const f=r.frames[i],label=detail??frameLabel(r,i);return `<button class="image-button" data-zoom="${board.rows.indexOf(r)}"${detail?` data-zoom-frame="${i}"`:''} aria-label="放大${esc(label)}">${stage?`<span class="frame-phase">${esc(r.stage_text&&r.stage_text!=='未登记阶段标识'?r.stage_text:r.stage==='original'?'原片':'讲解')}</span>`:''}<img src="data:image/jpeg;base64,${f.jpeg}" alt="${esc(label)}" decoding="async"></button>`;};
+ const strip=(r:ReviewBoardRow,kind:string)=>`<div class="thumb-strip ${kind}">${r.frames.map((f,i)=>(r.stage==='original'||r.replayFrames)?`<figure>${image(r,i,embedded?frameLabel(r,i):undefined,embedded)}<figcaption>原片 ${n(f.seconds)}秒</figcaption></figure>`:image(r,i,embedded?frameLabel(r,i):undefined,embedded)).join('')}</div>`;
  const labelList=(lineId:string)=>{const labels=translatedLabels(data,lineId);return `${labels.invalid&&!embedded?'<p class="input-notice" data-input-code="INPUT">输入提示：短标中文与原文数量或类型不一致，未猜测对应。</p>':''}${labels.pairs.length?`<div class="label-copy"><h4>${embedded?'画面标注':'短标对照'}</h4><ul>${labels.pairs.map(p=>`<li><span lang="ms">${esc(p.ms)}</span>${p.zh||!embedded?`<span aria-hidden="true"> → </span><span>${esc(p.zh||'短标译文未登记')}</span>`:''}</li>`).join('')}</ul></div>`:''}`;};
  const stageCue=(row:ReviewBoardRow,style:string)=>embedded&&row.stage_text==='未登记阶段标识'?'':`<div class="stage-cue" style="${style}">${esc(row.stage_text)}</div>`;
  const copy=(r:ReviewBoardRow,lines=r.lines)=>lines.map(l=>`<div class="line-copy" data-line-id="${esc(l.id)}"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p><div class="caption-cards">${l.cards.map((card,i)=>`<div class="caption-card"><span>${embedded?'字幕 ':'字幕卡'}${i+1}</span>${card.map(s=>`<p lang="ms">${esc(s)}</p>`).join('')}</div>`).join('')}</div>${labelList(l.id)}</div>`).join('');
@@ -115,17 +115,22 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const stageZh=new Map([['Video asal','原片'],['Lihat semula','回看讲解'],['Ulasan semula','回看讲解']]);
  const stageList=(rows:ReviewBoardRow[])=>{const pairs=[...new Map(rows.flatMap(r=>stageTranslations(data,r)).map(p=>[p.ms+'\0'+p.zh,p])).values()];return pairs.length?`<p class="stage-translations">阶段标识：${pairs.map(p=>`${esc(p.ms)+((p.zh||stageZh.get(p.ms))?' → '+esc(p.zh||stageZh.get(p.ms)):'')}`).join('；')}</p>`:'';};
  const unknownBlock=(id:string)=>{const unknowns=unitUnknowns(data,id);return `<details class="evidence-boundaries"><summary>证据边界与未知</summary>${unknowns.length?`<ul>${unknowns.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:'<p>本组没有登记未知项，不等于已全部核实。</p>'}</details>`;};
- const opening=board.rows.find(r=>r.stage==='opening');const openingHtml=opening?`<section class="delivery opening${opening.deliveryLayout?' layered-opening':''}" data-card="opening"><h2>片头</h2><div class="delivery-body"><div class="provided">${opening.deliveryLayout?opening.frames.map((frame,i)=>`<figure>${image(opening,i)}<figcaption>${esc(frame.label)}</figcaption></figure>`).join(''):image(opening,0)}</div><div>${embedded?'':visualQuestions(opening.unit_id)}${copy(opening)}${embedded?'':questionHtml(questionKey(opening))}</div></div></section>`:'';
+ const opening=board.rows.find(r=>r.stage==='opening');
+ const openingImages=opening?.deliveryLayout?opening.frames.map((frame,i)=>`<figure>${image(opening,i)}<figcaption>${esc(frame.label)}</figcaption></figure>`).join('')
+  :opening?image(opening,0):'';
+ const openingHtml=embedded
+  ?`<section class="delivery opening" data-card="opening"><h2>片头</h2>${opening?`${opening.lines.map(line=>`<p class="opening-meaning" data-line-id="${esc(line.id)}">${esc(line.zh||line.ms)}</p>`).join('')}<details class="picture-note"><summary>审核依据</summary><div class="provided">${openingImages}</div>${copy(opening)}</details>`:'<p class="opening-empty">当前蓝图暂无可显示的片头。</p>'}</section>`
+  :opening?`<section class="delivery opening${opening.deliveryLayout?' layered-opening':''}" data-card="opening"><h2>片头</h2><div class="delivery-body"><div class="provided">${openingImages}</div><div>${visualQuestions(opening.unit_id)}${copy(opening)}${questionHtml(questionKey(opening))}</div></div></section>`:'';
  const excerptUnit=embedded&&unitIds.includes(teachingExcerptUnit??'')?teachingExcerptUnit:undefined;
  const sourceLinksScript=`<script>{
  for(const link of document.querySelectorAll('.source-link a'))link.addEventListener('click',event=>{
   const target=document.getElementById(link.hash.slice(1));
   if(!target)return;
   event.preventDefault();
-  for(let parent=target.parentElement;parent;parent=parent.parentElement){
+  for(let parent=target;parent;parent=parent.parentElement){
    if(parent instanceof HTMLDetailsElement)parent.open=true;
   }
-  target.scrollIntoView({block:'start'});
+  target.scrollIntoView({block:'${embedded?'center':'start'}'});
  });
  }</script>`;
  const replayScript=`<script>{
@@ -152,6 +157,26 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  }</script>`;
  const opinionsScript=`<script>{
  const origin=new URL(document.baseURI).origin;
+ const body=document.querySelector('main');
+ const sendHeight=()=>{
+  const height=Math.ceil(body.getBoundingClientRect().height);
+  if(height>0)parent.postMessage({type:'clipmentor:blueprint-height',height},origin);
+ };
+ new ResizeObserver(sendHeight).observe(body);
+ addEventListener('message',event=>{
+  if(event.source!==parent||event.origin!==origin||event.data?.type!=='clipmentor:blueprint-viewport')return;
+  const {height}=event.data;
+  if(Number.isFinite(height)&&height>=200&&height<=10000)document.documentElement.style.setProperty('--review-viewport',height+'px');
+  sendHeight();
+ });
+ const dialog=document.getElementById('zoom');
+ body.addEventListener('click',event=>{
+  const button=event.target.closest('[data-zoom]');
+  if(!button||!dialog.open)return;
+  const top=Math.min(button.getBoundingClientRect().top+scrollY,body.offsetHeight-dialog.offsetHeight);
+  dialog.style.top=Math.max(0,top)+'px';
+  dialog.scrollIntoView({block:'center'});
+ });
  const fields=[...document.querySelectorAll('[data-blueprint-opinion]')];
  for(const field of fields)field.addEventListener('input',()=>{
   parent.postMessage({type:'clipmentor:blueprint-opinion',unitId:field.dataset.blueprintOpinion,text:field.value},origin);
@@ -160,7 +185,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   if(event.source!==parent||event.origin!==origin)return;
   if(event.data?.type==='clipmentor:open-blueprint-opinion'){
    const field=fields.find(field=>field.dataset.blueprintOpinion===event.data.unitId);
-   if(field){field.closest('details').open=true;field.focus();}
+   if(field){field.closest('details').open=true;field.focus({preventScroll:true});field.scrollIntoView({block:'center'});}
    return;
   }
   if(event.data?.type!=='clipmentor:blueprint-opinion-draft')return;
@@ -292,20 +317,33 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
 @media(max-width:600px){.focused-explanation{grid-template-columns:minmax(0,1fr)}.focused-explanation>h3{grid-column:auto}}
 ${embedded?`
 body{background:#fdfaf5;color:#1f1c17;font:15px/1.65 system-ui,"PingFang SC",sans-serif}
-header,main,footer{max-width:900px;padding:0 12px}header{padding-top:10px}
-h1{font-size:20px;margin:0 0 4px}.overview{margin:0 0 14px;color:#7a746a}
+header{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);padding:0}
+main{display:flow-root;max-width:none;padding:0}
+dialog{position:absolute;inset:auto 0;margin:0 auto;max-width:calc(100% - 24px);max-height:calc(var(--review-viewport, 600px) - 80px);overflow:auto;border-radius:14px}
+.zoom-frames figure{min-width:0}.zoom-frames img{max-height:calc(var(--review-viewport, 600px) - 165px)}
 .group,.delivery{border:1px solid #e8e2d6;border-radius:16px;padding:18px;margin:0 0 18px}
-h2{font-size:20px;margin-bottom:8px}h2>span{font-size:12px;color:#7a746a;margin:0}
+h2{font-size:20px;font-weight:700;line-height:1.65;margin:2px 0 4px}h2>span{font-size:12px;color:#7a746a;margin:0}
+.opening h2{margin:0;color:#7a746a;font-size:12px;font-weight:400}
+.opening-meaning{font-size:17px;font-weight:700;margin:2px 0 4px}.opening-empty{font-size:14px;margin:4px 0 0;color:#7a746a}
+.opening .picture-note{margin-top:6px;padding:0;border:0}
+.opening .provided{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr));gap:12px;margin-top:8px}.opening figure{margin:0}
 .gain,.ending-check{display:inline-block;border-radius:8px;padding:3px 12px;background:#fff4d2;color:#5a4a1f;font-size:14px}
-.source-block{display:block;padding:0;border:0;margin:0 0 14px}.source-block h3,.focused-explanation>h3,.explanation h3{display:table;margin:0 0 6px;border-radius:999px;padding:3px 12px;font-size:12px;background:#e6c46f;color:#2f261a}
-.source-block h3{background:#0d5ea6;color:white}
-.source-rail{padding:0 0 6px}.source-rail .source-strip{display:flex;gap:10px;max-width:none;padding:0;background:none}.source-strip figure{flex:0 0 107px}.source-strip .image-button,.source-strip img{border-radius:10px}
-.focused-explanation,.explanation{grid-template-columns:minmax(0,245px) minmax(0,1fr);gap:12px 16px;margin-bottom:12px}.explanation-strip{max-width:300px;margin:0}.explanation-strip .image-button{border-radius:8px;overflow:hidden}
+.gain{margin:0 0 12px}.source-block{display:block;padding:0;border:0;margin:0 0 12px}
+.source-block h3,.focused-explanation>h3,.explanation h3{margin:0 0 6px;font-size:12px;font-weight:400;color:#7a746a}
+.source-rail,.explanation-strip{padding:0 0 4px;overflow-x:auto}.source-rail .source-strip,.explanation-strip{display:flex;gap:10px;max-width:none;margin:0;padding-inline:0;background:none}
+.source-strip figure{flex:0 0 130px}.source-strip .image-button,.explanation-strip .image-button{border-radius:10px;overflow:hidden;display:block;background:#17181b}
+.frame-phase{height:19px;display:block;background:#0d5ea6;color:#fff;font:11px/19px system-ui;text-align:center}
+.source-strip img{height:171px;aspect-ratio:auto;object-fit:contain;background:#17181b}
+.explanation-strip>*{flex:0 0 150px;min-width:0}.explanation-strip img{height:231px;aspect-ratio:auto;object-fit:contain;background:#17181b}
+.explanation-strip .frame-phase{background:#e6c46f;color:#2f261a}.thumb-strip figcaption{font-size:12px;color:#7a746a;margin-top:3px}
+.focused-explanation,.explanation{display:block;padding:0;margin-bottom:14px}.explanation+.explanation{padding-top:14px}
+.focused-copy,.explanation-copy{margin-top:14px}.replay-gallery{max-width:320px}
+.replay-frames .image-button img,.teaching-excerpt video{max-height:calc(var(--review-viewport,600px) - 120px)}
 .focused-copy,.explanation-copy{background:#fdfaf5;border:1px solid #e8e2d6;border-radius:12px;padding:12px 14px}
 .meaning,.focused-copy .meaning{font-size:15px;font-weight:600;margin:0 0 4px}.narration,.focused-copy .narration{font-size:14px;color:#3a342a;margin:0 0 8px}
 .provided{border-radius:10px;background:#f5f0e6;padding:6px}.provided .image-button img{max-height:430px}
 .group-opinion{border:1px solid #e8e2d6;border-radius:12px;margin-top:14px;padding:9px 14px;font-size:13px}
-@media(max-width:600px){.group,.delivery{padding:14px}.focused-explanation,.explanation{grid-template-columns:minmax(0,1fr)}.ending-grid{gap:12px}.ending+.ending{padding-left:0;border:0}}
+@media(max-width:700px){.ending-grid{grid-template-columns:1fr;gap:12px}.ending+.ending{padding-left:0;border:0}}
 `:''}
 </style></head><body><header>${embedded?'':'<p class="kicker">剪辑蓝图 · 人审版</p>'}<h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解${!embedded&&durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main>${embedded?'':'<footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer>'}<dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded,true)}${sourceLinksScript}${replayScript}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
 }
