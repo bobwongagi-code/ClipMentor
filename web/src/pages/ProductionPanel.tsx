@@ -6,7 +6,7 @@ import { blueprintNotices, readReviewIssue, reviewMessages, type ReviewIssue } f
 import { ProgressNode } from '../components/processing/ProgressNode'
 import { hasPlayablePreview, previewActions, previewStatus, previewSummary, productionProgress, productionActivity, productionPageTitle, reviewableBlueprintRevision, showSharedBlueprint } from './productionPanelState'
 
-import { projectResource, type TaskView } from './taskNavigation'
+import { projectResource, type TaskNavigation, type TaskView } from './taskNavigation'
 import { useReviewDraft } from './useReviewDraft'
 
 export const productionEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/production`
@@ -50,6 +50,7 @@ const noGroups:NonNullable<Task['reviewGroups']>=[]
 const sameDraft=(first:unknown,second:unknown)=>JSON.stringify(first)===JSON.stringify(second)
 const serviceUnavailable = '制作暂时不可用，已保存的内容不受影响。'
 const materialsUnavailable = '请确认四份素材都齐全，并且能打开。'
+const boardRequestTimeout = 30_000
 const publicBlueprintNotices=new Set<string>(Object.values(blueprintNotices))
 const reviewCopy:Record<string,string>={
   [reviewMessages.analysisPaused]:'原片分析暂停了，素材都在，无需重传。',
@@ -119,6 +120,12 @@ async function readBoardPage(response: Response, expectedIdentity?: string) {
   return { identity, html }
 }
 
+function validOpinionDifference(value:BlueprintOpinionDifference){
+  return value&&typeof value.label==='string'
+    &&Array.isArray(value.changes)&&value.changes.every(change=>change&&typeof change.before==='string'&&typeof change.after==='string')
+    &&Array.isArray(value.kept)&&value.kept.every(text=>typeof text==='string')
+}
+
 export async function readPanelState(response: Response): Promise<State | undefined> {
   if (!response.ok) return
   const data = await readApiJson<State>(response)
@@ -130,6 +137,14 @@ export async function readPanelState(response: Response): Promise<State | undefi
   if (data.outputOwner !== undefined && (!data.outputOwner || typeof data.outputOwner.taskId !== 'string' || !data.outputOwner.taskId
     || !Number.isSafeInteger(data.outputOwner.sequence))) return
   if(data.task){
+    const {reviewGroups,attachments,blueprintOpinionDifferences,productionDifferences}=data.task
+    if(reviewGroups!==undefined&&(!Array.isArray(reviewGroups)||!reviewGroups.every(group=>
+      group&&typeof group.id==='string'&&typeof group.label==='string')))return
+    if(attachments!==undefined&&(!Array.isArray(attachments)||!attachments.every(file=>
+      file&&typeof file.assetId==='string'&&typeof file.fileName==='string')))return
+    if([blueprintOpinionDifferences,productionDifferences].some(value=>value!==undefined&&(!value
+      ||!Array.isArray(value.groups)||!value.groups.every(validOpinionDifference)
+      ||value.overall!==undefined&&!validOpinionDifference(value.overall))))return
     const length=data.task.previewDuration
     const duration=typeof length==='number'&&Number.isFinite(length)&&length>0?length:undefined
     const ids=new Set<string>()
@@ -146,11 +161,11 @@ export async function readPanelState(response: Response): Promise<State | undefi
   return data
 }
 
-export default function ProductionPanel({ assets, intakeReady, requestApi, outputAudience, sourceTaskId, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh, showPreview = true, projectId, reviewProjectId, slotsFull = false, requestedAudience, onAudienceChange, onPreviewTask, workspaceView }: {
+export default function ProductionPanel({ assets, intakeReady, requestApi, outputAudience, sourceTaskId, sharedTask, onTask, unifiedBlueprint = false, mediaRefresh, showPreview = true, projectId, reviewProjectId, slotsFull = false, requestedAudience, onAudienceChange, onPreviewTask, workspaceView, navigateTask }: {
   assets:{id:string;title:string;name:string}[]; intakeReady:boolean; requestApi:(url:string, init?:RequestInit)=>Promise<Response>
   outputAudience?:Audience; sourceTaskId?:string; sharedTask?:Task; onTask?:(task:Task|undefined, failed:boolean)=>void; unifiedBlueprint?:boolean
   mediaRefresh?:number; showPreview?:boolean; projectId?:string; reviewProjectId?:string; slotsFull?:boolean
-  requestedAudience?:Audience; workspaceView?:TaskView; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
+  requestedAudience?:Audience; workspaceView?:TaskView; navigateTask?:TaskNavigation; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
 }) {
   const endpoint = projectResource(outputAudience ? `${productionEndpoint}?audience=${outputAudience}` : productionEndpoint, projectId)
   const assetUrl=(view:string,key:string,value:string)=>projectResource(resourceUrl(view,key,value,outputAudience),projectId)
@@ -229,7 +244,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   useEffect(()=>{
     if(activeOutput&&previewAvailable&&activeOutput!==requestedAudience)onAudienceChange?.(activeOutput)
   },[activeOutput,previewAvailable,requestedAudience,onAudienceChange])
-  useEffect(()=>{onPreviewTask?.(showingVersions||previewAvailable?activePreview:undefined)},[activePreview,previewAvailable,showingVersions,onPreviewTask])
+  useEffect(()=>{onPreviewTask?.(activePreview)},[activePreview,onPreviewTask])
   const visual = task?.visualCriteria
   const visualKey = `${task?.taskId}:${task?.renderId}:${visual?.digest}`
   const languageConfirmed = Boolean(confirmation?.key === visualKey && confirmation.language)
@@ -259,7 +274,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   const feedback=draft.text
   const groups=task?.reviewGroups??noGroups
   const opinionEntries=Array.isArray(opinionDraft?.entries)?opinionDraft.entries:undefined
-  const pendingOpinion=opinionReview?.key===boardKey&&sameDraft(opinionReview.draft,opinionDraft)?opinionReview:undefined
+  const pendingOpinion=opinionReview?.key===actionKey&&sameDraft(opinionReview.draft,opinionDraft)?opinionReview:undefined
   useEffect(()=>{
     if(pendingOpinion)opinionPrompt.current?.focus()
   },[pendingOpinion])
@@ -412,7 +427,8 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     let timer: ReturnType<typeof setTimeout>
     async function readBoard(revision: string, attempt: number) {
       try {
-        const response = await requestApi(boardUrl(revision,boardIdentity), { signal: controller.signal })
+        const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(boardRequestTimeout)])
+        const response = await requestApi(boardUrl(revision,boardIdentity), { signal })
         const page = await readBoardPage(response, boardIdentity)
         if (!controller.signal.aborted) setBoard({ key:boardKey, revision, presentation:boardPresentation, ...page })
       } catch {
@@ -480,6 +496,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     if(name==='accept'&&!canAccept)return
     const latestFeedback=readFeedbackDraft()
     const approveBlueprint=name==='produce_versions'||name==='approve_blueprint'
+    if((approveBlueprint||name==='revise_blueprint')&&!currentBoard)return
     function draftIsCurrent() {
       const latestOpinions=readOpinionDraft()
       const blocked=(name==='accept'&&!keepPreviewDraft&&!!latestFeedback?.text.trim())
@@ -505,7 +522,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       const identity = currentBoard?.identity
       const subjectKey=boardKey
       const submit = () => requestApi(endpoint, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal:AbortSignal.any([signal,AbortSignal.timeout(30_000)]),
         body: JSON.stringify({action:name,revision,boardIdentity:identity,boardPresentation:currentBoard?.presentation,renderId:task?.renderId,
           ...(name==='continue_blueprint_review'?{taskId:task?.taskId,sequence:task?.sequence}:{}),
           ...(name==='accept'?{previewWatched,languageConfirmed,visualCriteriaDigest:visual?.digest}:{}),
@@ -521,7 +538,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         // This response is returned before any mutation. Restore exactly the
         // board the reviewer acted on before sending the same action once.
         if(!stillCurrent())return
-        const refreshed = await requestApi(boardUrl(revision,identity),{signal})
+        const refreshed = await requestApi(boardUrl(revision,identity),{signal:AbortSignal.any([signal,AbortSignal.timeout(boardRequestTimeout)])})
         if (refreshed.ok) {
           const page = await readBoardPage(refreshed, identity)
           if(!stillCurrent())return
@@ -546,10 +563,13 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         return
       }
       if(name==='revise_blueprint'&&opinions&&(result?.opinionConfirmation||result?.opinionPlacements?.length)){
-        if(draftIsCurrent())setOpinionReview({key:boardKey,draft:opinionDraft,entries:opinions,confirmation:result.opinionConfirmation,placement:result.opinionPlacements?.[0]})
+        if(draftIsCurrent())setOpinionReview({key:actionKey,draft:opinionDraft,entries:opinions,confirmation:result.opinionConfirmation,placement:result.opinionPlacements?.[0]})
         return
       }
       if (result?.accepted !== true) throw new Error('Missing production acknowledgement')
+      if(name==='start')navigateTask?.('materials')
+      if(name==='approve_blueprint'||name==='produce_versions')navigateTask?.('blueprint')
+      if(name==='revise_preview')navigateTask?.('film')
       if(name==='revise_blueprint'){
         setOpinionDraft(current=>sameDraft(current,opinionDraft)?undefined:current)
         setOpinionReview(undefined)
@@ -656,11 +676,12 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
   if(state.outputs){
     const audiences=state.outputs.map(output=>output.audience)
     const primary=audiences.includes('existing_partner')?'existing_partner':audiences[0]
-    const requestedBoard=requestedAudience&&audiences.includes(requestedAudience)&&(
-      !!reviewableBlueprintRevision(outputTask(requestedAudience))
-      ||(outputTask(requestedAudience)?.status==='blocked'&&workspaceView==='blueprint'))
-    const blueprintAudience=requestedBoard?requestedAudience:reviewableBlueprintRevision(outputTask(primary))?primary
-      :audiences.find(audience=>!!reviewableBlueprintRevision(outputTask(audience)))??primary
+    const requestedTask=requestedAudience&&audiences.includes(requestedAudience)?outputTask(requestedAudience):undefined
+    const requestedBoard=requestedTask&&(reviewableBlueprintRevision(requestedTask)
+      ||(requestedTask.status==='blocked'&&!requestedTask.blueprintConfirmed&&['analysis','blueprint','copy_review'].includes(requestedTask.stage)))
+    const reviewableAudience=audiences.find(audience=>!!reviewableBlueprintRevision(outputTask(audience)))
+    const blueprintAudience=requestedBoard&&requestedAudience?requestedAudience:reviewableBlueprintRevision(outputTask(primary))?primary
+      :reviewableAudience??primary
     const blueprintTab=workspaceView==='blueprint'
     const tabbed=!blueprintTab&&(showingVersions||workspaceView==='film')
     const sharedBlueprint=blueprintTab||!tabbed&&showSharedBlueprint(outputTask(primary)??audiences.map(outputTask).find(Boolean))
@@ -687,7 +708,10 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
       document.getElementById(`${tabsId}-${audience}`)?.focus()
     }
     return <>
-    {hiddenBlueprint&&<p className="cm-panel" role="status">蓝图已进入制作，成片和随片资料可在「成片」查看。</p>}
+    {hiddenBlueprint&&<div className="cm-panel">
+      <p role="status">蓝图已进入制作，成片和随片资料可在「成片」查看。</p>
+      {navigateTask&&<button className="cm-button secondary" onClick={()=>navigateTask('blueprint','film')}>去看片</button>}
+    </div>}
     <div className={tabbed?'cm-preview-page':undefined} hidden={hiddenBlueprint}>
       {tabbed&&!projectId?<PreviewHeading completed={currentTask?.status==='completed'}/>
         :!tabbed&&!reviewableBlueprintRevision(outputTask(blueprintAudience))&&<div className="cm-heading"><Title>{productionPageTitle(sharedProgress)}</Title></div>}
@@ -709,7 +733,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
         return <section key={`${owner}:${audience}`} id={`${tabsId}-panel-${audience}`} hidden={!visible}
         role={tabbed?'tabpanel':undefined} aria-label={sharedBlueprint?'共用蓝图':audienceTitleFor(audience)}>
         <ProductionPanel assets={assets} intakeReady={intakeReady} requestApi={requestApi} mediaRefresh={mediaRefresh} unifiedBlueprint={sharedBlueprint}
-          projectId={projectId} reviewProjectId={reviewProjectId} slotsFull={slotsFull} outputAudience={audience} sourceTaskId={state.outputOwner?.taskId} sharedTask={sharedProgress} showPreview={visible} workspaceView={workspaceView}
+          projectId={projectId} reviewProjectId={reviewProjectId} slotsFull={slotsFull} outputAudience={audience} sourceTaskId={state.outputOwner?.taskId} sharedTask={sharedProgress} showPreview={visible} workspaceView={workspaceView} navigateTask={navigateTask}
           onTask={audience==='existing_partner'?reportPartner:reportContact} />
       </section>})}
       </div>
@@ -724,7 +748,18 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
     </div></>
   }
   if(task&&((boardRevision&&!showBoard)||(!boardRevision&&(awaitingPreview||completed||pendingPreview)&&!showFilm))){
-    return showPreview?<p className="cm-panel" role="status">{showBoard?'蓝图已进入制作，成片和随片资料可在「成片」查看。':'蓝图确认并生成预览后，可在这里看片。'}</p>:null
+    return showPreview?<div className="cm-panel">
+      <p role="status">{showBoard?'蓝图已进入制作，成片和随片资料可在「成片」查看。':'这一版有蓝图需要审核。'}</p>
+      {navigateTask&&<button className="cm-button secondary" onClick={()=>
+        showBoard?navigateTask('blueprint','film',outputAudience):navigateTask('film','blueprint',outputAudience)
+      }>{showBoard?'去看片':'去审蓝图'}</button>}
+    </div>:null
+  }
+  if(!task&&!outputAudience&&intakeReady&&workspaceView&&workspaceView!=='materials'){
+    return <div className="cm-panel">
+      <p role="status">素材已保存，请先开始制作。</p>
+      <button className="cm-button secondary" onClick={()=>navigateTask?.(workspaceView,'materials')}>去素材页</button>
+    </div>
   }
   const summary=task&&previewSummary(task,videoFailure===videoKey,canWritePreviewOpinion)
   return <>
@@ -769,7 +804,7 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
               <strong>{item.label}</strong>
               <ul>{item.keep.map(text=><li key={text}>保留 {text}</li>)}<li>修改 {item.change}</li></ul>
             </div>)}
-            <button type="button" className="cm-button secondary" disabled={pending} onClick={()=>void action('revise_blueprint',pendingOpinion.entries,pendingOpinion.confirmation?.token)}>确认并修改</button>
+            <button type="button" className="cm-button secondary" disabled={pending||!currentBoard} onClick={()=>void action('revise_blueprint',pendingOpinion.entries,pendingOpinion.confirmation?.token)}>确认并修改</button>
           </div>}
         </div>}
         {opinionNotice?.key===boardKey&&opinionNotice.message!==task.blueprintMessage&&<p role="status">{displayReviewCopy(opinionNotice.message)}</p>}
@@ -877,7 +912,10 @@ export default function ProductionPanel({ assets, intakeReady, requestApi, outpu
                   ...groups.map(group=>({value:`group:${group.id}`,label:group.label}))].map(({value,label})=>
                   <label key={value}>
                     <input type="radio" name={`${tabsId}-scope`} value={value} checked={draft.target===value}
-                      onChange={()=>setFeedbackDraft({...draft,target:value,confirmed:false})}/>
+                      onChange={()=>{
+                        if(value==='range'&&!startEntered&&loadedVideo===videoKey&&video.current?.readyState)setRangeFromPlayback('start')
+                        else setFeedbackDraft({...draft,target:value,confirmed:false})
+                      }}/>
                     <span>{label}</span>
                   </label>)}
               </fieldset>

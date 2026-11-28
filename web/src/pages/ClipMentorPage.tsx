@@ -3,7 +3,7 @@ import { Check, Download, Film, Image, Send, Upload } from 'lucide-react'
 import { uploadFeedback, uploadFeedbackFor } from '../../../shared/clipmentor-upload-feedback'
 import './clipmentor.css'
 import ProductionPanel, { productionEndpoint, readPanelState, type Audience, type Task } from './ProductionPanel'
-import { projectResource, taskPage, workspaceEndpoint, type TaskView } from './taskNavigation'
+import { projectResource, taskPage, workspaceEndpoint, type TaskNavigation, type TaskView } from './taskNavigation'
 
 const slots = [
   { key: 'source', title: '爆款原片', accept: 'video/mp4,video/webm,video/quicktime', icon: Film, formats: ['.mp4', '.webm', '.mov'] },
@@ -101,9 +101,9 @@ function Feedback({ label, messages, onSend }: {
 
 const intakeEndpoint = `${__CLIPMENTOR_API_BASE_PATH__}/intake`
 
-export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit, requestedAudience,onAudienceChange,onPreviewTask,workspaceView,taskStarted }: {
+export default function ClipMentorPage({ projectId, workspaceNew = false, embedded = false, running, limit, requestedAudience,onAudienceChange,onPreviewTask,workspaceView,taskStarted,navigateTask }: {
   projectId?: string; workspaceNew?: boolean; embedded?: boolean; running?: number; limit?: number
-  requestedAudience?:Audience; workspaceView?:TaskView; taskStarted?:boolean; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
+  requestedAudience?:Audience; workspaceView?:TaskView; navigateTask?:TaskNavigation; taskStarted?:boolean; onAudienceChange?:(audience:Audience)=>void; onPreviewTask?:(task:Task|undefined)=>void
 } = {}) {
   const [materials, setMaterials] = useState<Partial<Record<Slot, Material>>>({})
   const urls = useRef<Partial<Record<Slot, string>>>({})
@@ -159,11 +159,12 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
           } else {
             const { receipt: saved, repair: candidate } = await response.json() as { receipt: IntakeReceipt | null; repair?: IntakeRepair }
             if (controller.signal.aborted) return
-            if (saved?.assets.length === slots.length) {
+            if (saved && (!projectId || saved.projectId===projectId) && Array.isArray(saved.assets) && saved.assets.length===slots.length) {
               setReceipt(saved)
               return
             }
-            if (candidate?.assets.length === slots.length && candidate.missingSlots?.length
+            if (candidate && (!projectId || candidate.projectId===projectId) && Array.isArray(candidate.assets)
+              && candidate.assets.length===slots.length && Array.isArray(candidate.missingSlots) && candidate.missingSlots.length
               && candidate.missingSlots.every(key => slots.some(slot => slot.key === key))) setRepair(candidate)
           }
         } catch {
@@ -244,7 +245,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
       let target = projectId
       if (workspaceNew) {
         creationId.current ??= crypto.randomUUID()
-        const response = await requestApi(workspaceEndpoint, {method:'POST', headers:{'Content-Type':'application/json'},
+        const response = await requestApi(workspaceEndpoint, {method:'POST',signal:AbortSignal.timeout(15_000), headers:{'Content-Type':'application/json'},
           body:JSON.stringify({id:creationId.current,name:taskName.trim()})})
         const saved = await response.json().catch(() => undefined)
         if (!response.ok || saved?.id !== creationId.current) throw new UploadNotice(response.status===400?'请核对任务名称。':'暂时无法新建任务，请稍后再试。')
@@ -256,7 +257,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
         if (target && uploaded.projectId !== target) throw new UploadNotice(uploadFeedback.changed)
         if (workspaceNew) {
           // Still open the saved task if another task took the slot during upload.
-          const started = await requestApi(projectResource(productionEndpoint,target), {method:'POST',
+          const started = await requestApi(projectResource(productionEndpoint,target), {method:'POST',signal:AbortSignal.timeout(25_000),
             headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'start'})}).catch(() => undefined)
           const result = await started?.json().catch(() => undefined)
           const url = taskPage(target)
@@ -264,7 +265,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
           else window.location.assign(`${url}&start=${result?.reason==='capacity'?'capacity':'check'}`)
         } else finish(uploaded)
       }
-      const response = await requestApi(targetIntake, { method: 'POST', body }).catch(() => undefined)
+      const response = await requestApi(targetIntake, { method: 'POST', body, signal:AbortSignal.timeout(300_000) }).catch(() => undefined)
       const result = await response?.json().catch(() => undefined)
       if (response?.ok && result?.projectId && result.assets?.length === slots.length
         && (!repair || result.projectId === repair.projectId)) {
@@ -276,7 +277,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
       }
       // A disconnected response can follow a successful commit. Read the
       // receipt once and bind each submitted entry before moving on.
-      const readback = await requestApi(targetIntake).catch(() => undefined)
+      const readback = await requestApi(targetIntake,{signal:AbortSignal.timeout(15_000)}).catch(() => undefined)
       const saved: IntakeReceipt | undefined = readback?.ok
         ? (await readback.json().catch(() => undefined))?.receipt
         : undefined
@@ -301,7 +302,7 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
   }
 
   const source = materials.source
-  const showProduction = !demo && (receipt || hasSavedProduction)
+  const showProduction = !demo && (receipt || hasSavedProduction || taskStarted)
   const savedMaterialsView=workspaceView==='materials'&&taskStarted
   const materialTab=!workspaceView||workspaceView==='materials'
   const savedAssets=(receipt??repair)?.assets??[]
@@ -322,12 +323,13 @@ export default function ClipMentorPage({ projectId, workspaceNew = false, embedd
         {savedAssets.length?<ul className="cm-saved-assets">{savedAssets.map((asset,index)=><li key={asset.id}>
           <Check size={17} aria-hidden="true"/><strong>{slots[index].title}</strong><span>{asset.name}</span>
         </li>)}</ul>:<p role="status">{checkingReceipt?'正在确认上传情况…':uploadError||'暂时确认不了上传情况，请稍后刷新。'}</p>}
+        {navigateTask&&<button className="cm-button secondary" onClick={()=>navigateTask('materials')}>查看制作进度</button>}
       </section>}
       {!materialTab&&repair&&<p className="cm-caption" role="status">有素材需要补传。请打开「素材」标签，选择当初上传的文件。</p>}
       {!materialTab&&!showProduction&&!checkingReceipt&&<p className="cm-panel" role="status">请先上传四份素材，开始制作。</p>}
       {showProduction && <div hidden={savedMaterialsView}><ProductionPanel assets={(receipt ?? repair)?.assets.map((asset, index) => ({ ...asset, title: slots[index].title })) ?? []} requestApi={requestApi}
         projectId={projectId} reviewProjectId={projectId??receipt?.projectId??repair?.projectId} intakeReady={!!receipt}
-        slotsFull={slotsFull} mediaRefresh={mediaRefresh} requestedAudience={requestedAudience} onAudienceChange={onAudienceChange} onPreviewTask={onPreviewTask} workspaceView={workspaceView} showPreview={!savedMaterialsView} /></div>}
+        slotsFull={slotsFull} mediaRefresh={mediaRefresh} requestedAudience={requestedAudience} onAudienceChange={onAudienceChange} onPreviewTask={onPreviewTask} workspaceView={workspaceView} showPreview={!savedMaterialsView} navigateTask={navigateTask} /></div>}
       {checkingReceipt ? <p className="cm-caption" role="status">正在确认上传情况…</p> : materialTab && step === 0 && (!showProduction || repair) && <>
         {repair
           ? <div className="cm-heading"><h2>补传缺少的素材</h2><p>请选当初上传的原文件，补传后继续制作。</p></div>

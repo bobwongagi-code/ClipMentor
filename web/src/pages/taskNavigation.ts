@@ -9,6 +9,7 @@ export function projectResource(url: string, projectId?: string) {
 }
 
 export type TaskView = 'materials' | 'blueprint' | 'film'
+export type TaskNavigation = (from:TaskView,to?:TaskView,audience?:'new_contact'|'existing_partner')=>void
 
 export function taskPage(id?: string, view?: 'new' | TaskView, audience?: 'new_contact' | 'existing_partner') {
   const query = new URLSearchParams()

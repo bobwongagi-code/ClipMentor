@@ -35,6 +35,7 @@ export function panelReviewIssue(error:unknown){
   return {kind:'binding',message:copy.reviewPaused} as const;
  if(/production_confirmed_teaching_baseline_changed/.test(message))
   return {kind:'gate',message:copy.choicesRetained} as const;
+ if(message==='feedback_range_targets_required')return {kind:'binding',message:copy.feedbackRangeEmpty} as const;
  if(/binding|_scope_|_stale|_schema_|_format|review_reference_invalid|author_self_check_invalid|execution_mapping_repair_no_progress|feedback_(target_missing|unit_placement_missing|execution_targets_required|changed_)|绑定错|版本.*变化|预览.*变化|版本记录不匹配|片尾.*齐备|片尾.*变化|证据.*缺失/i.test(message))
   return {kind:'binding',message:copy.updated} as const;
  if(/(?:teaching_baseline_repair|teaching_final_narration_repair|preview_blueprint_alignment|blueprint_repair)_no_progress/.test(message))

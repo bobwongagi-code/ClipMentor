@@ -1229,3 +1229,11 @@ The workspace list reports stages and timestamps. It has no exact percent comple
 ### 2026-11-28 · Match the standalone mobile preview footer
 
 The unreviewed preview bar now reserves the design's 122.6 CSS pixels at 390 × 844. Keep each action label on one line and add any safe-area allowance to the minimum height. The standalone player fit measures both the fixed bar and the controls beneath the video. Measure their actual height after wrapping so the chapter rail and the feedback entry stay visible on short screens. Verify the fixed bar geometry, one-line buttons, and a real feedback click at widths 320, 360, and 390. Keep the standalone and workspace preview checks separate.
+
+### 2026-11-28 · Follow the saved state after a delayed response
+
+Test actions from the actual tab controls. A manual page reload can hide an action that commits but leaves the workspace on the wrong tab. Advance an explicitly open tab when a successful action or ordered workspace readback moves its workflow forward. Keep the selected version and keep the tab if the user has already moved elsewhere. A playable preview that still awaits internal review must leave a sibling's reopened blueprint reachable from the homepage. The task detail response decides whether the selected output can be confirmed or downloaded.
+
+Keep the last valid panel visible when a status refresh returns malformed nested data. Do not restore a material receipt bound to a different project. After a write loses its response, read back the saved state and keep the draft until the action is confirmed. Bind an opinion confirmation to the board presentation that generated it and wait for that board to load before submitting again.
+
+Start a time-range opinion at the current playback position and require an explicit end. The execution handler needs at least one complete timeline item in the selected interval. It rejects a short interval without changing the task. The returned notice explains how to widen the range or choose a group.

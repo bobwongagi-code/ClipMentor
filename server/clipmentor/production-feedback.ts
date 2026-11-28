@@ -108,7 +108,8 @@ export async function bindProductionFeedback(task:ProductionTask,doc:ProjectDoc,
   throw new Error('feedback_scope_group_overlap');
  // Shared overlays can span several groups. Do not widen the user's selection.
  for(const item of t.items)if(contained(ranges,item))ids.add(item.id);
- if(input.kind==='execution'&&!ids.size)throw new Error('feedback_execution_targets_required');
+ if(input.kind==='execution'&&!ids.size)
+  throw new Error(requested===undefined?'feedback_execution_targets_required':'feedback_range_targets_required');
  return {text:input.text,kind:input.kind,preview:bound.preview,saved_revision:bound.saved_revision,blueprint:{revision:bound.blueprint.revision,digest:bound.blueprint.digest},
   unit_ids:unitIds,item_ids:[...ids],output_frames:ranges,authority:'final_feedback_not_new_content_approval'};
 }

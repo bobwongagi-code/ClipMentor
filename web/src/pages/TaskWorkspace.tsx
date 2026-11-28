@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, Plus } from 'lucide-react'
 import type { ClipMentorTaskStatus, ClipMentorTaskSummary, ClipMentorWorkspace } from '../../../shared/clipmentor-tasks'
 import ClipMentorPage from './ClipMentorPage'
 import { audienceTitleFor, type Audience, type Task } from './ProductionPanel'
 import { previewActions } from './productionPanelState'
-import { taskPage, workspaceEndpoint, type TaskView } from './taskNavigation'
+import { taskPage, workspaceEndpoint, type TaskNavigation, type TaskView } from './taskNavigation'
 
 type WorkspaceStatus=ClipMentorTaskStatus|'unavailable'
 const statusLabels: Record<WorkspaceStatus, string> = {
@@ -66,12 +66,22 @@ function TaskTimestamp({task}:{task:ClipMentorTaskSummary}){
 
 const stageOrder=['analysis','blueprint','copy_review','audio','edit','export','self_check']
 const isBlueprintStage=(stage?:string)=>!!stage&&stageOrder.slice(0,3).includes(stage)
-function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
+function reviewTarget(task:ClipMentorTaskSummary){
+  const confirm=task.outputs.find(output=>output.status==='preview'&&output.awaitingConfirmation)
+  const board=task.outputs.find(output=>output.status==='blueprint')
+  const preview=task.outputs.find(output=>output.status==='preview')
+  if(confirm)return {view:'film',audience:confirm.audience,urgency:0}
+  if(board||task.status==='blueprint')return {view:'blueprint',audience:board?.audience,urgency:1}
+  if(preview||task.status==='preview')return {view:'film',audience:preview?.audience,urgency:2}
+  return undefined
+}
+
+function WorkspaceHome({ workspace, error }: { workspace?: ClipMentorWorkspace;error:string }) {
   const tasks = workspace?.tasks ?? []
-  const upcoming = tasks.filter(task=>task.status==='blueprint'||task.status==='preview')
-  // A version ready for the final decision needs the reviewer first.
-  const urgency=(task:ClipMentorTaskSummary)=>task.outputs.some(output=>output.awaitingConfirmation)?0:task.status==='preview'?1:2
-  const needsReview=[...upcoming].sort((a,b)=>urgency(a)-urgency(b))
+  const needsReview=tasks.flatMap(task=>{
+    const target=reviewTarget(task)
+    return target?[{task,target}]:[]
+  }).sort((a,b)=>a.target.urgency-b.target.urgency)
   const running=tasks.filter(task=>['running','queued','waiting'].includes(task.status))
   const saved=tasks.filter(task=>task.status==='materials')
   const inactive=tasks.filter(task=>['paused','completed','cancelled'].includes(task.status))
@@ -80,7 +90,7 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
     <aside className="cm-task-sidebar">
       <WorkspaceBrand/>
       <a className="cm-task-back" href={taskPage()} aria-current="page">全部任务</a>
-      <TaskLinks tasks={[...needsReview,...running,...saved,...inactive]}/>
+      <TaskLinks tasks={[...needsReview.map(({task})=>task),...running,...saved,...inactive]}/>
     </aside>
     <main className="cm-task-main">
       <div className="cm-task-title">
@@ -88,17 +98,17 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
         <div className="cm-task-actions"><Slots workspace={workspace}/><NewTask workspace={workspace}/></div>
       </div>
       {full&&<p className="cm-capacity-notice" role="status">同时制作已满 {workspace.limit} 个。可以<a href={taskPage(undefined,'new')}>先选素材</a>，有空位后再开始制作。</p>}
-      {!workspace?<p role="status">正在获取任务…</p>:tasks.length===0
+      {!workspace?(!error&&<p role="status">正在获取任务…</p>):tasks.length===0
         ?<div className="cm-task-empty"><h2>还没有任务</h2><p>上传四份素材，开始第一个任务。</p></div>:<>
         {needsReview.length>0&&<section className="cm-task-attention" aria-labelledby="cm-needs-you">
           <h2 id="cm-needs-you">待你处理 · {needsReview.length}</h2>
-          <ul>{needsReview.map(task=>{
-            const relevant=task.outputs.find(output=>output.status==='preview'&&output.awaitingConfirmation)
-              ??task.outputs.find(output=>output.status==='preview')
-            const label=task.status==='blueprint'?'去审蓝图':'去看片'
+          <ul>{needsReview.map(({task,target})=>{
+            const label=target.view==='blueprint'?'去审蓝图':'去看片'
+            const audience=target.audience&&audienceTitleFor(target.audience)
+            const state=target.view==='blueprint'?'蓝图待审核':target.urgency===0?'请查看确认状态':'请查看预览'
             return <li key={task.id}>
-              <div><strong>{task.name}</strong><small>{[relevant&&audienceTitleFor(relevant.audience),task.status==='blueprint'?'蓝图已生成':relevant?.awaitingConfirmation?'请查看确认状态':'请查看预览'].filter(Boolean).join(' · ')} · <TaskTimestamp task={task}/></small></div>
-              <a className="cm-button" href={taskPage(task.id,undefined,relevant?.audience)} aria-label={`${label} · ${task.name}${relevant?` · ${audienceTitleFor(relevant.audience)}`:''}`}>{label}</a>
+              <div><strong>{task.name}</strong><small>{audience&&`${audience} · `}{state} · <TaskTimestamp task={task}/></small></div>
+              <a className="cm-button" href={taskPage(task.id,undefined,target.audience)} aria-label={`${label} · ${task.name}${audience?` · ${audience}`:''}`}>{label}</a>
             </li>
           })}</ul>
         </section>}
@@ -110,7 +120,7 @@ function WorkspaceHome({ workspace }: { workspace?: ClipMentorWorkspace }) {
             return <li className="cm-task-row cm-task-running" key={task.id}>
               <h3><a href={taskPage(task.id)}>{task.name}</a></h3>
               <Status status={task.status} label={task.status==='running'?stage:undefined}/>
-              {index>=0&&<progress aria-label="制作阶段" max={stageOrder.length} value={index+1}/>}
+              {index>=0&&<progress aria-label="制作阶段" aria-valuetext={stage} max={stageOrder.length} value={index+1}/>}
               <TaskTimestamp task={task}/>
             </li>
           })}</ul>
@@ -152,7 +162,7 @@ function TaskSteps({ task,preview }: { task:{status:WorkspaceStatus;stage?:strin
   const actions=previewActions(preview)
   const stage=preview?.stage??task.stage
   const status=preview?.status??task.status
-  const current=actions.canDownload||status==='completed'?3:actions.watchable||status==='preview'?2
+  const current=actions.canDownload||!preview&&status==='completed'?3:actions.watchable||status==='preview'?2
     :status==='materials'?0:!stage?-1:isBlueprintStage(stage)?1:2
   const paused=(status==='paused'||status==='blocked')&&!actions.watchable
   return <ol className="cm-task-steps" aria-label="制作步骤">{steps.map((step,index)=><li
@@ -164,7 +174,10 @@ const taskTabs=[['materials','素材'],['blueprint','蓝图'],['film','成片']]
 
 function defaultTaskView(task:ClipMentorTaskSummary,audience?:Audience):TaskView{
   if(task.status==='materials')return 'materials'
-  if(task.status==='blueprint'||task.outputs.some(output=>output.audience===audience&&output.status==='blueprint'))return 'blueprint'
+  const selectedOutput=task.outputs.find(output=>output.audience===audience)
+  if(selectedOutput?.status==='blueprint')return 'blueprint'
+  if(selectedOutput&&['preview','completed'].includes(selectedOutput.status))return 'film'
+  if(task.status==='blueprint'||reviewTarget(task)?.view==='blueprint')return 'blueprint'
   if(task.status==='preview'||task.status==='completed'||task.outputs.some(output=>['preview','completed'].includes(output.status)))return 'film'
   if(task.stage&&!isBlueprintStage(task.stage))return 'film'
   return 'blueprint'
@@ -179,7 +192,25 @@ function TaskDetails({ workspace, task, initialView }: { workspace:ClipMentorWor
     const value=new URLSearchParams(window.location.search).get('audience')
     return value==='new_contact'||value==='existing_partner'?value:undefined
   })
-  const activeView=view??defaultTaskView(task,audience)
+  const preferredView=defaultTaskView(task,audience)
+  const activeView=view??preferredView
+  const activeNavigation=useRef({view:activeView,audience})
+  activeNavigation.current={view:activeView,audience}
+  const navigateTask:TaskNavigation=useCallback((from,to,nextAudience)=>{
+    const current=activeNavigation.current
+    if(current.view!==from)return
+    const selected=nextAudience??current.audience
+    setView(to)
+    setAudience(selected)
+    window.history.replaceState(window.history.state,'',taskPage(task.id,to,selected))
+  },[task.id])
+  const previousPreference=useRef({view:preferredView,audience})
+  useEffect(()=>{
+    const previous=previousPreference.current
+    previousPreference.current={view:preferredView,audience}
+    // Readback can publish the next step before the action is acknowledged.
+    if(previous.audience===audience&&previous.view!==preferredView)navigateTask(previous.view)
+  },[audience,preferredView,navigateTask])
   const changeAudience=useCallback((next:Audience)=>{
     setAudience(next)
     window.history.replaceState(window.history.state,'',taskPage(task.id,view,next))
@@ -224,9 +255,18 @@ function TaskDetails({ workspace, task, initialView }: { workspace:ClipMentorWor
         {startState==='capacity'?'素材已保存。有空位后，点「开始制作」。':'素材已保存，制作进度见下方。'}
       </p>}
       <ClipMentorPage key={task.id} projectId={task.id} embedded running={workspace.running} limit={workspace.limit}
-        workspaceView={activeView} taskStarted={task.status!=='materials'} requestedAudience={audience} onAudienceChange={changeAudience} onPreviewTask={setPreview}/>
+        workspaceView={activeView} taskStarted={task.status!=='materials'} requestedAudience={audience} onAudienceChange={changeAudience} onPreviewTask={setPreview} navigateTask={navigateTask}/>
     </main>
   </div>
+}
+
+function isWorkspace(value:unknown):value is ClipMentorWorkspace{
+  if(!value||typeof value!=='object')return false
+  const {tasks,running,limit}=value as ClipMentorWorkspace
+  return Number.isSafeInteger(running)&&running>=0&&Number.isSafeInteger(limit)&&limit>=1&&limit<=100
+    &&Array.isArray(tasks)&&tasks.every(task=>task&&typeof task.id==='string'&&typeof task.name==='string'
+      &&Object.prototype.hasOwnProperty.call(statusLabels,task.status)&&Array.isArray(task.outputs)&&task.outputs.every(output=>
+        output&&['new_contact','existing_partner'].includes(output.audience)&&Object.prototype.hasOwnProperty.call(statusLabels,output.status)))
 }
 
 export default function TaskWorkspace() {
@@ -251,8 +291,8 @@ export default function TaskWorkspace() {
           }
           return
         }
-        const data=await response.json()
-        if(!response.ok||!Array.isArray(data.tasks)||!Number.isSafeInteger(data.running)||!Number.isSafeInteger(data.limit)||data.running<0||data.limit<1||data.limit>100)throw Error('unavailable')
+        const data:unknown=await response.json()
+        if(!response.ok||!isWorkspace(data))throw Error('unavailable')
         if(!controller.signal.aborted){setWorkspace(data);setError('');setAccessLost(false)}
       }catch{if(!controller.signal.aborted)setError('列表暂时没更新，稍后自动重试。')}
       finally{if(!controller.signal.aborted)timer=setTimeout(read,5000)}
@@ -271,6 +311,6 @@ export default function TaskWorkspace() {
       ? task&&workspace?<TaskDetails workspace={workspace} task={task} initialView={initialView}/>
         :<main className="cm-task-main">{workspace?<><h1>找不到这个任务，可能已被删除</h1><a className="cm-task-back" href={taskPage()}><ArrowLeft size={16}/> 全部任务</a></>
           :!error&&<p role="status">正在打开…</p>}</main>
-      :<WorkspaceHome workspace={workspace}/>)}
+      :<WorkspaceHome workspace={workspace} error={error}/>)}
   </div>
 }

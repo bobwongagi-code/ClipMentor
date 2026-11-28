@@ -58,6 +58,7 @@ export function previewStatus(task?:PreviewTask,readFailed=false){
  if(task?.status==='completed')return previewActions(task).canDownload?'可下载':'暂不可下载'
  if(task?.status==='awaiting_review')return previewActions(task).canConfirm?'待确认':'暂不能确认'
  if(task?.previewPending)return task.status==='blocked'?'复核已暂停':task.active&&task.stage==='self_check'?'复核中':'待复核'
+ if(task?.status==='awaiting_blueprint')return '待审蓝图'
  if(task?.status==='cancelled')return '已取消'
  if(task?.status==='blocked')return '制作已暂停'
  if(task?.status==='queued')return '等待空位'

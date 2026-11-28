@@ -146,6 +146,7 @@ try{
     videoSha256:hash(videoBytes),sizeBytes:videoBytes.length,durationSeconds:.4,width:720,height:1280,fps:30,facts_digest:'2'.repeat(64),
   }};
   await productionTaskStore.save(task);
+  assert.equal((await (await request('task-workspace')).json()).running,0,'a stopped review does not hold a slot');
   const download=(view:string,assetId?:string,renderId='workspace-render')=>request('production-task?'+new URLSearchParams({
     projectId,view,renderId,...(assetId?{assetId}:{}),
   }));

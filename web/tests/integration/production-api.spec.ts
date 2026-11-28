@@ -317,28 +317,28 @@ test.describe('production gateway responses', () => {
 
   test('a malformed status response preserves the board while the API recovers', async ({ page }) => {
     await page.clock.install()
-    let malformed = false, statusReads = 0
+    let malformed: 'body'|'fields'|undefined, statusReads = 0
     await page.route(`**${apiBasePath}/intake`, route => route.fulfill({ json: { receipt: fixtureReceipt } }))
     await page.route(`**${apiBasePath}/production**`, route => {
       if (new URL(route.request().url()).searchParams.get('view') === 'panel_board') {
         return route.fulfill({ contentType: 'text/html', headers: { 'X-ClipMentor-Board-Identity': identity }, body: '<h2>仍可阅读的蓝图</h2>' })
       }
       statusReads++
-      return malformed ? route.fulfill({ contentType: 'application/json', body: 'null' })
-        : route.fulfill({ json: { task: fixtureBoard } })
+      return malformed === 'body' ? route.fulfill({ contentType: 'application/json', body: 'null' })
+        : route.fulfill({ json: { task: malformed === 'fields' ? {...fixtureBoard,reviewGroups:{}} : fixtureBoard } })
     })
     await page.goto(origin)
     const board = page.frameLocator('iframe').getByText('仍可阅读的蓝图')
     await expect(board).toBeVisible()
-    malformed = true
-    for (let i = 0; i < 3; i++) {
+    for (const fault of ['body','fields','fields'] as const) {
+      malformed = fault
       const before = statusReads
       await page.clock.fastForward(8000)
       await expect.poll(() => statusReads).toBeGreaterThan(before)
       await expect(board).toBeVisible()
     }
     await expect(page.getByRole('alert')).toContainText('正在重连')
-    malformed = false
+    malformed = undefined
     await page.clock.fastForward(8000)
     await expect(page.getByRole('alert')).toHaveCount(0)
     await expect(board).toBeVisible()

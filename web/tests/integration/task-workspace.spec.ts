@@ -103,7 +103,10 @@ test.beforeAll(async ()=>{
           const body=await readBody(req)
           const previous=flowPosts.get(id)??[]
           flowPosts.set(id,[...previous,body])
-          if(body.action==='start'&&uploaded.has(id))flows.set(id,{phase:'blueprint',revision:1,feedback:false,pending:false})
+          if(body.action==='start'&&uploaded.has(id)){
+            if(name.includes('复核暂停')&&previous.length===0){send(409,{reason:'capacity'});return}
+            flows.set(id,{phase:'blueprint',revision:1,feedback:false,pending:false})
+          }
           else if(flow&&flow.phase==='blueprint'&&body.action==='approve_blueprint'&&body.boardIdentity===id){
             flow.phase='preview';flow.pending=name.includes('复核暂停')
           }else if(flow?.phase==='preview'&&!flow.pending&&body.action==='revise_preview'&&body.renderId===`cut-${flow.revision}`&&!flow.feedback){
@@ -317,7 +320,7 @@ test('home opens the outstanding version and the three task tabs preserve it',as
   await expect(partner.tab).toHaveAttribute('aria-selected','true')
   await expect(partner.panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
   await page.goto(`${origin}/?task=${b}&view=downloads`)
-  await expect(page.getByText('蓝图确认并生成预览后，可在这里看片。')).toBeVisible()
+  await expect(page.getByText('这一版有蓝图需要审核。')).toBeVisible()
 })
 
 for(const scenario of ['delayed-read','switched','delayed-ack'])test(`confirmation follows the saved version (${scenario})`,async({page})=>{
@@ -514,6 +517,7 @@ test.describe('首页 · 三轮',()=>{
       ?route.fulfill({status:503,json:{}}):route.fulfill({json:{tasks:[],running:0,limit:5}}))
     await page.goto(origin)
     await expect(page.getByRole('alert')).toContainText('列表暂时没更新')
+    await expect(page.getByText('正在获取任务…')).toHaveCount(0)
     fail=false
     await page.clock.fastForward(6000)
     await expect(page.getByRole('heading',{name:'还没有任务'})).toBeVisible()
@@ -549,6 +553,60 @@ test.describe('蓝图 · 三轮',()=>{
     await expect(page.getByRole('navigation',{name:'蓝图意见'}).getByRole('button',{name:'第 1 组'})).toBeVisible()
     await page.getByRole('button',{name:'提交意见',exact:true}).click()
     await expect.poll(()=>sent).toMatchObject({action:'revise_blueprint',blueprintOpinions:[{unitId:'group-1',text:'只改这一组'}]})
+  })
+  test('返回蓝图时，确认修改要等当前审片板读回',async({page})=>{
+    const boardEndpoint=(url:URL)=>url.searchParams.get('projectId')===a&&url.searchParams.get('view')==='panel_board'
+    let releaseBoard:()=>void=()=>{}
+    let holdBoard=false
+    let writes:Record<string,unknown>[]=[]
+    await page.route(boardEndpoint,async route=>{
+      if(holdBoard)await new Promise<void>(resolve=>{releaseBoard=resolve})
+      await route.continue()
+    })
+    await page.route(`**${endpoints}/production?projectId=${a}`,async route=>{
+      if(route.request().method()!=='POST')return route.continue()
+      writes=[...writes,route.request().postDataJSON()]
+      await route.fulfill({json:writes.length===1
+        ?{opinionConfirmation:{token:'board-opinion-token',rows:[{label:'整体意见',keep:['保留开场'],change:'缩短结尾'}]}}
+        :{accepted:true}})
+    })
+    try{
+      await page.goto(`${origin}/?task=${a}&view=blueprint`)
+      await page.getByText('整体意见',{selector:'summary',exact:true}).click()
+      await page.getByLabel('整体意见',{exact:true}).fill('保留开场，缩短结尾。')
+      await page.getByRole('button',{name:'提交意见',exact:true}).click()
+      const confirm=page.getByRole('button',{name:'确认并修改'})
+      await expect(confirm).toBeEnabled()
+      await page.getByRole('button',{name:'素材',exact:true}).click()
+      holdBoard=true
+      await page.getByRole('button',{name:'蓝图',exact:true}).click()
+      await expect(confirm).toBeDisabled()
+      await expect.poll(()=>writes.length).toBe(1)
+      holdBoard=false
+      releaseBoard()
+      await expect(confirm).toBeEnabled()
+      await confirm.click()
+      await expect.poll(()=>writes.at(-1)).toMatchObject({revision:a,boardIdentity:a,opinionConfirmation:'board-opinion-token'})
+    }finally{releaseBoard()}
+  })
+  test('预览待复核的另一版本不会隐藏需要重新审核的蓝图',async({page})=>{
+    const tasks=[{...boardTasks.find(task=>task.id===exportsId)!,status:'preview',outputs:[
+      {audience:'new_contact',status:'preview',stage:'self_check'},
+      {audience:'existing_partner',status:'blueprint',stage:'copy_review'},
+    ]}]
+    await page.route(`**${endpoints}/tasks`,route=>route.fulfill({json:{tasks,running:0,limit:5}}))
+    await page.route(versionRead('existing_partner'),route=>route.fulfill({json:{task:{...baseTask,
+      taskId:'again-board',sourceTaskId:exportsId,audience:'existing_partner',status:'awaiting_blueprint',stage:'copy_review',
+      blueprintRevision:exportsId,boardIdentity:exportsId,canApproveBlueprint:true,blueprintConfirmed:true,feedbackUsed:true,
+    }}}))
+    await page.goto(origin)
+    await page.getByRole('link',{name:/去审蓝图 · 成片示例 · 已合作达人版/}).click()
+    await expect(page.getByRole('button',{name:'蓝图',exact:true})).toHaveAttribute('aria-current','page')
+    await expect(page.frameLocator('iframe').getByText('蓝图示例')).toBeVisible()
+    await page.getByRole('button',{name:'成片',exact:true}).click()
+    await version(page,'existing_partner').panel.getByRole('button',{name:'去审蓝图'}).click()
+    await expect(page.getByRole('button',{name:'蓝图',exact:true})).toHaveAttribute('aria-current','page')
+    await expect(page.getByRole('button',{name:'确认蓝图，开始制作'})).toBeEnabled()
   })
   test('另一版已完成时，二次待审仍直达正确蓝图和步骤',async({page})=>{
     const task={...boardTasks.find(task=>task.id===exportsId)!,status:'blueprint',stage:'copy_review',
@@ -588,6 +646,20 @@ test.describe('任务详情 · 三轮',()=>{
     await expect(version(page,'new_contact').panel.getByRole('button',{name:/继续/})).toHaveCount(0)
     await version(page,'existing_partner').tab.click()
     await expect(version(page,'existing_partner').panel.getByRole('link',{name:'下载成片',exact:true})).toBeVisible()
+  })
+  test('已有任务的首次素材和进度请求失败后恢复蓝图，无需重传',async({page})=>{
+    const intake=`**${endpoints}/intake?projectId=${a}`
+    const production=`**${endpoints}/production?projectId=${a}`
+    let ready=false
+    await page.clock.install()
+    await page.route(intake,route=>route.fulfill({status:503,json:{}}))
+    await page.route(production,route=>ready?route.continue():route.fulfill({status:503,json:{}}))
+    await page.goto(`${origin}/?task=${a}`)
+    await expect(page.getByText(/进度暂时没更新/).first()).toBeVisible()
+    await expect(page.getByText('请先上传四份素材，开始制作。')).toHaveCount(0)
+    ready=true
+    await page.clock.fastForward(9000)
+    await expect(page.frameLocator('iframe').getByText('蓝图示例')).toBeVisible()
   })
   test('手机切标签及版本保留本版意见',async({page})=>{
     await page.setViewportSize({width:390,height:844})
@@ -697,12 +769,32 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
     await expect(page.getByRole('heading',{level:1,name})).toBeVisible()
     const id=new URL(page.url()).searchParams.get('task')!
     await expect(page.getByRole('list',{name:'制作步骤'}).locator('li span')).toHaveText(['交素材','审蓝图','看片提意见','拿成片'])
+    if(scenario==='复核暂停'){
+      await expect(page.getByText('素材已保存。有空位后，点「开始制作」。')).toBeVisible()
+      await page.getByRole('button',{name:'蓝图',exact:true}).click()
+      await expect(page.getByRole('button',{name:'开始制作',exact:true})).toHaveCount(0)
+      await page.getByRole('button',{name:'去素材页'}).click()
+      await expect(page).toHaveURL(/view=materials/)
+      let releaseStart:()=>void=()=>{}
+      const startReceipt=new Promise<void>(resolve=>{releaseStart=resolve})
+      const projectProduction=`**${endpoints}/production?projectId=${id}`
+      await page.route(projectProduction,async route=>{
+        if(route.request().method()!=='POST'||route.request().postDataJSON().action!=='start')return route.continue()
+        const response=await route.fetch()
+        await startReceipt
+        await route.fulfill({response})
+      })
+      try{
+        await page.getByRole('button',{name:'开始制作',exact:true}).click()
+        await expect(page.getByRole('button',{name:'蓝图',exact:true})).toHaveAttribute('aria-current','page',{timeout:12_000})
+        await expect.poll(()=>flowPosts.get(id)?.filter(post=>post.action==='start').length).toBe(2)
+      }finally{releaseStart()}
+    }
     const approve=page.getByRole('button',{name:'确认蓝图，开始制作'})
     await expect(approve).toBeEnabled()
     await page.getByRole('button',{name:'素材',exact:true}).click()
     await expect(page.getByRole('region',{name:'制作素材'}).locator('li')).toHaveCount(4)
-    // Reload the task without a pinned tab before continuing its normal phase progression.
-    await page.goto(`${origin}/?task=${id}`)
+    await page.getByRole('button',{name:'蓝图',exact:true}).click()
     await expect(approve).toBeEnabled()
     await approve.click()
     await expect(page.getByRole('button',{name:'成片',exact:true})).toHaveAttribute('aria-current','page')
@@ -725,9 +817,9 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
       await expect(page.getByText('时间段不能超出视频时长。')).toBeVisible()
       await expect(submit).toBeDisabled()
       flows.get(id)!.pending=false
-      await page.reload()
       await expect(feedback).toHaveValue('只调整选中的画面')
       await page.getByLabel('结束（秒）').fill('0.5')
+      await expect(submit).toBeEnabled({timeout:12_000})
     }else{
       await page.getByRole('radio',{name:'第 1 组',exact:true}).check()
       if(scenario==='跨任务草稿'){
@@ -755,9 +847,10 @@ for(const [scenario,width,height] of [['常规',1280,900],['复核暂停',390,84
     await ready.click()
     expect((await download).suggestedFilename()).toBe('reviewed.mp4')
     const writes=flowPosts.get(id)!
-    expect(writes.map(write=>write.action)).toEqual(['start','approve_blueprint','revise_preview','accept'])
-    expect(writes[2].feedbackTarget).toEqual(scenario==='复核暂停'?{scope:'range',start:0,end:0.5}:{scope:'group',unitId:'group-1',kind:'content'})
-    expect(writes[3].renderId).toBe('cut-2')
+    expect(writes.map(write=>write.action)).toEqual(scenario==='复核暂停'
+      ?['start','start','approve_blueprint','revise_preview','accept']:['start','approve_blueprint','revise_preview','accept'])
+    expect(writes.at(-2)?.feedbackTarget).toEqual(scenario==='复核暂停'?{scope:'range',start:0,end:0.5}:{scope:'group',unitId:'group-1',kind:'content'})
+    expect(writes.at(-1)?.renderId).toBe('cut-2')
   })
 }
 
