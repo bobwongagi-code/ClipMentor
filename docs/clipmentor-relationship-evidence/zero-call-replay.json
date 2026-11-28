@@ -1,0 +1,140 @@
+{
+  "sourceEvidenceSha256": "a8a692dc5d841ebf4e0662814491dc12acb69286f0aaf766343d09583983562a",
+  "generation": {
+    "qualityRules": "v1",
+    "referenceRules": "registered-v1",
+    "creatorRules": "creator-teaching-v2",
+    "commit": "cdaf88623755b724425b978d57c3b27fd8aa1352",
+    "trackedChanges": false
+  },
+  "providerCalls": 0,
+  "bindingAccepted": {
+    "U-hook": {
+      "draftSha256": "d46d1ffb069d48c7a764ce7e054dff5c60dbff9cdcb843c066c13c358b4d23aa",
+      "bindingAccepted": true
+    },
+    "U-use": {
+      "draftSha256": "f3280c82c0ff5424085fdc210e1d3f36dac6f8ca8157f7cb49aa6e9b13ae857a",
+      "bindingAccepted": true
+    },
+    "U-cheek": {
+      "draftSha256": "ca0ba55cd51bf44fea5ef99560c9e9d5b6c210cc04de3b0190907e5bb726aafa",
+      "bindingAccepted": true
+    }
+  },
+  "missingBindingsRejected": [
+    {
+      "code": "creator_narration_relationship_missing",
+      "id": "U-hook"
+    },
+    {
+      "code": "creator_narration_relationship_missing",
+      "id": "U-use"
+    },
+    {
+      "code": "creator_narration_relationship_missing",
+      "id": "U-cheek"
+    }
+  ],
+  "savedSemanticNegatives": [
+    {
+      "id": "X32",
+      "unit": "U-hook",
+      "criterion": "C",
+      "draftSha256": "a81a6f2cb149777506505aafb07fa90dd6acd670db7262b0d0195832a47c5951",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X49",
+      "unit": "U-hook",
+      "criterion": "C",
+      "draftSha256": "1e065a10ae0b9af29f2594e9002155907ad82680a11fd35f5b924b33853991fe",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X86",
+      "unit": "U-hook",
+      "criterion": "C",
+      "draftSha256": "4e98f7aa10f255fef4e67b7d9f35cece9e4172b1236a9a691890ba8cedf850b5",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X41",
+      "unit": "U-hook",
+      "criterion": "C",
+      "draftSha256": "4c5235bd441c23e84383a5c9052bba542c58497502eb1832e91270bbfd4f6704",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X70",
+      "unit": "U-hook",
+      "criterion": "C",
+      "draftSha256": "1204aeae14612775ea7a23b7c2cd9ace1196c3a86a018dc2ff53e91df9acabfd",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "V69",
+      "unit": "U-hook",
+      "criterion": "C",
+      "draftSha256": "1f054aa5be24dfa4fd2aeddd23a6b06ae36f8bb480ad18941ee318c69ec5f80a",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X81",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "1587b0b17d72f6b9740dee2771ec62086b2fae1bcd682f86953bd524d85c8923",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X54",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "554d53d82aad6e11ee296ae101240d86844bbffd523997be93454ebe8ce1bd8f",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X66",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "bcfd7aa6dbba5b209e56bd6301aea87dab34ebf4066d296947ce62611c7c717a",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X87",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "07c324c8afa81b74ceeb7e63fb5678d4179cc1b9293c76571973a2ea2b615a2b",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X35",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "3c5e48bd67df621b9ba61e0d721731911bfdbdd7e62e569ec666a07b41b2404c",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "X49",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "9d0ea335051705259975b81583f82619a5790471c3a99bfc9823a33290808780",
+      "savedReaderFindingReplayed": true
+    },
+    {
+      "id": "V78",
+      "unit": "U-use",
+      "criterion": "R",
+      "draftSha256": "f7db5ad3a4c300fac2da12077f7bbd99ac8446767e020a27cd95bd98e505a040",
+      "savedReaderFindingReplayed": true
+    }
+  ],
+  "flowReplay": {
+    "mockReviewerResponses": 2,
+    "originalProviderCalls": 0,
+    "firstRepairKeepsBothFindings": true,
+    "unchangedBeforeDispatch": true,
+    "meaningfulPointerCorrectionReachesReview": true,
+    "sameGapParaphrasedStops": true
+  }
+}

@@ -407,6 +407,12 @@ try{
   assert.equal((unit.internal_review?.[firstDraft.plan_id] as {creator_conclusion_line_id?:string}).creator_conclusion_line_id,draftLine.id);
   assert.match(independentPrompts.at(-1)??'',/creatorWorksheet/);
   assert.doesNotMatch(independentPrompts.at(-1)??'',/TS-05|creator-teashell/);
+  const request=JSON.parse(JSON.parse(independentPrompts.at(-1)!).find((message:{role:string})=>message.role==='user').content);
+  assert.deepEqual(Object.keys(request.creatorWorksheet.questions).sort(),[...creatorFilmQuestions,...creatorGroupQuestions].sort());
+  const analogy=request.creatorWorksheet.groups[0].analogy;
+  assert.deepEqual(Object.keys(analogy).sort(),['application','difference','evidence_ids','limit','mistake','payoff','why']);
+  assert.deepEqual(analogy.evidence_ids,[visible.evidence_id]);
+  assert.equal(request.creatorWorksheet.copy,undefined,'the qualifying review gets the questionnaire before there is a candidate');
   console.log('PASS creator worksheet author projection, bounded evidence selection and first-copy write/readback on the actual production worker');
  }
  console.log('PASS qualified first copy saves on the unchanged project and rejects real definition or same-ID evidence changes');
@@ -704,6 +710,13 @@ try{
   plan.creator_conclusion_line_id=goodId;
   const positive=await reviewed('creator-relationship-bound-pass');
   assert.match(independentPrompts.at(-1)!,/required_relationship/);
+  const request=JSON.parse(JSON.parse(independentPrompts.at(-1)!).find((message:{role:string})=>message.role==='user').content);
+  assert.deepEqual(Object.keys(request.creatorWorksheet.questions).sort(),[...creatorFilmQuestions,...creatorGroupQuestions].sort());
+  assert.equal(request.creatorWorksheet.copy[0].required_relationship,'说明刷头离开后，观众据近景能判断鼻侧色痕。');
+  assert.equal(request.creatorWorksheet.copy[0].conclusion,goodId);
+  assert.equal(request.creatorWorksheet.copy[0].lines.find((line:{id:string})=>line.id===goodId).narration,actionable);
+  assert.deepEqual(Object.keys(request.creatorWorksheet.groups[0].analogy).sort(),
+   ['application','difference','evidence_ids','limit','mistake','payoff','why']);
   const published=panelNarrationPublication(doc,task,positive.digest,requirements);
   assert.equal(published.independentNarrationAnswers[0].quote,actionable);
   plan.creator_conclusion_line_id=wrongId;

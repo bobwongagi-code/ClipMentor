@@ -1111,6 +1111,8 @@ try{
   assert(response.ok,await response.text());
   const started=await latestPanelProductionTask(projectId);
   assert.equal(started?.input.openingComparison?.kind,'opening_comparison');
+  assert.equal(started.input.panelDelivery?.blueprintQuality,'v1','ordinary panel start enables blueprint quality');
+  assert.equal(started.input.panelDelivery?.creatorQuality,'v1','ordinary panel start enables the creator worksheet');
   assert.deepEqual(started.input.doneCriteria,[{...criteria[0],source:{...source,assetId:assets[0].id},evidence:{...evidence,assetId:assets[2].id}}]);
   assert(started.input.brief.includes(started.input.openingComparison.quote),'the author and reviewer get the same verbatim requirement');
   const {copyReviewDependencies}=await import('../clipmentor/copy-review');
@@ -1123,11 +1125,15 @@ try{
   const unrelated=await post({action:'create',input:{...input,projectId,humanBlueprintReview:true}});
   assert.equal(unrelated.status,202);
   const auxiliary=(await unrelated.json()).taskId;
+  const generic=await productionTaskStore.load(projectId,auxiliary);
+  assert.equal(generic.input.panelDelivery?.blueprintQuality,undefined,'generic task creation does not add the panel defaults');
+  assert.equal(generic.input.panelDelivery?.creatorQuality,undefined);
   assert.equal((await latestPanelProductionTask(projectId))?.taskId,started.taskId);
   assert.deepEqual((await copyReviewDependencies().requirements!(projectId)).opening,bound.opening,'a generic human-review job cannot shadow the panel requirement');
   for(let i=0;i<100&&productionExecutionActive(projectId,started.taskId);i++)await new Promise(resolve=>setTimeout(resolve,5));
   for(let i=0;i<100&&productionExecutionActive(projectId,auxiliary);i++)await new Promise(resolve=>setTimeout(resolve,5));
   assert(!productionExecutionActive(projectId,started.taskId)&&!productionExecutionActive(projectId,auxiliary));
+  console.log('panel HTTP: ordinary starts freeze both quality switches at v1; a generic task keeps its own input');
  }
  console.log('production cold start: resumes queued/running tasks, reuses a reserved effect, keeps unknown outcomes, skips prior versions, review gates and deleted projects');
  console.log('production HTTP: origin guard, async no-page execution, duplicate launch refusal, canonical artifact cold recovery/read and final human acceptance passed; mocked stages, zero provider calls');
