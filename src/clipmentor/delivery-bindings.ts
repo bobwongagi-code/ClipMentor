@@ -41,6 +41,9 @@ export function assertNoReferenceMedia(doc:ProjectDoc,previous?:ProjectDoc):void
   throw Error('reference_only_asset_cannot_enter_timeline');
 }
 export const openingMaxLineCharacters=42;
+export function openingPerformanceHeadlines(results:{views:string;units:string;revenue:string}){
+ return [results.views.trim()+' tontonan',results.units.trim()+' unit terjual','Revenue '+results.revenue.trim()];
+}
 export function deliveryOpeningTextIssue(sections:unknown){
  if(!Array.isArray(sections))return;
  for(const section of sections){

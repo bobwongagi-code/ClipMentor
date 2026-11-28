@@ -15,6 +15,9 @@ const text=(v:unknown)=>typeof v==='string'?v:'';
 const esc=(s:unknown)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 const json=(v:unknown)=>JSON.stringify(v).replace(/</g,'\\u003c');
 const n=(v:number)=>Number(v.toFixed(1)).toString();
+const sourceTime=(start:number,end:number)=>start===end?n(start):n(start)===n(end)?`${start}–${end}`:`${n(start)}–${n(end)}`;
+const selectedFrameTime=(frame:ReviewBoardRow['frames'][number])=>
+ `原片 ${n(frame.seconds)}秒${frame.selection?.start===frame.selection?.end&&frame.selection?.end!==undefined?'（定格）':''}`;
 const questionKey=(r:ReviewBoardRow)=>r.stage==='opening'||r.stage==='closing'?r.key:r.unit_id;
 export function endingLabel(variant:string,index=0){
  if(variant==='new_contact')return'新建联达人';
@@ -36,7 +39,8 @@ export function humanBoardQuestions(board:ReviewBoardPlan){
  }
  return byUnit;
 }
-export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_materials:ProjectDoc[]=[],references:VisualReferenceFrame[]=[],embedded=false,teachingExcerptUnit?:string,narrationDecisions:readonly PublishedNarrationDecision[]=[]){
+export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_materials:ProjectDoc[]=[],references:VisualReferenceFrame[]=[],embedded=false,teachingExcerptUnit?:string,narrationDecisions:readonly PublishedNarrationDecision[]=[],generation?:Pick<import('./blueprint-review-board').BoardInput,
+ 'qualityRules'|'generationCommit'|'generationTrackedChanges'>){
  const body=board.rows.filter(r=>r.stage==='original'||r.stage==='explanation'),unitIds=[...new Set(body.map(r=>r.unit_id))],questions=humanBoardQuestions(board);
  const productName=text(obj(data.analysis.product).name).trim();
  const title=embedded||!productName||/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(productName)?'剪辑蓝图':productName;
@@ -44,6 +48,10 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const revision=version?`第${version}版候选`:'现行保存候选';
  const breakdown=obj(data.analysis.source_breakdown);
  const teachingGroup=(id:string)=>arr(breakdown.units).map(obj).find(unit=>unit.unit_id===id);
+ const conciseChoice=(id:string)=>{
+  const selection=obj(teachingGroup(id)?.teaching_selection);
+  return generation?.qualityRules==='v1'?text(selection.decision).trim():'';
+ };
  const teaching=(id:string)=>{
   const group=teachingGroup(id);
   const brief=text(obj(group?.teaching_selection).first_glance).trim();
@@ -54,7 +62,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
  const originalDescription=(id:string)=>{const breakdown=obj(data.analysis.source_breakdown),unit=arr(breakdown.units).map(obj).find(u=>u.unit_id===id),segments=arr(breakdown.segments).map(obj).filter(s=>arr(unit?.original_segment_ids).includes(s.segment_id)),evidenceIds=segments.flatMap(s=>arr(s.visible_evidence_ids));const evidence=arr(data.analysis.evidence).map(obj).find(e=>evidenceIds.includes(e.evidence_id)&&e.kind==='visible_action'),range=evidence?.source_range_seconds;if(!text(evidence?.text)||!Array.isArray(range)||range.length!==2||!range.every(v=>typeof v==='number'&&Number.isFinite(v))||range[0]<0||range[1]<range[0])return null;return{text:text(evidence?.text),range:range as [number,number]};};
  const frameLabel=(r:ReviewBoardRow,i:number)=>`${r.stage==='original'?'原片':'讲解'}画面${i+1}`;
  const image=(r:ReviewBoardRow,i:number,detail?:string,stage=false)=>{const f=r.frames[i],label=detail??frameLabel(r,i);return `<button class="image-button" data-zoom="${board.rows.indexOf(r)}"${detail?` data-zoom-frame="${i}"`:''} aria-label="放大${esc(label)}">${stage?`<span class="frame-phase">${esc(r.stage_text&&r.stage_text!=='未登记阶段标识'?r.stage_text:r.stage==='original'?'原片':'讲解')}</span>`:''}<img src="data:image/jpeg;base64,${f.jpeg}" alt="${esc(label)}" decoding="async"></button>`;};
- const strip=(r:ReviewBoardRow,kind:string)=>`<div class="thumb-strip ${kind}">${r.frames.map((f,i)=>(r.stage==='original'||r.replayFrames)?`<figure>${image(r,i,embedded?frameLabel(r,i):undefined,embedded)}<figcaption>原片 ${n(f.seconds)}秒</figcaption></figure>`:image(r,i,embedded?frameLabel(r,i):undefined,embedded)).join('')}</div>`;
+ const strip=(r:ReviewBoardRow,kind:string)=>`<div class="thumb-strip ${kind}">${r.frames.map((f,i)=>(r.stage==='original'||r.replayFrames)?`<figure>${image(r,i,embedded?frameLabel(r,i):undefined,embedded)}<figcaption>${selectedFrameTime(f)}</figcaption></figure>`:image(r,i,embedded?frameLabel(r,i):undefined,embedded)).join('')}</div>`;
  const labelList=(lineId:string)=>{const labels=translatedLabels(data,lineId);return `${labels.invalid&&!embedded?'<p class="input-notice" data-input-code="INPUT">输入提示：短标中文与原文数量或类型不一致，未猜测对应。</p>':''}${labels.pairs.length?`<div class="label-copy"><h4>${embedded?'画面标注':'短标对照'}</h4><ul>${labels.pairs.map(p=>`<li><span lang="ms">${esc(p.ms)}</span>${p.zh||!embedded?`<span aria-hidden="true"> → </span><span>${esc(p.zh||'短标译文未登记')}</span>`:''}</li>`).join('')}</ul></div>`:''}`;};
  const stageCue=(row:ReviewBoardRow,style:string)=>embedded&&row.stage_text==='未登记阶段标识'?'':`<div class="stage-cue" style="${style}">${esc(row.stage_text)}</div>`;
  const copy=(r:ReviewBoardRow,lines=r.lines)=>lines.map(l=>`<div class="line-copy" data-line-id="${esc(l.id)}"><p class="meaning">${esc(l.zh)}</p><p class="narration" lang="ms">${esc(l.ms)}</p><div class="caption-cards">${l.cards.map((card,i)=>`<div class="caption-card"><span>${embedded?'字幕 ':'字幕卡'}${i+1}</span>${card.map(s=>`<p lang="ms">${esc(s)}</p>`).join('')}</div>`).join('')}</div>${labelList(l.id)}</div>`).join('');
@@ -81,7 +89,7 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   }).join('');
   const frames=views.map(({row,index,frame},i)=>{
    const label=frame.selection?.shortLabel;
-   return `<figure data-replay-frame="${i}"${keys[i]!==undefined?` data-recap-frame="${areas.indexOf(keys[i])}"`:''}${i===0?'':' hidden'}>${image(row,index,label?.zh??stamp(frame.seconds))}<figcaption>${label?`<strong>${esc(label.zh)}</strong> <span lang="ms">${esc(label.ms)}</span>`:''} <span class="replay-time">${stamp(frame.seconds)}</span></figcaption></figure>`;
+   return `<figure data-replay-frame="${i}"${keys[i]!==undefined?` data-recap-frame="${areas.indexOf(keys[i])}"`:''}${i===0?'':' hidden'}>${image(row,index,label?.zh??stamp(frame.seconds))}<figcaption>${label?`<strong>${esc(label.zh)}</strong> <span lang="ms">${esc(label.ms)}</span>`:''} <span class="replay-time">${stamp(frame.seconds)}${frame.selection?.end!==undefined&&frame.selection.start===frame.selection.end?'（定格）':''}</span></figcaption></figure>`;
   }).join('');
   return `<div class="replay-gallery"><div class="replay-navigation" role="group" aria-label="回看画面">${controls}${areas.length>1?'<button type="button" data-show="recap" aria-pressed="false">总览</button>':''}</div>${stageCue(views[0].row,stageStyle(views[0].row))}<div class="replay-frames">${frames}</div></div>`;
  };
@@ -103,13 +111,12 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
    const copy=embedded?malay:claim.zh
     ?`<p class="speech-meaning">${esc(claim.zh)}</p><details class="source-ms"><summary>马来语原话</summary>${malay}</details>`
     :`<p class="missing-translation">此条原话暂无中文译文</p>${malay}`;
-   return `<article id="speech-${index+1}-${i}" class="speech-record"><p class="speech-time">原片 ${n(start)}–${n(end)}秒${scope}</p>${copy}</article>`;
+   return `<article id="speech-${index+1}-${i}" class="speech-record"><p class="speech-time">原片 ${sourceTime(start,end)}秒${scope}</p>${copy}</article>`;
   }).join('');
   return `<details class="source-speech" id="source-group-${index+1}"><summary>附录 · 原片听写</summary><p class="provenance-note">${provenance}</p>${entries||`<p>${empty}</p>`}</details>`;
  };
  const sourceLink=(row:ReviewBoardRow,index:number,originals:ReviewBoardRow[])=>{const order=[index,...unitIds.map((_,i)=>i).filter(i=>i!==index)];let target=`source-group-${index+1}`;for(const i of order){const claims=transcript(i===index?originals:body.filter(r=>r.unit_id===unitIds[i]&&r.stage==='original')),match=claims.findIndex(c=>row.range&&overlaps(c.range,row.range));if(match>=0){target=`speech-${i+1}-${match}`;break;}}if(!row.range)return '';const [start,end]=row.range;
-  const time=start===end?n(start):`${n(start)}–${n(end)}`;
-  return `<p class="source-link"><a href="#${target}">${embedded?'原片听写':'回看原片'} ${time}秒</a></p>`;
+  return `<p class="source-link"><a href="#${target}">${embedded?'原片听写':'回看原片'} ${sourceTime(start,end)}秒${start===end?'（定格）':''}</a></p>`;
  };
 
  const stageZh=new Map([['Video asal','原片'],['Lihat semula','回看讲解'],['Ulasan semula','回看讲解']]);
@@ -261,13 +268,13 @@ export function humanReviewBoardPage(board:ReviewBoardPlan,data:Data,lint:Lint,_
   const opinion=embedded?`<details class="group-opinion"><summary>第 ${index+1} 组意见</summary><textarea rows="3" maxlength="${BLUEPRINT_OPINION_MAX_LENGTH}" data-blueprint-opinion="${esc(id)}" aria-label="第 ${index+1} 组意见" placeholder="没意见可不填"></textarea></details>`:'';
   const lesson=teaching(id);
   if(embedded){
-   const decision=text(obj(teachingGroup(id)?.teaching_selection).decision).trim()
+   const decision=conciseChoice(id)||text(obj(teachingGroup(id)?.teaching_selection).decision).trim()
     ||text(data.selectedPlans.find(p=>p.unit.unit_id===id)?.unit.intent_zh).trim();
    const chars=[...decision],short=chars.length>20?chars.slice(0,19).join('')+'…':decision;
    const evidence=speechBlock(index,originals);
    return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组</span>${esc(short)}</h2>${lesson&&lesson!==short?`<p class="gain">达人一眼得到：${esc(lesson)}</p>`:''}${id===excerptUnit?excerptHtml:''}${playback}${excerpt||evidence||short!==decision?`<details class="picture-note"><summary>审核依据</summary>${short!==decision?`<p>${esc(decision)}</p>`:''}${excerpt}${stageList(originals)}${evidence}</details>`:''}${opinion}</section>`;
   }
-  return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组${lesson?' · 教什么':''}</span>${esc(lesson)}</h2>${id===excerptUnit?excerptHtml:''}${playback}${speechBlock(index,originals)}${embedded?'':check+unknownBlock(id)+questionHtml(id)}${opinion}</section>`;
+  return `<section class="group" data-card="group-${index+1}" data-unit-id="${esc(id)}"><h2><span>第${index+1}组${lesson?' · 教什么':''}</span>${esc(conciseChoice(id)||lesson)}</h2>${conciseChoice(id)&&lesson?`<p class="gain">达人一眼得到：${esc(lesson)}</p>`:''}${id===excerptUnit?excerptHtml:''}${playback}${speechBlock(index,originals)}${embedded?'':check+unknownBlock(id)+questionHtml(id)}${opinion}</section>`;
  }).join('');
 
  const endings=board.rows.filter(r=>r.stage==='closing');
@@ -345,5 +352,5 @@ h2{font-size:20px;font-weight:700;line-height:1.65;margin:2px 0 4px}h2>span{font
 .group-opinion{border:1px solid #e8e2d6;border-radius:12px;margin-top:14px;padding:9px 14px;font-size:13px}
 @media(max-width:700px){.ending-grid{grid-template-columns:1fr;gap:12px}.ending+.ending{padding-left:0;border:0}}
 `:''}
-</style></head><body><header>${embedded?'':'<p class="kicker">剪辑蓝图 · 人审版</p>'}<h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解${!embedded&&durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}</main>${embedded?'':'<footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer>'}<dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded,true)}${sourceLinksScript}${replayScript}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
+</style></head><body><header>${embedded?'':'<p class="kicker">剪辑蓝图 · 人审版</p>'}<h1>${esc(title)}</h1><p class="overview">${unitIds.length}组教学 · ${new Set(body.flatMap(r=>r.line_ids)).size}句讲解${!embedded&&durationSummary?' · '+esc(durationSummary)+'（估算）':''}</p>${embedded?'':`<p class="version-note">这块板对应${revision}；稿子改过就要重新生成。示意图不代表实际成片或声音对位。</p><div class="identity"><label>核对现行稿件 <input id="candidate-file" type="file" accept=".json,application/json"></label><span id="freshness" role="status">未核对现行版本</span></div>`}</header><main>${openingHtml}${groups}${endingsHtml}${generation?.qualityRules?`<p class="version-note">蓝图规则 ${esc(generation.qualityRules)} · 启动提交 ${esc(generation.generationCommit?.slice(0,12)??'未记录')}${generation.generationTrackedChanges?' · 启动时有未提交改动':''}</p>`:''}</main>${embedded?'':'<footer><p>内部审稿使用，不发给达人。截图依照登记范围抽取，动作连续性与实际字幕可读性仍需看成片。</p></footer>'}<dialog id="zoom"><button id="close">关闭</button><div id="zoom-body" class="zoom-frames"></div></dialog>${reviewBoardInteractions(payload,pictures,!embedded,true)}${sourceLinksScript}${replayScript}${excerptUnit?excerptScript:''}${embedded?opinionsScript:''}</body></html>`;
 }

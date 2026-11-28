@@ -26,7 +26,7 @@ export function translatedLabels(data:Data,lineId:string){
  const invalid=(raw.labels!==undefined&&!Array.isArray(raw.labels))||labels.some(v=>!v.trim())||!labelTranslationsShape(given,labels);
  return{invalid,pairs:labels.map((ms,i)=>({ms,zh:invalid?'':string(Array.isArray(given)?given[i]:undefined).trim()})).filter(p=>p.ms.trim())};
 }
-export function reviewReplayViews(rows:readonly ReviewBoardRow[]){
+export function reviewReplayViews(rows:readonly ReviewBoardRow[],requireImages=true){
  const first=rows[0];
  if(!first||!rows.every(row=>row.stage_text===first.stage_text&&row.colors.join()===first.colors.join()
   &&(!row.replayFrames||row.frames.length===row.replayFrames.length)))return [];
@@ -34,7 +34,7 @@ export function reviewReplayViews(rows:readonly ReviewBoardRow[]){
  const views=new Map<string,View>(),conflicts=new Set<string>();
  for(const row of rows)for(const [index,frame] of row.frames.entries()){
   const selection=frame.selection;
-  if(!selection||!frame.jpeg)continue;
+  if(!selection||requireImages&&!frame.jpeg)continue;
   const key=JSON.stringify([selection.segmentId,selection.start]);
   const prior=views.get(key),before=prior?.frame.selection?.shortLabel,after=selection.shortLabel;
   if(before&&after&&(before.ms!==after.ms||before.zh!==after.zh))conflicts.add(key);

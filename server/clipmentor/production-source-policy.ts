@@ -31,17 +31,24 @@ export function frozenTeachingTopics(doc:ProjectDoc,task:{input:Pick<ProductionT
  const timeline=doc.timelines.find(t=>t.id===doc.activeTimelineId);
  const duration=doc.clipMentorAnalysis?.source.duration_seconds??(source?.durationInFrames&&timeline?.fps
   ?source.durationInFrames/timeline.fps:undefined);
- if(duration!==undefined&&declaration.closing.evidenceRange[1]>duration)
+ if(duration!==undefined&&(declaration.closing.evidenceRange[1]>duration
+  ||'guidance' in declaration&&declaration.reviewViews?.some(view=>view.range[1]>duration)))
   throw Error('source_teaching_window_outside_original');
  return {quote:declaration.quote,
-  ...('guidance' in declaration?{guidance:declaration.guidance}:{
+  ...('guidance' in declaration?{guidance:declaration.guidance,
+   ...(declaration.reviewViews?{reviewViews:declaration.reviewViews}:{}),
+   ...(declaration.reviewViewsDecisionId?{reviewViewsDecisionId:declaration.reviewViewsDecisionId}:{}),
+   ...(declaration.reviewGroupCount!==undefined?{reviewGroupCount:declaration.reviewGroupCount}:{})}:{
    main:declaration.main,background:declaration.background,mainRanges:declaration.mainRanges,backgroundRanges:declaration.backgroundRanges}),
   closingStatus:declaration.closing.status,closing:declaration.closing.note,closingEvidenceRange:declaration.closing.evidenceRange};
 }
 
 /** Intake registration cannot grant approval. The editor's blueprint approval binds the actual selected teaching. */
 export function sourceTeachingAdvice(topics:NonNullable<ReturnType<typeof frozenTeachingTopics>>){
- return 'guidance' in topics?{recordedRequest:topics.quote,advice:topics.guidance}:{
+ return 'guidance' in topics?{recordedRequest:topics.quote,advice:topics.guidance,
+  ...(topics.reviewViews?{requiredReviewViews:topics.reviewViews}:{}),
+  ...(topics.reviewViewsDecisionId?{reviewViewsDecisionId:topics.reviewViewsDecisionId}:{}),
+  ...(topics.reviewGroupCount!==undefined?{reviewGroupCount:topics.reviewGroupCount}:{})}:{
   recordedRequest:topics.quote,previousPlan:topics.main,previousBackground:topics.background,
   suggestedWindows:topics.mainRanges,previouslyUnusedWindows:topics.backgroundRanges,
  };

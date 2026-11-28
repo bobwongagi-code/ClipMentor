@@ -11,6 +11,10 @@ export interface SourceInventory {
   emphasis: string[];
 }
 
+export const filmingChoiceLimit = 20;
+export const hasConciseFilmingChoice = (value: string | undefined) =>
+  !!value?.trim() && Array.from(value.trim()).length <= filmingChoiceLimit;
+
 export interface TeachingSelection {
   decision: string;
   omission_loss: string;
@@ -55,13 +59,16 @@ export function isUnselectedBuyerRoles(value: unknown): value is Partial<Record<
 }
 
 /** Only main points carried by narration require a writing brief. */
-export function firstGlanceWritingUnits(breakdown: SourceBreakdown | undefined) {
+export function firstGlanceWritingUnits(breakdown: SourceBreakdown | undefined, requireConciseChoice = false) {
   if (!breakdown) return [];
   const primary = new Set(breakdown.points.filter(point => point.role === 'primary').map(point => point.point_id));
   return breakdown.units.flatMap(unit => {
-    if (!unit.coverage.some(entry => entry.treatment === 'explain' && primary.has(entry.point_id))) return [];
-    const hook = unit.teaching_selection?.hook_curiosity;
-    return [{ unit_id: unit.unit_id, first_glance: unit.teaching_selection?.first_glance, hook_curiosity: hook,
+    const narrated = unit.coverage.some(entry => entry.treatment === 'explain' && primary.has(entry.point_id));
+    if (!narrated && !(requireConciseChoice && unit.coverage.some(entry => entry.treatment === 'visual_only'))) return [];
+    const selection = unit.teaching_selection;
+    const hook = selection?.hook_curiosity;
+    return [{ unit_id: unit.unit_id, first_glance: selection?.first_glance, hook_curiosity: hook,
+      ...(requireConciseChoice ? {filming_choice:selection?.decision??'', omission_loss:selection?.omission_loss??''} : {}),
       ...(hook && !unit.coverage.some(entry => entry.treatment === 'explain' && entry.point_id === hook.point_id && primary.has(entry.point_id))
         ? { invalid_hook_point: true } : {}) }];
   });

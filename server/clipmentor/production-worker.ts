@@ -7,6 +7,7 @@ import {openingUnderlayShortfall,pictureRepairWriteError} from './production-cap
 import {teachingReplayRisks} from '../../src/clipmentor/blueprint-lint';
 import {stageCuePalette} from '../../src/clipmentor/blueprint-picture-notices';
 import {comparisonSelectionReview,firstGlanceWritingUnits,teachingSelectionGaps} from '../../src/clipmentor/teaching-selection';
+import {planReviewBoards,requiredReviewViewIssues} from './blueprint-review-board';
 import {frozenParameterEdits} from '../../src/clipmentor/execution-parameters';
 import {productionTeachingPresentation} from './production-teaching-presentation';
 import {assertLocalFeedbackPreservation,feedbackProjectDigest,captureBlueprintFeedbackSummary} from './production-feedback';
@@ -28,7 +29,7 @@ import {currentAgentSessionGeneration} from '../../src/persist/agentSessionGener
 import {checkCopyProduction,copyTeachingPacketFromDoc,copyReviewSubject} from '../../src/clipmentor/production-gate';
 import {handoffDigest,openingComparisonCriterion} from '../../shared/clipmentor-handoff';
 import {confirmedOpeningResultsMatch,deliveryPictureBindings} from '../../src/clipmentor/delivery-sections';
-import {deliverySectionsFromDoc,openingMaxLineCharacters} from '../../src/clipmentor/delivery-bindings';
+import {deliverySectionsFromDoc,openingMaxLineCharacters,openingPerformanceHeadlines} from '../../src/clipmentor/delivery-bindings';
 import {currentPicturePhases,picturePhaseIssueCode} from '../../src/clipmentor/blueprint-picture-notices';
 import {copyPreparationReady,checkSourceBreakdown} from '../../src/clipmentor/source-breakdown';
 import {completedSourceEvidenceOperations,importProductionSourceEvidence,productionEvidenceInspection,productionSourceObservationAllowed,productionReviewObservation,verifiedUnansweredSourceObservation} from './production-source-evidence';
@@ -131,10 +132,12 @@ export async function loadProductionAuthorGuidance(stage:ProductionTask['stage']
 export async function prepareProductionCopyReview(
  task:ProductionTask,doc:ProjectDoc,revision:string,criteria:ReturnType<typeof boundVisualCriteria>,
  openingComparison:ReturnType<typeof productionOpeningComparison>,signal:AbortSignal,
-):Promise<{prepared:Awaited<ReturnType<typeof createProductionPreparation>>}|(StageResult&{repair:'blueprint'})>{
+):Promise<{prepared:Awaited<ReturnType<typeof createProductionPreparation>>;
+ requiredGallery?:{decisionId:string;unitIds:string[]}}|(StageResult&{repair:'blueprint'})>{
  const issues:ReturnType<typeof blueprintFindings>=task.input.panelDelivery?productionBoardPhaseIssues(doc):[];
  const add=(code:string,id='delivery',targets?:string[])=>issues.push({code,id,...(targets?.length?{targets}:{})});
  let prepared:Awaited<ReturnType<typeof createProductionPreparation>>|undefined;
+ let requiredGallery:{decisionId:string;unitIds:string[]}|undefined;
  try{prepared=await createProductionPreparation(doc);}
  catch(error){
   if(!task.input.humanBlueprintReview||!(error instanceof Error))throw error;
@@ -158,8 +161,30 @@ export async function prepareProductionCopyReview(
  if(delivery!==null){
   const openings=delivery?.filter(section=>section.kind==='performance_opening')??[];
   if(openingComparison&&openings.length!==1)add('opening_comparison_section_missing_or_duplicate');
-  if(openingComparison?.results&&openings.length===1&&!confirmedOpeningResultsMatch(openings[0],openingComparison.results))
-   add('opening_results_missing_or_changed');
+  if(openingComparison?.results&&openings.length===1){
+   if(!confirmedOpeningResultsMatch(openings[0],openingComparison.results))add('opening_results_missing_or_changed');
+   if(task.input.panelDelivery?.blueprintQuality==='v1'){
+    const layout=openings[0].picture.layout;
+    const expected=openingPerformanceHeadlines(openingComparison.results);
+    if(layout?.kind!=='original_underlay'||!layout.show_sales
+     ||layout.headline.length!==expected.length||layout.headline.some((line,index)=>line.trim()!==expected[index]))
+     add('opening_performance_card_requires_three_readable_metrics','delivery',expected);
+   }
+  }
+  const topics=task.input.panelDelivery?.blueprintQuality==='v1'?frozenTeachingTopics(doc,task):undefined;
+  if(prepared&&topics&&'reviewViews' in topics&&topics.reviewViews?.length){
+   try{
+    const input={value:doc,sha256:digestValue(doc),hashMode:'project' as const,assertUnchanged:async()=>{},
+     embedded:true,qualityRules:'v1' as const};
+    const {plans}=planReviewBoards(input);
+    const gallery=requiredReviewViewIssues(plans,topics.reviewViews);
+    if(gallery.missing.length)add('picture_plan_required_demonstration_views_missing','teaching',gallery.missing);
+    if(topics.reviewViewsDecisionId)requiredGallery={decisionId:topics.reviewViewsDecisionId,unitIds:gallery.unitIds};
+   }catch(error){
+    if(!(error instanceof Error)||!error.message.startsWith('INPUT: '))throw error;
+    add('picture_plan_required_demonstration_board_unavailable','teaching',[error.message.slice(7)]);
+   }
+  }
   try{
    const units=prepared?.rawPacket.units??doc.clipMentorAnalysis?.source_breakdown?.units??[];
    assertVisualCriteriaPlan(criteria,delivery,units.map(unit=>unit.unit_id),doc.activeTimelineId);
@@ -184,7 +209,7 @@ export async function prepareProductionCopyReview(
   return {artifact:{revision,blueprint_structure_issue:`blueprint_stage_incomplete:${JSON.stringify(unique)}`},repair:'blueprint'};
  }
  if(!prepared)throw Error('blueprint_execution_plan_missing');
- return {prepared};
+ return {prepared,requiredGallery};
 }
 
 async function runProductionCopyReview({
@@ -682,6 +707,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    references.length?digestValue(references):undefined);
   let teachingDigest:string|undefined;
   let teachingDefinition:string|undefined;
+  let copyInput:Awaited<ReturnType<typeof prepareProductionCopyReview>>|undefined;
   if(panelDraft&&['blueprint','copy_review'].includes(task.stage)){
    const repairBaseline=(issue:string,nextRebuild=rebuild)=>({artifact:{revision:editor.revision,
     teaching_baseline_issue:issue,...(nextRebuild?{teaching_rebuild:nextRebuild}:{})},repair:'analysis' as const});
@@ -729,6 +755,10 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
    if(priorNarrationDigest&&task.repairContext?.narration_repair_digest===priorNarrationDigest
     &&(sameNarrationScope||!task.repairContext.narration_repair_scope))
     throw Error('teaching_final_narration_repair_no_progress: 现行口播未变');
+   if(task.stage==='copy_review'&&task.input.panelDelivery?.blueprintQuality==='v1'){
+    copyInput=await prepareProductionCopyReview(task,doc,editor.revision,criteria,openingComparison,stage.signal);
+    if(!('prepared' in copyInput))return copyInput;
+   }
    const checked=await checkTeachingBaseline(task,stage,source,baselinePolicyDigest,teachingDefinition);
    if(panelBlueprintRequirementsDigest(await productionReviewRequirements(task.projectId))!==baselinePolicyDigest)
     return {artifact:{revision:editor.revision,review_contract_recheck:true,reason:'review_requirements_changed'},repair:task.stage as 'blueprint'|'copy_review'};
@@ -742,6 +772,14 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
     .filter(issue=>!!issue).map(issue=>'整片选题 '+issue);
    const issues=[...topicIssues,...unitIssues];
    if(issues.length)return repairBaseline(issues.join('；'),teachingRebuild(source,doc,checked.review,rebuild));
+   if(copyInput&&'prepared' in copyInput&&copyInput.requiredGallery){
+    const gallery=copyInput.requiredGallery;
+    const teaching=checked.review.confirmed_teaching_checks?.find(check=>check.id===gallery.decisionId);
+    if(!teaching?.unit_id||!gallery.unitIds.includes(teaching.unit_id)){
+     const finding={code:'picture_plan_demonstration_views_wrong_group',id:'teaching',targets:[gallery.decisionId]};
+     return {artifact:{revision:editor.revision,blueprint_structure_issue:'blueprint_stage_incomplete:'+JSON.stringify([finding])},repair:'blueprint'};
+    }
+   }
    const narrationIssues=checked.review.narration_checks?.filter(answer=>answer.status!=='ok');
    if(narrationIssues?.length){
     if(narrationIssues.some(answer=>!answer.baseline_criterion))
@@ -778,7 +816,7 @@ export const productionStageWorker:StageWorker=async(task,stage)=>{
   }
   if(task.stage==='copy_review'){
    // Keep the editor lease through review and receipt publication.
-   const copyInput=await prepareProductionCopyReview(task,doc,editor.revision,criteria,openingComparison,stage.signal);
+   copyInput??=await prepareProductionCopyReview(task,doc,editor.revision,criteria,openingComparison,stage.signal);
    if(!('prepared' in copyInput))return copyInput;
    return await runProductionCopyReview({task,stage,editor,doc,policy,criteria,prepared:copyInput.prepared,teachingBriefDigest,
     baselinePolicyDigest,confirmedSelection:!!teachingBrief?.confirmedGroups,approvedDraft,
@@ -1183,15 +1221,23 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
    instruction:'对照现行口播和独立审核，逐项修正列出的口播及其同文字幕，核对当句回看是否仍匹配。保留已核选题、未点名的教学组和片头片尾。版本号、标题和短标的改动不能代替口播修订。'} }:{}),
   ...(['analysis','blueprint'].includes(task.stage)?{teachingPurpose,sourceClosing:sourceClosingPolicy(frozenTopics,doc)}:{}),
   ...(task.input.panelDelivery?.firstGlanceWriting&&['analysis','blueprint'].includes(task.stage)?{narrationBrief:{
-   groups:firstGlanceWritingUnits(doc.clipMentorAnalysis?.source_breakdown),
-   instruction:task.stage==='analysis'
+   groups:firstGlanceWritingUnits(doc.clipMentorAnalysis?.source_breakdown,task.input.panelDelivery?.blueprintQuality==='v1'),
+   ...(task.input.panelDelivery?.blueprintQuality==='v1'?{compositionRule:
+    '每组选中的 teaching_selection 分开写 decision（她怎么拍，20 字以内）、first_glance（达人一眼得到什么）、omission_loss（删掉会损失什么）。按本片可见证据写。凡例只用于借鉴判断方法。逐部位讲解的每个短标都要有自己可见的原片窗；静帧写明定格，现场动作和结果用可证明的连续窗。'}:{}),
+   instruction:task.input.panelDelivery?.blueprintQuality==='v1'
+    ?task.stage==='analysis'
+      ?'先按原片为每组选定拍法、效果和删去的损失。拆解原片钩子时登记 hook_curiosity:{point_id,question} 指向本组主讲。'
+      :'按已核定的 decision 和 first_glance 写本组口播。讲清镜头为什么这样取舍。部位和动作细节用实际画面与短标承担。选题变更走现有独立核验。'
+    :task.stage==='analysis'
     ?'在各有主讲口播的组选题 teaching_selection.first_glance 写一条白话，讲她怎么拍、达人一眼得到什么。确实拆解原片钩子时，另填 hook_curiosity:{point_id,question}，指到本组负责钩子的主讲点，写清观众具体想弄明白什么。'
     :'直接从已核 first_glance 写马来语。hook_curiosity 只负责留下这个具体问题，讲解兑现拍法和效果。返修用审核定位哪句话漏了这个意思，先替换弱句，避免把审核备注、部位或动作清单写进口播。改选题走现有分析和独立核验，写稿时不改卡迁就返修。'
   }}:{}),
   ...(task.input.panelDelivery?.selectionPolicy==='v1'&&['analysis','blueprint'].includes(task.stage)
    ?{teachingSelectionContract:'v1'}:{}),
   ...(frozenTopics?{selectionAdvice:sourceTeachingAdvice(frozenTopics),
-   selectionAdviceInstruction:'参考已记录的用户意图。取材可以重选，旧背景可重新评估。每个教学点引用本点最能说明拍法的真实依据，分别交代各镜头能证明什么。意见登记不改变现有编辑确认。收尾按 sourceClosing 处置。'}:{}),
+   selectionAdviceInstruction:'参考已记录的用户意图。取材可以重选，旧背景可重新评估。每个教学点引用本点最能说明拍法的真实依据，分别交代各镜头能证明什么。意见登记不改变现有编辑确认。收尾按 sourceClosing 处置。'
+    +('reviewViews' in frozenTopics&&frozenTopics.reviewViews?.length?
+     '同一组正式画面须覆盖 requiredReviewViews。给每处选所登记证据内的实际窗，用 labels、labels_zh 保存同一对短标，在该句对应 phase.context_source_ranges 的 purpose 明确写该短标。不同部位分别登记。不能把动作照片写成连续播放。':'')}:{}),
   ...(task.sharedProduction?.prepared?{sharedBody:{end_frame:task.sharedProduction.endFrame,
    instruction:'片头和教学主体已从同批另一版本复用，实际时间线中此前的画面、音频、字幕和样式全部保持。只为本版本补齐片尾，不能重新剪主体、重复配同文音频或改动前段。'}}:{}),
   ...(doneCriteria.length?{doneCriteria}:{}),
@@ -1210,7 +1256,9 @@ export async function productionAuthorTaskData(task:ProductionTask,doc:ProjectDo
     ?'在现有 difference 里写明借用的推理、本片的原片依据和它改变的具体教学取舍。无法迁移时交代本片缺少的成立条件。'
     :'逐主讲点回读已保存的 connection 和 difference。实际马来语口播须教出改变的拍摄决定及其作用；借用范例的推理时，用本片证据来讲。同组 S1 只从现行口播引出这个决定。纯画面教学沿用它的专用承载检查。',
    ...(openingResults?{openingResultsInstruction:
-    `马来语口播及同文字幕按同款前提、成绩提问、一次邀请的顺序。成绩用 ${openingResults.views} tontonan、${openingResults.units} unit terjual、Revenue ${openingResults.revenue}。不上创作者人数前提。收入不写佣金或商品 GMV。`}:{})
+    `马来语口播及同文字幕按同款前提、成绩提问、一次邀请的顺序。成绩用 ${openingResults.views} tontonan、${openingResults.units} unit terjual、Revenue ${openingResults.revenue}。不上创作者人数前提。收入不写佣金或商品 GMV。`,
+    ...(task.input.panelDelivery?.blueprintQuality==='v1'?{openingPerformanceHeadline:openingPerformanceHeadlines(openingResults),
+     openingPerformanceCardRule:'成绩截图阶段用 openingPerformanceHeadline 的三行作为 layout.headline，三项各占一行。'}:{})}:{})
   }:{}),
   ...(task.stage==='blueprint'&&task.input.panelDelivery?{deliveryRequirements:{
    ...task.input.panelDelivery,

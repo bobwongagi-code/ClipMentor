@@ -15,7 +15,7 @@ const test=async(name:string,fn:()=>Promise<void>)=>{try{await fn();tests.push({
 const c=fixture.cases;
 const input=(value:unknown,bindings?:ProjectDoc[]):BoardInput=>({value,sha256:hash(JSON.stringify(value)),hashMode:'file',assertUnchanged:async()=>{},bindings});
 try{
- const {loadReviewBoardInput,planReviewBoards,renderReviewBoards,REVIEW_BOARD_FRAME_LIMIT}=await import('./blueprint-review-board');
+ const {loadReviewBoardInput,planReviewBoards,renderReviewBoards,requiredReviewViewIssues,REVIEW_BOARD_FRAME_LIMIT}=await import('./blueprint-review-board');
  assert.equal((await import('../runtime-profile')).runtimeProfile().rootDir,root,'all server imports must bind to temporary storage');
  await test('Human replay gallery uses named source selections, preserves the draft and falls back on conflicts',async()=>{
   const {humanReviewBoardPage}=await import('./blueprint-review-board-human');
@@ -29,6 +29,27 @@ try{
     selection:{segmentId:`segment-${index}`,start:2+index,shortLabel:{zh,ms:`step ${index}`}}})),
   ];
   const rows=[{...unit,frames:samples,replayFrames:samples}];
+  const parts=['外颊','鼻梁侧','鼻翼旁','眼下'];
+  const named=parts.map((zh,index)=>({...samples[index+1],seconds:2+index+.25,
+   selection:{...samples[index+1].selection,start:2+index,end:3+index,shortLabel:{zh,ms:'area '+index}}}));
+  const requirements=parts.map((labelZh,index)=>({labelZh,labelMs:'area '+index,
+   range:[2+index,3+index] as [number,number],kind:'moving' as const}));
+  const projected={...board,rows:[{...unit,frames:named,replayFrames:named}]};
+  assert.deepEqual(requiredReviewViewIssues([projected],requirements),{unitIds:[unit.unit_id],missing:[]});
+  assert.deepEqual(requiredReviewViewIssues([{...projected,rows:[{...unit,frames:named.slice(1),replayFrames:named.slice(1)}]}],requirements),
+   {unitIds:[],missing:['外颊']});
+  assert.deepEqual(requiredReviewViewIssues([{...projected,rows:[
+   {...unit,frames:named.slice(0,2),replayFrames:named.slice(0,2)},
+   {...unit,stage_text:'另一阶段',frames:named.slice(2),replayFrames:named.slice(2)}]}],requirements),
+   {unitIds:[],missing:parts});
+  const still={...named[0],seconds:2,selection:{...named[0].selection,end:2}};
+  const partial={...projected,rows:[{...unit,frames:[still,...named.slice(1)],replayFrames:[still,...named.slice(1)]}]};
+  assert.deepEqual(requiredReviewViewIssues([partial],requirements).missing,['外颊'],'a still cannot take the place of the agreed moving evidence');
+  assert.match(humanReviewBoardPage(partial,data,lint,[],[],true),/原片 2 秒（定格）/u);
+  const structure=humanReviewBoardPage(projected,data,lint,[],[],true,undefined,[],{
+   qualityRules:'v1',generationCommit:'7'.repeat(40),generationTrackedChanges:true});
+  for(const area of parts)assert.match(structure,new RegExp('data-show="[0-3]" aria-pressed="(?:false|true)">'+area));
+  assert.match(structure,/蓝图规则 v1 · 启动提交 777777777777 · 启动时有未提交改动/u);
   assert.deepEqual(reviewReplayViews(rows).map(({frame})=>frame.key),['context','step-0','step-1','step-2','step-3']);
   assert.deepEqual(reviewReplayViews([{...rows[0],frames:samples.slice(0,3)}]),[],'limited frames cannot appear as a complete recap');
   assert.deepEqual(reviewReplayViews([...rows,{...rows[0],stage_text:'another cue'}]),[],'never flatten two different stage cues');

@@ -12,8 +12,12 @@ type Binding=Pick<Picture,'src'|'sha256'>;
 const width=576,height=1024;
 const escapeXml=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 async function withTitles(bytes:Buffer,lines:string[],highlightFirst:boolean){
+ const metrics=highlightFirst&&lines.length===3&&/ tontonan$/u.test(lines[0])
+  &&/ unit terjual$/u.test(lines[1])&&/^Revenue /u.test(lines[2]);
+ const fontSize=(line:string)=>Math.min(44,Math.floor(720/Array.from(line).length));
+ const metricSize=metrics?Math.min(...lines.map(fontSize)):0;
  const svg=Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${lines.map((line,index)=>
-  `<text x="288" y="${128+index*58}" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="${Math.min(44,Math.floor(720/Array.from(line).length))}" fill="${(highlightFirst?index===0:index===lines.length-1)?'#FFD83D':'white'}">${escapeXml(line)}</text>`).join('')}</svg>`);
+  `<text x="288" y="${128+index*58}" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="${metrics?metricSize:fontSize(line)}" fill="${(metrics||(highlightFirst?index===0:index===lines.length-1))?'#FFD83D':'white'}">${escapeXml(line)}</text>`).join('')}</svg>`);
  return sharp(bytes).composite([{input:svg}]).jpeg({quality:90}).toBuffer();
 }
 

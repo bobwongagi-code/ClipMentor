@@ -79,12 +79,16 @@ export function pictureRepairCoverage(issue:unknown){
 export function repeatedPictureRepair(previous:unknown,current:unknown,history:readonly string[]=[]){
  const seen=new Set([...history,...pictureRepairCoverage(previous)]);
  const next=pictureRepairCoverage(current);
+ const strictKeys=new Set(pictureRepairFindings(current).filter(({code})=>
+  /^(picture_plan_(?:required_demonstration_|demonstration_views_wrong_group)|opening_performance_card_)/u.test(code))
+  .flatMap(blueprintFindingKeys));
  const stalled=new Set(next.flatMap(signature=>{
   const [unit,keys]=JSON.parse(signature) as [string,string[]];
   const remaining=new Set(keys);
   for(const prior of seen){
    const [before,missing]=JSON.parse(prior) as [string,string[]];
-   if(unit===before&&missing.every(key=>remaining.has(key)))return [unit];
+   if(unit===before&&(missing.every(key=>remaining.has(key))
+    ||missing.some(key=>strictKeys.has(key)&&remaining.has(key))))return [unit];
   }
   return [];
  }));

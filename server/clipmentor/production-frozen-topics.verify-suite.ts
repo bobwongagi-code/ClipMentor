@@ -10,6 +10,8 @@ import {parseProductionSourceCriteria,type SourceTeachingCriterion,type SourcePe
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {recordEditorApprovedGateProbe,firstSuspectedGateDefect} from './production-gate-probes';
 import {sourceClosingDecision} from './production-source-policy';
+import {repeatedPictureRepair} from './production-decisions';
+import {readPanelSourceCriteria,registerPanelSourceCriteria} from './production-panel-source-requirements';
 
 type Source=ReturnType<typeof teachingBaselineSource>;
 type Review=ReturnType<typeof validateTeachingBaselineReview>;
@@ -71,6 +73,25 @@ export async function verifyFrozenTopics(draft:ProjectDoc,strictTask:ProductionT
  const salesHash='4a62b3adca0c3a8890ef0a676706bd266a30d10d0cff875206e43bd90b0b5c24',saleId='fixture-sales-image';
  const performance:SourcePerformanceCriterion={kind:'source_performance',source,evidence:{assetId:saleId,sha256:salesHash},
   quote:'等义改写的片头',results:{views:'339.32k',units:'135',revenue:'RM5.31k'}};
+ const qualityFinding=(targets:string[])=>'blueprint_stage_incomplete:'+JSON.stringify([
+  {id:'teaching',code:'picture_plan_required_demonstration_views_missing',targets}]);
+ assert.match(repeatedPictureRepair(qualityFinding(['外颊','眼下']),qualityFinding(['外颊']))??'',/blueprint_repair_no_progress/u);
+ assert.equal(repeatedPictureRepair(qualityFinding(['眼下']),qualityFinding(['外颊'])),undefined);
+ const incomingSource={id:'reuploaded-source',sourceContentHash:frozenHash};
+ const incomingSales={id:'reuploaded-sales',sourceContentHash:salesHash};
+ assert.equal(await readPanelSourceCriteria('before-registration',incomingSource,incomingSales),undefined);
+ await registerPanelSourceCriteria('registered-editor-replay',[proposal,performance],
+  {id:sourceId,sourceContentHash:frozenHash},{id:saleId,sourceContentHash:salesHash},{reuseSameMaterials:true});
+ const migrated=await readPanelSourceCriteria('new-editor-replay',incomingSource,incomingSales);
+ assert.deepEqual(migrated?.map(item=>item.source.assetId),[incomingSource.id,incomingSource.id]);
+ assert.deepEqual(migrated?.find(item=>item.kind==='source_performance'),
+  {...performance,source:{...source,assetId:incomingSource.id},evidence:{assetId:incomingSales.id,sha256:salesHash}});
+ assert.equal(await readPanelSourceCriteria('different-sales',incomingSource,{...incomingSales,sourceContentHash:'b'.repeat(64)}),undefined);
+ assert.equal(await readPanelSourceCriteria('different-source',{...incomingSource,sourceContentHash:'b'.repeat(64)},incomingSales),undefined);
+ await registerPanelSourceCriteria('new-editor-replay',[declaration],incomingSource,incomingSales);
+ assert.deepEqual(await readPanelSourceCriteria('new-editor-replay',incomingSource,incomingSales),
+  [{...declaration,source:{...source,assetId:incomingSource.id}}],'an explicit project choice takes precedence');
+ assert.equal((await readPanelSourceCriteria('another-editor-replay',incomingSource,incomingSales))?.length,2);
  const sale=panelSalesEvidence(sourceId,saleId,performance.results);
  const boundDoc=structuredClone(frozenDoc);
  boundDoc.assets.push({...boundDoc.assets[0],id:saleId,kind:'image',sourceContentHash:salesHash});

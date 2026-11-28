@@ -31,7 +31,7 @@ import {handoffDigest,sourcePerformanceCriterion,type HandoffPolicy} from '../..
 import {revisionOf} from '../../src/agent/external-edit-session';
 import {runProjectMigrations} from '../../src/persist/migrations';
 import {handoffKey,readHandoffPolicy} from './handoff';
-import {deliverySectionsFromDoc} from '../../src/clipmentor/delivery-bindings';
+import {deliverySectionsFromDoc,openingMaxLineCharacters,openingPerformanceHeadlines} from '../../src/clipmentor/delivery-bindings';
 import {productionDeliverables,productionAttachmentSlots} from './production-deliverables';
 import {verifyProductionOutput} from './production-format';
 import {pendingProductionPreview,openPendingProductionPreview} from './production-playable-preview';
@@ -64,7 +64,19 @@ function needsSourceRequirementsMaintenance(task:ProductionTask){
 type PanelSettings = { unavailable: string } | { provider:'openai'; model:string; apiMode:'chat'|'responses'; backend:'api'|'codex' };
 
 export const panelServiceUnavailable = '制作服务暂时不可用。';
-const boardPresentationVersion='panel-opinions-v10';
+const boardPresentationVersion='panel-opinions-v11';
+async function blueprintGeneration():Promise<NonNullable<ProductionTask['input']['blueprintGeneration']>>{
+ const git=promisify(execFile);
+ try{
+  const [revision,changes]=await Promise.all([
+   git('git',['rev-parse','HEAD'],{timeout:2000}),
+   git('git',['--no-optional-locks','status','--porcelain','--untracked-files=no'],{timeout:2000}),
+  ]);
+  const commit=revision.stdout.trim();
+  if(/^[a-f0-9]{40}$/u.test(commit))return {qualityRules:'v1',commit,trackedChanges:!!changes.stdout.trim()};
+ }catch{/* Packaged installs can lack Git metadata. */}
+ return {qualityRules:'v1'};
+}
 function boardPresentation(doc:import('../../src/editor/types').ProjectDoc){
   return doc.clipMentorAnalysis?.source_breakdown?.units?.some(unit=>unit.teaching_selection?.first_glance?.trim())
     ?boardPresentationVersion:undefined;
@@ -511,6 +523,9 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
             if ((await snapshot()).revision !== revision) throw new Error('蓝图版本已变化，请刷新');
             input.embedded=true;
             input.narrationDecisions=narrationDecisions;
+            input.qualityRules=task.input.panelDelivery?.blueprintQuality;
+            input.generationCommit=task.input.blueprintGeneration?.commit;
+            input.generationTrackedChanges=task.input.blueprintGeneration?.trackedChanges;
             if(isPanelBlueprintDraft(task))input.teachingExcerptUnit=representativeTeachingExcerpt(saved.doc)?.unitId;
             const result = await renderReviewBoards(input, join(reviewBoardArtifactRoot(projectId), boardPresentationVersion, artifactIdentity), undefined, 'human');
             if ((await snapshot()).revision !== revision || (await boardSubject(revision,task,await readRequirements())).identity!==identity || !result.artifacts[0]) throw new Error('审片板生成后蓝图已变化');
@@ -769,13 +784,17 @@ export function createProductionPanel(launch:(task:ProductionTask)=>void, active
         const doneCriteria=await readPanelSourceCriteria(projectId,source,sales);
         const openingComparison=declaredPanelOpening(saved.doc,sourcePerformanceCriterion(doneCriteria??[]),source.id,sales.id);
         if(doneCriteria)frozenTeachingTopics(saved.doc,{input:{sourceAssetId:source.id,doneCriteria}});
+        if(openingComparison.results&&openingPerformanceHeadlines(openingComparison.results)
+         .some(line=>Array.from(line).length>openingMaxLineCharacters||/[\p{Cc}\p{Cf}]/u.test(line)))
+         throw new PanelReviewIssue('content',reviewMessages.openingPerformanceDeclaration);
         const salesFact=panelSalesEvidence(source.id,sales.id,openingComparison.results);
+        const generation=await blueprintGeneration();
         releaseSlot=reserveSlot(projectId);
         const next = await createProductionTask({
           projectId, sourceAssetId:source.id, product:{name:typeof name === 'string' && name.trim() ? name.trim() : '当前商品',category:'待核实'},
-          openingComparison,...(doneCriteria?{doneCriteria}:{}),
+          openingComparison,...(doneCriteria?{doneCriteria}:{}),blueprintGeneration:generation,
           brief:'以工程完整原片和商品资料制作马来西亚达人拆解蓝图。教学主体说明原作者怎样让购买理由可见，让达人能借鉴拍法。共用片头和教学主体，分别登记新建联与已合作的行动结尾。片头保留用户原话“'+openingComparison.quote+'”的同款成绩提问意图。按本片上传成绩图填写，不写只有本片做到或断言其他视频差，不承诺拍法解释成交原因。用本片原片压暗作底、成绩图作前景。新建联用上传CTA原图，已合作用本商品的原片Storyboard。先交人审版。',
-          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',editorialPolicy:'exemplar-v1',selectionPolicy:'v1',firstGlanceWriting:true,
+          panelDelivery:{productAssetId:product.id,productAssetHash:product.sourceContentHash!,salesAssetId:sales.id,salesAssetHash:sales.sourceContentHash!,ctaAssetId:cta.id,ctaAssetHash:cta.sourceContentHash!,bookends:'layered-v1',partnerEnding:'product_storyboard_pdf',editorialPolicy:'exemplar-v1',selectionPolicy:'v1',firstGlanceWriting:true,blueprintQuality:'v1',
             salesEvidenceId:salesFact.evidence_id,salesEvidenceSha256:createHash('sha256').update(salesFact.text).digest('hex')},
           author:api, reviewer:api, ...(config.backend==='codex'?{authorBackend:'codex' as const,reviewerBackend:'codex' as const}:{}),
           voice:{provider:'minimax',voiceId:'Malay_female_1_v1'},

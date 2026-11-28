@@ -178,6 +178,16 @@ export function verifyTeachingSelections(template: ProjectDoc, templateTask: Pro
  writingUnits[1].teaching_selection!.first_glance='她分部位留住工具和脸同框的短镜头，达人能认出落点。';
  writingUnits[0].teaching_selection!.hook_curiosity={point_id:'hook',question:'她用了什么？'};
  assert.notEqual(qualifiedTeachingDigest(withBrief),qualifiedTeachingDigest(doc),'a changed writing brief needs requalification');
+ const strictWriting=structuredClone(writingTask);
+ strictWriting.input.panelDelivery!.blueprintQuality='v1';
+ const previousChoice=writingUnits[0].teaching_selection!.decision;
+ writingUnits[0].teaching_selection!.decision='动作镜头顺次详述'.repeat(4);
+ assert(teachingPointGaps(teachingBaselineSource(withBrief,strictWriting,[]),withBrief)
+  .some(issue=>issue.includes('需要 20 字以内的具体拍法')));
+ writingUnits[0].teaching_selection!.decision='妆效开场，双盘与编号同框';
+ assert(!teachingPointGaps(teachingBaselineSource(withBrief,strictWriting,[]),withBrief)
+  .some(issue=>issue.startsWith(writingUnits[0].unit_id+' 需要 20 字')));
+ writingUnits[0].teaching_selection!.decision=previousChoice;
  const checkedSource=briefSource();
  assert.deepEqual(checkedSource.narrationTargets?.filter(target=>target.hook_curiosity).map(target=>target.point_id),['hook']);
  assert(!teachingPointGaps(checkedSource,withBrief).some(issue=>issue.includes('缺一眼效果')));

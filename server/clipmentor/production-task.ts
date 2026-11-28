@@ -91,8 +91,9 @@ export interface ProductionInput {
  voice?:{provider:string;voiceId:string};
  humanBlueprintReview?:true;
  gatewayRecovery?:'bounded'|'none';
+ blueprintGeneration?:{qualityRules:'v1';commit?:string;trackedChanges?:boolean};
  panelDelivery?:{productAssetId:string;productAssetHash:string;salesAssetId:string;ctaAssetId:string;ctaAssetHash:string;
-  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';firstGlanceWriting?:true;salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
+  bookends?:'layered-v1';partnerEnding?:'product_storyboard_pdf';editorialPolicy?:'exemplar-v1';selectionPolicy?:'v1';firstGlanceWriting?:true;blueprintQuality?:'v1';salesAssetHash?:string;salesEvidenceId?:string;salesEvidenceSha256?:string;audience?:'new_contact'|'existing_partner'};
  authorBackend?:'codex';
  reviewerBackend?:'codex';
  budget:EffectCounts&{maxElapsedMs:number;maxRepairs:number;routine?:EffectCounts};
@@ -507,6 +508,13 @@ export function validateProductionInput(v:ProductionInput){
   parseProductionSourceCriteria(v.doneCriteria);
  }
  if(v.openingComparison!==undefined&&(!v.panelDelivery||!openingComparisonShape(v.openingComparison)))throw Error('Invalid opening comparison requirement');
+ if(v.blueprintGeneration!==undefined){
+  const generation=v.blueprintGeneration;
+  if(!generation||v.panelDelivery?.blueprintQuality!=='v1'||generation.qualityRules!=='v1'
+   ||generation.commit!==undefined&&(typeof generation.commit!=='string'||! /^[a-f0-9]{40}$/u.test(generation.commit))
+   ||generation.trackedChanges!==undefined&&(!generation.commit||typeof generation.trackedChanges!=='boolean'))
+   throw Error('Invalid blueprint generation metadata');
+ }
  if(v.gatewayRecovery!==undefined&&!['bounded','none'].includes(v.gatewayRecovery))throw Error('Invalid gateway recovery policy');
  for(const config of [v.author,v.reviewer])if(!config?.model?.trim()||!LLM_PROVIDER_PRESETS.some(p=>p.id===config.provider)||!['responses','chat'].includes(config.apiMode))throw new Error('Explicit API author/reviewer configuration required');
  if(v.panelDelivery){
@@ -518,6 +526,7 @@ export function validateProductionInput(v:ProductionInput){
    ||(v.panelDelivery.editorialPolicy!==undefined&&v.panelDelivery.editorialPolicy!=='exemplar-v1')
    ||(v.panelDelivery.selectionPolicy!==undefined&&(v.panelDelivery.selectionPolicy!=='v1'||v.panelDelivery.editorialPolicy!=='exemplar-v1'))
    ||(v.panelDelivery.firstGlanceWriting!==undefined&&(v.panelDelivery.firstGlanceWriting!==true||v.panelDelivery.selectionPolicy!=='v1'))
+   ||(v.panelDelivery.blueprintQuality!==undefined&&(v.panelDelivery.blueprintQuality!=='v1'||v.panelDelivery.firstGlanceWriting!==true))
    ||(v.panelDelivery.partnerEnding!==undefined&&v.panelDelivery.partnerEnding!=='product_storyboard_pdf')
    ||((v.panelDelivery.salesEvidenceId!==undefined||v.panelDelivery.salesEvidenceSha256!==undefined)
     &&(v.panelDelivery.bookends!=='layered-v1'||typeof v.panelDelivery.salesEvidenceId!=='string'||!v.panelDelivery.salesEvidenceId.trim()

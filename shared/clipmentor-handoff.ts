@@ -28,8 +28,9 @@ interface SourceTeachingDeclaration {
  kind:'source_teaching';source:SourceAssetBinding;quote:string;
  closing:{status:SourceClosingStatus;note:string;evidenceRange:SourceWindow};
 }
+export type SourceReviewView={labelZh:string;labelMs:string;range:SourceWindow;kind:'moving'|'still'};
 export type SourceTeachingCriterion=SourceTeachingDeclaration&(
- {guidance:SourceTeachingGuidance[]}
+ {guidance:SourceTeachingGuidance[];reviewViews?:SourceReviewView[];reviewViewsDecisionId?:string;reviewGroupCount?:number}
  // Historical fields are accepted for readback and projected as advice.
  |{main:string;background:string;mainRanges:SourceWindow[];backgroundRanges:SourceWindow[]}
 );
@@ -89,10 +90,21 @@ const sourceTeachingGuidance=(v:unknown):v is SourceTeachingGuidance=>handoffRec
  &&handoffRecord(v.source)&&keys(v.source,['who','reference'])
  &&boundedText(v.source.who,160)&&boundedText(v.source.reference,1000)
  &&[v.text,v.rationale,v.reconsiderWhen].every(x=>boundedText(x,1000));
+const sourceReviewView=(v:unknown):v is SourceReviewView=>handoffRecord(v)
+ &&keys(v,['labelZh','labelMs','range','kind'])&&boundedText(v.labelZh,30)&&boundedText(v.labelMs,60)
+ &&sourceWindow(v.range)&&(v.kind==='moving'||v.kind==='still');
 const sourceTeachingShape=(v:unknown):v is SourceTeachingCriterion=>handoffRecord(v)
  &&v.kind==='source_teaching'&&sourceAssetBinding(v.source)&&boundedText(v.quote,1000)
- &&(keys(v,['kind','source','quote','guidance','closing'])
+ &&(keys(v,['kind','source','quote','guidance','closing',...(Object.hasOwn(v,'reviewViews')?['reviewViews']:[]),
+  ...(Object.hasOwn(v,'reviewViewsDecisionId')?['reviewViewsDecisionId']:[]),
+  ...(Object.hasOwn(v,'reviewGroupCount')?['reviewGroupCount']:[])])
   ?Array.isArray(v.guidance)&&v.guidance.length<=12&&v.guidance.every(sourceTeachingGuidance)
+   &&(!Object.hasOwn(v,'reviewGroupCount')||integer(v.reviewGroupCount,1,20))
+   &&(!Object.hasOwn(v,'reviewViewsDecisionId')||typeof v.reviewViewsDecisionId==='string'&&Array.isArray(v.reviewViews)
+    &&v.guidance.some(item=>item.confirmedDecisionId===v.reviewViewsDecisionId))
+   &&(!Object.hasOwn(v,'reviewViews')||Array.isArray(v.reviewViews)&&v.reviewViews.length>=2&&v.reviewViews.length<=8
+    &&v.reviewViews.every(sourceReviewView)&&new Set(v.reviewViews.map(view=>view.labelZh)).size===v.reviewViews.length
+    &&new Set(v.reviewViews.map(view=>view.labelMs)).size===v.reviewViews.length)
    &&new Set(v.guidance.flatMap(g=>g.confirmedDecisionId?[g.confirmedDecisionId]:[])).size===v.guidance.filter(g=>g.confirmedDecisionId).length
   :keys(v,['kind','source','quote','main','background','mainRanges','backgroundRanges','closing'])
    &&[v.main,v.background].every(x=>boundedText(x,1000))
