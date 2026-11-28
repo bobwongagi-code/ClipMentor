@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import type { ProjectDoc, TimelineItem } from '../editor/types';
 import type { AgentContext } from '../agent/context';
 import type { SourceBreakdown } from './source-breakdown';
-import { isSourceBreakdown, checkSourceBreakdown, breakdownRevisionError } from './source-breakdown';
+import { isSourceBreakdown, checkSourceBreakdown, breakdownRevisionError, prepareSourceBreakdownWrite } from './source-breakdown';
 import { isClipMentorAnalysis, pointDigest } from './analysis';
 import { makeDraft } from '../editor/store';
 import { executeTool } from '../agent/tools';
@@ -41,6 +41,14 @@ const b: SourceBreakdown = {
     revisits: [{ from_segment_id: 'S1', to_segment_id: 'S1', reason: 'Revisit the demonstrated gesture to explain its use experience' }],
     placement: { timeline_id: 'tl', original_frames: [0, 84], explanation_frames: [90, 174] } }],
 };
+const invalidRevisit=structuredClone(b);
+Object.assign(invalidRevisit.units[0],{revisits:[{segment_id:'S1',reason:'one endpoint does not specify a revisit'}]});
+assert(!isSourceBreakdown(invalidRevisit));
+assert.deepEqual(prepareSourceBreakdownWrite(invalidRevisit).issues,[{
+ point_id:'U1',field:'revisits.0',code:'expected_from_segment_id_to_segment_id_and_reason',
+}]);
+assert.deepEqual(prepareSourceBreakdownWrite(b).issues,[]);
+
 for (const teaching_question of ['', ' ', null, ['question']]) {
   const invalid = structuredClone(b);
   Object.assign(invalid.points[0], { teaching_question });

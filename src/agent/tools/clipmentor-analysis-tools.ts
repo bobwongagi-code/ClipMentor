@@ -357,7 +357,9 @@ export async function execClipMentorAnalysisTool(name: string, args: Args, ctx: 
         const { record, issues } = prepareSourceBreakdownWrite(args.record);
         if (issues.length || !isSourceBreakdown(record)) return {
           error: 'Invalid source breakdown; nothing changed',
-          ...(issues.length ? { issues, next_step: '只修列出的 point_id 和字段。buying_concern 只写在 point；exemplar 填单个 principle ID。' } : {}),
+          ...(issues.length ? { issues, next_step: issues.some(issue=>issue.field.startsWith('revisits.'))
+            ? '每条 revisits 写 {from_segment_id,to_segment_id,reason}，使用本组实际已登记的原声与讲解段 ID。单独的 segment_id 不表示回看关系。只修列出的组和字段。'
+            : '只修列出的 point_id 和字段。buying_concern 只写在 point；exemplar 填单个 principle ID。' } : {}),
         };
         const confirmed = new Set<string>();
         for (const review of a.reviews) {

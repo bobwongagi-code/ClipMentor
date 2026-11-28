@@ -123,6 +123,15 @@ export function prepareSourceBreakdownWrite(value: unknown) {
     teachingBasisIssues(prepared, add);
     return redundant ? { ...point, teaching_basis: prepared } : point;
   });
+  if (Array.isArray(value.units)) for (const unit of value.units) {
+    if (!row(unit) || !text(unit.unit_id) || !Array.isArray(unit.revisits)) continue;
+    for (const [index, revisit] of unit.revisits.entries()) {
+      if (!row(revisit) || !text(revisit.from_segment_id) || !text(revisit.to_segment_id) || !text(revisit.reason)) {
+        issues.push({ point_id: unit.unit_id, field: 'revisits.' + index,
+          code: 'expected_from_segment_id_to_segment_id_and_reason' });
+      }
+    }
+  }
   return { record: { ...value, points }, issues };
 }
 
